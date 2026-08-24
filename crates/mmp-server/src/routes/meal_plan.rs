@@ -2,7 +2,6 @@ use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use mmp_core::domain::{HouseholdMemberId, MealPlanEntryId, Role};
-use mmp_core::ports::PageRequest;
 use time::{Date, Weekday};
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
@@ -11,8 +10,8 @@ use uuid::Uuid;
 use crate::auth::Principal;
 use crate::dto::common::iso_date;
 use crate::dto::{
-    CreateMealPlanEntryRequest, HouseholdMemberDto, MarkMealPlanEatenRequest, MealPlanEntryDto,
-    MealPlanWeekDto, UpdateMealPlanEntryRequest,
+    CreateMealPlanEntryRequest, MarkMealPlanEatenRequest, MealPlanEntryDto, MealPlanWeekDto,
+    UpdateMealPlanEntryRequest,
 };
 use crate::error::{ApiError, ApiResult};
 use crate::http::{Created, IfMatch, Tagged};
@@ -20,7 +19,6 @@ use crate::state::AppState;
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
-        .routes(routes!(list_members))
         .routes(routes!(get_week))
         .routes(routes!(create))
         .routes(routes!(get_one, update, delete))
@@ -32,15 +30,15 @@ fn entry_id(id: Uuid) -> MealPlanEntryId {
     id.into()
 }
 
-fn member_id(id: Uuid) -> HouseholdMemberId {
-    id.into()
-}
-
-async fn require_access(
-    state: &AppState,
-    principal: &Principal,
-    member_id: HouseholdMemberId,
-) -> ApiResult<()> {
+async fn personal_member(state: &AppState, principal: &Principal) -> ApiResult<HouseholdMemberId> {
+    let member_id = principal.member_id.ok_or_else(|| {
+        ApiError::new(
+            StatusCode::CONFLICT,
+            "member-link-required",
+            "Meal plan unavailable",
+            "Your account is not linked to an active household member.",
+        )
+    })?;
     let member = state.household.get_member(member_id).await?;
     if member.is_archived() {
         return Err(ApiError::new(
@@ -50,14 +48,31 @@ async fn require_access(
             "Archived household members cannot have their meal plan changed.",
         ));
     }
-    if principal.roles.contains(&Role::Admin) || principal.member_id == Some(member_id) {
+    Ok(member_id)
+}
+
+async fn require_personal_entry(
+    state: &AppState,
+    principal: &Principal,
+    entry_member_id: HouseholdMemberId,
+) -> ApiResult<()> {
+    let member = state.household.get_member(entry_member_id).await?;
+    if member.is_archived() {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "archived-member",
+            "Archived member",
+            "Archived household members cannot have their meal plan changed.",
+        ));
+    }
+    if principal.roles.contains(&Role::Admin) || principal.member_id == Some(entry_member_id) {
         Ok(())
     } else {
         Err(ApiError::new(
             StatusCode::FORBIDDEN,
             "forbidden",
             "Forbidden",
-            "You cannot manage that household member's meal plan.",
+            "This meal does not belong to your personal plan.",
         ))
     }
 }
@@ -73,45 +88,13 @@ fn parse_week_start(raw: &str) -> ApiResult<Date> {
 
 #[utoipa::path(
     get,
-    path = "/api/v1/meal-plan/members",
-    operation_id = "listMealPlanMembers",
-    responses((status = 200, body = Vec<HouseholdMemberDto>)),
-    tag = "meal-plan",
-    security(("basic" = []))
-)]
-async fn list_members(
-    State(state): State<AppState>,
-    principal: Principal,
-) -> ApiResult<Json<Vec<HouseholdMemberDto>>> {
-    if principal.roles.contains(&Role::Admin) {
-        let page = state
-            .household
-            .list_members(&mmp_core::ports::MemberQuery {
-                page: PageRequest::new(1, PageRequest::MAX_PER_PAGE),
-                ..Default::default()
-            })
-            .await?;
-        return Ok(Json(page.items.into_iter().map(Into::into).collect()));
-    }
-    let members = match principal.member_id {
-        Some(id) => vec![state.household.get_member(id).await?.into()],
-        None => vec![],
-    };
-    Ok(Json(members))
-}
-
-#[utoipa::path(
-    get,
-    path = "/api/v1/meal-plan/{member_id}/{week_start}",
+    path = "/api/v1/meal-plan/{week_start}",
     operation_id = "getMealPlanWeek",
-    params(
-        ("member_id" = Uuid, Path),
-        ("week_start" = String, Path, example = "2026-08-24")
-    ),
+    params(("week_start" = String, Path, example = "2026-08-24")),
     responses(
         (status = 200, body = MealPlanWeekDto),
         (status = 400, body = crate::error::Problem),
-        (status = 403, body = crate::error::Problem)
+        (status = 409, body = crate::error::Problem)
     ),
     tag = "meal-plan",
     security(("basic" = []))
@@ -119,10 +102,9 @@ async fn list_members(
 async fn get_week(
     State(state): State<AppState>,
     principal: Principal,
-    Path((member, week_start)): Path<(Uuid, String)>,
+    Path(week_start): Path<String>,
 ) -> ApiResult<Json<MealPlanWeekDto>> {
-    let member = member_id(member);
-    require_access(&state, &principal, member).await?;
+    let member = personal_member(&state, &principal).await?;
     let week = state
         .meal_plan
         .week(member, parse_week_start(&week_start)?)
@@ -144,10 +126,10 @@ async fn create(
     principal: Principal,
     Json(body): Json<CreateMealPlanEntryRequest>,
 ) -> ApiResult<Created<MealPlanEntryDto>> {
-    require_access(&state, &principal, member_id(body.member_id)).await?;
+    let member = personal_member(&state, &principal).await?;
     let created = state
         .meal_plan
-        .create(body.into_domain(principal.user_id))
+        .create(body.into_domain(member, principal.user_id))
         .await?;
     Ok(Created(created.entry.revision, created.into()))
 }
@@ -167,7 +149,7 @@ async fn get_one(
     Path(id): Path<Uuid>,
 ) -> ApiResult<Tagged<MealPlanEntryDto>> {
     let entry = state.meal_plan.get(entry_id(id)).await?;
-    require_access(&state, &principal, entry.entry.member_id).await?;
+    require_personal_entry(&state, &principal, entry.entry.member_id).await?;
     Ok(Tagged(entry.entry.revision, entry.into()))
 }
 
@@ -190,7 +172,7 @@ async fn update(
 ) -> ApiResult<Tagged<MealPlanEntryDto>> {
     let id = entry_id(id);
     let current = state.meal_plan.get(id).await?;
-    require_access(&state, &principal, current.entry.member_id).await?;
+    require_personal_entry(&state, &principal, current.entry.member_id).await?;
     let patch = body.into_domain().map_err(|message| {
         let mut errors = mmp_core::ValidationErrors::new();
         errors.push("planned_time", message);
@@ -220,7 +202,7 @@ async fn delete(
 ) -> ApiResult<StatusCode> {
     let id = entry_id(id);
     let current = state.meal_plan.get(id).await?;
-    require_access(&state, &principal, current.entry.member_id).await?;
+    require_personal_entry(&state, &principal, current.entry.member_id).await?;
     state.meal_plan.delete(id, revision).await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -244,7 +226,7 @@ async fn mark_eaten(
 ) -> ApiResult<Tagged<MealPlanEntryDto>> {
     let id = entry_id(id);
     let current = state.meal_plan.get(id).await?;
-    require_access(&state, &principal, current.entry.member_id).await?;
+    require_personal_entry(&state, &principal, current.entry.member_id).await?;
     let updated = state
         .meal_plan
         .mark_eaten(id, revision, body.into_domain(principal.user_id))
@@ -269,7 +251,7 @@ async fn mark_not_eaten(
 ) -> ApiResult<Tagged<MealPlanEntryDto>> {
     let id = entry_id(id);
     let current = state.meal_plan.get(id).await?;
-    require_access(&state, &principal, current.entry.member_id).await?;
+    require_personal_entry(&state, &principal, current.entry.member_id).await?;
     let updated = state
         .meal_plan
         .mark_not_eaten(id, revision, principal.user_id)

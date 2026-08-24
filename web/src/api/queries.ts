@@ -461,26 +461,18 @@ export function useDeleteConsumption() {
 }
 
 export const mealPlanKeys = {
-  members: ['mealPlanMembers'] as const,
-  week: (memberId: string, weekStart: string) => ['mealPlanWeek', memberId, weekStart] as const,
+  week: (weekStart: string) => ['mealPlanWeek', weekStart] as const,
   entry: (id: string) => ['mealPlanEntry', id] as const,
 };
 
-export function useMealPlanMembers() {
+export function useMealPlanWeek(weekStart: string) {
   return useQuery({
-    queryKey: mealPlanKeys.members,
-    queryFn: async () => unwrap(await client.GET('/api/v1/meal-plan/members')),
-  });
-}
-
-export function useMealPlanWeek(memberId: string, weekStart: string) {
-  return useQuery({
-    queryKey: mealPlanKeys.week(memberId, weekStart),
-    enabled: Boolean(memberId) && Boolean(weekStart),
+    queryKey: mealPlanKeys.week(weekStart),
+    enabled: Boolean(weekStart),
     queryFn: async () =>
       unwrap(
-        await client.GET('/api/v1/meal-plan/{member_id}/{week_start}', {
-          params: { path: { member_id: memberId, week_start: weekStart } },
+        await client.GET('/api/v1/meal-plan/{week_start}', {
+          params: { path: { week_start: weekStart } },
         }),
       ),
   });
@@ -488,9 +480,9 @@ export function useMealPlanWeek(memberId: string, weekStart: string) {
 
 function useMealPlanInvalidation() {
   const qc = useQueryClient();
-  return (memberId: string) => {
-    void qc.invalidateQueries({ queryKey: ['mealPlanWeek', memberId] });
-    void qc.invalidateQueries({ queryKey: ['diaryDay', memberId] });
+  return (memberId?: string) => {
+    void qc.invalidateQueries({ queryKey: ['mealPlanWeek'] });
+    if (memberId) void qc.invalidateQueries({ queryKey: ['diaryDay', memberId] });
   };
 }
 
@@ -524,13 +516,13 @@ export function useUpdateMealPlanEntry() {
 export function useDeleteMealPlanEntry() {
   const invalidate = useMealPlanInvalidation();
   return useMutation({
-    mutationFn: async (input: { id: string; revision: number; memberId: string }) =>
+    mutationFn: async (input: { id: string; revision: number }) =>
       unwrap(
         await client.DELETE('/api/v1/meal-plan-entries/{id}', {
           params: { path: { id: input.id }, header: ifMatch(input.revision) },
         }),
       ),
-    onSuccess: (_data, input) => invalidate(input.memberId),
+    onSuccess: () => invalidate(),
   });
 }
 

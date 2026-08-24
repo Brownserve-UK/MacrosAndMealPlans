@@ -260,23 +260,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/meal-plan/members": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get: operations["listMealPlanMembers"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/meal-plan/{member_id}/{week_start}": {
+    "/api/v1/meal-plan/{week_start}": {
         parameters: {
             query?: never;
             header?: never;
@@ -708,8 +692,6 @@ export interface components {
             components: components["schemas"]["MealPlanComponentRequest"][];
             /** Format: uuid */
             id?: string | null;
-            /** Format: uuid */
-            member_id: string;
             /** Format: date */
             planned_on: string;
             /** @example 18:30 */
@@ -1891,31 +1873,11 @@ export interface operations {
             };
         };
     };
-    listMealPlanMembers: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HouseholdMemberDto"][];
-                };
-            };
-        };
-    };
     getMealPlanWeek: {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                member_id: string;
                 /** @example 2026-08-24 */
                 week_start: string;
             };
@@ -1939,7 +1901,7 @@ export interface operations {
                     "application/json": components["schemas"]["Problem"];
                 };
             };
-            403: {
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

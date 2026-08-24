@@ -10,15 +10,13 @@ import ButtonBase from '@mui/material/ButtonBase';
 import Chip from '@mui/material/Chip';
 import Divider from '@mui/material/Divider';
 import IconButton from '@mui/material/IconButton';
-import MenuItem from '@mui/material/MenuItem';
 import Paper from '@mui/material/Paper';
 import Stack from '@mui/material/Stack';
-import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
 import { useNavigate } from '@tanstack/react-router';
 import { useState } from 'react';
 import type { MealPlanDay, MealPlanEntry, MealSlot } from '../../api/client';
-import { useMealPlanMembers, useMealPlanWeek } from '../../api/queries';
+import { useMealPlanWeek } from '../../api/queries';
 import { InitialsAvatar } from '../../components/InitialsAvatar';
 import { PageHeader } from '../../components/PageHeader';
 import { ErrorState, Loading } from '../../components/States';
@@ -39,11 +37,6 @@ type Selection = {
   date: string;
   slot: MealSlot;
   entry: MealPlanEntry | null;
-};
-
-type MemberOption = {
-  id: string;
-  display_name: string;
 };
 
 function longDayName(date: string) {
@@ -279,21 +272,15 @@ function WeekNavigator({
   days,
   selectedDate,
   currentMonday,
-  members,
-  memberId,
   onWeekChange,
   onDayChange,
-  onMemberChange,
 }: {
   weekStart: string;
   days: MealPlanDay[];
   selectedDate: string;
   currentMonday: string;
-  members: MemberOption[];
-  memberId: string;
   onWeekChange: (week: string) => void;
   onDayChange: (date: string) => void;
-  onMemberChange: (member: string) => void;
 }) {
   return (
     <Paper sx={{ mb: 3, overflow: 'hidden', backgroundColor: 'background.default' }}>
@@ -335,22 +322,7 @@ function WeekNavigator({
             <ChevronRightIcon />
           </IconButton>
         </Stack>
-        {members.length > 1 ? (
-          <TextField
-            select
-            label="Plan for"
-            value={memberId}
-            onChange={(event) => onMemberChange(event.target.value)}
-            size="small"
-            sx={{ justifySelf: { sm: 'end' }, minWidth: { xs: '100%', sm: 180 } }}
-          >
-            {members.map((member) => (
-              <MenuItem key={member.id} value={member.id}>
-                {member.display_name}
-              </MenuItem>
-            ))}
-          </TextField>
-        ) : null}
+        <Box sx={{ display: { xs: 'none', sm: 'block' } }} />
       </Box>
       <Divider />
       <WeekDayRail days={days} value={selectedDate} onChange={onDayChange} />
@@ -358,24 +330,22 @@ function WeekNavigator({
   );
 }
 
-export function MealPlanPage({ memberId, weekStart }: { memberId: string; weekStart: string }) {
+export function MealPlanPage({ weekStart }: { weekStart: string }) {
   const navigate = useNavigate();
-  const members = useMealPlanMembers();
-  const week = useMealPlanWeek(memberId, weekStart);
+  const week = useMealPlanWeek(weekStart);
   const [selection, setSelection] = useState<Selection | null>(null);
   const [selectedDate, setSelectedDate] = useState(() => {
     const today = todayIso();
     return today >= weekStart && today <= addDays(weekStart, 6) ? today : weekStart;
   });
 
-  function goTo(start: string, member = memberId) {
+  function goTo(start: string) {
     void navigate({
-      to: '/meal-plan/$memberId/$weekStart',
-      params: { memberId: member, weekStart: start },
+      to: '/meal-plan/$weekStart',
+      params: { weekStart: start },
     });
   }
 
-  if (members.isError) return <ErrorState error={members.error} onRetry={() => members.refetch()} />;
   if (week.isError) return <ErrorState error={week.error} onRetry={() => week.refetch()} />;
 
   const currentMonday = startOfWeekIso(todayIso());
@@ -417,11 +387,8 @@ export function MealPlanPage({ memberId, weekStart }: { memberId: string; weekSt
           days={week.data.days}
           selectedDate={activeDate}
           currentMonday={currentMonday}
-          members={members.data ?? []}
-          memberId={memberId}
           onWeekChange={goTo}
           onDayChange={setSelectedDate}
-          onMemberChange={(member) => goTo(weekStart, member)}
         />
       ) : null}
 
@@ -473,7 +440,6 @@ export function MealPlanPage({ memberId, weekStart }: { memberId: string; weekSt
           key={selection.key}
           open
           onClose={() => setSelection(null)}
-          memberId={memberId}
           date={selection.date}
           slot={selection.slot}
           entry={selection.entry}

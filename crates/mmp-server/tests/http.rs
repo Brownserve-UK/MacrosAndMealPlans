@@ -539,6 +539,13 @@ async fn the_openapi_document_describes_the_routes() {
     assert!(paths.get("/api/v1/ingredients").is_some());
     assert!(paths.get("/api/v1/ingredients/{id}").is_some());
     assert!(paths.get("/api/v1/products/{id}/ingredient").is_some());
+    assert!(paths.get("/api/v1/meal-plan/{week_start}").is_some());
+    assert!(paths.get("/api/v1/meal-plan/members").is_none());
+    assert!(
+        paths
+            .get("/api/v1/meal-plan/{member_id}/{week_start}")
+            .is_none()
+    );
     assert!(body["components"]["securitySchemes"]["basic"].is_object());
 }
 
@@ -1563,7 +1570,6 @@ async fn a_meal_plan_entry_round_trips_through_the_week() {
     let (status, entry, headers) = send(
         &app,
         Call::new("POST", "/api/v1/meal-plan-entries").body(json!({
-            "member_id": member_id,
             "planned_on": "2026-08-25",
             "planned_time": "18:30",
             "slot": "dinner",
@@ -1576,15 +1582,12 @@ async fn a_meal_plan_entry_round_trips_through_the_week() {
     .await;
     assert_eq!(status, StatusCode::CREATED, "{entry}");
     assert_eq!(etag(&headers), "1");
+    assert_eq!(entry["member_id"], member_id);
     assert_eq!(entry["status"], "planned");
     assert_eq!(entry["components"].as_array().unwrap().len(), 2);
     assert_eq!(entry["planned"]["nutrition"]["energy_kcal"], json!(128.0));
 
-    let (status, week, _) = send(
-        &app,
-        Call::new("GET", format!("/api/v1/meal-plan/{member_id}/2026-08-24")),
-    )
-    .await;
+    let (status, week, _) = send(&app, Call::new("GET", "/api/v1/meal-plan/2026-08-24")).await;
     assert_eq!(status, StatusCode::OK, "{week}");
     assert_eq!(week["days"].as_array().unwrap().len(), 7);
     assert_eq!(week["days"][1]["entries"][0]["id"], entry["id"]);
@@ -1604,7 +1607,6 @@ async fn confirming_a_planned_meal_creates_locked_diary_records() {
     let entry = send(
         &app,
         Call::new("POST", "/api/v1/meal-plan-entries").body(json!({
-            "member_id": member_id,
             "planned_on": "2026-08-25",
             "slot": "lunch",
             "components": [{"product_id": product["id"], "amount": measured_amount(150.0)}]
@@ -1660,21 +1662,14 @@ async fn confirming_a_planned_meal_creates_locked_diary_records() {
 #[tokio::test]
 async fn a_meal_plan_week_must_start_on_monday() {
     let app = app().await;
-    let me = send(&app, Call::new("GET", "/api/v1/auth/me")).await.1;
-    let member_id = me["member_id"].as_str().unwrap();
 
-    let (status, body, _) = send(
-        &app,
-        Call::new("GET", format!("/api/v1/meal-plan/{member_id}/2026-08-25")),
-    )
-    .await;
+    let (status, body, _) = send(&app, Call::new("GET", "/api/v1/meal-plan/2026-08-25")).await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
 }
 
 #[tokio::test]
-async fn a_basic_user_cannot_manage_someone_elses_meal_plan() {
+async fn an_unlinked_user_cannot_use_a_personal_meal_plan() {
     let app = app().await;
-    let member = create_member(&app, "Ann").await;
     create_user(&app, "joe", &["basic_user"]).await;
     let product = create_milk_product(&app).await;
 
@@ -1683,12 +1678,102 @@ async fn a_basic_user_cannot_manage_someone_elses_meal_plan() {
         Call::new("POST", "/api/v1/meal-plan-entries")
             .signed_in_as("joe")
             .body(json!({
-                "member_id": member["id"],
                 "planned_on": "2026-08-25",
                 "slot": "breakfast",
                 "components": [{"product_id": product["id"], "amount": measured_amount(100.0)}]
             })),
     )
     .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(
+        body["type"],
+        "https://macrosandmealplans.dev/problems/member-link-required"
+    );
+}
+
+#[tokio::test]
+async fn a_personal_meal_plan_cannot_be_opened_by_another_member() {
+    let app = app().await;
+    let product = create_milk_product(&app).await;
+    let entry = send(
+        &app,
+        Call::new("POST", "/api/v1/meal-plan-entries").body(json!({
+            "planned_on": "2026-08-25",
+            "slot": "breakfast",
+            "components": [{"product_id": product["id"], "amount": measured_amount(100.0)}]
+        })),
+    )
+    .await
+    .1;
+
+    let member = create_member(&app, "Joe").await;
+    let user = create_user(&app, "joe", &["basic_user"]).await;
+    send(
+        &app,
+        Call::new(
+            "PUT",
+            format!("/api/v1/members/{}/account", member["id"].as_str().unwrap()),
+        )
+        .if_match(member["revision"].as_i64().unwrap())
+        .body(json!({"user_id": user["id"]})),
+    )
+    .await;
+
+    let (status, body, _) = send(
+        &app,
+        Call::new(
+            "GET",
+            format!(
+                "/api/v1/meal-plan-entries/{}",
+                entry["id"].as_str().unwrap()
+            ),
+        )
+        .signed_in_as("joe"),
+    )
+    .await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+}
+
+#[tokio::test]
+async fn the_trusted_admin_can_open_another_members_entry() {
+    let app = app().await;
+    let member = create_member(&app, "Joe").await;
+    let user = create_user(&app, "joe", &["basic_user"]).await;
+    send(
+        &app,
+        Call::new(
+            "PUT",
+            format!("/api/v1/members/{}/account", member["id"].as_str().unwrap()),
+        )
+        .if_match(member["revision"].as_i64().unwrap())
+        .body(json!({"user_id": user["id"]})),
+    )
+    .await;
+
+    let product = create_milk_product(&app).await;
+    let entry = send(
+        &app,
+        Call::new("POST", "/api/v1/meal-plan-entries")
+            .signed_in_as("joe")
+            .body(json!({
+                "planned_on": "2026-08-25",
+                "slot": "breakfast",
+                "components": [{"product_id": product["id"], "amount": measured_amount(100.0)}]
+            })),
+    )
+    .await
+    .1;
+
+    let (status, body, _) = send(
+        &app,
+        Call::new(
+            "GET",
+            format!(
+                "/api/v1/meal-plan-entries/{}",
+                entry["id"].as_str().unwrap()
+            ),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
 }

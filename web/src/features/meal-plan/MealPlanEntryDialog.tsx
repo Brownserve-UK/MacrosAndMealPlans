@@ -273,14 +273,12 @@ function Confirmation({
 export function MealPlanEntryDialog({
   open,
   onClose,
-  memberId,
   date,
   slot,
   entry,
 }: {
   open: boolean;
   onClose: () => void;
-  memberId: string;
   date: string;
   slot: MealSlot;
   entry: MealPlanEntry | null;
@@ -320,6 +318,7 @@ export function MealPlanEntryDialog({
     })),
   });
   const dirty = JSON.stringify(comparable(draft)) !== JSON.stringify(comparable(baseline));
+  const resolved = entry !== null && entry.status !== 'planned';
 
   function close() {
     if (!busy) onClose();
@@ -360,7 +359,6 @@ export function MealPlanEntryDialog({
         });
       } else {
         await create.mutateAsync({
-          member_id: memberId,
           planned_on: draft.date,
           planned_time: draft.time || null,
           slot: draft.slot,
@@ -376,7 +374,7 @@ export function MealPlanEntryDialog({
   async function deleteEntry() {
     if (!entry) return;
     try {
-      await remove.mutateAsync({ id: entry.id, revision: entry.revision, memberId });
+      await remove.mutateAsync({ id: entry.id, revision: entry.revision });
       onClose();
     } catch (caught) {
       report(caught);
@@ -488,7 +486,7 @@ export function MealPlanEntryDialog({
             </Alert>
           ) : null}
 
-          {entry && entry.status !== 'planned' ? (
+          {resolved ? (
             <ResolvedEntry entry={entry} />
           ) : stage === 'not_eaten' ? (
             <Confirmation
@@ -627,7 +625,7 @@ export function MealPlanEntryDialog({
         </DialogContent>
 
         <DialogActions sx={{ px: 3, py: 2.5 }}>
-          {entry?.status !== 'planned' ? (
+          {resolved ? (
             <Button onClick={close} disabled={busy}>
               Close
             </Button>
@@ -673,7 +671,7 @@ export function MealPlanEntryDialog({
         onDismiss={() => setConflict(null)}
         onReload={() => {
           setConflict(null);
-          void queryClient.invalidateQueries({ queryKey: ['mealPlanWeek', memberId] });
+          void queryClient.invalidateQueries({ queryKey: ['mealPlanWeek'] });
           onClose();
         }}
       />

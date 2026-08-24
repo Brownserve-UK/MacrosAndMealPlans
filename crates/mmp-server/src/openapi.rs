@@ -16,7 +16,7 @@ use utoipa::{Modify, OpenApi};
         (name = "household", description = "The people in this installation's household"),
         (name = "accounts", description = "Sign-in accounts and their roles"),
         (name = "diary", description = "What was actually eaten, and when"),
-        (name = "meal-plan", description = "What household members intend to eat"),
+        (name = "meal-plan", description = "What the signed-in household member intends to eat"),
     ),
     components(schemas(crate::dto::SortDirectionDto, crate::dto::AmountKindDto)),
     modifiers(&SecurityAddon)

@@ -189,7 +189,6 @@ impl From<MealPlanComponentRequest> for NewMealPlanComponent {
 pub struct CreateMealPlanEntryRequest {
     #[serde(default)]
     pub id: Option<Uuid>,
-    pub member_id: Uuid,
     #[serde(with = "iso_date")]
     #[schema(value_type = String, format = Date)]
     pub planned_on: Date,
@@ -201,10 +200,14 @@ pub struct CreateMealPlanEntryRequest {
 }
 
 impl CreateMealPlanEntryRequest {
-    pub fn into_domain(self, actor_id: mmp_core::domain::UserId) -> NewMealPlanEntry {
+    pub fn into_domain(
+        self,
+        member_id: mmp_core::domain::HouseholdMemberId,
+        actor_id: mmp_core::domain::UserId,
+    ) -> NewMealPlanEntry {
         NewMealPlanEntry {
             id: self.id.map(Into::into),
-            member_id: self.member_id.into(),
+            member_id,
             planned_on: self.planned_on,
             planned_time: self.planned_time,
             slot: self.slot,

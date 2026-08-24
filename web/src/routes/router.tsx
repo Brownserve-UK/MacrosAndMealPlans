@@ -32,10 +32,10 @@ const mealPlanIndexRoute = createRoute({
 
 const mealPlanWeekRoute = createRoute({
   getParentRoute: () => rootRoute,
-  path: '/meal-plan/$memberId/$weekStart',
+  path: '/meal-plan/$weekStart',
   component: function ViewMealPlanWeek() {
-    const { memberId, weekStart } = mealPlanWeekRoute.useParams();
-    return <MealPlanPage memberId={memberId} weekStart={weekStart} />;
+    const { weekStart } = mealPlanWeekRoute.useParams();
+    return <MealPlanPage weekStart={weekStart} />;
   },
 });
 
