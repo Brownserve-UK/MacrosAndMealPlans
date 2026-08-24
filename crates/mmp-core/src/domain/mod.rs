@@ -3,6 +3,7 @@ mod consumption;
 mod household;
 mod ids;
 mod ingredient;
+mod meal_plan;
 mod nutrition;
 mod patch;
 mod product;
@@ -19,8 +20,14 @@ pub use household::{
     NewHouseholdMember, NewUser, User, UserPatch,
 };
 pub use ids::{ConsumptionRecordId, HouseholdMemberId, IngredientId, ProductId, Revision, UserId};
+pub use ids::{MealPlanComponentId, MealPlanEntryId};
 pub use ingredient::{
     Ingredient, IngredientPatch, IngredientSummary, MAX_NAME_LEN, NewIngredient, validate_name,
+};
+pub use meal_plan::{
+    ActualMealPlanComponent, ConfirmMealPlanEntry, MealPlanComponent, MealPlanComponentSnapshot,
+    MealPlanEntry, MealPlanEntryPatch, MealPlanStatus, MealSlot, NewMealPlanComponent,
+    NewMealPlanEntry, UnknownMealPlanStatus, UnknownMealSlot, validate_components,
 };
 pub use nutrition::NutritionFacts;
 pub use patch::Patch;

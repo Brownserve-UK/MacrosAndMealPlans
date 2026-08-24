@@ -5,8 +5,8 @@ use rust_decimal::Decimal;
 use time::{Date, OffsetDateTime};
 
 use super::{
-    ConsumptionRecordId, HouseholdMemberId, NutritionFacts, Product, ProductId, Quantity, Revision,
-    UserId,
+    ConsumptionRecordId, HouseholdMemberId, MealPlanComponentId, MealPlanEntryId, NutritionFacts,
+    Product, ProductId, Quantity, Revision, UserId,
 };
 use crate::error::ValidationErrors;
 
@@ -26,7 +26,7 @@ impl ConsumedAmount {
         }
     }
 
-    fn value(&self) -> Decimal {
+    pub fn value(&self) -> Decimal {
         match self {
             ConsumedAmount::Measure(quantity) => quantity.amount,
             ConsumedAmount::Servings(value) | ConsumedAmount::Packs(value) => *value,
@@ -201,6 +201,8 @@ pub struct ConsumptionRecord {
     pub member_id: HouseholdMemberId,
     pub product_id: ProductId,
     pub recorded_by: Option<UserId>,
+    pub meal_plan_entry_id: Option<MealPlanEntryId>,
+    pub meal_plan_component_id: Option<MealPlanComponentId>,
     pub amount: ConsumedAmount,
     pub consumed_on: Date,
     pub consumed_at: OffsetDateTime,
@@ -217,6 +219,8 @@ pub struct NewConsumptionRecord {
     pub member_id: HouseholdMemberId,
     pub product_id: ProductId,
     pub recorded_by: Option<UserId>,
+    pub meal_plan_entry_id: Option<MealPlanEntryId>,
+    pub meal_plan_component_id: Option<MealPlanComponentId>,
     pub amount: ConsumedAmount,
     pub consumed_on: Date,
     pub consumed_at: Option<OffsetDateTime>,

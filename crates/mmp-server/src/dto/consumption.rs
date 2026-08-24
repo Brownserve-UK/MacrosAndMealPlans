@@ -74,6 +74,10 @@ pub struct ConsumptionRecordDto {
     pub product_id: Uuid,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub recorded_by: Option<Uuid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub meal_plan_entry_id: Option<Uuid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub meal_plan_component_id: Option<Uuid>,
     pub amount: AmountDto,
     #[serde(with = "iso_date")]
     #[schema(value_type = String, format = Date, example = "2026-08-22")]
@@ -99,6 +103,8 @@ impl From<ConsumptionRecord> for ConsumptionRecordDto {
             member_id: value.member_id.as_uuid(),
             product_id: value.product_id.as_uuid(),
             recorded_by: value.recorded_by.map(|id| id.as_uuid()),
+            meal_plan_entry_id: value.meal_plan_entry_id.map(|id| id.as_uuid()),
+            meal_plan_component_id: value.meal_plan_component_id.map(|id| id.as_uuid()),
             amount: value.amount.into(),
             consumed_on: value.consumed_on,
             consumed_at: value.consumed_at,
@@ -131,6 +137,8 @@ impl From<CreateConsumptionRequest> for NewConsumptionRecord {
             member_id: super::member_id(value.member_id),
             product_id: value.product_id.into(),
             recorded_by: None,
+            meal_plan_entry_id: None,
+            meal_plan_component_id: None,
             amount: value.amount.into(),
             consumed_on: value.consumed_on,
             consumed_at: value.consumed_at,

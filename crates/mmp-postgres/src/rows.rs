@@ -3,9 +3,9 @@ use std::str::FromStr;
 
 use mmp_core::domain::{
     AccessScope, CatalogueOrigin, ConsumedAmount, ConsumptionRecord, ConsumptionRecordId,
-    HouseholdMember, HouseholdMemberId, Ingredient, IngredientId, MemberAccessGrant,
-    NutritionFacts, NutritionQuality, Product, ProductId, Provenance, Quantity, Revision, Role,
-    Unit, User, UserId,
+    HouseholdMember, HouseholdMemberId, Ingredient, IngredientId, MealPlanComponentId,
+    MealPlanEntryId, MemberAccessGrant, NutritionFacts, NutritionQuality, Product, ProductId,
+    Provenance, Quantity, Revision, Role, Unit, User, UserId,
 };
 use mmp_core::{CoreError, RepositoryError};
 use rust_decimal::Decimal;
@@ -15,7 +15,7 @@ use uuid::Uuid;
 
 type Extra = Json<BTreeMap<String, Decimal>>;
 
-fn bad_value(column: &str, value: &str) -> CoreError {
+pub(crate) fn bad_value(column: &str, value: &str) -> CoreError {
     CoreError::Repository(RepositoryError::new(format!(
         "column `{column}` holds `{value}`, which this build does not understand"
     )))
@@ -148,7 +148,7 @@ impl TryFrom<ProductRow> for Product {
     }
 }
 
-fn parse_basis(
+pub(crate) fn parse_basis(
     amount: Option<Decimal>,
     unit: Option<String>,
 ) -> Result<Option<Quantity>, CoreError> {
@@ -294,7 +294,7 @@ pub fn amount_bindings(amount: &ConsumedAmount) -> (&'static str, Decimal, Optio
     }
 }
 
-fn parse_amount(
+pub(crate) fn parse_amount(
     kind: &str,
     value: Decimal,
     unit: Option<String>,
@@ -317,6 +317,8 @@ pub struct ConsumptionRecordRow {
     pub member_id: Uuid,
     pub product_id: Uuid,
     pub recorded_by: Option<Uuid>,
+    pub meal_plan_entry_id: Option<Uuid>,
+    pub meal_plan_component_id: Option<Uuid>,
     pub amount_kind: String,
     pub amount_value: Decimal,
     pub amount_unit: Option<String>,
@@ -351,6 +353,8 @@ impl TryFrom<ConsumptionRecordRow> for ConsumptionRecord {
             member_id: HouseholdMemberId::from(row.member_id),
             product_id: ProductId::from(row.product_id),
             recorded_by: row.recorded_by.map(UserId::from),
+            meal_plan_entry_id: row.meal_plan_entry_id.map(MealPlanEntryId::from),
+            meal_plan_component_id: row.meal_plan_component_id.map(MealPlanComponentId::from),
             amount,
             consumed_on: row.consumed_on,
             consumed_at: row.consumed_at,

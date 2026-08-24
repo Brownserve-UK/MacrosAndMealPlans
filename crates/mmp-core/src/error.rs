@@ -24,6 +24,9 @@ pub enum CoreError {
         value: String,
     },
 
+    #[error("{detail}")]
+    Conflict { detail: String },
+
     #[error("the supplied values were not valid")]
     Validation(#[from] ValidationErrors),
 
@@ -48,6 +51,12 @@ impl CoreError {
             resource,
             field,
             value: value.to_string(),
+        }
+    }
+
+    pub fn conflict(detail: impl Into<String>) -> Self {
+        Self::Conflict {
+            detail: detail.into(),
         }
     }
 }

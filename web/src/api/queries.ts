@@ -117,9 +117,10 @@ export function useProducts(params: ProductListParams) {
   });
 }
 
-export function useProduct(id: string) {
+export function useProduct(id: string, options?: { enabled?: boolean }) {
   return useQuery({
     queryKey: keys.product(id),
+    enabled: options?.enabled ?? true,
     queryFn: async () =>
       unwrap(await client.GET('/api/v1/products/{id}', { params: { path: { id } } })),
   });
@@ -456,5 +457,110 @@ export function useDeleteConsumption() {
     onSuccess: (_data, variables) => {
       void qc.invalidateQueries({ queryKey: ['diaryDay', variables.memberId] });
     },
+  });
+}
+
+export const mealPlanKeys = {
+  members: ['mealPlanMembers'] as const,
+  week: (memberId: string, weekStart: string) => ['mealPlanWeek', memberId, weekStart] as const,
+  entry: (id: string) => ['mealPlanEntry', id] as const,
+};
+
+export function useMealPlanMembers() {
+  return useQuery({
+    queryKey: mealPlanKeys.members,
+    queryFn: async () => unwrap(await client.GET('/api/v1/meal-plan/members')),
+  });
+}
+
+export function useMealPlanWeek(memberId: string, weekStart: string) {
+  return useQuery({
+    queryKey: mealPlanKeys.week(memberId, weekStart),
+    enabled: Boolean(memberId) && Boolean(weekStart),
+    queryFn: async () =>
+      unwrap(
+        await client.GET('/api/v1/meal-plan/{member_id}/{week_start}', {
+          params: { path: { member_id: memberId, week_start: weekStart } },
+        }),
+      ),
+  });
+}
+
+function useMealPlanInvalidation() {
+  const qc = useQueryClient();
+  return (memberId: string) => {
+    void qc.invalidateQueries({ queryKey: ['mealPlanWeek', memberId] });
+    void qc.invalidateQueries({ queryKey: ['diaryDay', memberId] });
+  };
+}
+
+export function useCreateMealPlanEntry() {
+  const invalidate = useMealPlanInvalidation();
+  return useMutation({
+    mutationFn: async (body: components['schemas']['CreateMealPlanEntryRequest']) =>
+      unwrap(await client.POST('/api/v1/meal-plan-entries', { body })),
+    onSuccess: (entry) => invalidate(entry.member_id),
+  });
+}
+
+export function useUpdateMealPlanEntry() {
+  const invalidate = useMealPlanInvalidation();
+  return useMutation({
+    mutationFn: async (input: {
+      id: string;
+      revision: number;
+      body: components['schemas']['UpdateMealPlanEntryRequest'];
+    }) =>
+      unwrap(
+        await client.PATCH('/api/v1/meal-plan-entries/{id}', {
+          params: { path: { id: input.id }, header: ifMatch(input.revision) },
+          body: input.body,
+        }),
+      ),
+    onSuccess: (entry) => invalidate(entry.member_id),
+  });
+}
+
+export function useDeleteMealPlanEntry() {
+  const invalidate = useMealPlanInvalidation();
+  return useMutation({
+    mutationFn: async (input: { id: string; revision: number; memberId: string }) =>
+      unwrap(
+        await client.DELETE('/api/v1/meal-plan-entries/{id}', {
+          params: { path: { id: input.id }, header: ifMatch(input.revision) },
+        }),
+      ),
+    onSuccess: (_data, input) => invalidate(input.memberId),
+  });
+}
+
+export function useMarkMealPlanEaten() {
+  const invalidate = useMealPlanInvalidation();
+  return useMutation({
+    mutationFn: async (input: {
+      id: string;
+      revision: number;
+      body: components['schemas']['MarkMealPlanEatenRequest'];
+    }) =>
+      unwrap(
+        await client.POST('/api/v1/meal-plan-entries/{id}/eaten', {
+          params: { path: { id: input.id }, header: ifMatch(input.revision) },
+          body: input.body,
+        }),
+      ),
+    onSuccess: (entry) => invalidate(entry.member_id),
+  });
+}
+
+export function useMarkMealPlanNotEaten() {
+  const invalidate = useMealPlanInvalidation();
+  return useMutation({
+    mutationFn: async (input: { id: string; revision: number }) =>
+      unwrap(
+        await client.POST('/api/v1/meal-plan-entries/{id}/not-eaten', {
+          params: { path: { id: input.id }, header: ifMatch(input.revision) },
+        }),
+      ),
+    onSuccess: (entry) => invalidate(entry.member_id),
   });
 }

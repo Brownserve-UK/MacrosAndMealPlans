@@ -7,13 +7,15 @@ use async_trait::async_trait;
 
 use crate::domain::{
     AccessScope, ConsumptionRecord, ConsumptionRecordId, HouseholdMember, HouseholdMemberId,
-    Ingredient, IngredientId, MemberAccessGrant, Product, ProductId, Revision, Role, User, UserId,
+    Ingredient, IngredientId, MealPlanEntry, MealPlanEntryId, MemberAccessGrant, Product,
+    ProductId, Revision, Role, User, UserId,
 };
 use crate::error::{CoreError, Result};
 use crate::ports::{
     AccessGrantRepository, ConsumptionQuery, ConsumptionRecordRepository,
-    HouseholdMemberRepository, IngredientQuery, IngredientRepository, MemberQuery, Paginated,
-    ProductQuery, ProductRepository, SortDirection, UpdateOutcome, UserQuery, UserRepository,
+    HouseholdMemberRepository, IngredientQuery, IngredientRepository, MealPlanQuery,
+    MealPlanRepository, MemberQuery, Paginated, ProductQuery, ProductRepository, SortDirection,
+    UpdateOutcome, UserQuery, UserRepository,
 };
 
 // This _should_ reflect the indexs that a real database would enforce
@@ -641,6 +643,41 @@ impl ConsumptionRecordRepository for InMemoryConsumptionRecordRepository {
         Ok(Paginated::new(page, total, query.page))
     }
 
+    async fn list_period(
+        &self,
+        member_id: HouseholdMemberId,
+        from: time::Date,
+        to: time::Date,
+    ) -> Result<Vec<ConsumptionRecord>> {
+        let mut records: Vec<_> = self
+            .rows
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|record| record.member_id == member_id)
+            .filter(|record| record.consumed_on >= from && record.consumed_on <= to)
+            .cloned()
+            .collect();
+        records.sort_by_key(|record| (record.consumed_at, record.id));
+        Ok(records)
+    }
+
+    async fn list_for_meal_plan_entry(
+        &self,
+        entry_id: MealPlanEntryId,
+    ) -> Result<Vec<ConsumptionRecord>> {
+        let mut records: Vec<_> = self
+            .rows
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|record| record.meal_plan_entry_id == Some(entry_id))
+            .cloned()
+            .collect();
+        records.sort_by_key(|record| (record.consumed_at, record.id));
+        Ok(records)
+    }
+
     async fn insert(&self, record: &ConsumptionRecord) -> Result<()> {
         self.rows.lock().unwrap().insert(record.id, record.clone());
         Ok(())
@@ -668,5 +705,124 @@ impl ConsumptionRecordRepository for InMemoryConsumptionRecordRepository {
 
     async fn delete(&self, id: ConsumptionRecordId) -> Result<bool> {
         Ok(self.rows.lock().unwrap().remove(&id).is_some())
+    }
+}
+
+#[derive(Clone)]
+pub struct InMemoryMealPlanRepository {
+    rows: Arc<Mutex<HashMap<MealPlanEntryId, MealPlanEntry>>>,
+    consumption: InMemoryConsumptionRecordRepository,
+}
+
+impl InMemoryMealPlanRepository {
+    pub fn new(consumption: InMemoryConsumptionRecordRepository) -> Self {
+        Self {
+            rows: Arc::new(Mutex::new(HashMap::new())),
+            consumption,
+        }
+    }
+
+    pub fn count(&self) -> usize {
+        self.rows.lock().unwrap().len()
+    }
+}
+
+impl Default for InMemoryMealPlanRepository {
+    fn default() -> Self {
+        Self::new(InMemoryConsumptionRecordRepository::new())
+    }
+}
+
+#[async_trait]
+impl MealPlanRepository for InMemoryMealPlanRepository {
+    async fn get(&self, id: MealPlanEntryId) -> Result<Option<MealPlanEntry>> {
+        Ok(self.rows.lock().unwrap().get(&id).cloned())
+    }
+
+    async fn list(&self, query: &MealPlanQuery) -> Result<Vec<MealPlanEntry>> {
+        let mut entries: Vec<_> = self
+            .rows
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|entry| entry.member_id == query.member_id)
+            .filter(|entry| entry.planned_on >= query.from && entry.planned_on <= query.to)
+            .cloned()
+            .collect();
+        entries.sort_by_key(|entry| {
+            (
+                entry.planned_on,
+                entry.slot.order(),
+                entry.planned_time,
+                entry.created_at,
+            )
+        });
+        Ok(entries)
+    }
+
+    async fn insert(&self, entry: &MealPlanEntry) -> Result<()> {
+        self.rows.lock().unwrap().insert(entry.id, entry.clone());
+        Ok(())
+    }
+
+    async fn update(&self, entry: &MealPlanEntry, expected: Revision) -> Result<UpdateOutcome> {
+        let mut rows = self.rows.lock().unwrap();
+        match rows.get(&entry.id) {
+            None => Ok(UpdateOutcome::NotFound),
+            Some(current) if current.revision != expected => Ok(UpdateOutcome::RevisionMismatch {
+                actual: current.revision,
+            }),
+            Some(_) => {
+                rows.insert(entry.id, entry.clone());
+                Ok(UpdateOutcome::Updated)
+            }
+        }
+    }
+
+    async fn delete(&self, id: MealPlanEntryId, expected: Revision) -> Result<UpdateOutcome> {
+        let mut rows = self.rows.lock().unwrap();
+        match rows.get(&id) {
+            None => Ok(UpdateOutcome::NotFound),
+            Some(current) if current.revision != expected => Ok(UpdateOutcome::RevisionMismatch {
+                actual: current.revision,
+            }),
+            Some(_) => {
+                rows.remove(&id);
+                Ok(UpdateOutcome::Updated)
+            }
+        }
+    }
+
+    async fn resolve(
+        &self,
+        entry: &MealPlanEntry,
+        expected: Revision,
+        consumption: &[ConsumptionRecord],
+    ) -> Result<UpdateOutcome> {
+        let mut rows = self.rows.lock().unwrap();
+        match rows.get(&entry.id) {
+            None => return Ok(UpdateOutcome::NotFound),
+            Some(current) if current.revision != expected => {
+                return Ok(UpdateOutcome::RevisionMismatch {
+                    actual: current.revision,
+                });
+            }
+            Some(_) => {}
+        }
+
+        let mut records = self.consumption.rows.lock().unwrap();
+        if consumption.iter().any(|candidate| {
+            records.values().any(|existing| {
+                candidate.meal_plan_component_id.is_some()
+                    && existing.meal_plan_component_id == candidate.meal_plan_component_id
+            })
+        }) {
+            return Err(CoreError::conflict("That meal has already been confirmed."));
+        }
+        for record in consumption {
+            records.insert(record.id, record.clone());
+        }
+        rows.insert(entry.id, entry.clone());
+        Ok(UpdateOutcome::Updated)
     }
 }

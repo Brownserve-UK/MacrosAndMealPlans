@@ -3,6 +3,7 @@ mod consumption_record;
 mod error;
 mod household_member;
 mod ingredient;
+mod meal_plan;
 mod product;
 mod rows;
 mod user;
@@ -11,6 +12,7 @@ pub use access_grant::PgAccessGrantRepository;
 pub use consumption_record::PgConsumptionRecordRepository;
 pub use household_member::PgHouseholdMemberRepository;
 pub use ingredient::PgIngredientRepository;
+pub use meal_plan::PgMealPlanRepository;
 pub use product::PgProductRepository;
 pub use user::PgUserRepository;
 

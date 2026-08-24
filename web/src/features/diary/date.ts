@@ -9,10 +9,32 @@ export function todayIso(): string {
   return toIsoDate(new Date());
 }
 
-function parseIsoDate(iso: string): Date {
+export function parseIsoDate(iso: string): Date {
   const parts = iso.split('-').map(Number);
   const [year = 1970, month = 1, day = 1] = parts;
   return new Date(year, month - 1, day);
+}
+
+export function startOfWeekIso(iso: string): string {
+  const date = parseIsoDate(iso);
+  const daysSinceMonday = (date.getDay() + 6) % 7;
+  date.setDate(date.getDate() - daysSinceMonday);
+  return toIsoDate(date);
+}
+
+export function formatWeekRange(weekStart: string): string {
+  const start = parseIsoDate(weekStart);
+  const end = parseIsoDate(addDays(weekStart, 6));
+  const startLabel = start.toLocaleDateString('en-GB', {
+    day: 'numeric',
+    month: start.getMonth() === end.getMonth() ? undefined : 'short',
+  });
+  const endLabel = end.toLocaleDateString('en-GB', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+  });
+  return `${startLabel} to ${endLabel}`;
 }
 
 export function addDays(iso: string, delta: number): string {

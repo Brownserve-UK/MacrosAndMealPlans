@@ -7,11 +7,11 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use http_body_util::BodyExt;
 use mmp_core::ports::SystemClock;
-use mmp_core::services::{CatalogueService, DiaryService, HouseholdService};
+use mmp_core::services::{CatalogueService, DiaryService, HouseholdService, MealPlanService};
 use mmp_core::testing::{
     InMemoryAccessGrantRepository, InMemoryConsumptionRecordRepository,
-    InMemoryHouseholdMemberRepository, InMemoryIngredientRepository, InMemoryProductRepository,
-    InMemoryUserRepository,
+    InMemoryHouseholdMemberRepository, InMemoryIngredientRepository, InMemoryMealPlanRepository,
+    InMemoryProductRepository, InMemoryUserRepository,
 };
 use mmp_server::AppState;
 use mmp_server::auth::DevBasicAuthProvider;
@@ -34,6 +34,7 @@ async fn app() -> Router {
         .expect("the bootstrap admin should be created");
 
     let products = InMemoryProductRepository::new();
+    let consumption = InMemoryConsumptionRecordRepository::new();
     let state = AppState::new(
         CatalogueService::new(
             Arc::new(InMemoryIngredientRepository::new()),
@@ -42,8 +43,14 @@ async fn app() -> Router {
         ),
         household.clone(),
         DiaryService::new(
-            Arc::new(InMemoryConsumptionRecordRepository::new()),
+            Arc::new(consumption.clone()),
+            Arc::new(products.clone()),
+            Arc::new(SystemClock),
+        ),
+        MealPlanService::new(
+            Arc::new(InMemoryMealPlanRepository::new(consumption.clone())),
             Arc::new(products),
+            Arc::new(consumption),
             Arc::new(SystemClock),
         ),
         Arc::new(DevBasicAuthProvider::new(household, PASSWORD)),
@@ -1544,4 +1551,144 @@ async fn diary_members_lists_only_who_the_caller_may_see() {
         body.as_array().unwrap().is_empty(),
         "a basic user with no linked member sees nobody's diary"
     );
+}
+
+#[tokio::test]
+async fn a_meal_plan_entry_round_trips_through_the_week() {
+    let app = app().await;
+    let me = send(&app, Call::new("GET", "/api/v1/auth/me")).await.1;
+    let member_id = me["member_id"].as_str().unwrap();
+    let product = create_milk_product(&app).await;
+
+    let (status, entry, headers) = send(
+        &app,
+        Call::new("POST", "/api/v1/meal-plan-entries").body(json!({
+            "member_id": member_id,
+            "planned_on": "2026-08-25",
+            "planned_time": "18:30",
+            "slot": "dinner",
+            "components": [
+                {"product_id": product["id"], "amount": measured_amount(150.0)},
+                {"product_id": product["id"], "amount": measured_amount(50.0)}
+            ]
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{entry}");
+    assert_eq!(etag(&headers), "1");
+    assert_eq!(entry["status"], "planned");
+    assert_eq!(entry["components"].as_array().unwrap().len(), 2);
+    assert_eq!(entry["planned"]["nutrition"]["energy_kcal"], json!(128.0));
+
+    let (status, week, _) = send(
+        &app,
+        Call::new("GET", format!("/api/v1/meal-plan/{member_id}/2026-08-24")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{week}");
+    assert_eq!(week["days"].as_array().unwrap().len(), 7);
+    assert_eq!(week["days"][1]["entries"][0]["id"], entry["id"]);
+    assert_eq!(
+        week["remaining_planned"]["nutrition"]["energy_kcal"],
+        json!(128.0)
+    );
+    assert_eq!(week["projected"]["nutrition"]["energy_kcal"], json!(128.0));
+}
+
+#[tokio::test]
+async fn confirming_a_planned_meal_creates_locked_diary_records() {
+    let app = app().await;
+    let me = send(&app, Call::new("GET", "/api/v1/auth/me")).await.1;
+    let member_id = me["member_id"].as_str().unwrap();
+    let product = create_milk_product(&app).await;
+    let entry = send(
+        &app,
+        Call::new("POST", "/api/v1/meal-plan-entries").body(json!({
+            "member_id": member_id,
+            "planned_on": "2026-08-25",
+            "slot": "lunch",
+            "components": [{"product_id": product["id"], "amount": measured_amount(150.0)}]
+        })),
+    )
+    .await
+    .1;
+    let entry_id = entry["id"].as_str().unwrap();
+    let component_id = entry["components"][0]["id"].as_str().unwrap();
+
+    let (status, eaten, _) = send(
+        &app,
+        Call::new(
+            "POST",
+            format!("/api/v1/meal-plan-entries/{entry_id}/eaten"),
+        )
+        .if_match(1)
+        .body(json!({
+            "consumed_on": "2026-08-26",
+            "consumed_at": "2026-08-26T19:15:00Z",
+            "components": [{"component_id": component_id, "amount": measured_amount(200.0)}]
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{eaten}");
+    assert_eq!(eaten["status"], "eaten");
+    assert_eq!(eaten["actual"]["nutrition"]["energy_kcal"], json!(128.0));
+    let record = &eaten["components"][0]["consumption_record"];
+    assert_eq!(record["meal_plan_entry_id"], entry["id"]);
+    assert_eq!(
+        record["meal_plan_component_id"],
+        entry["components"][0]["id"]
+    );
+
+    let (status, diary, _) = send(
+        &app,
+        Call::new("GET", format!("/api/v1/diary/{member_id}/2026-08-26")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{diary}");
+    assert_eq!(diary["entries"].as_array().unwrap().len(), 1);
+
+    let record_id = record["id"].as_str().unwrap();
+    let (status, _, _) = send(
+        &app,
+        Call::new("DELETE", format!("/api/v1/consumption/{record_id}"))
+            .if_match(record["revision"].as_i64().unwrap()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn a_meal_plan_week_must_start_on_monday() {
+    let app = app().await;
+    let me = send(&app, Call::new("GET", "/api/v1/auth/me")).await.1;
+    let member_id = me["member_id"].as_str().unwrap();
+
+    let (status, body, _) = send(
+        &app,
+        Call::new("GET", format!("/api/v1/meal-plan/{member_id}/2026-08-25")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+}
+
+#[tokio::test]
+async fn a_basic_user_cannot_manage_someone_elses_meal_plan() {
+    let app = app().await;
+    let member = create_member(&app, "Ann").await;
+    create_user(&app, "joe", &["basic_user"]).await;
+    let product = create_milk_product(&app).await;
+
+    let (status, body, _) = send(
+        &app,
+        Call::new("POST", "/api/v1/meal-plan-entries")
+            .signed_in_as("joe")
+            .body(json!({
+                "member_id": member["id"],
+                "planned_on": "2026-08-25",
+                "slot": "breakfast",
+                "components": [{"product_id": product["id"], "amount": measured_amount(100.0)}]
+            })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
 }

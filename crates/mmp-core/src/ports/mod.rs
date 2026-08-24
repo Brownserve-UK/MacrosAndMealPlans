@@ -4,8 +4,9 @@ mod repository;
 pub use clock::{Clock, FixedClock, SystemClock};
 pub use repository::{
     AccessGrantRepository, ConsumptionQuery, ConsumptionRecordRepository,
-    HouseholdMemberRepository, IngredientQuery, IngredientRepository, MemberQuery, ProductQuery,
-    ProductRepository, SortDirection, UpdateOutcome, UserQuery, UserRepository,
+    HouseholdMemberRepository, IngredientQuery, IngredientRepository, MealPlanQuery,
+    MealPlanRepository, MemberQuery, ProductQuery, ProductRepository, SortDirection, UpdateOutcome,
+    UserQuery, UserRepository,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

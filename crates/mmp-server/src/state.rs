@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use mmp_core::services::{CatalogueService, DiaryService, HouseholdService};
+use mmp_core::services::{CatalogueService, DiaryService, HouseholdService, MealPlanService};
 
 use crate::auth::AuthProvider;
 
@@ -9,6 +9,7 @@ pub struct AppState {
     pub catalogue: CatalogueService,
     pub household: Arc<HouseholdService>,
     pub diary: DiaryService,
+    pub meal_plan: MealPlanService,
     pub auth: Arc<dyn AuthProvider>,
 }
 
@@ -17,12 +18,14 @@ impl AppState {
         catalogue: CatalogueService,
         household: Arc<HouseholdService>,
         diary: DiaryService,
+        meal_plan: MealPlanService,
         auth: Arc<dyn AuthProvider>,
     ) -> Self {
         Self {
             catalogue,
             household,
             diary,
+            meal_plan,
             auth,
         }
     }

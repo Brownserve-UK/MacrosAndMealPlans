@@ -71,6 +71,8 @@ impl DiaryService {
             member_id: input.member_id,
             product_id: input.product_id,
             recorded_by: input.recorded_by,
+            meal_plan_entry_id: input.meal_plan_entry_id,
+            meal_plan_component_id: input.meal_plan_component_id,
             amount: input.amount,
             consumed_on: input.consumed_on,
             consumed_at: input.consumed_at.unwrap_or(now),
@@ -130,6 +132,11 @@ impl DiaryService {
     pub async fn remove(&self, id: ConsumptionRecordId, expected: Revision) -> Result<()> {
         let current = self.get(id).await?;
         require_revision(id, expected, current.revision)?;
+        if current.meal_plan_component_id.is_some() {
+            return Err(CoreError::conflict(
+                "Food recorded from an eaten meal plan cannot be deleted.",
+            ));
+        }
         if self.records.delete(id).await? {
             Ok(())
         } else {

@@ -20,6 +20,7 @@ pub fn build(state: AppState) -> (Router, utoipa::openapi::OpenApi) {
         .merge(routes::members::router())
         .merge(routes::users::router())
         .merge(routes::diary::router())
+        .merge(routes::meal_plan::router())
         .split_for_parts();
 
     let router = router
@@ -59,17 +60,25 @@ pub fn stub_state() -> AppState {
         Arc::new(NoopGrants),
         Arc::new(SystemClock),
     ));
+    let consumption = Arc::new(NoopConsumptionRecords);
+    let products = Arc::new(NoopProducts);
 
     AppState::new(
         mmp_core::services::CatalogueService::new(
             Arc::new(NoopIngredients),
-            Arc::new(NoopProducts),
+            products.clone(),
             Arc::new(SystemClock),
         ),
         household.clone(),
         mmp_core::services::DiaryService::new(
-            Arc::new(NoopConsumptionRecords),
-            Arc::new(NoopProducts),
+            consumption.clone(),
+            products.clone(),
+            Arc::new(SystemClock),
+        ),
+        mmp_core::services::MealPlanService::new(
+            Arc::new(NoopMealPlans),
+            products,
+            consumption,
             Arc::new(SystemClock),
         ),
         Arc::new(crate::auth::DevBasicAuthProvider::new(household, "")),
@@ -82,6 +91,7 @@ struct NoopMembers;
 struct NoopUsers;
 struct NoopGrants;
 struct NoopConsumptionRecords;
+struct NoopMealPlans;
 
 #[async_trait::async_trait]
 impl mmp_core::ports::IngredientRepository for NoopIngredients {
@@ -249,6 +259,20 @@ impl mmp_core::ports::ConsumptionRecordRepository for NoopConsumptionRecords {
     ) -> mmp_core::Result<mmp_core::ports::Paginated<mmp_core::domain::ConsumptionRecord>> {
         Ok(mmp_core::ports::Paginated::new(vec![], 0, q.page))
     }
+    async fn list_period(
+        &self,
+        _: mmp_core::domain::HouseholdMemberId,
+        _: time::Date,
+        _: time::Date,
+    ) -> mmp_core::Result<Vec<mmp_core::domain::ConsumptionRecord>> {
+        Ok(vec![])
+    }
+    async fn list_for_meal_plan_entry(
+        &self,
+        _: mmp_core::domain::MealPlanEntryId,
+    ) -> mmp_core::Result<Vec<mmp_core::domain::ConsumptionRecord>> {
+        Ok(vec![])
+    }
     async fn insert(&self, _: &mmp_core::domain::ConsumptionRecord) -> mmp_core::Result<()> {
         Ok(())
     }
@@ -261,6 +285,47 @@ impl mmp_core::ports::ConsumptionRecordRepository for NoopConsumptionRecords {
     }
     async fn delete(&self, _: mmp_core::domain::ConsumptionRecordId) -> mmp_core::Result<bool> {
         Ok(false)
+    }
+}
+
+#[async_trait::async_trait]
+impl mmp_core::ports::MealPlanRepository for NoopMealPlans {
+    async fn get(
+        &self,
+        _: mmp_core::domain::MealPlanEntryId,
+    ) -> mmp_core::Result<Option<mmp_core::domain::MealPlanEntry>> {
+        Ok(None)
+    }
+    async fn list(
+        &self,
+        _: &mmp_core::ports::MealPlanQuery,
+    ) -> mmp_core::Result<Vec<mmp_core::domain::MealPlanEntry>> {
+        Ok(vec![])
+    }
+    async fn insert(&self, _: &mmp_core::domain::MealPlanEntry) -> mmp_core::Result<()> {
+        Ok(())
+    }
+    async fn update(
+        &self,
+        _: &mmp_core::domain::MealPlanEntry,
+        _: mmp_core::domain::Revision,
+    ) -> mmp_core::Result<mmp_core::ports::UpdateOutcome> {
+        Ok(mmp_core::ports::UpdateOutcome::NotFound)
+    }
+    async fn delete(
+        &self,
+        _: mmp_core::domain::MealPlanEntryId,
+        _: mmp_core::domain::Revision,
+    ) -> mmp_core::Result<mmp_core::ports::UpdateOutcome> {
+        Ok(mmp_core::ports::UpdateOutcome::NotFound)
+    }
+    async fn resolve(
+        &self,
+        _: &mmp_core::domain::MealPlanEntry,
+        _: mmp_core::domain::Revision,
+        _: &[mmp_core::domain::ConsumptionRecord],
+    ) -> mmp_core::Result<mmp_core::ports::UpdateOutcome> {
+        Ok(mmp_core::ports::UpdateOutcome::NotFound)
     }
 }
 

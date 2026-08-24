@@ -42,16 +42,18 @@ pub fn map_db_error(error: sqlx::Error, context: &str) -> CoreError {
     }
 }
 
-const TABLES: [(&str, &str); 6] = [
+const TABLES: [(&str, &str); 8] = [
     ("household_member_", "household member"),
     ("member_access_grant_", "access grant"),
     ("ingredient_", "ingredient"),
     ("app_user_", "user"),
     ("product_", "product"),
     ("consumption_record_", "consumption record"),
+    ("meal_plan_entry_", "meal plan entry"),
+    ("meal_plan_component_", "meal plan component"),
 ];
 
-const UNIQUE_CONSTRAINTS: [(&str, &str, &str); 11] = [
+const UNIQUE_CONSTRAINTS: [(&str, &str, &str); 14] = [
     ("ingredient_name_unique", "ingredient", "name"),
     ("ingredient_seed_key_unique", "ingredient", "seed_key"),
     ("ingredient_pkey", "ingredient", "id"),
@@ -67,6 +69,13 @@ const UNIQUE_CONSTRAINTS: [(&str, &str, &str); 11] = [
         "name",
     ),
     ("consumption_record_pkey", "consumption record", "id"),
+    ("meal_plan_entry_pkey", "meal plan entry", "id"),
+    ("meal_plan_component_pkey", "meal plan component", "id"),
+    (
+        "consumption_record_meal_plan_component_unique",
+        "consumption record",
+        "meal_plan_component_id",
+    ),
 ];
 
 fn unique_violation(constraint: &str) -> Option<(&'static str, &'static str)> {
@@ -79,6 +88,7 @@ fn unique_violation(constraint: &str) -> Option<(&'static str, &'static str)> {
         "household_member_linked_user_id_key" => Some(("household member", "account")),
         "household_member_pkey" => Some(("household member", "id")),
         "member_access_grant_pkey" => Some(("access grant", "id")),
+        "meal_plan_component_entry_id_position_key" => Some(("meal plan component", "position")),
         "user_role_pkey" => Some(("user", "role")),
         _ => None,
     }
@@ -90,6 +100,9 @@ fn foreign_key_target(constraint: &str) -> &'static str {
     }
     if constraint.contains("product_id") {
         return "product";
+    }
+    if constraint.contains("meal_plan_component_id") {
+        return "meal plan component";
     }
     if constraint.contains("user_id") || constraint.contains("_by_fkey") {
         return "user";

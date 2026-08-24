@@ -265,3 +265,112 @@ CREATE TABLE consumption_record (
 
 CREATE INDEX consumption_record_member_day ON consumption_record (member_id, consumed_on);
 CREATE INDEX consumption_record_product ON consumption_record (product_id);
+
+CREATE TABLE meal_plan_entry (
+    id            UUID PRIMARY KEY,
+    member_id     UUID NOT NULL REFERENCES household_member (id) ON DELETE CASCADE,
+    planned_on    DATE NOT NULL,
+    planned_time  TIME,
+    slot          TEXT NOT NULL,
+    status        TEXT NOT NULL,
+    created_by    UUID NOT NULL REFERENCES app_user (id) ON DELETE RESTRICT,
+    updated_by    UUID NOT NULL REFERENCES app_user (id) ON DELETE RESTRICT,
+    resolved_by   UUID REFERENCES app_user (id) ON DELETE RESTRICT,
+    resolved_at   TIMESTAMPTZ,
+    revision      BIGINT NOT NULL DEFAULT 1,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    CONSTRAINT meal_plan_entry_slot_valid
+        CHECK (slot IN ('breakfast', 'lunch', 'dinner', 'snacks')),
+    CONSTRAINT meal_plan_entry_status_valid
+        CHECK (status IN ('planned', 'eaten', 'not_eaten')),
+    CONSTRAINT meal_plan_entry_resolution_complete
+        CHECK ((status = 'planned') = (resolved_by IS NULL AND resolved_at IS NULL))
+);
+
+CREATE INDEX meal_plan_entry_member_day
+    ON meal_plan_entry (member_id, planned_on, slot, planned_time);
+CREATE INDEX meal_plan_entry_status_day
+    ON meal_plan_entry (status, planned_on);
+
+CREATE TABLE meal_plan_component (
+    id            UUID PRIMARY KEY,
+    entry_id      UUID NOT NULL REFERENCES meal_plan_entry (id) ON DELETE CASCADE,
+    position      INTEGER NOT NULL,
+    product_id    UUID NOT NULL REFERENCES product (id) ON DELETE RESTRICT,
+    amount_kind   TEXT NOT NULL,
+    amount_value  NUMERIC(16, 4) NOT NULL,
+    amount_unit   TEXT,
+    frozen_product_name TEXT,
+    nutrition_basis_amount  NUMERIC(16, 4),
+    nutrition_basis_unit    TEXT,
+    energy_kcal         NUMERIC(12, 3),
+    protein_g           NUMERIC(12, 3),
+    carbohydrate_g      NUMERIC(12, 3),
+    sugar_g             NUMERIC(12, 3),
+    fat_g               NUMERIC(12, 3),
+    saturated_fat_g     NUMERIC(12, 3),
+    fibre_g             NUMERIC(12, 3),
+    salt_g              NUMERIC(12, 3),
+    cholesterol_mg      NUMERIC(12, 3),
+    nutrition_extra     JSONB,
+    nutrition_quality   TEXT,
+
+    CONSTRAINT meal_plan_component_position_non_negative
+        CHECK (position >= 0),
+    CONSTRAINT meal_plan_component_amount_kind_valid
+        CHECK (amount_kind IN ('measure', 'servings', 'packs')),
+    CONSTRAINT meal_plan_component_amount_value_positive
+        CHECK (amount_value > 0),
+    CONSTRAINT meal_plan_component_amount_unit_present
+        CHECK ((amount_kind = 'measure') = (amount_unit IS NOT NULL)),
+    CONSTRAINT meal_plan_component_amount_unit_valid
+        CHECK (amount_unit IS NULL OR amount_unit IN ('mg', 'g', 'kg', 'oz', 'lb', 'ml', 'l', 'tsp', 'tbsp', 'fl_oz', 'cup', 'item', 'piece', 'slice', 'clove', 'can', 'pack', 'bunch')),
+    CONSTRAINT meal_plan_component_basis_unit_valid
+        CHECK (nutrition_basis_unit IS NULL OR nutrition_basis_unit IN ('mg', 'g', 'kg', 'oz', 'lb', 'ml', 'l', 'tsp', 'tbsp', 'fl_oz', 'cup', 'item', 'piece', 'slice', 'clove', 'can', 'pack', 'bunch')),
+    CONSTRAINT meal_plan_component_basis_complete
+        CHECK (num_nonnulls(nutrition_basis_amount, nutrition_basis_unit) <> 1),
+    CONSTRAINT meal_plan_component_basis_positive
+        CHECK (nutrition_basis_amount IS NULL OR nutrition_basis_amount > 0),
+    CONSTRAINT meal_plan_component_snapshot_complete
+        CHECK (
+            (frozen_product_name IS NULL AND nutrition_quality IS NULL AND nutrition_extra IS NULL)
+            OR
+            (frozen_product_name IS NOT NULL AND nutrition_quality IS NOT NULL AND nutrition_extra IS NOT NULL)
+        ),
+    CONSTRAINT meal_plan_component_extra_is_object
+        CHECK (nutrition_extra IS NULL OR jsonb_typeof(nutrition_extra) = 'object'),
+    CONSTRAINT meal_plan_component_quality_valid
+        CHECK (nutrition_quality IS NULL OR nutrition_quality IN ('known', 'partial', 'unknown')),
+    CONSTRAINT meal_plan_component_energy_non_negative
+        CHECK (energy_kcal IS NULL OR energy_kcal >= 0),
+    CONSTRAINT meal_plan_component_protein_non_negative
+        CHECK (protein_g IS NULL OR protein_g >= 0),
+    CONSTRAINT meal_plan_component_carbohydrate_non_negative
+        CHECK (carbohydrate_g IS NULL OR carbohydrate_g >= 0),
+    CONSTRAINT meal_plan_component_sugar_non_negative
+        CHECK (sugar_g IS NULL OR sugar_g >= 0),
+    CONSTRAINT meal_plan_component_fat_non_negative
+        CHECK (fat_g IS NULL OR fat_g >= 0),
+    CONSTRAINT meal_plan_component_saturated_fat_non_negative
+        CHECK (saturated_fat_g IS NULL OR saturated_fat_g >= 0),
+    CONSTRAINT meal_plan_component_fibre_non_negative
+        CHECK (fibre_g IS NULL OR fibre_g >= 0),
+    CONSTRAINT meal_plan_component_salt_non_negative
+        CHECK (salt_g IS NULL OR salt_g >= 0),
+    CONSTRAINT meal_plan_component_cholesterol_non_negative
+        CHECK (cholesterol_mg IS NULL OR cholesterol_mg >= 0),
+    UNIQUE (entry_id, position)
+);
+
+CREATE INDEX meal_plan_component_entry ON meal_plan_component (entry_id, position);
+CREATE INDEX meal_plan_component_product ON meal_plan_component (product_id);
+
+ALTER TABLE consumption_record
+    ADD COLUMN meal_plan_component_id UUID
+        REFERENCES meal_plan_component (id) ON DELETE RESTRICT;
+
+CREATE UNIQUE INDEX consumption_record_meal_plan_component_unique
+    ON consumption_record (meal_plan_component_id)
+    WHERE meal_plan_component_id IS NOT NULL;

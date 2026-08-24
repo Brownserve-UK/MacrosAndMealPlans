@@ -137,6 +137,9 @@ impl From<CoreError> for ApiError {
                     format!("Another {resource} already uses that {field}."),
                 )
             }
+            CoreError::Conflict { ref detail } => {
+                ApiError::new(StatusCode::CONFLICT, "conflict", "Conflict", detail.clone())
+            }
             CoreError::Validation(ref errors) => ApiError::new(
                 StatusCode::UNPROCESSABLE_ENTITY,
                 "validation-failed",

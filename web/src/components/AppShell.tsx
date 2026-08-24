@@ -1,6 +1,7 @@
 import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettingsOutlined';
 import DarkModeIcon from '@mui/icons-material/DarkModeOutlined';
 import EventNoteIcon from '@mui/icons-material/EventNoteOutlined';
+import CalendarMonthIcon from '@mui/icons-material/CalendarMonthOutlined';
 import InventoryIcon from '@mui/icons-material/Inventory2Outlined';
 import LightModeIcon from '@mui/icons-material/LightModeOutlined';
 import LogoutIcon from '@mui/icons-material/LogoutOutlined';
@@ -31,6 +32,7 @@ import { useAuth } from '../auth/AuthProvider';
 export const DRAWER_WIDTH = 236;
 
 const NAV = [
+  { to: '/meal-plan', label: 'Meal plan', icon: <CalendarMonthIcon fontSize="small" />, needs: undefined },
   { to: '/diary', label: 'Diary', icon: <EventNoteIcon fontSize="small" />, needs: undefined },
   { to: '/ingredients', label: 'Ingredients', icon: <RestaurantIcon fontSize="small" />, needs: 'catalogue:read' },
   { to: '/products', label: 'Products', icon: <InventoryIcon fontSize="small" />, needs: 'catalogue:read' },
@@ -178,7 +180,7 @@ export function AppShell() {
           </Toolbar>
         </AppBar>
 
-        <Container maxWidth="md" sx={{ py: 5, flexGrow: 1 }}>
+        <Container maxWidth={pathname.startsWith('/meal-plan') ? 'lg' : 'md'} sx={{ py: 5, flexGrow: 1 }}>
           <Outlet />
         </Container>
       </Box>

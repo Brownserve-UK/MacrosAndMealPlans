@@ -4,11 +4,11 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use http_body_util::BodyExt;
 use mmp_core::ports::SystemClock;
-use mmp_core::services::{CatalogueService, DiaryService, HouseholdService};
+use mmp_core::services::{CatalogueService, DiaryService, HouseholdService, MealPlanService};
 use mmp_core::testing::{
     InMemoryAccessGrantRepository, InMemoryConsumptionRecordRepository,
-    InMemoryHouseholdMemberRepository, InMemoryIngredientRepository, InMemoryProductRepository,
-    InMemoryUserRepository,
+    InMemoryHouseholdMemberRepository, InMemoryIngredientRepository, InMemoryMealPlanRepository,
+    InMemoryProductRepository, InMemoryUserRepository,
 };
 use mmp_server::auth::DevBasicAuthProvider;
 use mmp_server::{AppState, app};
@@ -34,6 +34,7 @@ fn app_with_web(dist: &std::path::Path) -> axum::Router {
         Arc::new(SystemClock),
     ));
     let products = InMemoryProductRepository::new();
+    let consumption = InMemoryConsumptionRecordRepository::new();
     let state = AppState::new(
         CatalogueService::new(
             Arc::new(InMemoryIngredientRepository::new()),
@@ -42,8 +43,14 @@ fn app_with_web(dist: &std::path::Path) -> axum::Router {
         ),
         household.clone(),
         DiaryService::new(
-            Arc::new(InMemoryConsumptionRecordRepository::new()),
+            Arc::new(consumption.clone()),
+            Arc::new(products.clone()),
+            Arc::new(SystemClock),
+        ),
+        MealPlanService::new(
+            Arc::new(InMemoryMealPlanRepository::new(consumption.clone())),
             Arc::new(products),
+            Arc::new(consumption),
             Arc::new(SystemClock),
         ),
         Arc::new(DevBasicAuthProvider::new(household, "changeme")),
@@ -144,6 +151,7 @@ async fn without_a_web_build_the_api_still_works() {
         Arc::new(SystemClock),
     ));
     let products = InMemoryProductRepository::new();
+    let consumption = InMemoryConsumptionRecordRepository::new();
     let state = AppState::new(
         CatalogueService::new(
             Arc::new(InMemoryIngredientRepository::new()),
@@ -152,8 +160,14 @@ async fn without_a_web_build_the_api_still_works() {
         ),
         household.clone(),
         DiaryService::new(
-            Arc::new(InMemoryConsumptionRecordRepository::new()),
+            Arc::new(consumption.clone()),
+            Arc::new(products.clone()),
+            Arc::new(SystemClock),
+        ),
+        MealPlanService::new(
+            Arc::new(InMemoryMealPlanRepository::new(consumption.clone())),
             Arc::new(products),
+            Arc::new(consumption),
             Arc::new(SystemClock),
         ),
         Arc::new(DevBasicAuthProvider::new(household, "changeme")),

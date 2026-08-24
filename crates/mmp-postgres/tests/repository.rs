@@ -3,18 +3,20 @@
 use mmp_core::CoreError;
 use mmp_core::domain::{
     AccessScope, CatalogueOrigin, ConsumedAmount, ConsumptionRecord, ConsumptionRecordId,
-    HouseholdMember, HouseholdMemberId, Ingredient, IngredientId, MemberAccessGrant,
-    NutritionFacts, NutritionQuality, Product, ProductId, Provenance, Quantity, Revision, Role,
-    Unit, User, UserId,
+    HouseholdMember, HouseholdMemberId, Ingredient, IngredientId, MealPlanComponent,
+    MealPlanComponentId, MealPlanComponentSnapshot, MealPlanEntry, MealPlanEntryId, MealPlanStatus,
+    MealSlot, MemberAccessGrant, NutritionFacts, NutritionQuality, Product, ProductId, Provenance,
+    Quantity, Revision, Role, Unit, User, UserId,
 };
 use mmp_core::ports::{
     AccessGrantRepository, ConsumptionQuery, ConsumptionRecordRepository,
-    HouseholdMemberRepository, IngredientQuery, IngredientRepository, MemberQuery, PageRequest,
-    ProductQuery, ProductRepository, UpdateOutcome, UserRepository,
+    HouseholdMemberRepository, IngredientQuery, IngredientRepository, MealPlanQuery,
+    MealPlanRepository, MemberQuery, PageRequest, ProductQuery, ProductRepository, UpdateOutcome,
+    UserRepository,
 };
 use mmp_postgres::{
     PgAccessGrantRepository, PgConsumptionRecordRepository, PgHouseholdMemberRepository,
-    PgIngredientRepository, PgProductRepository, PgUserRepository,
+    PgIngredientRepository, PgMealPlanRepository, PgProductRepository, PgUserRepository,
 };
 use rust_decimal::Decimal;
 use sqlx::PgPool;
@@ -887,6 +889,8 @@ fn consumption_record(member_id: HouseholdMemberId, product_id: ProductId) -> Co
         member_id,
         product_id,
         recorded_by: None,
+        meal_plan_entry_id: None,
+        meal_plan_component_id: None,
         amount: ConsumedAmount::Measure(Quantity::new(Decimal::new(150, 0), Unit::Millilitre)),
         consumed_on: date!(2026 - 08 - 22),
         consumed_at: now,
@@ -1062,4 +1066,105 @@ async fn listing_filters_by_member_and_date_range(pool: PgPool) {
 
     assert_eq!(page.items.len(), 1);
     assert_eq!(page.items[0].id, on_day.id);
+}
+
+async fn seed_meal_plan_dependencies(pool: &PgPool) -> (HouseholdMemberId, ProductId, UserId) {
+    let users = PgUserRepository::new(pool.clone());
+    let actor = user("planner", vec![Role::Admin]);
+    users.insert(&actor).await.unwrap();
+    let (member_id, product_id) = seed_member_and_product(pool).await;
+    (member_id, product_id, actor.id)
+}
+
+fn meal_plan_entry(
+    member_id: HouseholdMemberId,
+    product_id: ProductId,
+    actor_id: UserId,
+) -> MealPlanEntry {
+    let now = OffsetDateTime::now_utc();
+    MealPlanEntry {
+        id: MealPlanEntryId::new(),
+        member_id,
+        planned_on: date!(2026 - 08 - 25),
+        planned_time: Some(time::macros::time!(18:30)),
+        slot: MealSlot::Dinner,
+        status: MealPlanStatus::Planned,
+        components: vec![MealPlanComponent {
+            id: MealPlanComponentId::new(),
+            product_id,
+            amount: ConsumedAmount::Measure(Quantity::new(Decimal::new(150, 0), Unit::Millilitre)),
+            position: 0,
+            snapshot: None,
+        }],
+        created_by: actor_id,
+        updated_by: actor_id,
+        resolved_by: None,
+        resolved_at: None,
+        revision: Revision::INITIAL,
+        created_at: now,
+        updated_at: now,
+    }
+}
+
+#[sqlx::test]
+async fn round_trips_a_planned_meal_with_components(pool: PgPool) {
+    let (member_id, product_id, actor_id) = seed_meal_plan_dependencies(&pool).await;
+    let repo = PgMealPlanRepository::new(pool);
+    let original = meal_plan_entry(member_id, product_id, actor_id);
+
+    repo.insert(&original).await.unwrap();
+    let loaded = repo.get(original.id).await.unwrap().unwrap();
+
+    assert_eq!(loaded, original);
+    let listed = repo
+        .list(&MealPlanQuery {
+            member_id,
+            from: date!(2026 - 08 - 24),
+            to: date!(2026 - 08 - 30),
+        })
+        .await
+        .unwrap();
+    assert_eq!(listed, vec![original]);
+}
+
+#[sqlx::test]
+async fn resolving_a_meal_freezes_components_and_links_consumption(pool: PgPool) {
+    let (member_id, product_id, actor_id) = seed_meal_plan_dependencies(&pool).await;
+    let plans = PgMealPlanRepository::new(pool.clone());
+    let consumption = PgConsumptionRecordRepository::new(pool);
+    let original = meal_plan_entry(member_id, product_id, actor_id);
+    plans.insert(&original).await.unwrap();
+
+    let mut resolved = original.clone();
+    resolved.status = MealPlanStatus::Eaten;
+    resolved.resolved_by = Some(actor_id);
+    resolved.resolved_at = Some(resolved.updated_at);
+    resolved.revision = resolved.revision.next();
+    resolved.components[0].snapshot = Some(MealPlanComponentSnapshot {
+        product_name: "Whole Milk".to_owned(),
+        nutrition: NutritionFacts {
+            basis: Some(Quantity::new(Decimal::new(150, 0), Unit::Millilitre)),
+            energy_kcal: Some(Decimal::new(96, 0)),
+            ..Default::default()
+        },
+        quality: NutritionQuality::Partial,
+    });
+    let mut record = consumption_record(member_id, product_id);
+    record.meal_plan_entry_id = Some(original.id);
+    record.meal_plan_component_id = Some(original.components[0].id);
+    record.recorded_by = Some(actor_id);
+
+    let outcome = plans
+        .resolve(&resolved, original.revision, &[record.clone()])
+        .await
+        .unwrap();
+    assert_eq!(outcome, UpdateOutcome::Updated);
+    assert_eq!(plans.get(original.id).await.unwrap().unwrap(), resolved);
+
+    let loaded_record = consumption.get(record.id).await.unwrap().unwrap();
+    assert_eq!(loaded_record.meal_plan_entry_id, Some(original.id));
+    assert_eq!(
+        loaded_record.meal_plan_component_id,
+        Some(original.components[0].id)
+    );
 }

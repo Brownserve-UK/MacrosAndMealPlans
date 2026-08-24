@@ -18,6 +18,13 @@ export type ConsumptionRecord = components['schemas']['ConsumptionRecordDto'];
 export type DiaryEntry = components['schemas']['DiaryEntryDto'];
 export type DiaryDay = components['schemas']['DiaryDayDto'];
 export type NutritionQuality = components['schemas']['NutritionQuality'];
+export type MealPlanEntry = components['schemas']['MealPlanEntryDto'];
+export type MealPlanDay = components['schemas']['MealPlanDayDto'];
+export type MealPlanWeek = components['schemas']['MealPlanWeekDto'];
+export type MealPlanComponent = components['schemas']['MealPlanComponentDto'];
+export type MealPlanSummary = components['schemas']['NutritionSummaryDto'];
+export type MealPlanStatus = components['schemas']['MealPlanStatus'];
+export type MealSlot = components['schemas']['MealSlot'];
 
 const CREDENTIAL_KEY = 'mmp.credential';
 

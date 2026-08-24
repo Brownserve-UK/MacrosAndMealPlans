@@ -6,6 +6,8 @@ import { DiaryIndexRedirect } from '../features/diary/DiaryIndexRedirect';
 import { DiaryPage } from '../features/diary/DiaryPage';
 import { HouseholdPage } from '../features/household/HouseholdPage';
 import { MemberPage } from '../features/household/MemberPage';
+import { MealPlanIndexRedirect } from '../features/meal-plan/MealPlanIndexRedirect';
+import { MealPlanPage } from '../features/meal-plan/MealPlanPage';
 import { IngredientPage } from '../features/ingredients/IngredientPage';
 import { IngredientsPage } from '../features/ingredients/IngredientsPage';
 import { ProductPage } from '../features/products/ProductPage';
@@ -18,7 +20,22 @@ const indexRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/',
   beforeLoad: () => {
-    throw redirect({ to: '/ingredients' });
+    throw redirect({ to: '/meal-plan' });
+  },
+});
+
+const mealPlanIndexRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/meal-plan',
+  component: MealPlanIndexRedirect,
+});
+
+const mealPlanWeekRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/meal-plan/$memberId/$weekStart',
+  component: function ViewMealPlanWeek() {
+    const { memberId, weekStart } = mealPlanWeekRoute.useParams();
+    return <MealPlanPage memberId={memberId} weekStart={weekStart} />;
   },
 });
 
@@ -102,6 +119,8 @@ const profileRoute = createRoute({
 
 const routeTree = rootRoute.addChildren([
   indexRoute,
+  mealPlanIndexRoute,
+  mealPlanWeekRoute,
   ingredientsRoute,
   ingredientRoute,
   productsRoute,

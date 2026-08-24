@@ -80,6 +80,8 @@ fn measure_150g(product_id: ProductId, member_id: HouseholdMemberId) -> NewConsu
         member_id,
         product_id,
         recorded_by: None,
+        meal_plan_entry_id: None,
+        meal_plan_component_id: None,
         amount: ConsumedAmount::Measure(Quantity::new(Decimal::new(150, 0), Unit::Gram)),
         consumed_on: date!(2026 - 08 - 22),
         consumed_at: None,

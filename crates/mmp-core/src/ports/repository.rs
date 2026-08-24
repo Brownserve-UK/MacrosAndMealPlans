@@ -6,8 +6,8 @@ use time::Date;
 use super::{PageRequest, Paginated};
 use crate::domain::{
     AccessScope, CatalogueOrigin, ConsumptionRecord, ConsumptionRecordId, HouseholdMember,
-    HouseholdMemberId, Ingredient, IngredientId, MemberAccessGrant, Product, ProductId, Revision,
-    Role, User, UserId,
+    HouseholdMemberId, Ingredient, IngredientId, MealPlanEntry, MealPlanEntryId, MemberAccessGrant,
+    Product, ProductId, Revision, Role, User, UserId,
 };
 use crate::error::Result;
 
@@ -71,6 +71,13 @@ pub struct ConsumptionQuery {
     pub to: Option<Date>,
     pub page: PageRequest,
     pub sort: SortDirection,
+}
+
+#[derive(Debug, Clone)]
+pub struct MealPlanQuery {
+    pub member_id: HouseholdMemberId,
+    pub from: Date,
+    pub to: Date,
 }
 
 #[async_trait]
@@ -144,6 +151,16 @@ pub trait IngredientRepository: Send + Sync + 'static {
 pub trait ProductRepository: Send + Sync + 'static {
     async fn get(&self, id: ProductId) -> Result<Option<Product>>;
 
+    async fn get_many(&self, ids: &[ProductId]) -> Result<Vec<Product>> {
+        let mut products = Vec::with_capacity(ids.len());
+        for id in ids {
+            if let Some(product) = self.get(*id).await? {
+                products.push(product);
+            }
+        }
+        Ok(products)
+    }
+
     async fn find_by_barcode(&self, barcode: &str) -> Result<Option<Product>>;
 
     async fn find_by_seed_key(&self, seed_key: &str) -> Result<Option<Product>>;
@@ -166,10 +183,42 @@ pub trait ConsumptionRecordRepository: Send + Sync + 'static {
 
     async fn list(&self, query: &ConsumptionQuery) -> Result<Paginated<ConsumptionRecord>>;
 
+    async fn list_period(
+        &self,
+        member_id: HouseholdMemberId,
+        from: Date,
+        to: Date,
+    ) -> Result<Vec<ConsumptionRecord>>;
+
+    async fn list_for_meal_plan_entry(
+        &self,
+        entry_id: MealPlanEntryId,
+    ) -> Result<Vec<ConsumptionRecord>>;
+
     async fn insert(&self, record: &ConsumptionRecord) -> Result<()>;
 
     async fn update(&self, record: &ConsumptionRecord, expected: Revision)
     -> Result<UpdateOutcome>;
 
     async fn delete(&self, id: ConsumptionRecordId) -> Result<bool>;
+}
+
+#[async_trait]
+pub trait MealPlanRepository: Send + Sync + 'static {
+    async fn get(&self, id: MealPlanEntryId) -> Result<Option<MealPlanEntry>>;
+
+    async fn list(&self, query: &MealPlanQuery) -> Result<Vec<MealPlanEntry>>;
+
+    async fn insert(&self, entry: &MealPlanEntry) -> Result<()>;
+
+    async fn update(&self, entry: &MealPlanEntry, expected: Revision) -> Result<UpdateOutcome>;
+
+    async fn delete(&self, id: MealPlanEntryId, expected: Revision) -> Result<UpdateOutcome>;
+
+    async fn resolve(
+        &self,
+        entry: &MealPlanEntry,
+        expected: Revision,
+        consumption: &[ConsumptionRecord],
+    ) -> Result<UpdateOutcome>;
 }

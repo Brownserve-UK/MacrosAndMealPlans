@@ -196,6 +196,102 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/meal-plan-entries": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["createMealPlanEntry"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/meal-plan-entries/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getMealPlanEntry"];
+        put?: never;
+        post?: never;
+        delete: operations["deleteMealPlanEntry"];
+        options?: never;
+        head?: never;
+        patch: operations["updateMealPlanEntry"];
+        trace?: never;
+    };
+    "/api/v1/meal-plan-entries/{id}/eaten": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["markMealPlanEntryEaten"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/meal-plan-entries/{id}/not-eaten": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["markMealPlanEntryNotEaten"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/meal-plan/members": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listMealPlanMembers"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/meal-plan/{member_id}/{week_start}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getMealPlanWeek"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/members": {
         parameters: {
             query?: never;
@@ -522,6 +618,11 @@ export interface components {
     schemas: {
         /** @enum {string} */
         AccessScope: "health_data";
+        ActualMealPlanComponentRequest: {
+            amount: components["schemas"]["AmountDto"];
+            /** Format: uuid */
+            component_id: string;
+        };
         AmountDto: {
             /** @enum {string} */
             kind: "measure";
@@ -566,6 +667,10 @@ export interface components {
             /** Format: uuid */
             id: string;
             /** Format: uuid */
+            meal_plan_component_id?: string | null;
+            /** Format: uuid */
+            meal_plan_entry_id?: string | null;
+            /** Format: uuid */
             member_id: string;
             nutrition: components["schemas"]["NutritionDto"];
             /** Format: uuid */
@@ -598,6 +703,18 @@ export interface components {
             id?: string | null;
             /** @example Whole Milk */
             name: string;
+        };
+        CreateMealPlanEntryRequest: {
+            components: components["schemas"]["MealPlanComponentRequest"][];
+            /** Format: uuid */
+            id?: string | null;
+            /** Format: uuid */
+            member_id: string;
+            /** Format: date */
+            planned_on: string;
+            /** @example 18:30 */
+            planned_time?: string | null;
+            slot: components["schemas"]["MealSlot"];
         };
         CreateMemberRequest: {
             /** @example Joe */
@@ -715,6 +832,85 @@ export interface components {
             /** Format: uuid */
             user_id: string;
         };
+        MarkMealPlanEatenRequest: {
+            components: components["schemas"]["ActualMealPlanComponentRequest"][];
+            /** Format: date-time */
+            consumed_at: string;
+            /** Format: date */
+            consumed_on: string;
+        };
+        MealPlanComponentDto: {
+            amount: components["schemas"]["AmountDto"];
+            consumption_record?: null | components["schemas"]["ConsumptionRecordDto"];
+            /** Format: uuid */
+            id: string;
+            nutrition: components["schemas"]["NutritionDto"];
+            /** Format: int32 */
+            position: number;
+            /** Format: uuid */
+            product_id: string;
+            product_name: string;
+            quality: components["schemas"]["NutritionQuality"];
+        };
+        MealPlanComponentRequest: {
+            amount: components["schemas"]["AmountDto"];
+            /** Format: uuid */
+            product_id: string;
+        };
+        MealPlanDayDto: {
+            actual: components["schemas"]["NutritionSummaryDto"];
+            /** Format: date */
+            date: string;
+            entries: components["schemas"]["MealPlanEntryDto"][];
+            projected: components["schemas"]["NutritionSummaryDto"];
+            remaining_planned: components["schemas"]["NutritionSummaryDto"];
+        };
+        MealPlanEntryDto: {
+            actual?: null | components["schemas"]["NutritionSummaryDto"];
+            components: components["schemas"]["MealPlanComponentDto"][];
+            /** Format: date-time */
+            created_at: string;
+            /** Format: uuid */
+            created_by: string;
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            member_id: string;
+            needs_attention: boolean;
+            planned: components["schemas"]["NutritionSummaryDto"];
+            /** Format: date */
+            planned_on: string;
+            /** @example 18:30 */
+            planned_time?: string | null;
+            /** Format: date-time */
+            resolved_at?: string | null;
+            /** Format: uuid */
+            resolved_by?: string | null;
+            /** Format: int64 */
+            revision: number;
+            slot: components["schemas"]["MealSlot"];
+            status: components["schemas"]["MealPlanStatus"];
+            /** Format: date-time */
+            updated_at: string;
+            /** Format: uuid */
+            updated_by: string;
+        };
+        /** @enum {string} */
+        MealPlanStatus: "planned" | "eaten" | "not_eaten";
+        MealPlanWeekDto: {
+            actual: components["schemas"]["NutritionSummaryDto"];
+            days: components["schemas"]["MealPlanDayDto"][];
+            /** Format: uuid */
+            member_id: string;
+            projected: components["schemas"]["NutritionSummaryDto"];
+            remaining_planned: components["schemas"]["NutritionSummaryDto"];
+            /** Format: date */
+            week_end: string;
+            /** Format: date */
+            week_start: string;
+        };
+        /** @enum {string} */
+        MealSlot: "breakfast" | "lunch" | "dinner" | "snacks";
         MemberAccessGrantDto: {
             /** Format: date-time */
             granted_at: string;
@@ -765,6 +961,13 @@ export interface components {
         };
         /** @enum {string} */
         NutritionQuality: "known" | "partial" | "unknown";
+        NutritionSummaryDto: {
+            nutrition: components["schemas"]["NutritionDto"];
+            /** Format: int64 */
+            partial_count: number;
+            /** Format: int64 */
+            unknown_count: number;
+        };
         PageMeta: {
             /**
              * Format: int32
@@ -909,6 +1112,14 @@ export interface components {
         UpdateIngredientRequest: {
             default_unit?: null | components["schemas"]["Unit"];
             name?: string | null;
+        };
+        UpdateMealPlanEntryRequest: {
+            components?: components["schemas"]["MealPlanComponentRequest"][] | null;
+            /** Format: date */
+            planned_on?: string | null;
+            /** @example 18:30 */
+            planned_time?: string | null;
+            slot?: null | components["schemas"]["MealSlot"];
         };
         UpdateMemberRequest: {
             display_name?: string | null;
@@ -1534,6 +1745,206 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["IngredientDto"];
+                };
+            };
+        };
+    };
+    createMealPlanEntry: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateMealPlanEntryRequest"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MealPlanEntryDto"];
+                };
+            };
+        };
+    };
+    getMealPlanEntry: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MealPlanEntryDto"];
+                };
+            };
+        };
+    };
+    deleteMealPlanEntry: {
+        parameters: {
+            query?: never;
+            header: {
+                "If-Match": string;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    updateMealPlanEntry: {
+        parameters: {
+            query?: never;
+            header: {
+                "If-Match": string;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateMealPlanEntryRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MealPlanEntryDto"];
+                };
+            };
+        };
+    };
+    markMealPlanEntryEaten: {
+        parameters: {
+            query?: never;
+            header: {
+                "If-Match": string;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MarkMealPlanEatenRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MealPlanEntryDto"];
+                };
+            };
+        };
+    };
+    markMealPlanEntryNotEaten: {
+        parameters: {
+            query?: never;
+            header: {
+                "If-Match": string;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MealPlanEntryDto"];
+                };
+            };
+        };
+    };
+    listMealPlanMembers: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HouseholdMemberDto"][];
+                };
+            };
+        };
+    };
+    getMealPlanWeek: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                member_id: string;
+                /** @example 2026-08-24 */
+                week_start: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MealPlanWeekDto"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
         };

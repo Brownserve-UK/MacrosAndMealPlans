@@ -50,6 +50,52 @@ pub mod iso_date {
     }
 }
 
+pub mod iso_time {
+    use serde::{Deserialize, Deserializer, Serializer};
+    use time::Time;
+    use time::format_description::FormatItem;
+    use time::macros::format_description;
+
+    const FORMAT: &[FormatItem<'_>] = format_description!("[hour]:[minute]");
+
+    pub fn parse(raw: &str) -> Result<Time, time::error::Parse> {
+        Time::parse(raw, FORMAT)
+    }
+
+    pub fn serialize<S: Serializer>(time: &Time, serializer: S) -> Result<S::Ok, S::Error> {
+        let formatted = time.format(FORMAT).map_err(serde::ser::Error::custom)?;
+        serializer.serialize_str(&formatted)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Time, D::Error> {
+        let raw = String::deserialize(deserializer)?;
+        parse(&raw).map_err(serde::de::Error::custom)
+    }
+
+    pub mod option {
+        use serde::{Deserialize, Deserializer, Serializer};
+        use time::Time;
+
+        pub fn serialize<S: Serializer>(
+            time: &Option<Time>,
+            serializer: S,
+        ) -> Result<S::Ok, S::Error> {
+            match time {
+                Some(time) => super::serialize(time, serializer),
+                None => serializer.serialize_none(),
+            }
+        }
+
+        pub fn deserialize<'de, D: Deserializer<'de>>(
+            deserializer: D,
+        ) -> Result<Option<Time>, D::Error> {
+            let raw = Option::<String>::deserialize(deserializer)?;
+            raw.map(|raw| super::parse(&raw).map_err(serde::de::Error::custom))
+                .transpose()
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct ProvenanceDto {
     pub origin: CatalogueOrigin,
