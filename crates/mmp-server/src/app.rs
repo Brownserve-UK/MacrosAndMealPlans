@@ -327,6 +327,13 @@ impl mmp_core::ports::MealPlanRepository for NoopMealPlans {
     ) -> mmp_core::Result<mmp_core::ports::UpdateOutcome> {
         Ok(mmp_core::ports::UpdateOutcome::NotFound)
     }
+    async fn reopen(
+        &self,
+        _: &mmp_core::domain::MealPlanEntry,
+        _: mmp_core::domain::Revision,
+    ) -> mmp_core::Result<mmp_core::ports::UpdateOutcome> {
+        Ok(mmp_core::ports::UpdateOutcome::NotFound)
+    }
 }
 
 #[async_trait::async_trait]

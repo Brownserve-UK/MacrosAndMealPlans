@@ -825,4 +825,22 @@ impl MealPlanRepository for InMemoryMealPlanRepository {
         rows.insert(entry.id, entry.clone());
         Ok(UpdateOutcome::Updated)
     }
+
+    async fn reopen(&self, entry: &MealPlanEntry, expected: Revision) -> Result<UpdateOutcome> {
+        let mut rows = self.rows.lock().unwrap();
+        match rows.get(&entry.id) {
+            None => return Ok(UpdateOutcome::NotFound),
+            Some(current) if current.revision != expected => {
+                return Ok(UpdateOutcome::RevisionMismatch {
+                    actual: current.revision,
+                });
+            }
+            Some(_) => {}
+        }
+
+        let mut records = self.consumption.rows.lock().unwrap();
+        records.retain(|_, record| record.meal_plan_entry_id != Some(entry.id));
+        rows.insert(entry.id, entry.clone());
+        Ok(UpdateOutcome::Updated)
+    }
 }

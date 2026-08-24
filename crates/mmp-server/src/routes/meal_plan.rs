@@ -24,6 +24,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(get_one, update, delete))
         .routes(routes!(mark_eaten))
         .routes(routes!(mark_not_eaten))
+        .routes(routes!(reopen))
 }
 
 fn entry_id(id: Uuid) -> MealPlanEntryId {
@@ -255,6 +256,31 @@ async fn mark_not_eaten(
     let updated = state
         .meal_plan
         .mark_not_eaten(id, revision, principal.user_id)
+        .await?;
+    Ok(Tagged(updated.entry.revision, updated.into()))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/meal-plan-entries/{id}/reopen",
+    operation_id = "reopenMealPlanEntry",
+    params(("id" = Uuid, Path), ("If-Match" = String, Header)),
+    responses((status = 200, body = MealPlanEntryDto)),
+    tag = "meal-plan",
+    security(("basic" = []))
+)]
+async fn reopen(
+    State(state): State<AppState>,
+    principal: Principal,
+    Path(id): Path<Uuid>,
+    IfMatch(revision): IfMatch,
+) -> ApiResult<Tagged<MealPlanEntryDto>> {
+    let id = entry_id(id);
+    let current = state.meal_plan.get(id).await?;
+    require_personal_entry(&state, &principal, current.entry.member_id).await?;
+    let updated = state
+        .meal_plan
+        .reopen(id, revision, principal.user_id)
         .await?;
     Ok(Tagged(updated.entry.revision, updated.into()))
 }

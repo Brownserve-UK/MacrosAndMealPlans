@@ -271,6 +271,31 @@ impl MealPlanRepository for PgMealPlanRepository {
             .map_err(|error| repository_error("committing a meal outcome", error))?;
         Ok(UpdateOutcome::Updated)
     }
+
+    async fn reopen(&self, entry: &MealPlanEntry, expected: Revision) -> Result<UpdateOutcome> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|error| repository_error("starting a meal reopen", error))?;
+        let outcome = update_entry(&mut tx, entry, expected).await?;
+        if outcome != UpdateOutcome::Updated {
+            tx.rollback()
+                .await
+                .map_err(|error| repository_error("rolling back a meal reopen", error))?;
+            return Ok(outcome);
+        }
+        sqlx::query("DELETE FROM consumption_record WHERE meal_plan_entry_id = $1")
+            .bind(entry.id.as_uuid())
+            .execute(&mut *tx)
+            .await
+            .map_err(|error| map_db_error(error, "removing consumption from a reopened meal"))?;
+        thaw_components(&mut tx, entry).await?;
+        tx.commit()
+            .await
+            .map_err(|error| repository_error("committing a meal reopen", error))?;
+        Ok(UpdateOutcome::Updated)
+    }
 }
 
 async fn insert_entry(tx: &mut Transaction<'_, Postgres>, entry: &MealPlanEntry) -> Result<()> {
@@ -398,6 +423,17 @@ async fn freeze_components(
             .execute(&mut **tx)
             .await
             .map_err(|error| map_db_error(error, "freezing a meal plan component"))?;
+    }
+    Ok(())
+}
+
+async fn thaw_components(tx: &mut Transaction<'_, Postgres>, entry: &MealPlanEntry) -> Result<()> {
+    for component in &entry.components {
+        sqlx::query("UPDATE meal_plan_component SET frozen_product_name = NULL, nutrition_basis_amount = NULL, nutrition_basis_unit = NULL, energy_kcal = NULL, protein_g = NULL, carbohydrate_g = NULL, sugar_g = NULL, fat_g = NULL, saturated_fat_g = NULL, fibre_g = NULL, salt_g = NULL, cholesterol_mg = NULL, nutrition_extra = NULL, nutrition_quality = NULL WHERE id = $1")
+            .bind(component.id.as_uuid())
+            .execute(&mut **tx)
+            .await
+            .map_err(|error| map_db_error(error, "thawing a meal plan component"))?;
     }
     Ok(())
 }

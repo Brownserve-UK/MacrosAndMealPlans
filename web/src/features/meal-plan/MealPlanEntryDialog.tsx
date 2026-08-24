@@ -32,6 +32,7 @@ import {
   useMarkMealPlanEaten,
   useMarkMealPlanNotEaten,
   useProduct,
+  useReopenMealPlanEntry,
   useUpdateMealPlanEntry,
 } from '../../api/queries';
 import { ConflictDialog } from '../../components/ConflictDialog';
@@ -70,7 +71,12 @@ type Draft = {
   components: ComponentDraft[];
 };
 
-type Stage = 'edit' | 'eaten' | 'not_eaten' | 'delete';
+type Stage = 'edit' | 'eaten' | 'not_eaten' | 'delete' | 'reopen';
+
+function amountsMatch(a: Amount, b: Amount) {
+  if (a.kind !== b.kind || a.value !== b.value) return false;
+  return a.kind === 'measure' && b.kind === 'measure' ? a.unit === b.unit : true;
+}
 
 function amountToDraft(amount: Amount): AmountDraft {
   return amount.kind === 'measure'
@@ -216,6 +222,13 @@ function ResolvedEntry({ entry }: { entry: MealPlanEntry }) {
               <Typography variant="body2" color="text.secondary">
                 {formatAmount(component.consumption_record?.amount ?? component.amount)}
               </Typography>
+              {component.consumption_record &&
+              !amountsMatch(component.consumption_record.amount, component.amount) ? (
+                <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                  Planned {formatAmount(component.amount)} ·{' '}
+                  <MaybeNumber value={component.nutrition.energy_kcal} fractionDigits={0} /> kcal
+                </Typography>
+              ) : null}
               {component.consumption_record ? (
                 <Link
                   to="/diary/$memberId/$date"
@@ -247,7 +260,7 @@ function ResolvedEntry({ entry }: { entry: MealPlanEntry }) {
         ))}
       </Stack>
       <Typography variant="caption" color="text.secondary">
-        Resolved meals are retained as recorded and cannot be changed.
+        Reopen this meal to change it or mark it eaten differently.
       </Typography>
     </Stack>
   );
@@ -291,6 +304,7 @@ export function MealPlanEntryDialog({
   const remove = useDeleteMealPlanEntry();
   const markEaten = useMarkMealPlanEaten();
   const markNotEaten = useMarkMealPlanNotEaten();
+  const reopenEntry = useReopenMealPlanEntry();
   const [baseline] = useState(() => initialDraft(entry, date, slot));
   const [draft, setDraft] = useState(baseline);
   const [stage, setStage] = useState<Stage>('edit');
@@ -306,7 +320,8 @@ export function MealPlanEntryDialog({
     update.isPending ||
     remove.isPending ||
     markEaten.isPending ||
-    markNotEaten.isPending;
+    markNotEaten.isPending ||
+    reopenEntry.isPending;
   const comparable = (value: Draft) => ({
     date: value.date,
     time: value.time,
@@ -391,6 +406,16 @@ export function MealPlanEntryDialog({
     }
   }
 
+  async function confirmReopen() {
+    if (!entry) return;
+    try {
+      await reopenEntry.mutateAsync({ id: entry.id, revision: entry.revision });
+      onClose();
+    } catch (caught) {
+      report(caught);
+    }
+  }
+
   async function confirmEaten() {
     if (!entry) return;
     const found = validationErrors(draft);
@@ -419,15 +444,17 @@ export function MealPlanEntryDialog({
 
   const title = !entry
     ? 'Plan a meal'
-    : entry.status !== 'planned'
-      ? `${labelForSlot(entry.slot)} details`
-      : stage === 'eaten'
-        ? 'Confirm what was eaten'
-        : stage === 'not_eaten'
-          ? 'Mark as not eaten'
-          : stage === 'delete'
-            ? 'Delete planned meal'
-            : 'Edit planned meal';
+    : stage === 'reopen'
+      ? 'Reopen this meal?'
+      : entry.status !== 'planned'
+        ? `${labelForSlot(entry.slot)} details`
+        : stage === 'eaten'
+          ? 'Confirm what was eaten'
+          : stage === 'not_eaten'
+            ? 'Mark as not eaten'
+            : stage === 'delete'
+              ? 'Delete planned meal'
+              : 'Edit planned meal';
   const context = `${formattedDate(stage === 'eaten' ? actualDate : draft.date)} · ${labelForSlot(draft.slot)}`;
 
   return (
@@ -444,7 +471,7 @@ export function MealPlanEntryDialog({
               <Typography component="h2" variant="h2">
                 {title}
               </Typography>
-              {stage !== 'delete' && stage !== 'not_eaten' ? (
+              {stage !== 'delete' && stage !== 'not_eaten' && stage !== 'reopen' ? (
                 <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
                   {context}
                 </Typography>
@@ -486,7 +513,16 @@ export function MealPlanEntryDialog({
             </Alert>
           ) : null}
 
-          {resolved ? (
+          {stage === 'reopen' && entry ? (
+            <Confirmation
+              title="Reopen this meal?"
+              description={
+                entry.status === 'eaten'
+                  ? 'This removes the matching entries from your diary and returns the meal to planned.'
+                  : 'This returns the meal to planned so it can be edited or confirmed again.'
+              }
+            />
+          ) : resolved ? (
             <ResolvedEntry entry={entry} />
           ) : stage === 'not_eaten' ? (
             <Confirmation
@@ -625,10 +661,24 @@ export function MealPlanEntryDialog({
         </DialogContent>
 
         <DialogActions sx={{ px: 3, py: 2.5 }}>
-          {resolved ? (
-            <Button onClick={close} disabled={busy}>
-              Close
-            </Button>
+          {stage === 'reopen' ? (
+            <>
+              <Button onClick={() => setStage('edit')} disabled={busy} sx={{ mr: 'auto' }}>
+                Back
+              </Button>
+              <Button onClick={confirmReopen} color="warning" variant="contained" disabled={busy}>
+                {busy ? 'Reopening…' : 'Reopen meal'}
+              </Button>
+            </>
+          ) : resolved ? (
+            <>
+              <Button onClick={() => setStage('reopen')} disabled={busy} sx={{ mr: 'auto' }}>
+                Reopen
+              </Button>
+              <Button onClick={close} disabled={busy}>
+                Close
+              </Button>
+            </>
           ) : stage === 'edit' ? (
             <>
               <Button onClick={close} disabled={busy} sx={{ mr: 'auto' }}>

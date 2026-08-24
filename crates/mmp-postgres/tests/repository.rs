@@ -1168,3 +1168,198 @@ async fn resolving_a_meal_freezes_components_and_links_consumption(pool: PgPool)
         Some(original.components[0].id)
     );
 }
+
+#[sqlx::test]
+async fn updating_a_meal_plan_entry_replaces_its_components(pool: PgPool) {
+    let (member_id, product_id, actor_id) = seed_meal_plan_dependencies(&pool).await;
+    let other_product = product("Other product");
+    PgProductRepository::new(pool.clone())
+        .insert(&other_product)
+        .await
+        .unwrap();
+    let repo = PgMealPlanRepository::new(pool);
+    let original = meal_plan_entry(member_id, product_id, actor_id);
+    repo.insert(&original).await.unwrap();
+
+    let mut updated = original.clone();
+    updated.components = vec![
+        MealPlanComponent {
+            id: MealPlanComponentId::new(),
+            product_id: other_product.id,
+            amount: ConsumedAmount::Servings(Decimal::new(2, 0)),
+            position: 0,
+            snapshot: None,
+        },
+        MealPlanComponent {
+            id: MealPlanComponentId::new(),
+            product_id,
+            amount: ConsumedAmount::Servings(Decimal::new(1, 0)),
+            position: 1,
+            snapshot: None,
+        },
+    ];
+    updated.revision = updated.revision.next();
+
+    let outcome = repo.update(&updated, original.revision).await.unwrap();
+    assert_eq!(outcome, UpdateOutcome::Updated);
+
+    let loaded = repo.get(original.id).await.unwrap().unwrap();
+    assert_eq!(loaded.components.len(), 2);
+    assert!(
+        loaded
+            .components
+            .iter()
+            .all(|component| component.id != original.components[0].id)
+    );
+    assert_eq!(loaded.components[0].position, 0);
+    assert_eq!(loaded.components[1].position, 1);
+}
+
+#[sqlx::test]
+async fn updating_a_meal_plan_entry_with_a_stale_revision_is_refused(pool: PgPool) {
+    let (member_id, product_id, actor_id) = seed_meal_plan_dependencies(&pool).await;
+    let repo = PgMealPlanRepository::new(pool);
+    let original = meal_plan_entry(member_id, product_id, actor_id);
+    repo.insert(&original).await.unwrap();
+
+    let mut stale = original.clone();
+    stale.revision = stale.revision.next();
+
+    let outcome = repo.update(&stale, Revision::INITIAL.next()).await.unwrap();
+    assert_eq!(
+        outcome,
+        UpdateOutcome::RevisionMismatch {
+            actual: original.revision
+        }
+    );
+    assert_eq!(repo.get(original.id).await.unwrap().unwrap(), original);
+}
+
+#[sqlx::test]
+async fn resolving_with_a_stale_revision_leaves_the_entry_untouched(pool: PgPool) {
+    let (member_id, product_id, actor_id) = seed_meal_plan_dependencies(&pool).await;
+    let plans = PgMealPlanRepository::new(pool.clone());
+    let consumption = PgConsumptionRecordRepository::new(pool);
+    let original = meal_plan_entry(member_id, product_id, actor_id);
+    plans.insert(&original).await.unwrap();
+
+    let mut resolved = original.clone();
+    resolved.status = MealPlanStatus::Eaten;
+    resolved.revision = resolved.revision.next();
+    let mut record = consumption_record(member_id, product_id);
+    record.meal_plan_entry_id = Some(original.id);
+    record.meal_plan_component_id = Some(original.components[0].id);
+
+    let outcome = plans
+        .resolve(&resolved, Revision::INITIAL.next(), &[record.clone()])
+        .await
+        .unwrap();
+    assert_eq!(
+        outcome,
+        UpdateOutcome::RevisionMismatch {
+            actual: original.revision
+        }
+    );
+    assert_eq!(plans.get(original.id).await.unwrap().unwrap(), original);
+    assert!(consumption.get(record.id).await.unwrap().is_none());
+}
+
+#[sqlx::test]
+async fn deleting_a_meal_plan_entry_cascades_to_its_components(pool: PgPool) {
+    let (member_id, product_id, actor_id) = seed_meal_plan_dependencies(&pool).await;
+    let repo = PgMealPlanRepository::new(pool.clone());
+    let original = meal_plan_entry(member_id, product_id, actor_id);
+    repo.insert(&original).await.unwrap();
+
+    let outcome = repo.delete(original.id, original.revision).await.unwrap();
+    assert_eq!(outcome, UpdateOutcome::Updated);
+    assert!(repo.get(original.id).await.unwrap().is_none());
+
+    let remaining: i64 = sqlx::query_scalar("SELECT count(*) FROM meal_plan_component")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(remaining, 0);
+}
+
+#[sqlx::test]
+async fn deleting_an_unknown_meal_plan_entry_reports_not_found(pool: PgPool) {
+    let repo = PgMealPlanRepository::new(pool);
+    let outcome = repo
+        .delete(MealPlanEntryId::new(), Revision::INITIAL)
+        .await
+        .unwrap();
+    assert_eq!(outcome, UpdateOutcome::NotFound);
+}
+
+#[sqlx::test]
+async fn reopening_a_meal_removes_its_consumption_and_clears_the_snapshot(pool: PgPool) {
+    let (member_id, product_id, actor_id) = seed_meal_plan_dependencies(&pool).await;
+    let plans = PgMealPlanRepository::new(pool.clone());
+    let consumption = PgConsumptionRecordRepository::new(pool);
+    let original = meal_plan_entry(member_id, product_id, actor_id);
+    plans.insert(&original).await.unwrap();
+
+    let mut resolved = original.clone();
+    resolved.status = MealPlanStatus::Eaten;
+    resolved.resolved_by = Some(actor_id);
+    resolved.resolved_at = Some(resolved.updated_at);
+    resolved.revision = resolved.revision.next();
+    resolved.components[0].snapshot = Some(MealPlanComponentSnapshot {
+        product_name: "Whole Milk".to_owned(),
+        nutrition: NutritionFacts {
+            basis: Some(Quantity::new(Decimal::new(150, 0), Unit::Millilitre)),
+            energy_kcal: Some(Decimal::new(96, 0)),
+            ..Default::default()
+        },
+        quality: NutritionQuality::Partial,
+    });
+    let mut record = consumption_record(member_id, product_id);
+    record.meal_plan_entry_id = Some(original.id);
+    record.meal_plan_component_id = Some(original.components[0].id);
+    plans
+        .resolve(&resolved, original.revision, &[record.clone()])
+        .await
+        .unwrap();
+
+    let mut reopened = resolved.clone();
+    reopened.status = MealPlanStatus::Planned;
+    reopened.resolved_by = None;
+    reopened.resolved_at = None;
+    reopened.components[0].snapshot = None;
+    reopened.revision = reopened.revision.next();
+
+    let outcome = plans.reopen(&reopened, resolved.revision).await.unwrap();
+    assert_eq!(outcome, UpdateOutcome::Updated);
+    assert_eq!(plans.get(original.id).await.unwrap().unwrap(), reopened);
+    assert!(consumption.get(record.id).await.unwrap().is_none());
+}
+
+#[sqlx::test]
+async fn a_component_cannot_be_confirmed_by_two_consumption_records(pool: PgPool) {
+    let (member_id, product_id, actor_id) = seed_meal_plan_dependencies(&pool).await;
+    let plans = PgMealPlanRepository::new(pool.clone());
+    let original = meal_plan_entry(member_id, product_id, actor_id);
+    plans.insert(&original).await.unwrap();
+
+    let mut resolved = original.clone();
+    resolved.status = MealPlanStatus::Eaten;
+    resolved.revision = resolved.revision.next();
+    resolved.components[0].snapshot = Some(MealPlanComponentSnapshot {
+        product_name: "Whole Milk".to_owned(),
+        nutrition: NutritionFacts::default(),
+        quality: NutritionQuality::Unknown,
+    });
+    let mut first = consumption_record(member_id, product_id);
+    first.meal_plan_entry_id = Some(original.id);
+    first.meal_plan_component_id = Some(original.components[0].id);
+    let mut second = consumption_record(member_id, product_id);
+    second.meal_plan_entry_id = Some(original.id);
+    second.meal_plan_component_id = Some(original.components[0].id);
+
+    let error = plans
+        .resolve(&resolved, original.revision, &[first, second])
+        .await
+        .unwrap_err();
+    assert!(matches!(error, CoreError::Duplicate { .. }));
+}

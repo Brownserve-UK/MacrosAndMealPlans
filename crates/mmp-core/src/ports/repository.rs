@@ -221,4 +221,6 @@ pub trait MealPlanRepository: Send + Sync + 'static {
         expected: Revision,
         consumption: &[ConsumptionRecord],
     ) -> Result<UpdateOutcome>;
+
+    async fn reopen(&self, entry: &MealPlanEntry, expected: Revision) -> Result<UpdateOutcome>;
 }

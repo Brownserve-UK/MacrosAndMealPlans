@@ -250,6 +250,28 @@ impl MealPlanService {
         self.present(entry, &records).await
     }
 
+    pub async fn reopen(
+        &self,
+        id: MealPlanEntryId,
+        expected: Revision,
+        actor_id: crate::domain::UserId,
+    ) -> Result<MealPlanEntryView> {
+        let mut entry = self.get_entry(id).await?;
+        require_revision(id, expected, entry.revision)?;
+        require_resolved(&entry)?;
+        for component in &mut entry.components {
+            component.snapshot = None;
+        }
+        entry.status = MealPlanStatus::Planned;
+        entry.resolved_by = None;
+        entry.resolved_at = None;
+        entry.updated_by = actor_id;
+        entry.updated_at = self.clock.now();
+        entry.revision = entry.revision.next();
+        commit_outcome(self.plans.reopen(&entry, expected).await?, id, expected)?;
+        self.present(entry, &[]).await
+    }
+
     pub async fn week(
         &self,
         member_id: crate::domain::HouseholdMemberId,
@@ -516,6 +538,14 @@ fn require_planned(entry: &MealPlanEntry) -> Result<()> {
         Err(CoreError::conflict(
             "Resolved meal plans cannot be changed.",
         ))
+    }
+}
+
+fn require_resolved(entry: &MealPlanEntry) -> Result<()> {
+    if entry.status == MealPlanStatus::Planned {
+        Err(CoreError::conflict("This meal has not been resolved yet."))
+    } else {
+        Ok(())
     }
 }
 

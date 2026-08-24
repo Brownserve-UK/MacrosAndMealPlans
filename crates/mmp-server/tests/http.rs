@@ -1660,6 +1660,164 @@ async fn confirming_a_planned_meal_creates_locked_diary_records() {
 }
 
 #[tokio::test]
+async fn reopening_a_confirmed_meal_removes_the_diary_entries_and_allows_reconfirmation() {
+    let app = app().await;
+    let me = send(&app, Call::new("GET", "/api/v1/auth/me")).await.1;
+    let member_id = me["member_id"].as_str().unwrap();
+    let product = create_milk_product(&app).await;
+    let entry = send(
+        &app,
+        Call::new("POST", "/api/v1/meal-plan-entries").body(json!({
+            "planned_on": "2026-08-25",
+            "slot": "lunch",
+            "components": [{"product_id": product["id"], "amount": measured_amount(150.0)}]
+        })),
+    )
+    .await
+    .1;
+    let entry_id = entry["id"].as_str().unwrap();
+    let component_id = entry["components"][0]["id"].as_str().unwrap();
+
+    send(
+        &app,
+        Call::new(
+            "POST",
+            format!("/api/v1/meal-plan-entries/{entry_id}/eaten"),
+        )
+        .if_match(1)
+        .body(json!({
+            "consumed_on": "2026-08-26",
+            "consumed_at": "2026-08-26T19:15:00Z",
+            "components": [{"component_id": component_id, "amount": measured_amount(200.0)}]
+        })),
+    )
+    .await;
+
+    let (status, reopened, _) = send(
+        &app,
+        Call::new(
+            "POST",
+            format!("/api/v1/meal-plan-entries/{entry_id}/reopen"),
+        )
+        .if_match(2),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{reopened}");
+    assert_eq!(reopened["status"], "planned");
+
+    let (status, diary, _) = send(
+        &app,
+        Call::new("GET", format!("/api/v1/diary/{member_id}/2026-08-26")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{diary}");
+    assert_eq!(diary["entries"].as_array().unwrap().len(), 0);
+
+    let component_id = reopened["components"][0]["id"].as_str().unwrap();
+    let (status, reconfirmed, _) = send(
+        &app,
+        Call::new(
+            "POST",
+            format!("/api/v1/meal-plan-entries/{entry_id}/eaten"),
+        )
+        .if_match(3)
+        .body(json!({
+            "consumed_on": "2026-08-26",
+            "consumed_at": "2026-08-26T19:15:00Z",
+            "components": [{"component_id": component_id, "amount": measured_amount(150.0)}]
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{reconfirmed}");
+    assert_eq!(reconfirmed["status"], "eaten");
+}
+
+#[tokio::test]
+async fn a_planned_meal_cannot_be_reopened() {
+    let app = app().await;
+    let product = create_milk_product(&app).await;
+    let entry = send(
+        &app,
+        Call::new("POST", "/api/v1/meal-plan-entries").body(json!({
+            "planned_on": "2026-08-25",
+            "slot": "lunch",
+            "components": [{"product_id": product["id"], "amount": measured_amount(150.0)}]
+        })),
+    )
+    .await
+    .1;
+    let entry_id = entry["id"].as_str().unwrap();
+
+    let (status, body, _) = send(
+        &app,
+        Call::new(
+            "POST",
+            format!("/api/v1/meal-plan-entries/{entry_id}/reopen"),
+        )
+        .if_match(1),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+}
+
+#[tokio::test]
+async fn another_members_meal_cannot_be_reopened() {
+    let app = app().await;
+    let product = create_milk_product(&app).await;
+    let entry = send(
+        &app,
+        Call::new("POST", "/api/v1/meal-plan-entries").body(json!({
+            "planned_on": "2026-08-25",
+            "slot": "lunch",
+            "components": [{"product_id": product["id"], "amount": measured_amount(150.0)}]
+        })),
+    )
+    .await
+    .1;
+    let entry_id = entry["id"].as_str().unwrap();
+    let component_id = entry["components"][0]["id"].as_str().unwrap();
+    send(
+        &app,
+        Call::new(
+            "POST",
+            format!("/api/v1/meal-plan-entries/{entry_id}/eaten"),
+        )
+        .if_match(1)
+        .body(json!({
+            "consumed_on": "2026-08-26",
+            "consumed_at": "2026-08-26T19:15:00Z",
+            "components": [{"component_id": component_id, "amount": measured_amount(150.0)}]
+        })),
+    )
+    .await;
+
+    let member = create_member(&app, "Joe").await;
+    let user = create_user(&app, "joe", &["basic_user"]).await;
+    send(
+        &app,
+        Call::new(
+            "PUT",
+            format!("/api/v1/members/{}/account", member["id"].as_str().unwrap()),
+        )
+        .if_match(member["revision"].as_i64().unwrap())
+        .body(json!({"user_id": user["id"]})),
+    )
+    .await;
+
+    let (status, body, _) = send(
+        &app,
+        Call::new(
+            "POST",
+            format!("/api/v1/meal-plan-entries/{entry_id}/reopen"),
+        )
+        .if_match(2)
+        .signed_in_as("joe"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+}
+
+#[tokio::test]
 async fn a_meal_plan_week_must_start_on_monday() {
     let app = app().await;
 

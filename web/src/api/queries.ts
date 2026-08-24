@@ -421,6 +421,7 @@ export function useCreateConsumption() {
       unwrap(await client.POST('/api/v1/consumption', { body })),
     onSuccess: (created: ConsumptionRecord) => {
       void qc.invalidateQueries({ queryKey: ['diaryDay', created.member_id] });
+      void qc.invalidateQueries({ queryKey: ['mealPlanWeek'] });
     },
   });
 }
@@ -441,6 +442,7 @@ export function useUpdateConsumption() {
       ),
     onSuccess: (updated: ConsumptionRecord) => {
       void qc.invalidateQueries({ queryKey: ['diaryDay', updated.member_id] });
+      void qc.invalidateQueries({ queryKey: ['mealPlanWeek'] });
     },
   });
 }
@@ -456,6 +458,7 @@ export function useDeleteConsumption() {
       ),
     onSuccess: (_data, variables) => {
       void qc.invalidateQueries({ queryKey: ['diaryDay', variables.memberId] });
+      void qc.invalidateQueries({ queryKey: ['mealPlanWeek'] });
     },
   });
 }
@@ -550,6 +553,19 @@ export function useMarkMealPlanNotEaten() {
     mutationFn: async (input: { id: string; revision: number }) =>
       unwrap(
         await client.POST('/api/v1/meal-plan-entries/{id}/not-eaten', {
+          params: { path: { id: input.id }, header: ifMatch(input.revision) },
+        }),
+      ),
+    onSuccess: (entry) => invalidate(entry.member_id),
+  });
+}
+
+export function useReopenMealPlanEntry() {
+  const invalidate = useMealPlanInvalidation();
+  return useMutation({
+    mutationFn: async (input: { id: string; revision: number }) =>
+      unwrap(
+        await client.POST('/api/v1/meal-plan-entries/{id}/reopen', {
           params: { path: { id: input.id }, header: ifMatch(input.revision) },
         }),
       ),

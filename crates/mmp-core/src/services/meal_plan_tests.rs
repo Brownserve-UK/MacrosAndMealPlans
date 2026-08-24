@@ -352,3 +352,173 @@ async fn an_archived_product_may_be_retained_but_not_newly_added() {
         .await;
     assert!(matches!(newly_added, Err(CoreError::Validation(_))));
 }
+
+#[tokio::test]
+async fn reopening_an_eaten_entry_removes_its_diary_records() {
+    let h = harness();
+    let food = product("Food", 200);
+    h.products.seed(food.clone());
+    let entry = planned(&h, vec![measured(food.id, 100)]).await;
+    let confirmed = h
+        .service
+        .mark_eaten(
+            entry.entry.id,
+            entry.entry.revision,
+            ConfirmMealPlanEntry {
+                consumed_on: date!(2026 - 08 - 25),
+                consumed_at: datetime!(2026-08-25 18:30 UTC),
+                components: vec![ActualMealPlanComponent {
+                    component_id: entry.components[0].component.id,
+                    amount: entry.components[0].component.amount,
+                }],
+                actor_id: h.actor_id,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(h.records.count(), 1);
+
+    let reopened = h
+        .service
+        .reopen(confirmed.entry.id, confirmed.entry.revision, h.actor_id)
+        .await
+        .unwrap();
+
+    assert_eq!(reopened.entry.status, MealPlanStatus::Planned);
+    assert!(reopened.entry.resolved_by.is_none());
+    assert!(reopened.entry.resolved_at.is_none());
+    assert_eq!(h.records.count(), 0);
+    assert!(reopened.components[0].consumption_record.is_none());
+}
+
+#[tokio::test]
+async fn reopening_a_not_eaten_entry_returns_it_to_planned() {
+    let h = harness();
+    let food = product("Food", 200);
+    h.products.seed(food.clone());
+    let entry = planned(&h, vec![measured(food.id, 100)]).await;
+    let resolved = h
+        .service
+        .mark_not_eaten(entry.entry.id, entry.entry.revision, h.actor_id)
+        .await
+        .unwrap();
+
+    let reopened = h
+        .service
+        .reopen(resolved.entry.id, resolved.entry.revision, h.actor_id)
+        .await
+        .unwrap();
+
+    assert_eq!(reopened.entry.status, MealPlanStatus::Planned);
+    let week = h
+        .service
+        .week(h.member_id, date!(2026 - 08 - 24))
+        .await
+        .unwrap();
+    assert_eq!(
+        week.remaining_planned.nutrition.energy_kcal,
+        Some(Decimal::new(200, 0))
+    );
+}
+
+#[tokio::test]
+async fn a_still_planned_entry_cannot_be_reopened() {
+    let h = harness();
+    let food = product("Food", 200);
+    h.products.seed(food.clone());
+    let entry = planned(&h, vec![measured(food.id, 100)]).await;
+
+    let error = h
+        .service
+        .reopen(entry.entry.id, entry.entry.revision, h.actor_id)
+        .await
+        .unwrap_err();
+
+    assert!(matches!(error, CoreError::Conflict { .. }));
+}
+
+#[tokio::test]
+async fn reopening_with_a_stale_revision_is_refused() {
+    let h = harness();
+    let food = product("Food", 200);
+    h.products.seed(food.clone());
+    let entry = planned(&h, vec![measured(food.id, 100)]).await;
+    let resolved = h
+        .service
+        .mark_not_eaten(entry.entry.id, entry.entry.revision, h.actor_id)
+        .await
+        .unwrap();
+
+    let error = h
+        .service
+        .reopen(resolved.entry.id, entry.entry.revision, h.actor_id)
+        .await
+        .unwrap_err();
+
+    assert!(matches!(error, CoreError::RevisionMismatch { .. }));
+}
+
+#[tokio::test]
+async fn a_reopened_entry_can_be_edited_and_confirmed_again() {
+    let h = harness();
+    let food = product("Food", 200);
+    h.products.seed(food.clone());
+    let entry = planned(&h, vec![measured(food.id, 100)]).await;
+    let confirmed = h
+        .service
+        .mark_eaten(
+            entry.entry.id,
+            entry.entry.revision,
+            ConfirmMealPlanEntry {
+                consumed_on: date!(2026 - 08 - 25),
+                consumed_at: datetime!(2026-08-25 18:30 UTC),
+                components: vec![ActualMealPlanComponent {
+                    component_id: entry.components[0].component.id,
+                    amount: entry.components[0].component.amount,
+                }],
+                actor_id: h.actor_id,
+            },
+        )
+        .await
+        .unwrap();
+    let reopened = h
+        .service
+        .reopen(confirmed.entry.id, confirmed.entry.revision, h.actor_id)
+        .await
+        .unwrap();
+
+    let edited = h
+        .service
+        .update(
+            reopened.entry.id,
+            reopened.entry.revision,
+            MealPlanEntryPatch {
+                components: Some(vec![measured(food.id, 150)]),
+                ..Default::default()
+            },
+            h.actor_id,
+        )
+        .await
+        .unwrap();
+
+    let reconfirmed = h
+        .service
+        .mark_eaten(
+            edited.entry.id,
+            edited.entry.revision,
+            ConfirmMealPlanEntry {
+                consumed_on: date!(2026 - 08 - 26),
+                consumed_at: datetime!(2026-08-26 18:30 UTC),
+                components: vec![ActualMealPlanComponent {
+                    component_id: edited.components[0].component.id,
+                    amount: edited.components[0].component.amount,
+                }],
+                actor_id: h.actor_id,
+            },
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(reconfirmed.entry.status, MealPlanStatus::Eaten);
+    assert_eq!(h.records.count(), 1);
+}

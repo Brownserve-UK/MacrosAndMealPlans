@@ -134,7 +134,7 @@ impl DiaryService {
         require_revision(id, expected, current.revision)?;
         if current.meal_plan_component_id.is_some() {
             return Err(CoreError::conflict(
-                "Food recorded from an eaten meal plan cannot be deleted.",
+                "This food came from a planned meal. Reopen the meal in your plan to remove it.",
             ));
         }
         if self.records.delete(id).await? {

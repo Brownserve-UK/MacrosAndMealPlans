@@ -260,6 +260,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/meal-plan-entries/{id}/reopen": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["reopenMealPlanEntry"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/meal-plan/{week_start}": {
         parameters: {
             query?: never;
@@ -1851,6 +1867,29 @@ export interface operations {
         };
     };
     markMealPlanEntryNotEaten: {
+        parameters: {
+            query?: never;
+            header: {
+                "If-Match": string;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MealPlanEntryDto"];
+                };
+            };
+        };
+    };
+    reopenMealPlanEntry: {
         parameters: {
             query?: never;
             header: {
