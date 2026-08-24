@@ -1,0 +1,61 @@
+name: macros-and-meal-plans
+
+services:
+  db:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-mmp}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-mmp}
+      POSTGRES_DB: ${POSTGRES_DB:-mmp}
+    ports:
+      - "${POSTGRES_PORT:-55432}:5432"
+    volumes:
+      - db-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-mmp} -d ${POSTGRES_DB:-mmp}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  app:
+    build:
+      context: .
+      target: dev
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    working_dir: /workspace
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-mmp}:${POSTGRES_PASSWORD:-mmp}@db:5432/${POSTGRES_DB:-mmp}
+      MMP_DEV_USER: ${MMP_DEV_USER:-admin}
+      MMP_DEV_PASSWORD: ${MMP_DEV_PASSWORD:-changeme}
+      RUST_LOG: ${RUST_LOG:-info,mmp_server=debug,sqlx=warn}
+    ports:
+      - "${MMP_PORT:-7979}:7979"
+    volumes:
+      - ./:/workspace
+      - cargo-registry:/usr/local/cargo/registry
+      - cargo-target:/workspace/.target-container
+
+  web:
+    image: node:26-slim
+    restart: unless-stopped
+    depends_on:
+      - app
+    working_dir: /workspace/web
+    command: sh -c "npm install --no-audit --no-fund && npm run dev"
+    environment:
+      MMP_API_TARGET: http://app:7979
+    ports:
+      - "${MMP_WEB_PORT:-5173}:5173"
+    volumes:
+      - ./:/workspace
+      - web-node-modules:/workspace/web/node_modules
+
+volumes:
+  db-data:
+  cargo-registry:
+  cargo-target:
+  web-node-modules:

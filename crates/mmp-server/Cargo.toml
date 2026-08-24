@@ -1,0 +1,36 @@
+[package]
+name = "mmp-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "HTTP server and composition root for Macros & Meal Plans"
+
+[dependencies]
+anyhow = "1.0.104"
+async-trait = "0.1.92"
+axum = "0.8.9"
+base64 = "0.23.1"
+dotenvy = "0.15.7"
+mmp-core = { version = "0.1.0", path = "../mmp-core", features = ["openapi"] }
+mmp-postgres = { version = "0.1.0", path = "../mmp-postgres" }
+rust_decimal = { version = "1.42.1", features = ["serde", "serde-with-float"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+thiserror = "2.0.20"
+time = { version = "0.3.55", features = ["macros", "serde", "serde-well-known"] }
+tokio = { version = "1.53.1", features = ["full"] }
+tower-http = { version = "0.7.0", features = ["trace", "cors", "compression-gzip", "fs", "set-header"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+utoipa = { version = "5.5.0", features = ["axum_extras", "uuid", "time", "decimal"] }
+utoipa-axum = "0.2.0"
+utoipa-scalar = { version = "0.3.0", features = ["axum"] }
+uuid = "1.25.0"
+
+[dev-dependencies]
+http-body-util = "0.1.5"
+mmp-core = { path = "../mmp-core", features = ["testing"] }
+tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread"] }
+tower = { version = "0.5.3", features = ["util"] }
+uuid = { version = "1.25.0", features = ["v7"] }

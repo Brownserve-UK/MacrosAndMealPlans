@@ -1,0 +1,9 @@
+target
+.target-container
+**/node_modules
+web/dist
+.git
+.env
+.env.local
+.dev
+*.log

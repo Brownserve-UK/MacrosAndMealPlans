@@ -1,0 +1,98 @@
+import createClient, { type Middleware } from 'openapi-fetch';
+import type { components, paths } from './schema';
+
+export type Problem = components['schemas']['Problem'];
+export type Ingredient = components['schemas']['IngredientDto'];
+export type Product = components['schemas']['ProductDto'];
+export type Nutrition = components['schemas']['NutritionDto'];
+export type Unit = components['schemas']['Unit'];
+export type UnitInfo = components['schemas']['UnitDto'];
+export type Origin = components['schemas']['CatalogueOrigin'];
+export type Principal = components['schemas']['PrincipalDto'];
+export type Member = components['schemas']['HouseholdMemberDto'];
+export type User = components['schemas']['UserDto'];
+export type Role = components['schemas']['Role'];
+export type Quantity = components['schemas']['QuantityDto'];
+export type Amount = components['schemas']['AmountDto'];
+export type ConsumptionRecord = components['schemas']['ConsumptionRecordDto'];
+export type DiaryEntry = components['schemas']['DiaryEntryDto'];
+export type DiaryDay = components['schemas']['DiaryDayDto'];
+export type NutritionQuality = components['schemas']['NutritionQuality'];
+
+const CREDENTIAL_KEY = 'mmp.credential';
+
+let credential: string | null = readStoredCredential();
+
+function readStoredCredential(): string | null {
+  try {
+    return sessionStorage.getItem(CREDENTIAL_KEY);
+  } catch {
+    return null;
+  }
+}
+
+export function setCredential(value: string | null) {
+  credential = value;
+  try {
+    if (value) sessionStorage.setItem(CREDENTIAL_KEY, value);
+    else sessionStorage.removeItem(CREDENTIAL_KEY);
+  } catch {
+  }
+}
+
+export function hasCredential() {
+  return credential !== null;
+}
+
+export function encodeCredential(username: string, password: string) {
+  return `Basic ${btoa(`${username}:${password}`)}`;
+}
+
+export class ApiError extends Error {
+  readonly status: number;
+  readonly problem: Problem | null;
+
+  constructor(status: number, problem: Problem | null) {
+    super(problem?.detail ?? `The request failed with status ${status}.`);
+    this.name = 'ApiError';
+    this.status = status;
+    this.problem = problem;
+  }
+
+  get isConflict() {
+    return this.status === 409 && this.problem?.actual_revision != null;
+  }
+
+  get isUnauthorized() {
+    return this.status === 401;
+  }
+
+  get fieldErrors(): Record<string, string> {
+    const entries = this.problem?.errors ?? [];
+    return Object.fromEntries(entries.map((e) => [e.field, e.message]));
+  }
+}
+
+const authMiddleware: Middleware = {
+  async onRequest({ request }) {
+    if (credential) request.headers.set('Authorization', credential);
+    return request;
+  },
+};
+
+export const client = createClient<paths>({ baseUrl: '' });
+client.use(authMiddleware);
+
+type Result<T> = { data?: T; error?: unknown; response: Response };
+
+export function unwrap<T>(result: Result<T>): T {
+  if (result.error !== undefined || !result.response.ok) {
+    const problem = (result.error ?? null) as Problem | null;
+    throw new ApiError(result.response.status, problem);
+  }
+  return result.data as T;
+}
+
+export function ifMatch(revision: number): { 'If-Match': string } {
+  return { 'If-Match': `"${revision}"` };
+}

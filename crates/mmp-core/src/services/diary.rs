@@ -1,0 +1,244 @@
+use std::sync::Arc;
+
+use time::Date;
+
+use crate::domain::{
+    ConsumedAmount, ConsumptionRecord, ConsumptionRecordId, ConsumptionRecordPatch,
+    HouseholdMemberId, NewConsumptionRecord, NutritionFacts, NutritionQuality, Product, ProductId,
+    Revision, nutrition_for, sum_nutrition,
+};
+use crate::error::{CoreError, Result, ValidationErrors};
+use crate::ports::{
+    Clock, ConsumptionQuery, ConsumptionRecordRepository, PageRequest, ProductRepository,
+    UpdateOutcome,
+};
+
+const CONSUMPTION_RECORD: &str = "consumption record";
+const PRODUCT: &str = "product";
+
+#[derive(Debug, Clone)]
+pub struct DayTotals {
+    pub nutrition: NutritionFacts,
+    pub entry_count: i64,
+    pub unknown_count: i64,
+    pub partial_count: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct DiaryEntry {
+    pub record: ConsumptionRecord,
+    pub product_name: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct DiaryDay {
+    pub member_id: HouseholdMemberId,
+    pub date: Date,
+    pub entries: Vec<DiaryEntry>,
+    pub totals: DayTotals,
+}
+
+#[derive(Clone)]
+pub struct DiaryService {
+    records: Arc<dyn ConsumptionRecordRepository>,
+    products: Arc<dyn ProductRepository>,
+    clock: Arc<dyn Clock>,
+}
+
+impl DiaryService {
+    pub fn new(
+        records: Arc<dyn ConsumptionRecordRepository>,
+        products: Arc<dyn ProductRepository>,
+        clock: Arc<dyn Clock>,
+    ) -> Self {
+        Self {
+            records,
+            products,
+            clock,
+        }
+    }
+
+    pub async fn record(&self, input: NewConsumptionRecord) -> Result<ConsumptionRecord> {
+        input.validate()?;
+        let product = self.get_product(input.product_id).await?;
+        ensure_loggable(&product)?;
+        ensure_resolvable(&product, &input.amount)?;
+
+        let scaled = nutrition_for(&product, &input.amount);
+        let now = self.clock.now();
+        let record = ConsumptionRecord {
+            id: input.id.unwrap_or_default(),
+            member_id: input.member_id,
+            product_id: input.product_id,
+            recorded_by: input.recorded_by,
+            amount: input.amount,
+            consumed_on: input.consumed_on,
+            consumed_at: input.consumed_at.unwrap_or(now),
+            nutrition: scaled.facts,
+            quality: scaled.quality,
+            revision: Revision::INITIAL,
+            created_at: now,
+            updated_at: now,
+        };
+
+        self.records.insert(&record).await?;
+        Ok(record)
+    }
+
+    pub async fn get(&self, id: ConsumptionRecordId) -> Result<ConsumptionRecord> {
+        self.records
+            .get(id)
+            .await?
+            .ok_or_else(|| CoreError::not_found(CONSUMPTION_RECORD, id))
+    }
+
+    pub async fn amend(
+        &self,
+        id: ConsumptionRecordId,
+        expected: Revision,
+        patch: ConsumptionRecordPatch,
+    ) -> Result<ConsumptionRecord> {
+        patch.validate()?;
+        let mut current = self.get(id).await?;
+        require_revision(id, expected, current.revision)?;
+
+        if patch.is_empty() {
+            return Ok(current);
+        }
+
+        if let Some(consumed_on) = patch.consumed_on {
+            current.consumed_on = consumed_on;
+        }
+        if let Some(consumed_at) = patch.consumed_at {
+            current.consumed_at = consumed_at;
+        }
+        if let Some(amount) = patch.amount {
+            let product = self.get_product(current.product_id).await?;
+            ensure_resolvable(&product, &amount)?;
+            let scaled = nutrition_for(&product, &amount);
+            current.amount = amount;
+            current.nutrition = scaled.facts;
+            current.quality = scaled.quality;
+        }
+
+        current.revision = current.revision.next();
+        current.updated_at = self.clock.now();
+        self.commit(&current, expected).await?;
+        Ok(current)
+    }
+
+    pub async fn remove(&self, id: ConsumptionRecordId, expected: Revision) -> Result<()> {
+        let current = self.get(id).await?;
+        require_revision(id, expected, current.revision)?;
+        if self.records.delete(id).await? {
+            Ok(())
+        } else {
+            Err(CoreError::not_found(CONSUMPTION_RECORD, id))
+        }
+    }
+
+    pub async fn day(&self, member_id: HouseholdMemberId, date: Date) -> Result<DiaryDay> {
+        let query = ConsumptionQuery {
+            member_id: Some(member_id),
+            from: Some(date),
+            to: Some(date),
+            page: PageRequest::new(1, PageRequest::MAX_PER_PAGE),
+            sort: Default::default(),
+        };
+        let page = self.records.list(&query).await?;
+        let totals = totals_for(&page.items);
+
+        let mut entries = Vec::with_capacity(page.items.len());
+        for record in page.items {
+            let product = self.get_product(record.product_id).await?;
+            entries.push(DiaryEntry {
+                record,
+                product_name: product.name,
+            });
+        }
+
+        Ok(DiaryDay {
+            member_id,
+            date,
+            entries,
+            totals,
+        })
+    }
+
+    async fn get_product(&self, id: ProductId) -> Result<Product> {
+        self.products
+            .get(id)
+            .await?
+            .ok_or_else(|| CoreError::not_found(PRODUCT, id))
+    }
+
+    async fn commit(&self, record: &ConsumptionRecord, expected: Revision) -> Result<()> {
+        match self.records.update(record, expected).await? {
+            UpdateOutcome::Updated => Ok(()),
+            UpdateOutcome::RevisionMismatch { actual } => Err(CoreError::RevisionMismatch {
+                resource: CONSUMPTION_RECORD,
+                id: record.id.to_string(),
+                expected,
+                actual,
+            }),
+            UpdateOutcome::NotFound => Err(CoreError::not_found(CONSUMPTION_RECORD, record.id)),
+        }
+    }
+}
+
+fn ensure_loggable(product: &Product) -> Result<()> {
+    if product.is_archived() {
+        let mut errors = ValidationErrors::new();
+        errors.push("product_id", "That product is archived");
+        return errors.into_result();
+    }
+    Ok(())
+}
+
+fn ensure_resolvable(product: &Product, amount: &ConsumedAmount) -> Result<()> {
+    if let Err(err) = amount.resolve(product) {
+        let mut errors = ValidationErrors::new();
+        errors.push("amount", err.to_string());
+        return errors.into_result();
+    }
+    Ok(())
+}
+
+fn totals_for(entries: &[ConsumptionRecord]) -> DayTotals {
+    let nutrition = sum_nutrition(entries.iter().map(|e| &e.nutrition));
+    let unknown_count = entries
+        .iter()
+        .filter(|e| e.quality == NutritionQuality::Unknown)
+        .count() as i64;
+    let partial_count = entries
+        .iter()
+        .filter(|e| e.quality == NutritionQuality::Partial)
+        .count() as i64;
+    DayTotals {
+        nutrition,
+        entry_count: entries.len() as i64,
+        unknown_count,
+        partial_count,
+    }
+}
+
+fn require_revision(
+    id: impl std::fmt::Display,
+    expected: Revision,
+    actual: Revision,
+) -> Result<()> {
+    if expected == actual {
+        Ok(())
+    } else {
+        Err(CoreError::RevisionMismatch {
+            resource: CONSUMPTION_RECORD,
+            id: id.to_string(),
+            expected,
+            actual,
+        })
+    }
+}
+
+#[cfg(test)]
+#[path = "diary_tests.rs"]
+mod tests;
