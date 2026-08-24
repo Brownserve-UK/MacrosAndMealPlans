@@ -180,7 +180,7 @@ export function AppShell() {
           </Toolbar>
         </AppBar>
 
-        <Container maxWidth={pathname.startsWith('/meal-plan') ? 'lg' : 'md'} sx={{ py: 5, flexGrow: 1 }}>
+        <Container maxWidth="md" sx={{ py: 5, flexGrow: 1 }}>
           <Outlet />
         </Container>
       </Box>

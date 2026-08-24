@@ -172,12 +172,14 @@ function ComponentEditor({
             </IconButton>
           ) : null}
         </Stack>
-        <AmountFields
-          product={product}
-          draft={draft.amount}
-          errors={{ amount: errors[`${prefix}.amount`] ?? '' }}
-          onChange={(amount) => onChange({ ...draft, amount })}
-        />
+        {product ? (
+          <AmountFields
+            product={product}
+            draft={draft.amount}
+            errors={{ amount: errors[`${prefix}.amount`] ?? '' }}
+            onChange={(amount) => onChange({ ...draft, amount })}
+          />
+        ) : null}
       </Stack>
     </Box>
   );

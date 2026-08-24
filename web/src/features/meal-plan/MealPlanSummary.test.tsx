@@ -26,11 +26,11 @@ describe('MealPlanSummary', () => {
       />,
     );
 
-    expect(screen.getByText('Week outlook')).toBeInTheDocument();
     expect(screen.getByText('Projected energy')).toBeInTheDocument();
     expect(screen.getByText('2,400', { exact: false })).toBeInTheDocument();
-    expect(screen.getByText('Eaten')).toBeInTheDocument();
+    expect(screen.getByText('Already eaten')).toBeInTheDocument();
     expect(screen.getByText('Still planned')).toBeInTheDocument();
+    expect(screen.getByRole('img', { name: /Projected macro split/ })).toBeInTheDocument();
   });
 
   it('only shows an incomplete nutrition warning when needed', () => {
@@ -48,6 +48,6 @@ describe('MealPlanSummary', () => {
       />,
     );
 
-    expect(screen.getByText('2 meals have incomplete nutrition.')).toBeInTheDocument();
+    expect(screen.getByText('2 meals have incomplete nutrition')).toBeInTheDocument();
   });
 });
