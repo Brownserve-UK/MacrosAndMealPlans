@@ -59,9 +59,10 @@ describe('DayWeekNutrition', () => {
     expect(screen.getByRole('button', { name: 'Day' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Week' })).toBeInTheDocument();
     expect(
-      screen.getByRole('img', { name: 'Day macro split: Protein 70.4%, Carbs 18.3%, Fat 11.3%' }),
+      screen.getByRole('img', { name: 'Day projected energy is 1250 kcal without a target' }),
     ).toBeInTheDocument();
-    expect(screen.getByText('Sugars')).toBeInTheDocument();
+    expect(screen.getByRole('progressbar', { name: 'Protein: 40.5 g, No target' })).toBeInTheDocument();
+    expect(screen.getByRole('progressbar', { name: 'Sugars: 4.5 g, No target' })).toBeInTheDocument();
   });
 
   it('switches to the week scope when toggled', () => {
@@ -70,10 +71,10 @@ describe('DayWeekNutrition', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Week' }));
 
     expect(
-      screen.getByRole('img', { name: 'Week macro split: Protein 33.3%, Carbs 33.3%, Fat 33.3%' }),
+      screen.getByRole('img', { name: 'Week projected energy is unknown without a target' }),
     ).toBeInTheDocument();
     expect(
-      screen.queryByRole('img', { name: /Day macro split/ }),
+      screen.queryByRole('img', { name: /Day projected energy/ }),
     ).not.toBeInTheDocument();
   });
 
@@ -82,7 +83,7 @@ describe('DayWeekNutrition', () => {
     expect(screen.getByText('2 meals have incomplete nutrition')).toBeInTheDocument();
   });
 
-  it('shows target hints when a target is present', () => {
+  it('shows targets in the dial and progress bars', () => {
     const target: NutritionGoals = { energy_kcal: 2000, protein_g: 120 };
     render(
       <DayWeekNutrition
@@ -91,8 +92,25 @@ describe('DayWeekNutrition', () => {
         directions={ALL_DIRECTIONS}
       />,
     );
-    expect(screen.getByText('of 2000 kcal')).toBeInTheDocument();
-    expect(screen.getByText('of 120 g')).toBeInTheDocument();
+    expect(screen.getByText('Energy target 2,000 kcal')).toBeInTheDocument();
+    expect(
+      screen.getByRole('progressbar', { name: 'Protein: 40.5 g, target 120 g' }),
+    ).toBeInTheDocument();
+  });
+
+  it('interprets overflow according to each target direction', () => {
+    const target: NutritionGoals = { energy_kcal: 1200, protein_g: 40, sugar_g: 4 };
+    render(
+      <DayWeekNutrition
+        day={scopeFrom(detailed, 0, 0, { target })}
+        week={weekScope}
+        directions={ALL_DIRECTIONS}
+      />,
+    );
+
+    expect(screen.getByText('Over')).toBeInTheDocument();
+    expect(screen.getByText('Minimum met')).toBeInTheDocument();
+    expect(screen.getByText('Over maximum')).toBeInTheDocument();
   });
 
   it('shows Not enough data for a partially-covered weekly nutrient', () => {
