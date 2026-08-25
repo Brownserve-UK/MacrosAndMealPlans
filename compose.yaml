@@ -54,6 +54,34 @@ services:
       - ./:/workspace
       - web-node-modules:/workspace/web/node_modules
 
+  sample-data:
+    profiles: ["sample-data"]
+    build:
+      context: .
+      target: dev
+    depends_on:
+      db:
+        condition: service_healthy
+    working_dir: /workspace
+    entrypoint:
+      - cargo
+      - run
+      - --quiet
+      - --manifest-path
+      - dev-tools/sample-data/Cargo.toml
+      - --
+    command: ["full"]
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-mmp}:${POSTGRES_PASSWORD:-mmp}@db:5432/${POSTGRES_DB:-mmp}
+      MMP_DEV_USER: ${MMP_DEV_USER:-admin}
+      MMP_DEV_PASSWORD: ${MMP_DEV_PASSWORD:-changeme}
+      MMP_SAMPLE_DATA: "true"
+      RUST_LOG: ${RUST_LOG:-info,mmp_server=debug,sqlx=warn}
+    volumes:
+      - ./:/workspace
+      - cargo-registry:/usr/local/cargo/registry
+      - cargo-target:/workspace/.target-container
+
 volumes:
   db-data:
   cargo-registry:

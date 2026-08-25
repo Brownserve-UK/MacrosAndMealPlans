@@ -1,4 +1,5 @@
 target
+**/target
 .target-container
 **/node_modules
 web/dist
@@ -7,3 +8,4 @@ web/dist
 .env.local
 .dev
 *.log
+dev-tools

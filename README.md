@@ -60,3 +60,17 @@ docker compose exec app cargo test --package mmp-postgres --features db-tests
 ```
 
 Use `docker compose run --rm --no-deps app <command>` instead if the stack is not already up.
+
+Populate the local database with repeatable sample data for manual testing:
+
+```sh
+docker compose run --rm sample-data full
+```
+
+Dates default to the current week. Pass a specific Monday when a reproducible period is useful:
+
+```sh
+docker compose run --rm sample-data full --week-start 2026-08-24
+```
+
+Use `minimal` instead of `full` for a smaller dataset.
