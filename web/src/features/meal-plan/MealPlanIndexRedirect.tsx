@@ -2,7 +2,7 @@ import { useNavigate } from '@tanstack/react-router';
 import { useEffect } from 'react';
 import { useAuth } from '../../auth/AuthProvider';
 import { EmptyState, Loading } from '../../components/States';
-import { startOfWeekIso, todayIso } from '../diary/date';
+import { startOfWeekIso, todayIso } from './date';
 
 export function MealPlanIndexRedirect() {
   const { principal } = useAuth();

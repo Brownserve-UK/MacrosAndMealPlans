@@ -9,9 +9,8 @@ import Typography from '@mui/material/Typography';
 import { useState, type FormEvent } from 'react';
 import { ApiError } from '../../api/client';
 import type { Product } from '../../api/client';
-import { useCreateConsumption, useProductNutrition } from '../../api/queries';
+import { useCreateConsumption } from '../../api/queries';
 import { FormDialog } from '../../components/FormDialog';
-import { useDebounced } from '../../hooks/useDebounced';
 import {
   AmountFields,
   amountDraftFrom,
@@ -20,7 +19,6 @@ import {
   type AmountDraft,
 } from './AmountFields';
 import { ProductPicker } from './ProductPicker';
-import { NutritionPreview } from './NutritionPreview';
 import { nowTime, combineDateTime, formatFullDate } from './date';
 
 type EntryDraft = {
@@ -39,7 +37,7 @@ function validate(draft: EntryDraft): Record<string, string> {
   return errors;
 }
 
-export function NewEntryDialog({
+export function LogFoodDialog({
   open,
   onClose,
   memberId,
@@ -54,10 +52,6 @@ export function NewEntryDialog({
   const [draft, setDraft] = useState<EntryDraft>(emptyDraft());
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [failure, setFailure] = useState<string | null>(null);
-
-  const debouncedValue = useDebounced(draft.amount.value, 300);
-  const previewAmount = draftToAmount({ ...draft.amount, value: debouncedValue });
-  const preview = useProductNutrition(draft.product?.id ?? null, previewAmount);
 
   function handleClose() {
     setDraft(emptyDraft());
@@ -130,8 +124,6 @@ export function NewEntryDialog({
                   value={draft.time}
                   onChange={(e) => e.target.value && setDraft({ ...draft, time: e.target.value })}
                 />
-
-                {preview.data ? <NutritionPreview nutrition={preview.data.nutrition} /> : null}
               </>
             ) : null}
           </Stack>

@@ -8,11 +8,10 @@ import TextField from '@mui/material/TextField';
 import { useState, type FormEvent } from 'react';
 import { ApiError } from '../../api/client';
 import type { DiaryEntry } from '../../api/client';
-import { useDeleteConsumption, useProduct, useProductNutrition, useUpdateConsumption } from '../../api/queries';
+import { useDeleteConsumption, useProduct, useUpdateConsumption } from '../../api/queries';
 import { ConflictDialog } from '../../components/ConflictDialog';
 import { FormDialog } from '../../components/FormDialog';
 import { Loading } from '../../components/States';
-import { useDebounced } from '../../hooks/useDebounced';
 import {
   AmountFields,
   draftToAmount,
@@ -20,7 +19,6 @@ import {
   type AmountDraft,
 } from './AmountFields';
 import { extractTime, combineDateTime } from './date';
-import { NutritionPreview } from './NutritionPreview';
 
 type EditDraft = {
   amount: AmountDraft;
@@ -39,7 +37,7 @@ function draftFrom(record: DiaryEntry): EditDraft {
   };
 }
 
-export function EditEntryDialog({
+export function EditLoggedFoodDialog({
   open,
   onClose,
   record,
@@ -55,10 +53,6 @@ export function EditEntryDialog({
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [failure, setFailure] = useState<string | null>(null);
   const [conflict, setConflict] = useState<ApiError | null>(null);
-
-  const debouncedValue = useDebounced(draft.amount.value, 300);
-  const previewAmount = draftToAmount({ ...draft.amount, value: debouncedValue });
-  const preview = useProductNutrition(record.product_id, previewAmount);
 
   function handleClose() {
     setErrors({});
@@ -145,8 +139,6 @@ export function EditEntryDialog({
                     fullWidth
                   />
                 </Stack>
-
-                {preview.data ? <NutritionPreview nutrition={preview.data.nutrition} /> : null}
               </>
             )}
           </Stack>

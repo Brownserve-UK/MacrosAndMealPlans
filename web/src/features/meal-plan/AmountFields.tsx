@@ -87,11 +87,13 @@ export function amountDraftFrom(product: AmountProductInfo | null): AmountDraft 
   return { kind: 'measure', value: '', unit: referenceUnit(product) ?? 'g' };
 }
 
+export const MAX_AMOUNT = 100000;
+
 export function draftToAmount(draft: AmountDraft): Amount | null {
   const raw = draft.value.trim();
   if (!raw) return null;
   const value = Number(raw);
-  if (Number.isNaN(value)) return null;
+  if (Number.isNaN(value) || value <= 0 || value > MAX_AMOUNT) return null;
   if (draft.kind === 'measure') return { kind: 'measure', value, unit: draft.unit };
   return { kind: draft.kind, value };
 }
@@ -105,6 +107,7 @@ export function validateAmountDraft(draft: AmountDraft): Record<string, string> 
     const value = Number(raw);
     if (Number.isNaN(value)) errors.amount = 'Must be a number';
     else if (value <= 0) errors.amount = 'Must be more than zero';
+    else if (value > MAX_AMOUNT) errors.amount = `Must be ${MAX_AMOUNT.toLocaleString('en-GB')} or less`;
   }
   return errors;
 }

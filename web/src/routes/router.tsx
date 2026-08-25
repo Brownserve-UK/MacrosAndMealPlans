@@ -2,8 +2,6 @@ import { createRootRoute, createRoute, createRouter, redirect } from '@tanstack/
 import { AppShell } from '../components/AppShell';
 import { AccountsPage } from '../features/administration/AccountsPage';
 import { AdministrationPage } from '../features/administration/AdministrationPage';
-import { DiaryIndexRedirect } from '../features/diary/DiaryIndexRedirect';
-import { DiaryPage } from '../features/diary/DiaryPage';
 import { HouseholdPage } from '../features/household/HouseholdPage';
 import { MemberPage } from '../features/household/MemberPage';
 import { MealPlanIndexRedirect } from '../features/meal-plan/MealPlanIndexRedirect';
@@ -69,21 +67,6 @@ const productRoute = createRoute({
   },
 });
 
-const diaryIndexRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: '/diary',
-  component: DiaryIndexRedirect,
-});
-
-const diaryDayRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: '/diary/$memberId/$date',
-  component: function EditDiaryDay() {
-    const { memberId, date } = diaryDayRoute.useParams();
-    return <DiaryPage memberId={memberId} date={date} />;
-  },
-});
-
 const householdRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/household',
@@ -125,8 +108,6 @@ const routeTree = rootRoute.addChildren([
   ingredientRoute,
   productsRoute,
   productRoute,
-  diaryIndexRoute,
-  diaryDayRoute,
   householdRoute,
   memberRoute,
   administrationRoute,

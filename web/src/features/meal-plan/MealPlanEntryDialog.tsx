@@ -17,7 +17,6 @@ import Typography from '@mui/material/Typography';
 import useMediaQuery from '@mui/material/useMediaQuery';
 import { useTheme } from '@mui/material/styles';
 import { useQueryClient } from '@tanstack/react-query';
-import { Link } from '@tanstack/react-router';
 import { useState, type FormEvent } from 'react';
 import {
   ApiError,
@@ -31,23 +30,26 @@ import {
   useDeleteMealPlanEntry,
   useMarkMealPlanEaten,
   useMarkMealPlanNotEaten,
+  useMealNutrition,
   useProduct,
   useReopenMealPlanEntry,
   useUpdateMealPlanEntry,
+  type MealNutritionTotals,
 } from '../../api/queries';
 import { ConflictDialog } from '../../components/ConflictDialog';
 import { FormDialog } from '../../components/FormDialog';
 import { MaybeNumber } from '../../components/Unknown';
+import { useDebounced } from '../../hooks/useDebounced';
 import {
   AmountFields,
   amountDraftFrom,
   draftToAmount,
   validateAmountDraft,
   type AmountDraft,
-} from '../diary/AmountFields';
-import { combineDateTime, nowTime, parseIsoDate } from '../diary/date';
-import { formatAmount } from '../diary/format';
-import { ProductPicker } from '../diary/ProductPicker';
+} from './AmountFields';
+import { combineDateTime, nowTime, parseIsoDate } from './date';
+import { formatAmount } from './format';
+import { ProductPicker } from './ProductPicker';
 
 export const SLOTS: { value: MealSlot; label: string }[] = [
   { value: 'breakfast', label: 'Breakfast' },
@@ -108,6 +110,42 @@ function labelForSlot(slot: MealSlot) {
   return SLOTS.find((candidate) => candidate.value === slot)?.label ?? slot;
 }
 
+const TOTAL_MACROS = [
+  { key: 'protein_g', label: 'Protein' },
+  { key: 'carbohydrate_g', label: 'Carbs' },
+  { key: 'fat_g', label: 'Fat' },
+] as const;
+
+function MealNutritionTotal({ total }: { total: MealNutritionTotals }) {
+  return (
+    <Box sx={{ p: 2, borderRadius: 2, backgroundColor: 'action.hover' }}>
+      <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1 }}>
+        Meal total
+      </Typography>
+      <Stack
+        direction="row"
+        spacing={{ xs: 2, sm: 3 }}
+        sx={{ alignItems: 'baseline', flexWrap: 'wrap', rowGap: 1 }}
+      >
+        <Typography className="numeral" sx={{ fontSize: '1.25rem', fontWeight: 600 }}>
+          <MaybeNumber value={total.energy_kcal} fractionDigits={0} />{' '}
+          <Box component="span" sx={{ color: 'text.secondary', fontSize: '0.75rem' }}>
+            kcal
+          </Box>
+        </Typography>
+        {TOTAL_MACROS.map(({ key, label }) => (
+          <Typography key={key} className="numeral" variant="body2" sx={{ fontWeight: 500 }}>
+            <Box component="span" sx={{ color: 'text.secondary', mr: 0.75 }}>
+              {label}
+            </Box>
+            <MaybeNumber value={total[key]} suffix="g" />
+          </Typography>
+        ))}
+      </Stack>
+    </Box>
+  );
+}
+
 function formattedDate(date: string) {
   return parseIsoDate(date).toLocaleDateString('en-GB', {
     weekday: 'long',
@@ -119,8 +157,15 @@ function formattedDate(date: string) {
 function validationErrors(draft: Draft) {
   const errors: Record<string, string> = {};
   if (!draft.date) errors.planned_on = 'Pick a date';
+  const seen = new Set<string>();
   draft.components.forEach((component, index) => {
-    if (!component.productId) errors[`components.${index}.product_id`] = 'Pick a product';
+    if (!component.productId) {
+      errors[`components.${index}.product_id`] = 'Pick a product';
+    } else if (seen.has(component.productId)) {
+      errors[`components.${index}.product_id`] = 'This product is already in the meal';
+    } else {
+      seen.add(component.productId);
+    }
     const amountErrors = validateAmountDraft(component.amount);
     if (amountErrors.amount) errors[`components.${index}.amount`] = amountErrors.amount;
   });
@@ -134,6 +179,7 @@ function ComponentEditor({
   errors,
   removable,
   productEditable,
+  excludeIds,
   onChange,
   onRemove,
 }: {
@@ -142,6 +188,7 @@ function ComponentEditor({
   errors: Record<string, string>;
   removable: boolean;
   productEditable: boolean;
+  excludeIds: string[];
   onChange: (next: ComponentDraft) => void;
   onRemove: () => void;
 }) {
@@ -170,6 +217,7 @@ function ComponentEditor({
               helperText={errors[`${prefix}.product_id`]}
               autoFocus={index === 0 && !draft.productId}
               disabled={!productEditable}
+              excludeIds={excludeIds}
             />
           </Box>
           {removable ? (
@@ -228,20 +276,6 @@ function ResolvedEntry({ entry }: { entry: MealPlanEntry }) {
                   Planned {formatAmount(component.amount)} ·{' '}
                   <MaybeNumber value={component.nutrition.energy_kcal} fractionDigits={0} /> kcal
                 </Typography>
-              ) : null}
-              {component.consumption_record ? (
-                <Link
-                  to="/diary/$memberId/$date"
-                  params={{
-                    memberId: entry.member_id,
-                    date: component.consumption_record.consumed_on,
-                  }}
-                  className="app-link"
-                >
-                  <Typography component="span" variant="caption">
-                    View in diary
-                  </Typography>
-                </Link>
               ) : null}
             </Box>
             {eaten ? (
@@ -314,6 +348,15 @@ export function MealPlanEntryDialog({
   const [actualDate, setActualDate] = useState(entry?.planned_on ?? date);
   const [actualTime, setActualTime] = useState(entry?.planned_time ?? nowTime());
   const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null);
+
+  const nutritionInputs = draft.components.map((component) => ({
+    productId: component.productId,
+    amount: draftToAmount(component.amount),
+  }));
+  const debouncedInputs = useDebounced(JSON.stringify(nutritionInputs), 300);
+  const { total: mealTotal } = useMealNutrition(
+    JSON.parse(debouncedInputs) as { productId: string; amount: Amount | null }[],
+  );
 
   const busy =
     create.isPending ||
@@ -639,6 +682,10 @@ export function MealPlanEntryDialog({
                       errors={errors}
                       removable={draft.components.length > 1 && stage === 'edit'}
                       productEditable={stage === 'edit'}
+                      excludeIds={draft.components
+                        .filter((_, candidate) => candidate !== index)
+                        .map((candidate) => candidate.productId)
+                        .filter(Boolean)}
                       onChange={(next) => {
                         const components = [...draft.components];
                         components[index] = next;
@@ -655,6 +702,9 @@ export function MealPlanEntryDialog({
                     />
                   ))}
                 </Stack>
+                <Box sx={{ mt: 2.5 }}>
+                  <MealNutritionTotal total={mealTotal ?? {}} />
+                </Box>
               </Box>
             </Stack>
           )}

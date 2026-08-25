@@ -8,6 +8,7 @@ vi.mock('../../api/queries', () => ({
   useDeleteMealPlanEntry: () => ({ isPending: false, mutateAsync: vi.fn() }),
   useMarkMealPlanEaten: () => ({ isPending: false, mutateAsync: vi.fn() }),
   useMarkMealPlanNotEaten: () => ({ isPending: false, mutateAsync: vi.fn() }),
+  useMealNutrition: () => ({ total: null }),
   useReopenMealPlanEntry: () => ({ isPending: false, mutateAsync: vi.fn() }),
   useProduct: () => ({ data: null }),
   useProducts: () => ({ data: { items: [] }, isLoading: false }),

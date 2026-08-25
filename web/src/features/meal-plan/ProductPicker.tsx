@@ -12,6 +12,7 @@ export function ProductPicker({
   autoFocus,
   error,
   helperText,
+  excludeIds,
 }: {
   value: Product | null;
   onChange: (next: Product | null) => void;
@@ -19,10 +20,15 @@ export function ProductPicker({
   autoFocus?: boolean;
   error?: boolean;
   helperText?: string;
+  excludeIds?: string[];
 }) {
   const [input, setInput] = useState('');
   const debounced = useDebounced(input, 300);
   const query = useProducts({ q: debounced || undefined, per_page: 20 });
+  const excluded = new Set(excludeIds ?? []);
+  const options = (query.data?.items ?? []).filter(
+    (product) => product.id === value?.id || !excluded.has(product.id),
+  );
 
   return (
     <Autocomplete<Product>
@@ -30,7 +36,7 @@ export function ProductPicker({
       onChange={(_, next) => onChange(next)}
       inputValue={input}
       onInputChange={(_, next) => setInput(next)}
-      options={query.data?.items ?? []}
+      options={options}
       getOptionLabel={(option) => option.name}
       isOptionEqualToValue={(a, b) => a.id === b.id}
       loading={query.isLoading}

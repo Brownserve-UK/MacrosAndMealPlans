@@ -162,6 +162,10 @@ describe('draftToAmount', () => {
   it('returns null for a value that does not parse as a number', () => {
     expect(draftToAmount({ kind: 'measure', value: 'abc', unit: 'g' })).toBeNull();
   });
+
+  it('returns null for an implausibly large value', () => {
+    expect(draftToAmount({ kind: 'measure', value: '1e38', unit: 'g' })).toBeNull();
+  });
 });
 
 describe('validateAmountDraft', () => {
@@ -181,6 +185,12 @@ describe('validateAmountDraft', () => {
     );
     expect(validateAmountDraft({ kind: 'measure', value: '-5', unit: 'g' }).amount).toBe(
       'Must be more than zero',
+    );
+  });
+
+  it('rejects an implausibly large amount', () => {
+    expect(validateAmountDraft({ kind: 'measure', value: '1e38', unit: 'g' }).amount).toBe(
+      'Must be 100,000 or less',
     );
   });
 
