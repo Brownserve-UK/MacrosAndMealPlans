@@ -7,18 +7,21 @@ use time::macros::{date, datetime, time};
 use super::*;
 use crate::domain::{
     ActualMealPlanComponent, ConsumedAmount, HouseholdMemberId, MealPlanEntryPatch, MealPlanStatus,
-    MealSlot, NewConsumptionRecord, NewMealPlanComponent, NewMealPlanEntry, NutritionFacts,
-    Product, ProductId, Provenance, Quantity, Revision, Unit, UserId,
+    MealSlot, NewConsumptionRecord, NewMealPlanComponent, NewMealPlanEntry, NewNutritionTarget,
+    NutritionFacts, NutritionGoals, Product, ProductId, Provenance, Quantity, Revision, Unit,
+    UserId,
 };
 use crate::ports::FixedClock;
-use crate::services::DiaryService;
+use crate::services::{DiaryService, NutritionTargetService};
 use crate::testing::{
-    InMemoryConsumptionRecordRepository, InMemoryMealPlanRepository, InMemoryProductRepository,
+    InMemoryConsumptionRecordRepository, InMemoryMealPlanRepository,
+    InMemoryNutritionTargetRepository, InMemoryProductRepository,
 };
 
 struct Harness {
     service: MealPlanService,
     diary: DiaryService,
+    targets: NutritionTargetService,
     products: InMemoryProductRepository,
     records: InMemoryConsumptionRecordRepository,
     member_id: HouseholdMemberId,
@@ -28,17 +31,25 @@ struct Harness {
 fn harness() -> Harness {
     let products = InMemoryProductRepository::new();
     let records = InMemoryConsumptionRecordRepository::new();
+    let target_repo = InMemoryNutritionTargetRepository::new();
     let clock = Arc::new(FixedClock::new(datetime!(2026-08-24 09:00 UTC)));
     let service = MealPlanService::new(
         Arc::new(InMemoryMealPlanRepository::new(records.clone())),
         Arc::new(products.clone()),
         Arc::new(records.clone()),
+        Arc::new(target_repo.clone()),
         clock.clone(),
     );
-    let diary = DiaryService::new(Arc::new(records.clone()), Arc::new(products.clone()), clock);
+    let diary = DiaryService::new(
+        Arc::new(records.clone()),
+        Arc::new(products.clone()),
+        clock.clone(),
+    );
+    let targets = NutritionTargetService::new(Arc::new(target_repo.clone()), clock);
     Harness {
         service,
         diary,
+        targets,
         products,
         records,
         member_id: HouseholdMemberId::new(),
@@ -78,6 +89,24 @@ fn measured(product_id: ProductId, grams: i64) -> NewMealPlanComponent {
     NewMealPlanComponent {
         product_id,
         amount: ConsumedAmount::Measure(Quantity::new(Decimal::new(grams, 0), Unit::Gram)),
+    }
+}
+
+async fn set_target(h: &Harness, effective: time::Date, goals: NutritionGoals) {
+    h.targets
+        .create(NewNutritionTarget {
+            member_id: h.member_id,
+            effective_from: effective,
+            goals,
+        })
+        .await
+        .unwrap();
+}
+
+fn kcal_goals(value: i64) -> NutritionGoals {
+    NutritionGoals {
+        energy_kcal: Some(Decimal::new(value, 0)),
+        ..Default::default()
     }
 }
 
@@ -456,6 +485,89 @@ async fn reopening_with_a_stale_revision_is_refused() {
         .unwrap_err();
 
     assert!(matches!(error, CoreError::RevisionMismatch { .. }));
+}
+
+#[tokio::test]
+async fn a_target_in_force_all_week_resolves_per_day_and_sums_the_week() {
+    let h = harness();
+    set_target(&h, date!(2026 - 08 - 01), kcal_goals(2000)).await;
+
+    let week = h
+        .service
+        .week(h.member_id, date!(2026 - 08 - 24))
+        .await
+        .unwrap();
+
+    for day in &week.days {
+        assert_eq!(
+            day.target.as_ref().and_then(|goals| goals.energy_kcal),
+            Some(Decimal::new(2000, 0))
+        );
+    }
+    assert_eq!(
+        week.target.as_ref().and_then(|goals| goals.energy_kcal),
+        Some(Decimal::new(14000, 0))
+    );
+    assert!(week.insufficient_target_coverage.is_empty());
+}
+
+#[tokio::test]
+async fn a_target_starting_midweek_is_not_enough_data_for_the_week() {
+    let h = harness();
+    set_target(&h, date!(2026 - 08 - 26), kcal_goals(2000)).await;
+
+    let week = h
+        .service
+        .week(h.member_id, date!(2026 - 08 - 24))
+        .await
+        .unwrap();
+
+    assert!(week.days[0].target.is_none());
+    assert!(week.days[1].target.is_none());
+    assert_eq!(
+        week.days[2]
+            .target
+            .as_ref()
+            .and_then(|goals| goals.energy_kcal),
+        Some(Decimal::new(2000, 0))
+    );
+    assert!(week.target.is_none());
+    assert_eq!(
+        week.insufficient_target_coverage,
+        vec!["energy_kcal".to_owned()]
+    );
+}
+
+#[tokio::test]
+async fn a_target_change_sums_energy_but_flags_a_newly_added_nutrient() {
+    let h = harness();
+    set_target(&h, date!(2026 - 08 - 01), kcal_goals(2000)).await;
+    set_target(
+        &h,
+        date!(2026 - 08 - 27),
+        NutritionGoals {
+            energy_kcal: Some(Decimal::new(1800, 0)),
+            protein_g: Some(Decimal::new(120, 0)),
+            ..Default::default()
+        },
+    )
+    .await;
+
+    let week = h
+        .service
+        .week(h.member_id, date!(2026 - 08 - 24))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        week.target.as_ref().and_then(|goals| goals.energy_kcal),
+        Some(Decimal::new(13200, 0))
+    );
+    assert_eq!(week.target.as_ref().and_then(|goals| goals.protein_g), None);
+    assert_eq!(
+        week.insufficient_target_coverage,
+        vec!["protein_g".to_owned()]
+    );
 }
 
 #[tokio::test]

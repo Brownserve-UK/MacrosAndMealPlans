@@ -25,6 +25,10 @@ export type MealPlanComponent = components['schemas']['MealPlanComponentDto'];
 export type MealPlanSummary = components['schemas']['NutritionSummaryDto'];
 export type MealPlanStatus = components['schemas']['MealPlanStatus'];
 export type MealSlot = components['schemas']['MealSlot'];
+export type Meta = components['schemas']['MetaDto'];
+export type NutritionTarget = components['schemas']['NutritionTargetDto'];
+export type NutritionGoals = components['schemas']['NutritionGoalsDto'];
+export type TargetDirection = components['schemas']['TargetDirectionDto'];
 
 const CREDENTIAL_KEY = 'mmp.credential';
 

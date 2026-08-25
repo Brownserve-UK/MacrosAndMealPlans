@@ -4,8 +4,9 @@ use std::str::FromStr;
 use mmp_core::domain::{
     AccessScope, CatalogueOrigin, ConsumedAmount, ConsumptionRecord, ConsumptionRecordId,
     HouseholdMember, HouseholdMemberId, Ingredient, IngredientId, MealPlanComponentId,
-    MealPlanEntryId, MemberAccessGrant, NutritionFacts, NutritionQuality, Product, ProductId,
-    Provenance, Quantity, Revision, Role, Unit, User, UserId,
+    MealPlanEntryId, MemberAccessGrant, NutritionFacts, NutritionGoals, NutritionQuality,
+    NutritionTarget, NutritionTargetId, Product, ProductId, Provenance, Quantity, Revision, Role,
+    Unit, User, UserId,
 };
 use mmp_core::{CoreError, RepositoryError};
 use rust_decimal::Decimal;
@@ -278,6 +279,49 @@ impl TryFrom<MemberAccessGrantRow> for MemberAccessGrant {
             granted_at: row.granted_at,
             granted_by: row.granted_by.map(UserId::from),
         })
+    }
+}
+
+#[derive(Debug, sqlx::FromRow)]
+pub struct NutritionTargetRow {
+    pub id: Uuid,
+    pub member_id: Uuid,
+    pub effective_from: Date,
+    pub energy_kcal: Option<Decimal>,
+    pub protein_g: Option<Decimal>,
+    pub carbohydrate_g: Option<Decimal>,
+    pub sugar_g: Option<Decimal>,
+    pub fat_g: Option<Decimal>,
+    pub saturated_fat_g: Option<Decimal>,
+    pub fibre_g: Option<Decimal>,
+    pub salt_g: Option<Decimal>,
+    pub cholesterol_mg: Option<Decimal>,
+    pub revision: i64,
+    pub created_at: OffsetDateTime,
+    pub updated_at: OffsetDateTime,
+}
+
+impl From<NutritionTargetRow> for NutritionTarget {
+    fn from(row: NutritionTargetRow) -> Self {
+        NutritionTarget {
+            id: NutritionTargetId::from(row.id),
+            member_id: HouseholdMemberId::from(row.member_id),
+            effective_from: row.effective_from,
+            goals: NutritionGoals {
+                energy_kcal: row.energy_kcal,
+                protein_g: row.protein_g,
+                carbohydrate_g: row.carbohydrate_g,
+                sugar_g: row.sugar_g,
+                fat_g: row.fat_g,
+                saturated_fat_g: row.saturated_fat_g,
+                fibre_g: row.fibre_g,
+                salt_g: row.salt_g,
+                cholesterol_mg: row.cholesterol_mg,
+            },
+            revision: Revision::new(row.revision),
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+        }
     }
 }
 

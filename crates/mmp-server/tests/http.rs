@@ -7,11 +7,13 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use http_body_util::BodyExt;
 use mmp_core::ports::SystemClock;
-use mmp_core::services::{CatalogueService, DiaryService, HouseholdService, MealPlanService};
+use mmp_core::services::{
+    CatalogueService, DiaryService, HouseholdService, MealPlanService, NutritionTargetService,
+};
 use mmp_core::testing::{
     InMemoryAccessGrantRepository, InMemoryConsumptionRecordRepository,
     InMemoryHouseholdMemberRepository, InMemoryIngredientRepository, InMemoryMealPlanRepository,
-    InMemoryProductRepository, InMemoryUserRepository,
+    InMemoryNutritionTargetRepository, InMemoryProductRepository, InMemoryUserRepository,
 };
 use mmp_server::AppState;
 use mmp_server::auth::DevBasicAuthProvider;
@@ -35,6 +37,7 @@ async fn app() -> Router {
 
     let products = InMemoryProductRepository::new();
     let consumption = InMemoryConsumptionRecordRepository::new();
+    let targets = InMemoryNutritionTargetRepository::new();
     let state = AppState::new(
         CatalogueService::new(
             Arc::new(InMemoryIngredientRepository::new()),
@@ -51,8 +54,10 @@ async fn app() -> Router {
             Arc::new(InMemoryMealPlanRepository::new(consumption.clone())),
             Arc::new(products),
             Arc::new(consumption),
+            Arc::new(targets.clone()),
             Arc::new(SystemClock),
         ),
+        NutritionTargetService::new(Arc::new(targets), Arc::new(SystemClock)),
         Arc::new(DevBasicAuthProvider::new(household, PASSWORD)),
     );
     mmp_server::app::build(state).0
@@ -1934,4 +1939,215 @@ async fn the_trusted_admin_can_open_another_members_entry() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
+}
+
+async fn my_member_id(app: &Router) -> String {
+    let (status, body, _) = send(app, Call::new("GET", "/api/v1/auth/me")).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    body["member_id"]
+        .as_str()
+        .expect("the admin should be linked to a member")
+        .to_owned()
+}
+
+#[tokio::test]
+async fn nutrition_targets_round_trip() {
+    let app = app().await;
+    let member = my_member_id(&app).await;
+
+    let (status, created, headers) = send(
+        &app,
+        Call::new(
+            "POST",
+            format!("/api/v1/members/{member}/nutrition-targets"),
+        )
+        .body(json!({
+            "effective_from": "2026-08-25",
+            "energy_kcal": 2000.0,
+            "protein_g": 120.0,
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    assert_eq!(created["energy_kcal"], 2000.0);
+    assert_eq!(created["protein_g"], 120.0);
+    assert!(created["fat_g"].is_null());
+    assert_eq!(etag(&headers), "1");
+
+    let id = created["id"].as_str().unwrap();
+    let (status, updated, _) = send(
+        &app,
+        Call::new("PATCH", format!("/api/v1/nutrition-targets/{id}"))
+            .if_match(1)
+            .body(json!({"energy_kcal": 1800.0, "protein_g": null})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{updated}");
+    assert_eq!(updated["energy_kcal"], 1800.0);
+    assert!(updated["protein_g"].is_null(), "null clears the field");
+    assert_eq!(updated["revision"], 2);
+
+    let (status, listed, _) = send(
+        &app,
+        Call::new("GET", format!("/api/v1/members/{member}/nutrition-targets")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(listed.as_array().unwrap().len(), 1);
+
+    let (status, _, _) = send(
+        &app,
+        Call::new("DELETE", format!("/api/v1/nutrition-targets/{id}")).if_match(2),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+}
+
+#[tokio::test]
+async fn updating_a_target_without_if_match_is_precondition_required() {
+    let app = app().await;
+    let member = my_member_id(&app).await;
+    let (_, created, _) = send(
+        &app,
+        Call::new(
+            "POST",
+            format!("/api/v1/members/{member}/nutrition-targets"),
+        )
+        .body(json!({"effective_from": "2026-08-25", "energy_kcal": 2000.0})),
+    )
+    .await;
+    let id = created["id"].as_str().unwrap();
+
+    let (status, body, _) = send(
+        &app,
+        Call::new("PATCH", format!("/api/v1/nutrition-targets/{id}"))
+            .body(json!({"energy_kcal": 1900.0})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::PRECONDITION_REQUIRED, "{body}");
+}
+
+#[tokio::test]
+async fn a_stale_target_revision_conflicts() {
+    let app = app().await;
+    let member = my_member_id(&app).await;
+    let (_, created, _) = send(
+        &app,
+        Call::new(
+            "POST",
+            format!("/api/v1/members/{member}/nutrition-targets"),
+        )
+        .body(json!({"effective_from": "2026-08-25", "energy_kcal": 2000.0})),
+    )
+    .await;
+    let id = created["id"].as_str().unwrap();
+
+    let (status, body, _) = send(
+        &app,
+        Call::new("PATCH", format!("/api/v1/nutrition-targets/{id}"))
+            .if_match(99)
+            .body(json!({"energy_kcal": 1900.0})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["actual_revision"], 1);
+}
+
+#[tokio::test]
+async fn a_duplicate_effective_date_conflicts() {
+    let app = app().await;
+    let member = my_member_id(&app).await;
+    let make = || {
+        Call::new(
+            "POST",
+            format!("/api/v1/members/{member}/nutrition-targets"),
+        )
+        .body(json!({"effective_from": "2026-08-25", "energy_kcal": 2000.0}))
+    };
+    let (status, _, _) = send(&app, make()).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let (status, body, _) = send(&app, make()).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+}
+
+#[tokio::test]
+async fn an_empty_target_is_unprocessable() {
+    let app = app().await;
+    let member = my_member_id(&app).await;
+    let (status, body, _) = send(
+        &app,
+        Call::new(
+            "POST",
+            format!("/api/v1/members/{member}/nutrition-targets"),
+        )
+        .body(json!({"effective_from": "2026-08-25"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+}
+
+#[tokio::test]
+async fn another_member_cannot_read_your_targets() {
+    let app = app().await;
+    let member = my_member_id(&app).await;
+    create_user(&app, "joe", &["basic_user"]).await;
+
+    let (status, body, _) = send(
+        &app,
+        Call::new("GET", format!("/api/v1/members/{member}/nutrition-targets")).signed_in_as("joe"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+}
+
+#[tokio::test]
+async fn the_meal_plan_week_carries_a_resolved_target() {
+    let app = app().await;
+    let member = my_member_id(&app).await;
+    send(
+        &app,
+        Call::new(
+            "POST",
+            format!("/api/v1/members/{member}/nutrition-targets"),
+        )
+        .body(json!({"effective_from": "2026-08-01", "energy_kcal": 2000.0})),
+    )
+    .await;
+
+    let (status, week, _) = send(&app, Call::new("GET", "/api/v1/meal-plan/2026-08-24")).await;
+    assert_eq!(status, StatusCode::OK, "{week}");
+    assert_eq!(week["target"]["energy_kcal"], 14000.0);
+    assert_eq!(week["days"][0]["target"]["energy_kcal"], 2000.0);
+    assert!(
+        week["insufficient_target_coverage"].as_array().is_none()
+            || week["insufficient_target_coverage"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn a_midweek_target_reports_insufficient_weekly_coverage() {
+    let app = app().await;
+    let member = my_member_id(&app).await;
+    send(
+        &app,
+        Call::new(
+            "POST",
+            format!("/api/v1/members/{member}/nutrition-targets"),
+        )
+        .body(json!({"effective_from": "2026-08-26", "energy_kcal": 2000.0})),
+    )
+    .await;
+
+    let (status, week, _) = send(&app, Call::new("GET", "/api/v1/meal-plan/2026-08-24")).await;
+    assert_eq!(status, StatusCode::OK, "{week}");
+    assert!(
+        week["target"].is_null(),
+        "a partial week has no weekly target"
+    );
+    assert_eq!(week["insufficient_target_coverage"], json!(["energy_kcal"]));
+    assert!(week["days"][0]["target"].is_null());
+    assert_eq!(week["days"][2]["target"]["energy_kcal"], 2000.0);
 }

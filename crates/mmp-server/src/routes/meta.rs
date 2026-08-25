@@ -1,9 +1,12 @@
+use std::collections::BTreeMap;
+
 use axum::Json;
 use serde::Serialize;
 use utoipa::ToSchema;
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
 
+use crate::dto::{TargetDirectionDto, nutrient_directions};
 use crate::state::AppState;
 
 pub const PROTOCOL_VERSION: u32 = 1;
@@ -24,6 +27,7 @@ pub struct MetaDto {
     #[schema(example = 1)]
     pub protocol_version: u32,
     pub supported_client_protocol_versions: ProtocolRange,
+    pub nutrient_directions: BTreeMap<String, TargetDirectionDto>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -49,6 +53,7 @@ async fn meta() -> Json<MetaDto> {
             min: MIN_SUPPORTED_CLIENT_PROTOCOL,
             max: MAX_SUPPORTED_CLIENT_PROTOCOL,
         },
+        nutrient_directions: nutrient_directions(),
     })
 }
 

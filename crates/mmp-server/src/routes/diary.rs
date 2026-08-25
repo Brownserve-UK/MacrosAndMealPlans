@@ -1,14 +1,14 @@
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
-use mmp_core::domain::HouseholdMemberId;
 use mmp_core::ports::PageRequest;
 use time::Date;
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
 use uuid::Uuid;
 
-use crate::auth::{AuthError, Permission, Principal};
+use super::require_member_access;
+use crate::auth::Principal;
 use crate::dto::common::iso_date;
 use crate::dto::{
     ConsumptionRecordDto, CreateConsumptionRequest, DiaryDayDto, HouseholdMemberDto,
@@ -24,23 +24,6 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(get_one, update, delete))
         .routes(routes!(get_day))
         .routes(routes!(list_members))
-}
-
-async fn require_member_access(
-    state: &AppState,
-    principal: &Principal,
-    member: HouseholdMemberId,
-) -> ApiResult<()> {
-    let user = state.household.get_user(principal.user_id).await?;
-    if state
-        .household
-        .can_view_member_health_data(&user, member)
-        .await?
-    {
-        Ok(())
-    } else {
-        Err(AuthError::Forbidden(Permission::MemberHealthData).into())
-    }
 }
 
 fn parse_path_date(raw: &str) -> ApiResult<Date> {

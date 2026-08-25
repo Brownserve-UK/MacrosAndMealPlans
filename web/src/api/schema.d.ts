@@ -404,6 +404,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/members/{member_id}/nutrition-targets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listNutritionTargets"];
+        put?: never;
+        post: operations["createNutritionTarget"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/meta": {
         parameters: {
             query?: never;
@@ -418,6 +434,22 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/api/v1/nutrition-targets/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getNutritionTarget"];
+        put?: never;
+        post?: never;
+        delete: operations["deleteNutritionTarget"];
+        options?: never;
+        head?: never;
+        patch: operations["updateNutritionTarget"];
         trace?: never;
     };
     "/api/v1/products": {
@@ -720,6 +752,13 @@ export interface components {
             /** Format: uuid */
             linked_user_id?: string | null;
         };
+        CreateNutritionTargetRequest: components["schemas"]["NutritionGoalsDto"] & {
+            /**
+             * Format: date
+             * @example 2026-08-25
+             */
+            effective_from: string;
+        };
         CreateProductRequest: {
             barcode?: string | null;
             brand?: string | null;
@@ -862,6 +901,7 @@ export interface components {
             entries: components["schemas"]["MealPlanEntryDto"][];
             projected: components["schemas"]["NutritionSummaryDto"];
             remaining_planned: components["schemas"]["NutritionSummaryDto"];
+            target?: null | components["schemas"]["NutritionGoalsDto"];
         };
         MealPlanEntryDto: {
             actual?: null | components["schemas"]["NutritionSummaryDto"];
@@ -898,10 +938,12 @@ export interface components {
         MealPlanWeekDto: {
             actual: components["schemas"]["NutritionSummaryDto"];
             days: components["schemas"]["MealPlanDayDto"][];
+            insufficient_target_coverage?: string[];
             /** Format: uuid */
             member_id: string;
             projected: components["schemas"]["NutritionSummaryDto"];
             remaining_planned: components["schemas"]["NutritionSummaryDto"];
+            target?: null | components["schemas"]["NutritionGoalsDto"];
             /** Format: date */
             week_end: string;
             /** Format: date */
@@ -924,6 +966,9 @@ export interface components {
             items: components["schemas"]["HouseholdMemberDto"][];
         };
         MetaDto: {
+            nutrient_directions: {
+                [key: string]: components["schemas"]["TargetDirectionDto"];
+            };
             /**
              * Format: int32
              * @example 1
@@ -957,6 +1002,26 @@ export interface components {
             /** Format: double */
             sugar_g?: number | null;
         };
+        NutritionGoalsDto: {
+            /** Format: double */
+            carbohydrate_g?: number | null;
+            /** Format: double */
+            cholesterol_mg?: number | null;
+            /** Format: double */
+            energy_kcal?: number | null;
+            /** Format: double */
+            fat_g?: number | null;
+            /** Format: double */
+            fibre_g?: number | null;
+            /** Format: double */
+            protein_g?: number | null;
+            /** Format: double */
+            salt_g?: number | null;
+            /** Format: double */
+            saturated_fat_g?: number | null;
+            /** Format: double */
+            sugar_g?: number | null;
+        };
         /** @enum {string} */
         NutritionQuality: "known" | "partial" | "unknown";
         NutritionSummaryDto: {
@@ -965,6 +1030,23 @@ export interface components {
             partial_count: number;
             /** Format: int64 */
             unknown_count: number;
+        };
+        NutritionTargetDto: components["schemas"]["NutritionGoalsDto"] & {
+            /** Format: date-time */
+            created_at: string;
+            /**
+             * Format: date
+             * @example 2026-08-25
+             */
+            effective_from: string;
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            member_id: string;
+            /** Format: int64 */
+            revision: number;
+            /** Format: date-time */
+            updated_at: string;
         };
         PageMeta: {
             /**
@@ -1090,6 +1172,8 @@ export interface components {
         /** @enum {string} */
         SortDirectionDto: "asc" | "desc";
         /** @enum {string} */
+        TargetDirectionDto: "at_least" | "at_most" | "around";
+        /** @enum {string} */
         Unit: "mg" | "g" | "kg" | "oz" | "lb" | "ml" | "l" | "tsp" | "tbsp" | "fl_oz" | "cup" | "item" | "piece" | "slice" | "clove" | "can" | "pack" | "bunch";
         UnitDto: {
             /** @example g */
@@ -1121,6 +1205,28 @@ export interface components {
         };
         UpdateMemberRequest: {
             display_name?: string | null;
+        };
+        UpdateNutritionTargetRequest: {
+            /** Format: double */
+            carbohydrate_g?: number | null;
+            /** Format: double */
+            cholesterol_mg?: number | null;
+            /** Format: date */
+            effective_from?: string | null;
+            /** Format: double */
+            energy_kcal?: number | null;
+            /** Format: double */
+            fat_g?: number | null;
+            /** Format: double */
+            fibre_g?: number | null;
+            /** Format: double */
+            protein_g?: number | null;
+            /** Format: double */
+            salt_g?: number | null;
+            /** Format: double */
+            saturated_fat_g?: number | null;
+            /** Format: double */
+            sugar_g?: number | null;
         };
         UpdateProductRequest: {
             barcode?: string | null;
@@ -2311,6 +2417,92 @@ export interface operations {
             };
         };
     };
+    listNutritionTargets: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Household member id */
+                member_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The member's target history, oldest first */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NutritionTargetDto"][];
+                };
+            };
+            /** @description Not permitted */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    createNutritionTarget: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Household member id */
+                member_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateNutritionTargetRequest"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NutritionTargetDto"];
+                };
+            };
+            /** @description Not permitted */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A target already takes effect on that date */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     getMeta: {
         parameters: {
             query?: never;
@@ -2327,6 +2519,157 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MetaDto"];
+                };
+            };
+        };
+    };
+    getNutritionTarget: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Nutrition target id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The target */
+            200: {
+                headers: {
+                    /** @description The revision to send back as If-Match */
+                    ETag?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NutritionTargetDto"];
+                };
+            };
+            /** @description Not permitted */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    deleteNutritionTarget: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The revision you loaded */
+                "If-Match": string;
+            };
+            path: {
+                /** @description Nutrition target id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not permitted */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Someone else changed it first */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    updateNutritionTarget: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The revision you loaded */
+                "If-Match": string;
+            };
+            path: {
+                /** @description Nutrition target id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateNutritionTargetRequest"];
+            };
+        };
+        responses: {
+            /** @description Updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NutritionTargetDto"];
+                };
+            };
+            /** @description Not permitted */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Someone else changed it first */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description If-Match is required */
+            428: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
         };

@@ -7,15 +7,15 @@ use async_trait::async_trait;
 
 use crate::domain::{
     AccessScope, ConsumptionRecord, ConsumptionRecordId, HouseholdMember, HouseholdMemberId,
-    Ingredient, IngredientId, MealPlanEntry, MealPlanEntryId, MemberAccessGrant, Product,
-    ProductId, Revision, Role, User, UserId,
+    Ingredient, IngredientId, MealPlanEntry, MealPlanEntryId, MemberAccessGrant, NutritionTarget,
+    NutritionTargetId, Product, ProductId, Revision, Role, User, UserId,
 };
 use crate::error::{CoreError, Result};
 use crate::ports::{
     AccessGrantRepository, ConsumptionQuery, ConsumptionRecordRepository,
     HouseholdMemberRepository, IngredientQuery, IngredientRepository, MealPlanQuery,
-    MealPlanRepository, MemberQuery, Paginated, ProductQuery, ProductRepository, SortDirection,
-    UpdateOutcome, UserQuery, UserRepository,
+    MealPlanRepository, MemberQuery, NutritionTargetRepository, Paginated, ProductQuery,
+    ProductRepository, SortDirection, UpdateOutcome, UserQuery, UserRepository,
 };
 
 // This _should_ reflect the indexs that a real database would enforce
@@ -842,5 +842,105 @@ impl MealPlanRepository for InMemoryMealPlanRepository {
         records.retain(|_, record| record.meal_plan_entry_id != Some(entry.id));
         rows.insert(entry.id, entry.clone());
         Ok(UpdateOutcome::Updated)
+    }
+}
+
+fn enforce_target_uniqueness(
+    rows: &HashMap<NutritionTargetId, NutritionTarget>,
+    candidate: &NutritionTarget,
+) -> Result<()> {
+    for existing in rows.values() {
+        if existing.id == candidate.id {
+            continue;
+        }
+        if existing.member_id == candidate.member_id
+            && existing.effective_from == candidate.effective_from
+        {
+            return Err(CoreError::duplicate(
+                "nutrition target",
+                "effective_from",
+                candidate.effective_from,
+            ));
+        }
+    }
+    Ok(())
+}
+
+#[derive(Default, Clone)]
+pub struct InMemoryNutritionTargetRepository {
+    rows: Arc<Mutex<HashMap<NutritionTargetId, NutritionTarget>>>,
+}
+
+impl InMemoryNutritionTargetRepository {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn seed(&self, target: NutritionTarget) {
+        self.rows.lock().unwrap().insert(target.id, target);
+    }
+
+    pub fn count(&self) -> usize {
+        self.rows.lock().unwrap().len()
+    }
+}
+
+#[async_trait]
+impl NutritionTargetRepository for InMemoryNutritionTargetRepository {
+    async fn get(&self, id: NutritionTargetId) -> Result<Option<NutritionTarget>> {
+        Ok(self.rows.lock().unwrap().get(&id).cloned())
+    }
+
+    async fn list_for_member(&self, member_id: HouseholdMemberId) -> Result<Vec<NutritionTarget>> {
+        let mut targets: Vec<_> = self
+            .rows
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|target| target.member_id == member_id)
+            .cloned()
+            .collect();
+        targets.sort_by_key(|target| target.effective_from);
+        Ok(targets)
+    }
+
+    async fn insert(&self, target: &NutritionTarget) -> Result<()> {
+        let mut rows = self.rows.lock().unwrap();
+        enforce_target_uniqueness(&rows, target)?;
+        rows.insert(target.id, target.clone());
+        Ok(())
+    }
+
+    async fn update(&self, target: &NutritionTarget, expected: Revision) -> Result<UpdateOutcome> {
+        let mut rows = self.rows.lock().unwrap();
+        match rows.get(&target.id) {
+            None => Ok(UpdateOutcome::NotFound),
+            Some(existing) if existing.revision != expected => {
+                Ok(UpdateOutcome::RevisionMismatch {
+                    actual: existing.revision,
+                })
+            }
+            Some(_) => {
+                enforce_target_uniqueness(&rows, target)?;
+                rows.insert(target.id, target.clone());
+                Ok(UpdateOutcome::Updated)
+            }
+        }
+    }
+
+    async fn delete(&self, id: NutritionTargetId, expected: Revision) -> Result<UpdateOutcome> {
+        let mut rows = self.rows.lock().unwrap();
+        match rows.get(&id) {
+            None => Ok(UpdateOutcome::NotFound),
+            Some(existing) if existing.revision != expected => {
+                Ok(UpdateOutcome::RevisionMismatch {
+                    actual: existing.revision,
+                })
+            }
+            Some(_) => {
+                rows.remove(&id);
+                Ok(UpdateOutcome::Updated)
+            }
+        }
     }
 }

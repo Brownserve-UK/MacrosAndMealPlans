@@ -11,7 +11,7 @@ use utoipa::ToSchema;
 use uuid::Uuid;
 
 use super::common::{iso_date, iso_time};
-use super::{AmountDto, ConsumptionRecordDto, NutritionDto};
+use super::{AmountDto, ConsumptionRecordDto, NutritionDto, NutritionGoalsDto};
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct NutritionSummaryDto {
@@ -127,6 +127,8 @@ pub struct MealPlanDayDto {
     pub actual: NutritionSummaryDto,
     pub remaining_planned: NutritionSummaryDto,
     pub projected: NutritionSummaryDto,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target: Option<NutritionGoalsDto>,
 }
 
 impl From<MealPlanDay> for MealPlanDayDto {
@@ -137,6 +139,7 @@ impl From<MealPlanDay> for MealPlanDayDto {
             actual: value.actual.into(),
             remaining_planned: value.remaining_planned.into(),
             projected: value.projected.into(),
+            target: value.target.map(Into::into),
         }
     }
 }
@@ -154,6 +157,10 @@ pub struct MealPlanWeekDto {
     pub actual: NutritionSummaryDto,
     pub remaining_planned: NutritionSummaryDto,
     pub projected: NutritionSummaryDto,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target: Option<NutritionGoalsDto>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub insufficient_target_coverage: Vec<String>,
 }
 
 impl From<MealPlanWeek> for MealPlanWeekDto {
@@ -166,6 +173,8 @@ impl From<MealPlanWeek> for MealPlanWeekDto {
             actual: value.actual.into(),
             remaining_planned: value.remaining_planned.into(),
             projected: value.projected.into(),
+            target: value.target.map(Into::into),
+            insufficient_target_coverage: value.insufficient_target_coverage,
         }
     }
 }

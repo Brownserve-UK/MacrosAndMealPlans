@@ -19,12 +19,14 @@ export type ProductListParams = IngredientListParams & {
 
 export const keys = {
   units: ['units'] as const,
+  meta: ['meta'] as const,
   me: ['me'] as const,
   ingredients: (params: IngredientListParams) => ['ingredients', params] as const,
   ingredient: (id: string) => ['ingredient', id] as const,
   ingredientProducts: (id: string) => ['ingredient', id, 'products'] as const,
   products: (params: ProductListParams) => ['products', params] as const,
   product: (id: string) => ['product', id] as const,
+  nutritionTargets: (memberId: string) => ['nutritionTargets', memberId] as const,
 };
 
 export function useUnits() {
@@ -32,6 +34,14 @@ export function useUnits() {
     queryKey: keys.units,
     staleTime: Infinity,
     queryFn: async () => unwrap(await client.GET('/api/v1/units')),
+  });
+}
+
+export function useMeta() {
+  return useQuery({
+    queryKey: keys.meta,
+    staleTime: Infinity,
+    queryFn: async () => unwrap(await client.GET('/api/v1/meta')),
   });
 }
 
@@ -592,5 +602,74 @@ export function useReopenMealPlanEntry() {
         }),
       ),
     onSuccess: (entry) => invalidate(entry.member_id),
+  });
+}
+
+export function useNutritionTargets(memberId: string) {
+  return useQuery({
+    queryKey: keys.nutritionTargets(memberId),
+    enabled: Boolean(memberId),
+    queryFn: async () =>
+      unwrap(
+        await client.GET('/api/v1/members/{member_id}/nutrition-targets', {
+          params: { path: { member_id: memberId } },
+        }),
+      ),
+  });
+}
+
+function useNutritionTargetInvalidation() {
+  const qc = useQueryClient();
+  return (memberId: string) => {
+    void qc.invalidateQueries({ queryKey: keys.nutritionTargets(memberId) });
+    void qc.invalidateQueries({ queryKey: ['mealPlanWeek'] });
+  };
+}
+
+export function useCreateNutritionTarget() {
+  const invalidate = useNutritionTargetInvalidation();
+  return useMutation({
+    mutationFn: async (input: {
+      memberId: string;
+      body: components['schemas']['CreateNutritionTargetRequest'];
+    }) =>
+      unwrap(
+        await client.POST('/api/v1/members/{member_id}/nutrition-targets', {
+          params: { path: { member_id: input.memberId } },
+          body: input.body,
+        }),
+      ),
+    onSuccess: (target) => invalidate(target.member_id),
+  });
+}
+
+export function useUpdateNutritionTarget() {
+  const invalidate = useNutritionTargetInvalidation();
+  return useMutation({
+    mutationFn: async (input: {
+      id: string;
+      revision: number;
+      body: components['schemas']['UpdateNutritionTargetRequest'];
+    }) =>
+      unwrap(
+        await client.PATCH('/api/v1/nutrition-targets/{id}', {
+          params: { path: { id: input.id }, header: ifMatch(input.revision) },
+          body: input.body,
+        }),
+      ),
+    onSuccess: (target) => invalidate(target.member_id),
+  });
+}
+
+export function useDeleteNutritionTarget() {
+  const invalidate = useNutritionTargetInvalidation();
+  return useMutation({
+    mutationFn: async (input: { id: string; revision: number; memberId: string }) =>
+      unwrap(
+        await client.DELETE('/api/v1/nutrition-targets/{id}', {
+          params: { path: { id: input.id }, header: ifMatch(input.revision) },
+        }),
+      ),
+    onSuccess: (_data, variables) => invalidate(variables.memberId),
   });
 }

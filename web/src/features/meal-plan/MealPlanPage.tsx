@@ -16,7 +16,7 @@ import Typography from '@mui/material/Typography';
 import { useNavigate } from '@tanstack/react-router';
 import { useState } from 'react';
 import type { DiaryEntry, MealPlanDay, MealPlanEntry, MealSlot } from '../../api/client';
-import { useDiaryDay, useMealPlanWeek } from '../../api/queries';
+import { useDiaryDay, useMealPlanWeek, useMeta } from '../../api/queries';
 import { useAuth } from '../../auth/AuthProvider';
 import { InitialsAvatar } from '../../components/InitialsAvatar';
 import { PageHeader } from '../../components/PageHeader';
@@ -351,6 +351,8 @@ export function MealPlanPage({ weekStart }: { weekStart: string }) {
   const { principal } = useAuth();
   const memberId = principal?.member_id ?? '';
   const week = useMealPlanWeek(weekStart);
+  const meta = useMeta();
+  const directions = meta.data?.nutrient_directions ?? {};
   const [selectedDate, setSelectedDate] = useState(() => {
     const today = todayIso();
     return today >= weekStart && today <= addDays(weekStart, 6) ? today : weekStart;
@@ -416,15 +418,19 @@ export function MealPlanPage({ weekStart }: { weekStart: string }) {
 
           <Stack spacing={3}>
             <DayWeekNutrition
+              directions={directions}
               day={{
                 actual: selectedDay.actual,
                 remaining: selectedDay.remaining_planned,
                 projected: selectedDay.projected,
+                target: selectedDay.target,
               }}
               week={{
                 actual: week.data.actual,
                 remaining: week.data.remaining_planned,
                 projected: week.data.projected,
+                target: week.data.target,
+                notEnoughData: week.data.insufficient_target_coverage,
               }}
             />
 

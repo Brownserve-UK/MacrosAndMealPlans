@@ -7,7 +7,7 @@ use super::{PageRequest, Paginated};
 use crate::domain::{
     AccessScope, CatalogueOrigin, ConsumptionRecord, ConsumptionRecordId, HouseholdMember,
     HouseholdMemberId, Ingredient, IngredientId, MealPlanEntry, MealPlanEntryId, MemberAccessGrant,
-    Product, ProductId, Revision, Role, User, UserId,
+    NutritionTarget, NutritionTargetId, Product, ProductId, Revision, Role, User, UserId,
 };
 use crate::error::Result;
 
@@ -223,4 +223,17 @@ pub trait MealPlanRepository: Send + Sync + 'static {
     ) -> Result<UpdateOutcome>;
 
     async fn reopen(&self, entry: &MealPlanEntry, expected: Revision) -> Result<UpdateOutcome>;
+}
+
+#[async_trait]
+pub trait NutritionTargetRepository: Send + Sync + 'static {
+    async fn get(&self, id: NutritionTargetId) -> Result<Option<NutritionTarget>>;
+
+    async fn list_for_member(&self, member_id: HouseholdMemberId) -> Result<Vec<NutritionTarget>>;
+
+    async fn insert(&self, target: &NutritionTarget) -> Result<()>;
+
+    async fn update(&self, target: &NutritionTarget, expected: Revision) -> Result<UpdateOutcome>;
+
+    async fn delete(&self, id: NutritionTargetId, expected: Revision) -> Result<UpdateOutcome>;
 }

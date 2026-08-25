@@ -3,16 +3,19 @@ use std::sync::Arc;
 
 use time::{Date, Duration};
 
+use rust_decimal::Decimal;
+
 use crate::domain::{
     ConfirmMealPlanEntry, ConsumedAmount, ConsumptionRecord, MealPlanComponent,
     MealPlanComponentSnapshot, MealPlanEntry, MealPlanEntryId, MealPlanEntryPatch, MealPlanStatus,
-    NewMealPlanComponent, NewMealPlanEntry, NutritionFacts, NutritionQuality, Product, ProductId,
-    Revision, nutrition_for, sum_nutrition, validate_components,
+    NUTRIENT_KEYS, NewMealPlanComponent, NewMealPlanEntry, NutritionFacts, NutritionGoals,
+    NutritionQuality, Product, ProductId, Revision, nutrition_for, resolve_on, sum_nutrition,
+    validate_components,
 };
 use crate::error::{CoreError, Result, ValidationErrors};
 use crate::ports::{
-    Clock, ConsumptionRecordRepository, MealPlanQuery, MealPlanRepository, ProductRepository,
-    UpdateOutcome,
+    Clock, ConsumptionRecordRepository, MealPlanQuery, MealPlanRepository,
+    NutritionTargetRepository, ProductRepository, UpdateOutcome,
 };
 
 const MEAL_PLAN_ENTRY: &str = "meal plan entry";
@@ -50,6 +53,7 @@ pub struct MealPlanDay {
     pub actual: NutritionSummary,
     pub remaining_planned: NutritionSummary,
     pub projected: NutritionSummary,
+    pub target: Option<NutritionGoals>,
 }
 
 #[derive(Debug, Clone)]
@@ -61,6 +65,8 @@ pub struct MealPlanWeek {
     pub actual: NutritionSummary,
     pub remaining_planned: NutritionSummary,
     pub projected: NutritionSummary,
+    pub target: Option<NutritionGoals>,
+    pub insufficient_target_coverage: Vec<String>,
 }
 
 #[derive(Clone)]
@@ -68,6 +74,7 @@ pub struct MealPlanService {
     plans: Arc<dyn MealPlanRepository>,
     products: Arc<dyn ProductRepository>,
     consumption: Arc<dyn ConsumptionRecordRepository>,
+    targets: Arc<dyn NutritionTargetRepository>,
     clock: Arc<dyn Clock>,
 }
 
@@ -76,12 +83,14 @@ impl MealPlanService {
         plans: Arc<dyn MealPlanRepository>,
         products: Arc<dyn ProductRepository>,
         consumption: Arc<dyn ConsumptionRecordRepository>,
+        targets: Arc<dyn NutritionTargetRepository>,
         clock: Arc<dyn Clock>,
     ) -> Self {
         Self {
             plans,
             products,
             consumption,
+            targets,
             clock,
         }
     }
@@ -290,6 +299,7 @@ impl MealPlanService {
             .consumption
             .list_period(member_id, week_start, week_end)
             .await?;
+        let targets = self.targets.list_for_member(member_id).await?;
         let mut records_by_entry: HashMap<MealPlanEntryId, Vec<ConsumptionRecord>> = HashMap::new();
         for record in &records {
             if let Some(entry_id) = record.meal_plan_entry_id {
@@ -331,18 +341,22 @@ impl MealPlanService {
                     .filter(|view| view.entry.status == MealPlanStatus::Planned),
             );
             let projected = combine_summaries(&actual, &remaining_planned);
+            let target = resolve_on(&targets, date).map(|target| target.goals.clone());
             days.push(MealPlanDay {
                 date,
                 entries: day_entries,
                 actual,
                 remaining_planned,
                 projected,
+                target,
             });
         }
 
         let actual = combine_many(days.iter().map(|day| &day.actual));
         let remaining_planned = combine_many(days.iter().map(|day| &day.remaining_planned));
         let projected = combine_summaries(&actual, &remaining_planned);
+        let (target, insufficient_target_coverage) =
+            weekly_goals(days.iter().map(|day| day.target.as_ref()));
         Ok(MealPlanWeek {
             member_id,
             week_start,
@@ -351,6 +365,8 @@ impl MealPlanService {
             actual,
             remaining_planned,
             projected,
+            target,
+            insufficient_target_coverage,
         })
     }
 
@@ -628,6 +644,29 @@ fn combine_many<'a>(summaries: impl Iterator<Item = &'a NutritionSummary>) -> Nu
 
 fn combine_summaries(left: &NutritionSummary, right: &NutritionSummary) -> NutritionSummary {
     combine_many([left, right].into_iter())
+}
+
+fn weekly_goals<'a>(
+    daily: impl Iterator<Item = Option<&'a NutritionGoals>>,
+) -> (Option<NutritionGoals>, Vec<String>) {
+    let daily: Vec<Option<&NutritionGoals>> = daily.collect();
+    let day_count = daily.len();
+    let mut goals = NutritionGoals::default();
+    let mut insufficient = Vec::new();
+    for key in NUTRIENT_KEYS {
+        let values: Vec<Decimal> = daily
+            .iter()
+            .filter_map(|day| day.and_then(|day| day.get(key)))
+            .collect();
+        let covered = values.len();
+        if day_count > 0 && covered == day_count {
+            goals.set(key, Some(values.iter().copied().sum()));
+        } else if covered > 0 {
+            insufficient.push(key.to_string());
+        }
+    }
+    let target = if goals.is_empty() { None } else { Some(goals) };
+    (target, insufficient)
 }
 
 #[cfg(test)]

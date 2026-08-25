@@ -21,6 +21,7 @@ pub fn build(state: AppState) -> (Router, utoipa::openapi::OpenApi) {
         .merge(routes::users::router())
         .merge(routes::diary::router())
         .merge(routes::meal_plan::router())
+        .merge(routes::nutrition_target::router())
         .split_for_parts();
 
     let router = router
@@ -62,6 +63,7 @@ pub fn stub_state() -> AppState {
     ));
     let consumption = Arc::new(NoopConsumptionRecords);
     let products = Arc::new(NoopProducts);
+    let targets = Arc::new(NoopNutritionTargets);
 
     AppState::new(
         mmp_core::services::CatalogueService::new(
@@ -79,8 +81,10 @@ pub fn stub_state() -> AppState {
             Arc::new(NoopMealPlans),
             products,
             consumption,
+            targets.clone(),
             Arc::new(SystemClock),
         ),
+        mmp_core::services::NutritionTargetService::new(targets, Arc::new(SystemClock)),
         Arc::new(crate::auth::DevBasicAuthProvider::new(household, "")),
     )
 }
@@ -92,6 +96,40 @@ struct NoopUsers;
 struct NoopGrants;
 struct NoopConsumptionRecords;
 struct NoopMealPlans;
+struct NoopNutritionTargets;
+
+#[async_trait::async_trait]
+impl mmp_core::ports::NutritionTargetRepository for NoopNutritionTargets {
+    async fn get(
+        &self,
+        _: mmp_core::domain::NutritionTargetId,
+    ) -> mmp_core::Result<Option<mmp_core::domain::NutritionTarget>> {
+        Ok(None)
+    }
+    async fn list_for_member(
+        &self,
+        _: mmp_core::domain::HouseholdMemberId,
+    ) -> mmp_core::Result<Vec<mmp_core::domain::NutritionTarget>> {
+        Ok(vec![])
+    }
+    async fn insert(&self, _: &mmp_core::domain::NutritionTarget) -> mmp_core::Result<()> {
+        Ok(())
+    }
+    async fn update(
+        &self,
+        _: &mmp_core::domain::NutritionTarget,
+        _: mmp_core::domain::Revision,
+    ) -> mmp_core::Result<mmp_core::ports::UpdateOutcome> {
+        Ok(mmp_core::ports::UpdateOutcome::NotFound)
+    }
+    async fn delete(
+        &self,
+        _: mmp_core::domain::NutritionTargetId,
+        _: mmp_core::domain::Revision,
+    ) -> mmp_core::Result<mmp_core::ports::UpdateOutcome> {
+        Ok(mmp_core::ports::UpdateOutcome::NotFound)
+    }
+}
 
 #[async_trait::async_trait]
 impl mmp_core::ports::IngredientRepository for NoopIngredients {

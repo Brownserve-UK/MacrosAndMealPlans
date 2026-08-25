@@ -374,3 +374,47 @@ ALTER TABLE consumption_record
 CREATE UNIQUE INDEX consumption_record_meal_plan_component_unique
     ON consumption_record (meal_plan_component_id)
     WHERE meal_plan_component_id IS NOT NULL;
+
+CREATE TABLE nutrition_target (
+    id              UUID PRIMARY KEY,
+    member_id       UUID NOT NULL REFERENCES household_member (id) ON DELETE CASCADE,
+    effective_from  DATE NOT NULL,
+
+    energy_kcal         NUMERIC(12, 3),
+    protein_g           NUMERIC(12, 3),
+    carbohydrate_g      NUMERIC(12, 3),
+    sugar_g             NUMERIC(12, 3),
+    fat_g               NUMERIC(12, 3),
+    saturated_fat_g     NUMERIC(12, 3),
+    fibre_g             NUMERIC(12, 3),
+    salt_g              NUMERIC(12, 3),
+    cholesterol_mg      NUMERIC(12, 3),
+
+    revision        BIGINT NOT NULL DEFAULT 1,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    CONSTRAINT nutrition_target_has_goal
+        CHECK (num_nonnulls(energy_kcal, protein_g, carbohydrate_g, sugar_g, fat_g, saturated_fat_g, fibre_g, salt_g, cholesterol_mg) > 0),
+    CONSTRAINT nutrition_target_energy_kcal_non_negative
+        CHECK (energy_kcal IS NULL OR energy_kcal >= 0),
+    CONSTRAINT nutrition_target_protein_g_non_negative
+        CHECK (protein_g IS NULL OR protein_g >= 0),
+    CONSTRAINT nutrition_target_carbohydrate_g_non_negative
+        CHECK (carbohydrate_g IS NULL OR carbohydrate_g >= 0),
+    CONSTRAINT nutrition_target_sugar_g_non_negative
+        CHECK (sugar_g IS NULL OR sugar_g >= 0),
+    CONSTRAINT nutrition_target_fat_g_non_negative
+        CHECK (fat_g IS NULL OR fat_g >= 0),
+    CONSTRAINT nutrition_target_saturated_fat_g_non_negative
+        CHECK (saturated_fat_g IS NULL OR saturated_fat_g >= 0),
+    CONSTRAINT nutrition_target_fibre_g_non_negative
+        CHECK (fibre_g IS NULL OR fibre_g >= 0),
+    CONSTRAINT nutrition_target_salt_g_non_negative
+        CHECK (salt_g IS NULL OR salt_g >= 0),
+    CONSTRAINT nutrition_target_cholesterol_mg_non_negative
+        CHECK (cholesterol_mg IS NULL OR cholesterol_mg >= 0)
+);
+
+CREATE UNIQUE INDEX nutrition_target_member_effective_from_unique
+    ON nutrition_target (member_id, effective_from);

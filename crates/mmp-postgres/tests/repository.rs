@@ -5,18 +5,20 @@ use mmp_core::domain::{
     AccessScope, CatalogueOrigin, ConsumedAmount, ConsumptionRecord, ConsumptionRecordId,
     HouseholdMember, HouseholdMemberId, Ingredient, IngredientId, MealPlanComponent,
     MealPlanComponentId, MealPlanComponentSnapshot, MealPlanEntry, MealPlanEntryId, MealPlanStatus,
-    MealSlot, MemberAccessGrant, NutritionFacts, NutritionQuality, Product, ProductId, Provenance,
-    Quantity, Revision, Role, Unit, User, UserId,
+    MealSlot, MemberAccessGrant, NutritionFacts, NutritionGoals, NutritionQuality, NutritionTarget,
+    NutritionTargetId, Product, ProductId, Provenance, Quantity, Revision, Role, Unit, User,
+    UserId,
 };
 use mmp_core::ports::{
     AccessGrantRepository, ConsumptionQuery, ConsumptionRecordRepository,
     HouseholdMemberRepository, IngredientQuery, IngredientRepository, MealPlanQuery,
-    MealPlanRepository, MemberQuery, PageRequest, ProductQuery, ProductRepository, UpdateOutcome,
-    UserRepository,
+    MealPlanRepository, MemberQuery, NutritionTargetRepository, PageRequest, ProductQuery,
+    ProductRepository, UpdateOutcome, UserRepository,
 };
 use mmp_postgres::{
     PgAccessGrantRepository, PgConsumptionRecordRepository, PgHouseholdMemberRepository,
-    PgIngredientRepository, PgMealPlanRepository, PgProductRepository, PgUserRepository,
+    PgIngredientRepository, PgMealPlanRepository, PgNutritionTargetRepository, PgProductRepository,
+    PgUserRepository,
 };
 use rust_decimal::Decimal;
 use sqlx::PgPool;
@@ -1362,4 +1364,199 @@ async fn a_component_cannot_be_confirmed_by_two_consumption_records(pool: PgPool
         .await
         .unwrap_err();
     assert!(matches!(error, CoreError::Duplicate { .. }));
+}
+
+fn target(
+    member_id: HouseholdMemberId,
+    effective: time::Date,
+    goals: NutritionGoals,
+) -> NutritionTarget {
+    let now = OffsetDateTime::now_utc();
+    NutritionTarget {
+        id: NutritionTargetId::new(),
+        member_id,
+        effective_from: effective,
+        goals,
+        revision: Revision::INITIAL,
+        created_at: now,
+        updated_at: now,
+    }
+}
+
+#[sqlx::test]
+async fn round_trips_and_orders_nutrition_targets(pool: PgPool) {
+    let members = PgHouseholdMemberRepository::new(pool.clone());
+    let repo = PgNutritionTargetRepository::new(pool);
+    let joe = member("Joe");
+    members.insert(&joe).await.unwrap();
+
+    let later = target(
+        joe.id,
+        date!(2026 - 06 - 01),
+        NutritionGoals {
+            energy_kcal: Some(Decimal::new(1800, 0)),
+            protein_g: Some(Decimal::new(120, 0)),
+            ..Default::default()
+        },
+    );
+    let earlier = target(
+        joe.id,
+        date!(2026 - 01 - 01),
+        NutritionGoals {
+            energy_kcal: Some(Decimal::new(2200, 0)),
+            ..Default::default()
+        },
+    );
+    repo.insert(&later).await.unwrap();
+    repo.insert(&earlier).await.unwrap();
+
+    let listed = repo.list_for_member(joe.id).await.unwrap();
+    let dates: Vec<_> = listed.iter().map(|t| t.effective_from).collect();
+    assert_eq!(dates, vec![date!(2026 - 01 - 01), date!(2026 - 06 - 01)]);
+
+    let loaded = repo.get(later.id).await.unwrap().expect("should exist");
+    assert_eq!(loaded.goals.energy_kcal, Some(Decimal::new(1800, 0)));
+    assert_eq!(loaded.goals.protein_g, Some(Decimal::new(120, 0)));
+    assert_eq!(loaded.goals.fat_g, None, "unknown must stay unknown");
+}
+
+#[sqlx::test]
+async fn a_duplicate_effective_date_is_a_conflict(pool: PgPool) {
+    let members = PgHouseholdMemberRepository::new(pool.clone());
+    let repo = PgNutritionTargetRepository::new(pool);
+    let joe = member("Joe");
+    members.insert(&joe).await.unwrap();
+
+    let first = target(
+        joe.id,
+        date!(2026 - 08 - 25),
+        NutritionGoals {
+            energy_kcal: Some(Decimal::new(2000, 0)),
+            ..Default::default()
+        },
+    );
+    repo.insert(&first).await.unwrap();
+    let clash = target(
+        joe.id,
+        date!(2026 - 08 - 25),
+        NutritionGoals {
+            energy_kcal: Some(Decimal::new(1800, 0)),
+            ..Default::default()
+        },
+    );
+    let error = repo.insert(&clash).await.unwrap_err();
+    assert!(matches!(error, CoreError::Duplicate { .. }));
+}
+
+#[sqlx::test]
+async fn an_empty_target_is_rejected_by_the_schema(pool: PgPool) {
+    let members = PgHouseholdMemberRepository::new(pool.clone());
+    let repo = PgNutritionTargetRepository::new(pool);
+    let joe = member("Joe");
+    members.insert(&joe).await.unwrap();
+
+    let empty = target(joe.id, date!(2026 - 08 - 25), NutritionGoals::default());
+    let error = repo.insert(&empty).await.unwrap_err();
+    assert!(matches!(error, CoreError::Validation(_)));
+}
+
+#[sqlx::test]
+async fn a_negative_goal_is_rejected_by_the_schema(pool: PgPool) {
+    let members = PgHouseholdMemberRepository::new(pool.clone());
+    let repo = PgNutritionTargetRepository::new(pool);
+    let joe = member("Joe");
+    members.insert(&joe).await.unwrap();
+
+    let negative = target(
+        joe.id,
+        date!(2026 - 08 - 25),
+        NutritionGoals {
+            protein_g: Some(Decimal::new(-1, 0)),
+            ..Default::default()
+        },
+    );
+    let error = repo.insert(&negative).await.unwrap_err();
+    assert!(matches!(error, CoreError::Validation(_)));
+}
+
+#[sqlx::test]
+async fn nutrition_target_updates_report_revision_outcomes(pool: PgPool) {
+    let members = PgHouseholdMemberRepository::new(pool.clone());
+    let repo = PgNutritionTargetRepository::new(pool);
+    let joe = member("Joe");
+    members.insert(&joe).await.unwrap();
+
+    let original = target(
+        joe.id,
+        date!(2026 - 08 - 25),
+        NutritionGoals {
+            energy_kcal: Some(Decimal::new(2000, 0)),
+            ..Default::default()
+        },
+    );
+    repo.insert(&original).await.unwrap();
+
+    let mut updated = original.clone();
+    updated.goals.energy_kcal = Some(Decimal::new(1900, 0));
+    updated.revision = original.revision.next();
+    assert_eq!(
+        repo.update(&updated, original.revision).await.unwrap(),
+        UpdateOutcome::Updated
+    );
+
+    let stale = repo.update(&updated, original.revision).await.unwrap();
+    assert_eq!(
+        stale,
+        UpdateOutcome::RevisionMismatch {
+            actual: updated.revision,
+        }
+    );
+
+    let missing = target(
+        joe.id,
+        date!(2026 - 09 - 01),
+        NutritionGoals {
+            energy_kcal: Some(Decimal::new(2000, 0)),
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        repo.update(&missing, Revision::INITIAL).await.unwrap(),
+        UpdateOutcome::NotFound
+    );
+}
+
+#[sqlx::test]
+async fn nutrition_targets_can_be_deleted(pool: PgPool) {
+    let members = PgHouseholdMemberRepository::new(pool.clone());
+    let repo = PgNutritionTargetRepository::new(pool);
+    let joe = member("Joe");
+    members.insert(&joe).await.unwrap();
+
+    let original = target(
+        joe.id,
+        date!(2026 - 08 - 25),
+        NutritionGoals {
+            energy_kcal: Some(Decimal::new(2000, 0)),
+            ..Default::default()
+        },
+    );
+    repo.insert(&original).await.unwrap();
+
+    let stale = repo
+        .delete(original.id, original.revision.next())
+        .await
+        .unwrap();
+    assert_eq!(
+        stale,
+        UpdateOutcome::RevisionMismatch {
+            actual: original.revision
+        }
+    );
+
+    assert_eq!(
+        repo.delete(original.id, original.revision).await.unwrap(),
+        UpdateOutcome::Updated
+    );
+    assert!(repo.get(original.id).await.unwrap().is_none());
 }
