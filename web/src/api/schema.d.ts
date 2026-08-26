@@ -712,6 +712,7 @@ export interface components {
             recorded_by?: string | null;
             /** Format: int64 */
             revision: number;
+            slot: components["schemas"]["MealSlot"];
             /** Format: date-time */
             updated_at: string;
         };
@@ -728,6 +729,7 @@ export interface components {
             member_id: string;
             /** Format: uuid */
             product_id: string;
+            slot: components["schemas"]["MealSlot"];
         };
         CreateIngredientRequest: {
             default_unit: components["schemas"]["Unit"];
@@ -876,6 +878,38 @@ export interface components {
             /** Format: date */
             consumed_on: string;
         };
+        MealItemDto: components["schemas"]["MealItemSourceDto"] & {
+            amount: components["schemas"]["AmountDto"];
+            /** @example 18:30 */
+            at?: string | null;
+            /** Format: uuid */
+            linked_record_id?: string | null;
+            needs_attention: boolean;
+            nutrition: components["schemas"]["NutritionDto"];
+            planned_amount?: null | components["schemas"]["AmountDto"];
+            /** Format: date */
+            planned_on?: string | null;
+            /** Format: uuid */
+            product_id: string;
+            product_name: string;
+            quality: components["schemas"]["NutritionQuality"];
+            /** Format: int64 */
+            revision: number;
+            status: components["schemas"]["MealPlanStatus"];
+        };
+        MealItemSourceDto: {
+            /** Format: uuid */
+            component_id: string;
+            /** Format: uuid */
+            entry_id: string;
+            /** @enum {string} */
+            kind: "planned";
+        } | {
+            /** @enum {string} */
+            kind: "logged";
+            /** Format: uuid */
+            record_id: string;
+        };
         MealPlanComponentDto: {
             amount: components["schemas"]["AmountDto"];
             consumption_record?: null | components["schemas"]["ConsumptionRecordDto"];
@@ -901,6 +935,7 @@ export interface components {
             entries: components["schemas"]["MealPlanEntryDto"][];
             projected: components["schemas"]["NutritionSummaryDto"];
             remaining_planned: components["schemas"]["NutritionSummaryDto"];
+            slots: components["schemas"]["MealSlotViewDto"][];
             target?: null | components["schemas"]["NutritionGoalsDto"];
         };
         MealPlanEntryDto: {
@@ -951,6 +986,11 @@ export interface components {
         };
         /** @enum {string} */
         MealSlot: "breakfast" | "lunch" | "dinner" | "snacks";
+        MealSlotViewDto: {
+            items: components["schemas"]["MealItemDto"][];
+            nutrition: components["schemas"]["NutritionSummaryDto"];
+            slot: components["schemas"]["MealSlot"];
+        };
         MemberAccessGrantDto: {
             /** Format: date-time */
             granted_at: string;
@@ -1190,6 +1230,7 @@ export interface components {
             consumed_at?: string | null;
             /** Format: date */
             consumed_on?: string | null;
+            slot?: null | components["schemas"]["MealSlot"];
         };
         UpdateIngredientRequest: {
             default_unit?: null | components["schemas"]["Unit"];

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use time::Date;
+use time::{Date, Duration};
 
 use crate::domain::{
     ConsumedAmount, ConsumptionRecord, ConsumptionRecordId, ConsumptionRecordPatch,
@@ -59,6 +59,11 @@ impl DiaryService {
     }
 
     pub async fn record(&self, input: NewConsumptionRecord) -> Result<ConsumptionRecord> {
+        ensure_not_future(&*self.clock, input.consumed_on)?;
+        self.record_unchecked(input).await
+    }
+
+    pub async fn record_unchecked(&self, input: NewConsumptionRecord) -> Result<ConsumptionRecord> {
         input.validate()?;
         let product = self.get_product(input.product_id).await?;
         ensure_loggable(&product)?;
@@ -73,6 +78,7 @@ impl DiaryService {
             recorded_by: input.recorded_by,
             meal_plan_entry_id: input.meal_plan_entry_id,
             meal_plan_component_id: input.meal_plan_component_id,
+            slot: input.slot,
             amount: input.amount,
             consumed_on: input.consumed_on,
             consumed_at: input.consumed_at.unwrap_or(now),
@@ -108,11 +114,21 @@ impl DiaryService {
             return Ok(current);
         }
 
+        if patch.slot.is_some() && current.meal_plan_component_id.is_some() {
+            return Err(CoreError::conflict(
+                "This food came from a planned meal. Reopen the meal in your plan to move it.",
+            ));
+        }
+
         if let Some(consumed_on) = patch.consumed_on {
+            ensure_not_future(&*self.clock, consumed_on)?;
             current.consumed_on = consumed_on;
         }
         if let Some(consumed_at) = patch.consumed_at {
             current.consumed_at = consumed_at;
+        }
+        if let Some(slot) = patch.slot {
+            current.slot = slot;
         }
         if let Some(amount) = patch.amount {
             let product = self.get_product(current.product_id).await?;
@@ -206,6 +222,16 @@ fn ensure_resolvable(product: &Product, amount: &ConsumedAmount) -> Result<()> {
     if let Err(err) = amount.resolve(product) {
         let mut errors = ValidationErrors::new();
         errors.push("amount", err.to_string());
+        return errors.into_result();
+    }
+    Ok(())
+}
+
+fn ensure_not_future(clock: &dyn Clock, consumed_on: Date) -> Result<()> {
+    let latest = clock.now().date() + Duration::days(1);
+    if consumed_on > latest {
+        let mut errors = ValidationErrors::new();
+        errors.push("consumed_on", "Food cannot be logged in the future");
         return errors.into_result();
     }
     Ok(())

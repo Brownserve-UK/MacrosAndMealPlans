@@ -206,6 +206,7 @@ CREATE TABLE consumption_record (
 
     consumed_on   DATE NOT NULL,
     consumed_at   TIMESTAMPTZ NOT NULL,
+    slot          TEXT NOT NULL,
 
     nutrition_basis_amount  NUMERIC(16, 4),
     nutrition_basis_unit    TEXT,
@@ -260,7 +261,9 @@ CREATE TABLE consumption_record (
     CONSTRAINT consumption_record_cholesterol_mg_non_negative
         CHECK (cholesterol_mg IS NULL OR cholesterol_mg >= 0),
     CONSTRAINT consumption_record_quality_valid
-        CHECK (nutrition_quality IN ('known', 'partial', 'unknown'))
+        CHECK (nutrition_quality IN ('known', 'partial', 'unknown')),
+    CONSTRAINT consumption_record_slot_valid
+        CHECK (slot IN ('breakfast', 'lunch', 'dinner', 'snacks'))
 );
 
 CREATE INDEX consumption_record_member_day ON consumption_record (member_id, consumed_on);

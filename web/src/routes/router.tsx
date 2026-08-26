@@ -5,7 +5,7 @@ import { AdministrationPage } from '../features/administration/AdministrationPag
 import { HouseholdPage } from '../features/household/HouseholdPage';
 import { MemberPage } from '../features/household/MemberPage';
 import { MealPlanIndexRedirect } from '../features/meal-plan/MealPlanIndexRedirect';
-import { MealPlanPage } from '../features/meal-plan/MealPlanPage';
+import { MealPlanPage, defaultDayFor } from '../features/meal-plan/MealPlanPage';
 import { IngredientPage } from '../features/ingredients/IngredientPage';
 import { IngredientsPage } from '../features/ingredients/IngredientsPage';
 import { ProductPage } from '../features/products/ProductPage';
@@ -31,9 +31,21 @@ const mealPlanIndexRoute = createRoute({
 const mealPlanWeekRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/meal-plan/$weekStart',
-  component: function ViewMealPlanWeek() {
-    const { weekStart } = mealPlanWeekRoute.useParams();
-    return <MealPlanPage weekStart={weekStart} />;
+  beforeLoad: ({ params }) => {
+    throw redirect({
+      to: '/meal-plan/$weekStart/$day',
+      params: { weekStart: params.weekStart, day: defaultDayFor(params.weekStart) },
+      replace: true,
+    });
+  },
+});
+
+const mealPlanDayRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/meal-plan/$weekStart/$day',
+  component: function ViewMealPlanDay() {
+    const { weekStart, day } = mealPlanDayRoute.useParams();
+    return <MealPlanPage weekStart={weekStart} day={day} />;
   },
 });
 
@@ -104,6 +116,7 @@ const routeTree = rootRoute.addChildren([
   indexRoute,
   mealPlanIndexRoute,
   mealPlanWeekRoute,
+  mealPlanDayRoute,
   ingredientsRoute,
   ingredientRoute,
   productsRoute,

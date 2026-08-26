@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use super::*;
 use crate::domain::{
-    ConsumptionRecordId, HouseholdMemberId, NutritionQuality, Provenance, Quantity, Unit,
+    ConsumptionRecordId, HouseholdMemberId, MealSlot, NutritionQuality, Provenance, Quantity, Unit,
 };
 use crate::ports::FixedClock;
 use crate::testing::{InMemoryConsumptionRecordRepository, InMemoryProductRepository};
@@ -82,6 +82,7 @@ fn measure_150g(product_id: ProductId, member_id: HouseholdMemberId) -> NewConsu
         recorded_by: None,
         meal_plan_entry_id: None,
         meal_plan_component_id: None,
+        slot: MealSlot::Breakfast,
         amount: ConsumedAmount::Measure(Quantity::new(Decimal::new(150, 0), Unit::Gram)),
         consumed_on: date!(2026 - 08 - 22),
         consumed_at: None,
@@ -101,6 +102,7 @@ async fn records_a_consumption_at_the_initial_revision_with_scaled_nutrition() {
         .unwrap();
 
     assert_eq!(recorded.revision, Revision::INITIAL);
+    assert_eq!(recorded.slot, MealSlot::Breakfast);
     assert_eq!(recorded.nutrition.energy_kcal, Some(Decimal::new(300, 0)));
     assert_eq!(recorded.quality, NutritionQuality::Known);
     assert_eq!(h.records.count(), 1);
@@ -186,6 +188,34 @@ async fn amending_only_the_day_does_not_recompute_nutrition() {
 
     assert_eq!(amended.nutrition, recorded.nutrition);
     assert_eq!(amended.consumed_on, date!(2026 - 08 - 21));
+}
+
+#[tokio::test]
+async fn amending_the_meal_slot_moves_the_record() {
+    let h = harness();
+    let product = seed_product(&h, known_nutrition());
+    let member = HouseholdMemberId::new();
+    let recorded = h
+        .service
+        .record(measure_150g(product.id, member))
+        .await
+        .unwrap();
+
+    let amended = h
+        .service
+        .amend(
+            recorded.id,
+            recorded.revision,
+            ConsumptionRecordPatch {
+                slot: Some(MealSlot::Lunch),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(amended.slot, MealSlot::Lunch);
+    assert_eq!(amended.nutrition, recorded.nutrition);
 }
 
 #[tokio::test]
@@ -314,4 +344,52 @@ async fn day_only_returns_entries_for_the_requested_member_and_date() {
 
     let day = h.service.day(member, date!(2026 - 08 - 22)).await.unwrap();
     assert_eq!(day.entries.len(), 1);
+}
+
+#[tokio::test]
+async fn recording_food_in_the_future_is_refused() {
+    let h = harness();
+    let product = seed_product(&h, known_nutrition());
+    let member = HouseholdMemberId::new();
+
+    let mut next_week = measure_150g(product.id, member);
+    next_week.consumed_on = date!(2026 - 08 - 29);
+    let err = h.service.record(next_week).await.unwrap_err();
+
+    assert!(matches!(err, CoreError::Validation(_)));
+}
+
+#[tokio::test]
+async fn recording_food_a_day_ahead_is_allowed_for_timezone_slack() {
+    let h = harness();
+    let product = seed_product(&h, known_nutrition());
+    let member = HouseholdMemberId::new();
+
+    let mut tomorrow = measure_150g(product.id, member);
+    tomorrow.consumed_on = date!(2026 - 08 - 23);
+    h.service.record(tomorrow).await.unwrap();
+}
+
+#[tokio::test]
+async fn amending_a_record_into_the_future_is_refused() {
+    let h = harness();
+    let product = seed_product(&h, known_nutrition());
+    let member = HouseholdMemberId::new();
+    let recorded = h
+        .service
+        .record(measure_150g(product.id, member))
+        .await
+        .unwrap();
+
+    let patch = ConsumptionRecordPatch {
+        consumed_on: Some(date!(2026 - 08 - 29)),
+        ..Default::default()
+    };
+    let err = h
+        .service
+        .amend(recorded.id, recorded.revision, patch)
+        .await
+        .unwrap_err();
+
+    assert!(matches!(err, CoreError::Validation(_)));
 }

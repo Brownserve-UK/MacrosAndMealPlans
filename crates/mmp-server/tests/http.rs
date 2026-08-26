@@ -1211,6 +1211,7 @@ async fn creates_a_consumption_record_with_scaled_nutrition() {
         Call::new("POST", "/api/v1/consumption").body(json!({
             "member_id": me["member_id"],
             "product_id": product["id"],
+            "slot": "breakfast",
             "amount": measured_amount(150.0),
             "consumed_on": "2026-08-22",
         })),
@@ -1219,6 +1220,7 @@ async fn creates_a_consumption_record_with_scaled_nutrition() {
 
     assert_eq!(status, StatusCode::CREATED, "{body}");
     assert_eq!(body["revision"], 1);
+    assert_eq!(body["slot"], "breakfast");
     assert_eq!(body["nutrition"]["energy_kcal"], json!(96.0));
     assert_eq!(etag(&headers), "1");
 }
@@ -1247,6 +1249,7 @@ async fn a_basic_user_can_log_against_their_own_linked_member() {
             .body(json!({
                 "member_id": member["id"],
                 "product_id": product["id"],
+                "slot": "breakfast",
                 "amount": measured_amount(150.0),
                 "consumed_on": "2026-08-22",
             })),
@@ -1269,6 +1272,7 @@ async fn a_basic_user_cannot_log_against_someone_elses_member() {
             .body(json!({
                 "member_id": member["id"],
                 "product_id": product["id"],
+                "slot": "breakfast",
                 "amount": measured_amount(150.0),
                 "consumed_on": "2026-08-22",
             })),
@@ -1291,6 +1295,7 @@ async fn a_household_manager_cannot_log_on_behalf_of_a_member_without_a_grant() 
             .body(json!({
                 "member_id": member["id"],
                 "product_id": product["id"],
+                "slot": "breakfast",
                 "amount": measured_amount(150.0),
                 "consumed_on": "2026-08-22",
             })),
@@ -1326,6 +1331,7 @@ async fn an_explicit_health_data_grant_allows_logging() {
             .body(json!({
                 "member_id": member["id"],
                 "product_id": product["id"],
+                "slot": "breakfast",
                 "amount": measured_amount(150.0),
                 "consumed_on": "2026-08-22",
             })),
@@ -1357,6 +1363,7 @@ async fn logging_against_an_archived_product_is_rejected() {
         Call::new("POST", "/api/v1/consumption").body(json!({
             "member_id": me["member_id"],
             "product_id": product["id"],
+            "slot": "breakfast",
             "amount": measured_amount(150.0),
             "consumed_on": "2026-08-22",
         })),
@@ -1376,6 +1383,7 @@ async fn an_amount_the_product_cannot_resolve_is_a_validation_error() {
         Call::new("POST", "/api/v1/consumption").body(json!({
             "member_id": me["member_id"],
             "product_id": product["id"],
+            "slot": "breakfast",
             "amount": {"kind": "servings", "value": 1.0},
             "consumed_on": "2026-08-22",
         })),
@@ -1395,6 +1403,7 @@ async fn updating_a_consumption_record_needs_if_match() {
         Call::new("POST", "/api/v1/consumption").body(json!({
             "member_id": me["member_id"],
             "product_id": product["id"],
+            "slot": "breakfast",
             "amount": measured_amount(150.0),
             "consumed_on": "2026-08-22",
         })),
@@ -1423,6 +1432,7 @@ async fn amending_the_amount_rescales_the_nutrition() {
         Call::new("POST", "/api/v1/consumption").body(json!({
             "member_id": me["member_id"],
             "product_id": product["id"],
+            "slot": "breakfast",
             "amount": measured_amount(150.0),
             "consumed_on": "2026-08-22",
         })),
@@ -1434,10 +1444,11 @@ async fn amending_the_amount_rescales_the_nutrition() {
         &app,
         Call::new("PATCH", format!("/api/v1/consumption/{id}"))
             .if_match(1)
-            .body(json!({"amount": measured_amount(300.0)})),
+            .body(json!({"amount": measured_amount(300.0), "slot": "lunch"})),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{updated}");
+    assert_eq!(updated["slot"], "lunch");
     assert_eq!(updated["nutrition"]["energy_kcal"], json!(192.0));
 }
 
@@ -1451,6 +1462,7 @@ async fn a_stale_consumption_revision_conflicts() {
         Call::new("POST", "/api/v1/consumption").body(json!({
             "member_id": me["member_id"],
             "product_id": product["id"],
+            "slot": "breakfast",
             "amount": measured_amount(150.0),
             "consumed_on": "2026-08-22",
         })),
@@ -1478,6 +1490,7 @@ async fn deleting_a_consumption_record_removes_it() {
         Call::new("POST", "/api/v1/consumption").body(json!({
             "member_id": me["member_id"],
             "product_id": product["id"],
+            "slot": "breakfast",
             "amount": measured_amount(150.0),
             "consumed_on": "2026-08-22",
         })),
@@ -1509,6 +1522,7 @@ async fn the_diary_day_endpoint_returns_entries_and_totals() {
             Call::new("POST", "/api/v1/consumption").body(json!({
                 "member_id": member_id,
                 "product_id": product["id"],
+                "slot": "breakfast",
                 "amount": measured_amount(150.0),
                 "consumed_on": "2026-08-22",
             })),
@@ -1601,6 +1615,51 @@ async fn a_meal_plan_entry_round_trips_through_the_week() {
         json!(128.0)
     );
     assert_eq!(week["projected"]["nutrition"]["energy_kcal"], json!(128.0));
+}
+
+#[tokio::test]
+async fn the_week_slots_projection_flattens_planned_and_logged_food_together() {
+    let app = app().await;
+    let member_id = send(&app, Call::new("GET", "/api/v1/auth/me")).await.1["member_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let product = create_milk_product(&app).await;
+
+    let (status, entry, _) = send(
+        &app,
+        Call::new("POST", "/api/v1/meal-plan-entries").body(json!({
+            "planned_on": "2026-08-25",
+            "planned_time": "08:00",
+            "slot": "breakfast",
+            "components": [{"product_id": product["id"], "amount": measured_amount(150.0)}]
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{entry}");
+
+    let (status, logged, _) = send(
+        &app,
+        Call::new("POST", "/api/v1/consumption").body(json!({
+            "member_id": member_id,
+            "product_id": product["id"],
+            "slot": "breakfast",
+            "amount": measured_amount(50.0),
+            "consumed_on": "2026-08-25",
+            "consumed_at": "2026-08-25T08:15:00Z",
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{logged}");
+
+    let (status, week, _) = send(&app, Call::new("GET", "/api/v1/meal-plan/2026-08-24")).await;
+    assert_eq!(status, StatusCode::OK, "{week}");
+    let breakfast = &week["days"][1]["slots"][0];
+    assert_eq!(breakfast["slot"], "breakfast");
+    let items = breakfast["items"].as_array().unwrap();
+    assert_eq!(items.len(), 2, "{items:?}");
+    assert!(items.iter().any(|item| item["kind"] == "planned" && item["status"] == "planned"));
+    assert!(items.iter().any(|item| item["kind"] == "logged" && item["status"] == "eaten"));
 }
 
 #[tokio::test]

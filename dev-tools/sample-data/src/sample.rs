@@ -350,10 +350,22 @@ impl Loader<'_> {
             .await?;
 
         let thursday = week + Duration::days(3);
-        self.ensure_diary_entry(thursday, "bakery-lunch", "bakery-lunch", servings(1))
-            .await?;
-        self.ensure_diary_entry(thursday, "mystery-snack", "mystery-snack", servings(1))
-            .await?;
+        self.ensure_diary_entry(
+            thursday,
+            MealSlot::Lunch,
+            "bakery-lunch",
+            "bakery-lunch",
+            servings(1),
+        )
+        .await?;
+        self.ensure_diary_entry(
+            thursday,
+            MealSlot::Snacks,
+            "mystery-snack",
+            "mystery-snack",
+            servings(1),
+        )
+        .await?;
 
         let friday = week + Duration::days(4);
         self.ensure_meal(friday, MealSlot::Dinner, Outcome::Planned)
@@ -378,8 +390,14 @@ impl Loader<'_> {
             .await?;
         self.ensure_meal(tuesday, MealSlot::Dinner, Outcome::Planned)
             .await?;
-        self.ensure_diary_entry(tuesday, "extra-snack", "greek-yoghurt", servings(1))
-            .await?;
+        self.ensure_diary_entry(
+            tuesday,
+            MealSlot::Snacks,
+            "extra-snack",
+            "greek-yoghurt",
+            servings(1),
+        )
+        .await?;
 
         let wednesday = self.week_start + Duration::days(2);
         self.ensure_meal(wednesday, MealSlot::Breakfast, Outcome::NotEaten)
@@ -409,7 +427,7 @@ impl Loader<'_> {
                 self.report.meals_created += 1;
                 self.state
                     .meal_plan
-                    .create(NewMealPlanEntry {
+                    .create_unchecked(NewMealPlanEntry {
                         id: Some(id),
                         member_id: self.member.id,
                         planned_on: date,
@@ -444,7 +462,7 @@ impl Loader<'_> {
             Outcome::NotEaten => {
                 self.state
                     .meal_plan
-                    .mark_not_eaten(view.entry.id, view.entry.revision, self.actor.id)
+                    .mark_not_eaten_unchecked(view.entry.id, view.entry.revision, self.actor.id)
                     .await?;
                 self.report.meals_resolved += 1;
             }
@@ -465,7 +483,7 @@ impl Loader<'_> {
                     .collect();
                 self.state
                     .meal_plan
-                    .mark_eaten(
+                    .mark_eaten_unchecked(
                         view.entry.id,
                         view.entry.revision,
                         ConfirmMealPlanEntry {
@@ -485,6 +503,7 @@ impl Loader<'_> {
     async fn ensure_diary_entry(
         &mut self,
         date: Date,
+        slot: MealSlot,
         key: &str,
         product_key: &str,
         amount: ConsumedAmount,
@@ -500,13 +519,14 @@ impl Loader<'_> {
         }
         self.state
             .diary
-            .record(NewConsumptionRecord {
+            .record_unchecked(NewConsumptionRecord {
                 id: Some(id),
                 member_id: self.member.id,
                 product_id: product_id(product_key),
                 recorded_by: Some(self.actor.id),
                 meal_plan_entry_id: None,
                 meal_plan_component_id: None,
+                slot,
                 amount,
                 consumed_on: date,
                 consumed_at: Some(

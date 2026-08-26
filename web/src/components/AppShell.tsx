@@ -31,7 +31,7 @@ import { useAuth } from '../auth/AuthProvider';
 export const DRAWER_WIDTH = 236;
 
 const NAV = [
-  { to: '/meal-plan', label: 'Meal plan', icon: <CalendarMonthIcon fontSize="small" />, needs: undefined },
+  { to: '/meal-plan', label: 'Meals', icon: <CalendarMonthIcon fontSize="small" />, needs: undefined },
   { to: '/ingredients', label: 'Ingredients', icon: <RestaurantIcon fontSize="small" />, needs: 'catalogue:read' },
   { to: '/products', label: 'Products', icon: <InventoryIcon fontSize="small" />, needs: 'catalogue:read' },
   { to: '/household', label: 'Household', icon: <PeopleIcon fontSize="small" />, needs: 'household:read' },

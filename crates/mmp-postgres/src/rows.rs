@@ -4,7 +4,7 @@ use std::str::FromStr;
 use mmp_core::domain::{
     AccessScope, CatalogueOrigin, ConsumedAmount, ConsumptionRecord, ConsumptionRecordId,
     HouseholdMember, HouseholdMemberId, Ingredient, IngredientId, MealPlanComponentId,
-    MealPlanEntryId, MemberAccessGrant, NutritionFacts, NutritionGoals, NutritionQuality,
+    MealPlanEntryId, MealSlot, MemberAccessGrant, NutritionFacts, NutritionGoals, NutritionQuality,
     NutritionTarget, NutritionTargetId, Product, ProductId, Provenance, Quantity, Revision, Role,
     Unit, User, UserId,
 };
@@ -363,6 +363,7 @@ pub struct ConsumptionRecordRow {
     pub recorded_by: Option<Uuid>,
     pub meal_plan_entry_id: Option<Uuid>,
     pub meal_plan_component_id: Option<Uuid>,
+    pub slot: String,
     pub amount_kind: String,
     pub amount_value: Decimal,
     pub amount_unit: Option<String>,
@@ -399,6 +400,7 @@ impl TryFrom<ConsumptionRecordRow> for ConsumptionRecord {
             recorded_by: row.recorded_by.map(UserId::from),
             meal_plan_entry_id: row.meal_plan_entry_id.map(MealPlanEntryId::from),
             meal_plan_component_id: row.meal_plan_component_id.map(MealPlanComponentId::from),
+            slot: MealSlot::from_str(&row.slot).map_err(|_| bad_value("slot", &row.slot))?,
             amount,
             consumed_on: row.consumed_on,
             consumed_at: row.consumed_at,

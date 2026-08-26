@@ -11,7 +11,7 @@ use crate::rows::{ConsumptionRecordRow, amount_bindings, nutrition_bindings};
 
 macro_rules! columns {
     () => {
-        "c.id, c.member_id, c.product_id, c.recorded_by, mpc.entry_id AS meal_plan_entry_id, c.meal_plan_component_id, c.amount_kind, c.amount_value, c.amount_unit, c.consumed_on, c.consumed_at, c.nutrition_basis_amount, c.nutrition_basis_unit, c.energy_kcal, c.protein_g, c.carbohydrate_g, c.sugar_g, c.fat_g, c.saturated_fat_g, c.fibre_g, c.salt_g, c.cholesterol_mg, c.nutrition_extra, c.nutrition_quality, c.revision, c.created_at, c.updated_at"
+        "c.id, c.member_id, c.product_id, c.recorded_by, mpc.entry_id AS meal_plan_entry_id, c.meal_plan_component_id, c.slot, c.amount_kind, c.amount_value, c.amount_unit, c.consumed_on, c.consumed_at, c.nutrition_basis_amount, c.nutrition_basis_unit, c.energy_kcal, c.protein_g, c.carbohydrate_g, c.sugar_g, c.fat_g, c.saturated_fat_g, c.fibre_g, c.salt_g, c.cholesterol_mg, c.nutrition_extra, c.nutrition_quality, c.revision, c.created_at, c.updated_at"
     };
 }
 
@@ -145,7 +145,7 @@ impl ConsumptionRecordRepository for PgConsumptionRecordRepository {
         let n = nutrition_bindings(&record.nutrition);
         sqlx::query(
             "INSERT INTO consumption_record (
-                 id, member_id, product_id, recorded_by, meal_plan_component_id,
+                 id, member_id, product_id, recorded_by, meal_plan_component_id, slot,
                  amount_kind, amount_value, amount_unit,
                  consumed_on, consumed_at,
                  nutrition_basis_amount, nutrition_basis_unit,
@@ -154,14 +154,14 @@ impl ConsumptionRecordRepository for PgConsumptionRecordRepository {
                  nutrition_quality,
                  revision, created_at, updated_at
              ) VALUES (
-                 $1, $2, $3, $4, $5,
-                 $6, $7, $8,
-                 $9, $10,
-                 $11, $12,
-                 $13, $14, $15, $16, $17,
-                 $18, $19, $20, $21, $22,
-                 $23,
-                 $24, $25, $26
+                 $1, $2, $3, $4, $5, $6,
+                 $7, $8, $9,
+                 $10, $11,
+                 $12, $13,
+                 $14, $15, $16, $17, $18,
+                 $19, $20, $21, $22, $23,
+                 $24,
+                 $25, $26, $27
              )",
         )
         .bind(record.id.as_uuid())
@@ -169,6 +169,7 @@ impl ConsumptionRecordRepository for PgConsumptionRecordRepository {
         .bind(record.product_id.as_uuid())
         .bind(record.recorded_by.map(|id| id.as_uuid()))
         .bind(record.meal_plan_component_id.map(|id| id.as_uuid()))
+        .bind(record.slot.code())
         .bind(amount_kind)
         .bind(amount_value)
         .bind(amount_unit)
@@ -205,21 +206,22 @@ impl ConsumptionRecordRepository for PgConsumptionRecordRepository {
         let n = nutrition_bindings(&record.nutrition);
         let affected = sqlx::query(
             "UPDATE consumption_record SET
-                 member_id = $2, product_id = $3, recorded_by = $4,
-                 amount_kind = $5, amount_value = $6, amount_unit = $7,
-                 consumed_on = $8, consumed_at = $9,
-                 nutrition_basis_amount = $10, nutrition_basis_unit = $11,
-                 energy_kcal = $12, protein_g = $13, carbohydrate_g = $14,
-                 sugar_g = $15, fat_g = $16, saturated_fat_g = $17, fibre_g = $18,
-                 salt_g = $19, cholesterol_mg = $20, nutrition_extra = $21,
-                 nutrition_quality = $22,
-                 revision = $23, updated_at = $24
-             WHERE id = $1 AND revision = $25",
+                 member_id = $2, product_id = $3, recorded_by = $4, slot = $5,
+                 amount_kind = $6, amount_value = $7, amount_unit = $8,
+                 consumed_on = $9, consumed_at = $10,
+                 nutrition_basis_amount = $11, nutrition_basis_unit = $12,
+                 energy_kcal = $13, protein_g = $14, carbohydrate_g = $15,
+                 sugar_g = $16, fat_g = $17, saturated_fat_g = $18, fibre_g = $19,
+                 salt_g = $20, cholesterol_mg = $21, nutrition_extra = $22,
+                 nutrition_quality = $23,
+                 revision = $24, updated_at = $25
+             WHERE id = $1 AND revision = $26",
         )
         .bind(record.id.as_uuid())
         .bind(record.member_id.as_uuid())
         .bind(record.product_id.as_uuid())
         .bind(record.recorded_by.map(|id| id.as_uuid()))
+        .bind(record.slot.code())
         .bind(amount_kind)
         .bind(amount_value)
         .bind(amount_unit)

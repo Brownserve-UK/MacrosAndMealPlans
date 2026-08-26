@@ -66,16 +66,6 @@ function statusColour(status: Status, direction: TargetDirection | undefined) {
   return 'text.primary';
 }
 
-function statusLabel(status: Status, direction: TargetDirection | undefined) {
-  if (direction === 'at_most') return status === 'over' ? 'Over maximum' : 'Within maximum';
-  if (direction === 'at_least') return status === 'good' ? 'Minimum met' : 'Below minimum';
-  if (direction === 'around') {
-    if (status === 'good') return 'In target range';
-    return status === 'over' ? 'Above target range' : 'Below target range';
-  }
-  return null;
-}
-
 function formatTarget(target: number, unit: string) {
   return `${Math.round(target).toLocaleString('en-GB')} ${unit}`;
 }
@@ -94,7 +84,7 @@ function energyStatus(
   if (direction === 'at_most') {
     return value > target
       ? { amount: difference, label: 'Over', colour: 'error.main' }
-      : { amount: difference, label: 'Remaining', colour: 'success.main' };
+      : { amount: difference, label: 'Under', colour: 'success.main' };
   }
   if (direction === 'at_least') {
     return value >= target
@@ -276,7 +266,6 @@ function NutrientProgress({
       ? Math.min(Math.max(((value - target) / target) * 100, 3), 16)
       : 0;
   const overflowColour = direction === 'at_least' ? 'success.main' : 'error.main';
-  const stateLabel = incomplete ? 'Not enough data' : statusLabel(status, direction);
   const valueText = value == null ? 'Unknown' : `${value.toFixed(1)} ${unit}`;
   const targetText = target == null ? 'No target' : `target ${Math.round(target)} ${unit}`;
 
@@ -325,10 +314,6 @@ function NutrientProgress({
       {incomplete ? (
         <Typography variant="caption" color="text.secondary" noWrap>
           Not enough data
-        </Typography>
-      ) : stateLabel ? (
-        <Typography variant="caption" sx={{ color: statusColour(status, direction) }} noWrap>
-          {stateLabel}
         </Typography>
       ) : null}
     </Box>

@@ -109,8 +109,12 @@ describe('DayWeekNutrition', () => {
     );
 
     expect(screen.getByText('Over')).toBeInTheDocument();
-    expect(screen.getByText('Minimum met')).toBeInTheDocument();
-    expect(screen.getByText('Over maximum')).toBeInTheDocument();
+    expect(
+      screen.getByRole('progressbar', { name: 'Protein: 40.5 g, target 40 g' }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('progressbar', { name: 'Sugars: 4.5 g, target 4 g' }),
+    ).toBeInTheDocument();
   });
 
   it('shows Not enough data for a partially-covered weekly nutrient', () => {

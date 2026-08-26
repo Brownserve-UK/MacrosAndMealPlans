@@ -166,6 +166,7 @@ async fn weekly_actuals_include_food_logged_outside_the_meal_plan() {
             recorded_by: Some(h.actor_id),
             meal_plan_entry_id: None,
             meal_plan_component_id: None,
+            slot: MealSlot::Lunch,
             amount: ConsumedAmount::Measure(Quantity::new(Decimal::new(50, 0), Unit::Gram)),
             consumed_on: date!(2026 - 08 - 24),
             consumed_at: Some(datetime!(2026-08-24 12:00 UTC)),
@@ -318,6 +319,7 @@ async fn linked_diary_records_can_be_amended_but_not_deleted() {
         .await
         .unwrap();
     let record = confirmed.components[0].consumption_record.as_ref().unwrap();
+    assert_eq!(record.slot, entry.entry.slot);
 
     let amended = h
         .diary
@@ -335,6 +337,20 @@ async fn linked_diary_records_can_be_amended_but_not_deleted() {
         .await
         .unwrap();
     assert_eq!(amended.revision, record.revision.next());
+
+    let error = h
+        .diary
+        .amend(
+            amended.id,
+            amended.revision,
+            crate::domain::ConsumptionRecordPatch {
+                slot: Some(MealSlot::Lunch),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(error, CoreError::Conflict { .. }));
 
     let error = h
         .diary
@@ -633,4 +649,244 @@ async fn a_reopened_entry_can_be_edited_and_confirmed_again() {
 
     assert_eq!(reconfirmed.entry.status, MealPlanStatus::Eaten);
     assert_eq!(h.records.count(), 1);
+}
+
+#[tokio::test]
+async fn date_policy_forbids_creating_a_plan_in_the_past() {
+    let h = harness();
+    let food = product("Food", 200);
+    h.products.seed(food.clone());
+    let error = h
+        .service
+        .create(NewMealPlanEntry {
+            id: None,
+            member_id: h.member_id,
+            planned_on: date!(2026 - 08 - 20),
+            planned_time: None,
+            slot: MealSlot::Dinner,
+            components: vec![measured(food.id, 100)],
+            actor_id: h.actor_id,
+        })
+        .await
+        .unwrap_err();
+    assert!(matches!(error, CoreError::Validation(_)));
+}
+
+#[tokio::test]
+async fn date_policy_allows_a_one_day_grace_into_the_past() {
+    let h = harness();
+    let food = product("Food", 200);
+    h.products.seed(food.clone());
+    h.service
+        .create(NewMealPlanEntry {
+            id: None,
+            member_id: h.member_id,
+            planned_on: date!(2026 - 08 - 23),
+            planned_time: None,
+            slot: MealSlot::Dinner,
+            components: vec![measured(food.id, 100)],
+            actor_id: h.actor_id,
+        })
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn date_policy_forbids_moving_a_plan_into_the_past() {
+    let h = harness();
+    let food = product("Food", 200);
+    h.products.seed(food.clone());
+    let entry = planned(&h, vec![measured(food.id, 100)]).await;
+
+    let error = h
+        .service
+        .update(
+            entry.entry.id,
+            entry.entry.revision,
+            MealPlanEntryPatch {
+                planned_on: Some(date!(2026 - 08 - 20)),
+                ..Default::default()
+            },
+            h.actor_id,
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(error, CoreError::Validation(_)));
+}
+
+#[tokio::test]
+async fn date_policy_forbids_resolving_a_plan_that_is_not_yet_due() {
+    let h = harness();
+    let food = product("Food", 200);
+    h.products.seed(food.clone());
+    let entry = h
+        .service
+        .create(NewMealPlanEntry {
+            id: None,
+            member_id: h.member_id,
+            planned_on: date!(2026 - 08 - 30),
+            planned_time: None,
+            slot: MealSlot::Dinner,
+            components: vec![measured(food.id, 100)],
+            actor_id: h.actor_id,
+        })
+        .await
+        .unwrap();
+
+    let error = h
+        .service
+        .mark_eaten(
+            entry.entry.id,
+            entry.entry.revision,
+            ConfirmMealPlanEntry {
+                consumed_on: date!(2026 - 08 - 30),
+                consumed_at: datetime!(2026-08-30 18:30 UTC),
+                components: entry
+                    .components
+                    .iter()
+                    .map(|component| ActualMealPlanComponent {
+                        component_id: component.component.id,
+                        amount: component.component.amount,
+                    })
+                    .collect(),
+                actor_id: h.actor_id,
+            },
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(error, CoreError::Conflict { .. }));
+}
+
+#[tokio::test]
+async fn the_week_projects_a_planned_item_and_moves_it_once_eaten() {
+    let h = harness();
+    let food = product("Food", 200);
+    h.products.seed(food.clone());
+    let entry = planned(&h, vec![measured(food.id, 100)]).await;
+
+    let week = h
+        .service
+        .week(h.member_id, date!(2026 - 08 - 24))
+        .await
+        .unwrap();
+    let planned_day = week
+        .days
+        .iter()
+        .find(|day| day.date == date!(2026 - 08 - 25))
+        .unwrap();
+    let dinner = planned_day
+        .slots
+        .iter()
+        .find(|slot| slot.slot == MealSlot::Dinner)
+        .unwrap();
+    assert_eq!(dinner.items.len(), 1);
+    assert_eq!(dinner.items[0].status, MealPlanStatus::Planned);
+    assert_eq!(dinner.items[0].product_name, "Food");
+
+    h.service
+        .mark_eaten(
+            entry.entry.id,
+            entry.entry.revision,
+            ConfirmMealPlanEntry {
+                consumed_on: date!(2026 - 08 - 26),
+                consumed_at: datetime!(2026-08-26 19:00 UTC),
+                components: vec![ActualMealPlanComponent {
+                    component_id: entry.components[0].component.id,
+                    amount: ConsumedAmount::Measure(Quantity::new(
+                        Decimal::new(150, 0),
+                        Unit::Gram,
+                    )),
+                }],
+                actor_id: h.actor_id,
+            },
+        )
+        .await
+        .unwrap();
+
+    let week = h
+        .service
+        .week(h.member_id, date!(2026 - 08 - 24))
+        .await
+        .unwrap();
+    let planned_day = week
+        .days
+        .iter()
+        .find(|day| day.date == date!(2026 - 08 - 25))
+        .unwrap();
+    let dinner = planned_day
+        .slots
+        .iter()
+        .find(|slot| slot.slot == MealSlot::Dinner)
+        .unwrap();
+    assert!(dinner.items.is_empty());
+
+    let eaten_day = week
+        .days
+        .iter()
+        .find(|day| day.date == date!(2026 - 08 - 26))
+        .unwrap();
+    let dinner = eaten_day
+        .slots
+        .iter()
+        .find(|slot| slot.slot == MealSlot::Dinner)
+        .unwrap();
+    assert_eq!(dinner.items.len(), 1);
+    let item = &dinner.items[0];
+    assert_eq!(item.status, MealPlanStatus::Eaten);
+    assert_eq!(item.planned_on, Some(date!(2026 - 08 - 25)));
+    assert_eq!(
+        item.amount,
+        ConsumedAmount::Measure(Quantity::new(Decimal::new(150, 0), Unit::Gram))
+    );
+    assert_eq!(
+        item.planned_amount,
+        Some(ConsumedAmount::Measure(Quantity::new(
+            Decimal::new(100, 0),
+            Unit::Gram
+        )))
+    );
+}
+
+#[tokio::test]
+async fn the_week_projects_directly_logged_food_on_its_own_date() {
+    let h = harness();
+    let food = product("Food", 200);
+    h.products.seed(food.clone());
+    h.diary
+        .record(NewConsumptionRecord {
+            id: None,
+            member_id: h.member_id,
+            product_id: food.id,
+            recorded_by: Some(h.actor_id),
+            meal_plan_entry_id: None,
+            meal_plan_component_id: None,
+            slot: MealSlot::Snacks,
+            amount: ConsumedAmount::Measure(Quantity::new(Decimal::new(30, 0), Unit::Gram)),
+            consumed_on: date!(2026 - 08 - 24),
+            consumed_at: Some(datetime!(2026-08-24 15:00 UTC)),
+        })
+        .await
+        .unwrap();
+
+    let week = h
+        .service
+        .week(h.member_id, date!(2026 - 08 - 24))
+        .await
+        .unwrap();
+    let day = week
+        .days
+        .iter()
+        .find(|day| day.date == date!(2026 - 08 - 24))
+        .unwrap();
+    let snacks = day
+        .slots
+        .iter()
+        .find(|slot| slot.slot == MealSlot::Snacks)
+        .unwrap();
+    assert_eq!(snacks.items.len(), 1);
+    assert_eq!(snacks.items[0].product_name, "Food");
+    assert!(matches!(
+        snacks.items[0].source,
+        MealItemSource::Logged { .. }
+    ));
 }

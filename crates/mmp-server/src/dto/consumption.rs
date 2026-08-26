@@ -1,5 +1,5 @@
 use mmp_core::domain::{
-    ConsumedAmount, ConsumptionRecord, ConsumptionRecordId, ConsumptionRecordPatch,
+    ConsumedAmount, ConsumptionRecord, ConsumptionRecordId, ConsumptionRecordPatch, MealSlot,
     NewConsumptionRecord, NutritionQuality, Quantity, Unit,
 };
 use mmp_core::services::{DayTotals, DiaryDay, DiaryEntry};
@@ -78,6 +78,7 @@ pub struct ConsumptionRecordDto {
     pub meal_plan_entry_id: Option<Uuid>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub meal_plan_component_id: Option<Uuid>,
+    pub slot: MealSlot,
     pub amount: AmountDto,
     #[serde(with = "iso_date")]
     #[schema(value_type = String, format = Date, example = "2026-08-22")]
@@ -105,6 +106,7 @@ impl From<ConsumptionRecord> for ConsumptionRecordDto {
             recorded_by: value.recorded_by.map(|id| id.as_uuid()),
             meal_plan_entry_id: value.meal_plan_entry_id.map(|id| id.as_uuid()),
             meal_plan_component_id: value.meal_plan_component_id.map(|id| id.as_uuid()),
+            slot: value.slot,
             amount: value.amount.into(),
             consumed_on: value.consumed_on,
             consumed_at: value.consumed_at,
@@ -121,6 +123,7 @@ impl From<ConsumptionRecord> for ConsumptionRecordDto {
 pub struct CreateConsumptionRequest {
     pub member_id: Uuid,
     pub product_id: Uuid,
+    pub slot: MealSlot,
     pub amount: AmountDto,
     #[serde(with = "iso_date")]
     #[schema(value_type = String, format = Date, example = "2026-08-22")]
@@ -139,6 +142,7 @@ impl From<CreateConsumptionRequest> for NewConsumptionRecord {
             recorded_by: None,
             meal_plan_entry_id: None,
             meal_plan_component_id: None,
+            slot: value.slot,
             amount: value.amount.into(),
             consumed_on: value.consumed_on,
             consumed_at: value.consumed_at,
@@ -148,6 +152,8 @@ impl From<CreateConsumptionRequest> for NewConsumptionRecord {
 
 #[derive(Debug, Clone, Default, Deserialize, ToSchema)]
 pub struct UpdateConsumptionRequest {
+    #[serde(default)]
+    pub slot: Option<MealSlot>,
     #[serde(default)]
     pub amount: Option<AmountDto>,
     #[serde(default, with = "iso_date::option")]
@@ -161,6 +167,7 @@ pub struct UpdateConsumptionRequest {
 impl From<UpdateConsumptionRequest> for ConsumptionRecordPatch {
     fn from(value: UpdateConsumptionRequest) -> Self {
         Self {
+            slot: value.slot,
             amount: value.amount.map(Into::into),
             consumed_on: value.consumed_on,
             consumed_at: value.consumed_at,

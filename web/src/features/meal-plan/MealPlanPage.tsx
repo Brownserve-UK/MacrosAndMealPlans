@@ -1,8 +1,9 @@
 import AddIcon from '@mui/icons-material/AddOutlined';
-import CheckCircleIcon from '@mui/icons-material/CheckCircleOutlineOutlined';
+import CheckCircleIcon from '@mui/icons-material/CheckCircleOutlined';
 import ChevronLeftIcon from '@mui/icons-material/ChevronLeftOutlined';
 import ChevronRightIcon from '@mui/icons-material/ChevronRightOutlined';
-import RestaurantIcon from '@mui/icons-material/RestaurantOutlined';
+import RadioButtonUncheckedIcon from '@mui/icons-material/RadioButtonUncheckedOutlined';
+import RemoveCircleOutlineIcon from '@mui/icons-material/RemoveCircleOutlineOutlined';
 import WarningAmberIcon from '@mui/icons-material/WarningAmberOutlined';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
@@ -15,28 +16,39 @@ import Stack from '@mui/material/Stack';
 import Typography from '@mui/material/Typography';
 import { useNavigate } from '@tanstack/react-router';
 import { useState } from 'react';
-import type { DiaryEntry, MealPlanDay, MealPlanEntry, MealSlot } from '../../api/client';
-import { useDiaryDay, useMealPlanWeek, useMeta } from '../../api/queries';
+import type { MealItem, MealPlanDay, MealSlot } from '../../api/client';
+import { useMealPlanWeek, useMeta, useMarkMealPlanEaten, useReopenMealPlanEntry } from '../../api/queries';
 import { useAuth } from '../../auth/AuthProvider';
 import { InitialsAvatar } from '../../components/InitialsAvatar';
 import { PageHeader } from '../../components/PageHeader';
 import { ErrorState, Loading } from '../../components/States';
 import { MaybeNumber } from '../../components/Unknown';
+import { AddFoodDialog } from './AddFoodDialog';
 import { addDays, formatWeekRange, parseIsoDate, startOfWeekIso, todayIso } from './date';
-import { EditLoggedFoodDialog } from './EditLoggedFoodDialog';
+import { EditFoodDialog } from './EditFoodDialog';
 import { formatAmount } from './format';
-import { LogFoodDialog } from './LogFoodDialog';
-import { MealPlanEntryDialog, SLOTS } from './MealPlanEntryDialog';
 import { DayWeekNutrition } from './NutritionSummary';
+import { SLOTS } from './slots';
 
 const DEFAULT_SLOT: MealSlot = SLOTS[0]?.value ?? 'breakfast';
 
-type Selection = {
+type AddSelection = {
   key: string;
   date: string;
   slot: MealSlot;
-  entry: MealPlanEntry | null;
 };
+
+type EditSelection = {
+  key: string;
+  date: string;
+  slot: MealSlot;
+  item: MealItem;
+};
+
+export function defaultDayFor(weekStart: string): string {
+  const today = todayIso();
+  return today >= weekStart && today <= addDays(weekStart, 6) ? today : weekStart;
+}
 
 function longDayName(date: string) {
   return parseIsoDate(date).toLocaleDateString('en-GB', {
@@ -46,152 +58,161 @@ function longDayName(date: string) {
   });
 }
 
-function entryTitle(entry: MealPlanEntry) {
-  return entry.components.map((component) => component.product_name).join(' + ');
-}
-
-function EntryRow({ entry, divided, onClick }: { entry: MealPlanEntry; divided: boolean; onClick: () => void }) {
-  const nutrition = entry.actual ?? entry.planned;
-  const title = entryTitle(entry);
+function MealItemRow({
+  item,
+  divided,
+  toggling,
+  onToggle,
+  onOpen,
+}: {
+  item: MealItem;
+  divided: boolean;
+  toggling: boolean;
+  onToggle: (() => void) | null;
+  onOpen: () => void;
+}) {
   const detail = [
-    entry.planned_time?.slice(0, 5),
-    entry.components.map((component) => formatAmount(component.amount)).join(' · '),
-    entry.status === 'eaten' ? 'Eaten' : null,
-    entry.status === 'not_eaten' ? 'Not eaten' : null,
+    item.at,
+    formatAmount(item.amount),
+    item.planned_amount ? `Planned ${formatAmount(item.planned_amount)}` : null,
   ]
     .filter(Boolean)
     .join(' · ');
 
   return (
-    <ButtonBase
-      onClick={onClick}
-      aria-label={`Open ${title}`}
+    <Box
       sx={{
         display: 'flex',
-        width: '100%',
         alignItems: 'center',
-        gap: { xs: 1.5, sm: 2 },
-        px: { xs: 2, sm: 2.5 },
-        py: 1.75,
-        textAlign: 'left',
         borderTop: divided ? '1px solid' : 'none',
         borderColor: 'divider',
-        opacity: entry.status === 'not_eaten' ? 0.55 : 1,
-        transition: 'background-color 120ms ease',
-        '&:hover': { backgroundColor: 'action.hover' },
-        '&:focus-visible': { outline: '2px solid', outlineColor: 'primary.main', outlineOffset: -2 },
       }}
     >
-      <InitialsAvatar name={title} size={44} />
-      <Stack sx={{ minWidth: 0, flexGrow: 1 }} spacing={0.25}>
-        <Stack direction="row" spacing={0.75} sx={{ alignItems: 'center', minWidth: 0 }}>
+      {onToggle ? (
+        <IconButton
+          aria-label={
+            item.status === 'not_eaten'
+              ? `Reopen ${item.product_name}`
+              : item.status === 'planned'
+                ? `Mark ${item.product_name} eaten`
+                : `Mark ${item.product_name} not eaten yet`
+          }
+          onClick={onToggle}
+          disabled={toggling}
+          sx={{
+            ml: { xs: 1, sm: 1.5 },
+            color: item.status === 'eaten' ? 'success.main' : 'text.disabled',
+          }}
+        >
+          {item.status === 'eaten' ? (
+            <CheckCircleIcon />
+          ) : item.status === 'not_eaten' ? (
+            <RemoveCircleOutlineIcon />
+          ) : (
+            <RadioButtonUncheckedIcon />
+          )}
+        </IconButton>
+      ) : (
+        <Box sx={{ ml: { xs: 1, sm: 1.5 }, p: 1, display: 'flex', color: 'success.main' }} aria-hidden>
+          <CheckCircleIcon />
+        </Box>
+      )}
+      <ButtonBase
+        onClick={onOpen}
+        aria-label={`Open ${item.product_name}`}
+        sx={{
+          display: 'flex',
+          flexGrow: 1,
+          minWidth: 0,
+          alignItems: 'center',
+          gap: { xs: 1.5, sm: 2 },
+          pr: { xs: 2, sm: 2.5 },
+          py: 1.75,
+          textAlign: 'left',
+          opacity: item.status === 'not_eaten' ? 0.55 : 1,
+          transition: 'background-color 120ms ease',
+          '&:hover': { backgroundColor: 'action.hover' },
+          '&:focus-visible': { outline: '2px solid', outlineColor: 'primary.main', outlineOffset: -2 },
+        }}
+      >
+        <InitialsAvatar name={item.product_name} size={44} />
+        <Stack sx={{ minWidth: 0, flexGrow: 1 }} spacing={0.25}>
           <Typography
             variant="subtitle1"
             sx={{
-              minWidth: 0,
               overflow: 'hidden',
               textOverflow: 'ellipsis',
               whiteSpace: 'nowrap',
-              textDecoration: entry.status === 'not_eaten' ? 'line-through' : 'none',
+              textDecoration: item.status === 'not_eaten' ? 'line-through' : 'none',
             }}
           >
-            {title}
+            {item.product_name}
           </Typography>
-          {entry.status === 'eaten' ? (
-            <CheckCircleIcon titleAccess="Eaten" color="success" sx={{ flexShrink: 0, fontSize: 17 }} />
+          {detail ? (
+            <Typography variant="caption" color="text.secondary">
+              {detail}
+            </Typography>
           ) : null}
         </Stack>
-        {detail ? (
-          <Typography variant="caption" color="text.secondary">
-            {detail}
-          </Typography>
+        {item.needs_attention ? (
+          <Chip
+            size="small"
+            variant="outlined"
+            icon={<WarningAmberIcon />}
+            label="Needs attention"
+            sx={{ display: { xs: 'none', sm: 'inline-flex' }, flexShrink: 0 }}
+          />
         ) : null}
-      </Stack>
-      {entry.needs_attention ? (
-        <Chip
-          size="small"
-          variant="outlined"
-          icon={<WarningAmberIcon />}
-          label="Needs attention"
-          sx={{ display: { xs: 'none', sm: 'inline-flex' }, flexShrink: 0 }}
-        />
-      ) : null}
-      {entry.status !== 'not_eaten' ? (
-        <Typography className="numeral" variant="body2" sx={{ flexShrink: 0, fontWeight: 600 }}>
-          <MaybeNumber value={nutrition.nutrition.energy_kcal} fractionDigits={0} />{' '}
-          <Box component="span" sx={{ color: 'text.secondary', fontSize: '0.75rem' }}>
-            kcal
-          </Box>
-        </Typography>
-      ) : null}
-      <ChevronRightIcon sx={{ color: 'text.disabled', fontSize: 20, flexShrink: 0 }} />
-    </ButtonBase>
-  );
-}
-
-function LoggedRow({ entry, divided, onClick }: { entry: DiaryEntry; divided: boolean; onClick: () => void }) {
-  return (
-    <ButtonBase
-      onClick={onClick}
-      aria-label={`Edit ${entry.product_name}`}
-      sx={{
-        display: 'flex',
-        width: '100%',
-        alignItems: 'center',
-        gap: { xs: 1.5, sm: 2 },
-        px: { xs: 2, sm: 2.5 },
-        py: 1.75,
-        textAlign: 'left',
-        borderTop: divided ? '1px solid' : 'none',
-        borderColor: 'divider',
-        transition: 'background-color 120ms ease',
-        '&:hover': { backgroundColor: 'action.hover' },
-        '&:focus-visible': { outline: '2px solid', outlineColor: 'primary.main', outlineOffset: -2 },
-      }}
-    >
-      <InitialsAvatar name={entry.product_name} size={44} />
-      <Stack sx={{ minWidth: 0, flexGrow: 1 }} spacing={0.25}>
-        <Typography variant="subtitle1" sx={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {entry.product_name}
-        </Typography>
-        <Typography variant="caption" color="text.secondary">
-          {formatAmount(entry.amount)}
-        </Typography>
-      </Stack>
-      {entry.quality === 'unknown' ? (
-        <Chip size="small" variant="outlined" label="No nutrition" sx={{ flexShrink: 0 }} />
-      ) : (
-        <Typography className="numeral" variant="body2" sx={{ flexShrink: 0, fontWeight: 600 }}>
-          <MaybeNumber value={entry.nutrition.energy_kcal} fractionDigits={0} />{' '}
-          <Box component="span" sx={{ color: 'text.secondary', fontSize: '0.75rem' }}>
-            kcal
-          </Box>
-        </Typography>
-      )}
-      <ChevronRightIcon sx={{ color: 'text.disabled', fontSize: 20, flexShrink: 0 }} />
-    </ButtonBase>
+        {item.status !== 'not_eaten' ? (
+          item.quality === 'unknown' ? (
+            <Chip size="small" variant="outlined" label="No nutrition" sx={{ flexShrink: 0 }} />
+          ) : (
+            <Typography className="numeral" variant="body2" sx={{ flexShrink: 0, fontWeight: 600 }}>
+              <MaybeNumber value={item.nutrition.energy_kcal} fractionDigits={0} />{' '}
+              <Box component="span" sx={{ color: 'text.secondary', fontSize: '0.75rem' }}>
+                kcal
+              </Box>
+            </Typography>
+          )
+        ) : null}
+        <ChevronRightIcon sx={{ color: 'text.disabled', fontSize: 20, flexShrink: 0 }} />
+      </ButtonBase>
+    </Box>
   );
 }
 
 function SlotSection({
   slot,
   label,
-  entries,
+  items,
+  kcal,
+  toggling,
+  onToggle,
   onOpen,
   onAdd,
 }: {
   slot: MealSlot;
   label: string;
-  entries: MealPlanEntry[];
-  onOpen: (entry: MealPlanEntry) => void;
+  items: MealItem[];
+  kcal: number | null;
+  toggling: string | null;
+  onToggle: (item: MealItem) => void;
+  onOpen: (item: MealItem) => void;
   onAdd: (slot: MealSlot) => void;
 }) {
   return (
     <Box component="section" aria-label={label}>
-      <Typography variant="overline" color="text.secondary" sx={{ display: 'block', mb: 1 }}>
-        {label}
-      </Typography>
-      {entries.length === 0 ? (
+      <Stack direction="row" sx={{ alignItems: 'baseline', justifyContent: 'space-between', mb: 1 }}>
+        <Typography variant="overline" color="text.secondary">
+          {label}
+        </Typography>
+        {kcal !== null ? (
+          <Typography variant="caption" color="text.secondary">
+            {Math.round(kcal)} kcal
+          </Typography>
+        ) : null}
+      </Stack>
+      {items.length === 0 ? (
         <Button
           fullWidth
           startIcon={<AddIcon />}
@@ -206,20 +227,31 @@ function SlotSection({
             borderRadius: 2,
           }}
         >
-          Add {label.toLowerCase()}
+          Add food
         </Button>
       ) : (
         <Paper sx={{ overflow: 'hidden' }}>
-          {entries.map((entry, index) => (
-            <EntryRow key={entry.id} entry={entry} divided={index > 0} onClick={() => onOpen(entry)} />
-          ))}
+          {items.map((item, index) => {
+            const key =
+              item.kind === 'planned' ? item.component_id : item.record_id;
+            return (
+              <MealItemRow
+                key={key}
+                item={item}
+                divided={index > 0}
+                toggling={toggling === key}
+                onToggle={item.kind === 'planned' ? () => onToggle(item) : null}
+                onOpen={() => onOpen(item)}
+              />
+            );
+          })}
           <Button
             fullWidth
             startIcon={<AddIcon />}
             onClick={() => onAdd(slot)}
             sx={{ py: 1.25, borderTop: '1px solid', borderColor: 'divider', borderRadius: 0 }}
           >
-            Add to {label.toLowerCase()}
+            Add food
           </Button>
         </Paper>
       )}
@@ -241,13 +273,13 @@ function WeekDayRail({
       {days.map((day) => {
         const selected = day.date === value;
         const date = parseIsoDate(day.date);
-        const mealCount = day.entries.length;
+        const itemCount = day.slots.reduce((sum, slot) => sum + slot.items.length, 0);
         return (
           <ButtonBase
             key={day.date}
             onClick={() => onChange(day.date)}
             aria-pressed={selected}
-            aria-label={`${longDayName(day.date)}, ${mealCount} ${mealCount === 1 ? 'meal' : 'meals'}`}
+            aria-label={`${longDayName(day.date)}, ${itemCount} ${itemCount === 1 ? 'item' : 'items'}`}
             sx={{
               minWidth: { xs: 68, sm: 0 },
               flex: { sm: 1 },
@@ -272,7 +304,7 @@ function WeekDayRail({
                   width: 5,
                   height: 5,
                   borderRadius: '50%',
-                  backgroundColor: mealCount > 0 ? 'primary.main' : 'transparent',
+                  backgroundColor: itemCount > 0 ? 'primary.main' : 'transparent',
                 }}
               />
             </Stack>
@@ -346,54 +378,79 @@ function WeekNavigator({
   );
 }
 
-export function MealPlanPage({ weekStart }: { weekStart: string }) {
+export function MealPlanPage({ weekStart, day }: { weekStart: string; day: string }) {
   const navigate = useNavigate();
   const { principal } = useAuth();
   const memberId = principal?.member_id ?? '';
   const week = useMealPlanWeek(weekStart);
   const meta = useMeta();
   const directions = meta.data?.nutrient_directions ?? {};
-  const [selectedDate, setSelectedDate] = useState(() => {
-    const today = todayIso();
-    return today >= weekStart && today <= addDays(weekStart, 6) ? today : weekStart;
-  });
-  const [selection, setSelection] = useState<Selection | null>(null);
-  const [logging, setLogging] = useState(false);
-  const [editingRecord, setEditingRecord] = useState<DiaryEntry | null>(null);
+  const [adding, setAdding] = useState<AddSelection | null>(null);
+  const [editing, setEditing] = useState<EditSelection | null>(null);
+  const [toggling, setToggling] = useState<string | null>(null);
+  const markEaten = useMarkMealPlanEaten();
+  const reopenEntry = useReopenMealPlanEntry();
 
   const currentMonday = startOfWeekIso(todayIso());
-  const activeDate =
-    selectedDate >= weekStart && selectedDate <= addDays(weekStart, 6) ? selectedDate : weekStart;
-  const diary = useDiaryDay(memberId, activeDate);
+  const activeDate = day >= weekStart && day <= addDays(weekStart, 6) ? day : weekStart;
 
-  function goTo(start: string) {
-    void navigate({ to: '/meal-plan/$weekStart', params: { weekStart: start } });
+  function goToWeek(start: string) {
+    void navigate({
+      to: '/meal-plan/$weekStart/$day',
+      params: { weekStart: start, day: defaultDayFor(start) },
+    });
+  }
+
+  function goToDay(date: string) {
+    void navigate({ to: '/meal-plan/$weekStart/$day', params: { weekStart, day: date } });
   }
 
   if (week.isError) return <ErrorState error={week.error} onRetry={() => week.refetch()} />;
 
-  const selectedDay = week.data?.days.find((day) => day.date === activeDate) ?? week.data?.days[0];
-  const unplanned = (diary.data?.entries ?? []).filter((entry) => !entry.meal_plan_entry_id);
+  const selectedDay = week.data?.days.find((candidate) => candidate.date === activeDate) ?? week.data?.days[0];
 
-  function planMeal(slot: MealSlot) {
+  function addFood(slot: MealSlot) {
     if (!selectedDay) return;
-    setSelection({ key: crypto.randomUUID(), date: selectedDay.date, slot, entry: null });
+    setAdding({ key: crypto.randomUUID(), date: selectedDay.date, slot });
+  }
+
+  function openItem(slot: MealSlot, item: MealItem) {
+    if (!selectedDay) return;
+    setEditing({ key: crypto.randomUUID(), date: selectedDay.date, slot, item });
+  }
+
+  async function toggleItem(item: MealItem) {
+    if (item.kind !== 'planned') return;
+    const key = item.component_id;
+    setToggling(key);
+    try {
+      if (item.status === 'planned') {
+        await markEaten.mutateAsync({
+          id: item.entry_id,
+          revision: item.revision,
+          body: {
+            consumed_on: todayIso(),
+            consumed_at: new Date().toISOString(),
+            components: [{ component_id: item.component_id, amount: item.amount }],
+          },
+        });
+      } else {
+        await reopenEntry.mutateAsync({ id: item.entry_id, revision: item.revision });
+      }
+    } finally {
+      setToggling(null);
+    }
   }
 
   return (
-    <Box sx={{ maxWidth: 980, mx: 'auto' }}>
+    <Box>
       <PageHeader
-        title="Meal plan"
+        title="Meals"
         actions={
           selectedDay ? (
-            <Stack direction="row" spacing={1.5} sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
-              <Button variant="outlined" startIcon={<RestaurantIcon />} onClick={() => setLogging(true)}>
-                Log food
-              </Button>
-              <Button variant="contained" startIcon={<AddIcon />} onClick={() => planMeal(DEFAULT_SLOT)}>
-                Plan meal
-              </Button>
-            </Stack>
+            <Button variant="contained" startIcon={<AddIcon />} onClick={() => addFood(DEFAULT_SLOT)}>
+              Add food
+            </Button>
           ) : null
         }
       />
@@ -404,8 +461,8 @@ export function MealPlanPage({ weekStart }: { weekStart: string }) {
           days={week.data.days}
           selectedDate={activeDate}
           currentMonday={currentMonday}
-          onWeekChange={goTo}
-          onDayChange={setSelectedDate}
+          onWeekChange={goToWeek}
+          onDayChange={goToDay}
         />
       ) : null}
 
@@ -434,70 +491,44 @@ export function MealPlanPage({ weekStart }: { weekStart: string }) {
               }}
             />
 
-            {SLOTS.map((candidate) => (
+            {selectedDay.slots.map((slotView) => (
               <SlotSection
-                key={candidate.value}
-                slot={candidate.value}
-                label={candidate.label}
-                entries={selectedDay.entries.filter((entry) => entry.slot === candidate.value)}
-                onOpen={(entry) =>
-                  setSelection({ key: entry.id, date: selectedDay.date, slot: entry.slot, entry })
-                }
-                onAdd={planMeal}
+                key={slotView.slot}
+                slot={slotView.slot}
+                label={SLOTS.find((candidate) => candidate.value === slotView.slot)?.label ?? slotView.slot}
+                items={slotView.items}
+                kcal={slotView.items.length > 0 ? (slotView.nutrition.nutrition.energy_kcal ?? null) : null}
+                toggling={toggling}
+                onToggle={toggleItem}
+                onOpen={(item) => openItem(slotView.slot, item)}
+                onAdd={addFood}
               />
             ))}
-
-            {unplanned.length > 0 ? (
-              <Box component="section" aria-label="Logged unplanned food">
-                <Typography variant="overline" color="text.secondary" sx={{ display: 'block', mb: 1 }}>
-                  Also eaten (unplanned)
-                </Typography>
-                <Paper sx={{ overflow: 'hidden' }}>
-                  {unplanned.map((entry, index) => (
-                    <LoggedRow
-                      key={entry.id}
-                      entry={entry}
-                      divided={index > 0}
-                      onClick={() => setEditingRecord(entry)}
-                    />
-                  ))}
-                  <Button
-                    fullWidth
-                    startIcon={<AddIcon />}
-                    onClick={() => setLogging(true)}
-                    sx={{ py: 1.25, borderTop: '1px solid', borderColor: 'divider', borderRadius: 0 }}
-                  >
-                    Log more food
-                  </Button>
-                </Paper>
-              </Box>
-            ) : null}
           </Stack>
         </Box>
       ) : null}
 
-      {selection ? (
-        <MealPlanEntryDialog
-          key={selection.key}
+      {adding ? (
+        <AddFoodDialog
+          key={adding.key}
           open
-          onClose={() => setSelection(null)}
-          date={selection.date}
-          slot={selection.slot}
-          entry={selection.entry}
-        />
-      ) : null}
-
-      {selectedDay ? (
-        <LogFoodDialog
-          open={logging}
-          onClose={() => setLogging(false)}
+          onClose={() => setAdding(null)}
           memberId={memberId}
-          date={selectedDay.date}
+          date={adding.date}
+          slot={adding.slot}
         />
       ) : null}
 
-      {editingRecord ? (
-        <EditLoggedFoodDialog open record={editingRecord} onClose={() => setEditingRecord(null)} />
+      {editing ? (
+        <EditFoodDialog
+          key={editing.key}
+          open
+          onClose={() => setEditing(null)}
+          memberId={memberId}
+          date={editing.date}
+          slot={editing.slot}
+          item={editing.item}
+        />
       ) : null}
     </Box>
   );

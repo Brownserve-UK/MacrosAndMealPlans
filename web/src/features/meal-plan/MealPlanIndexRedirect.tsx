@@ -3,6 +3,7 @@ import { useEffect } from 'react';
 import { useAuth } from '../../auth/AuthProvider';
 import { EmptyState, Loading } from '../../components/States';
 import { startOfWeekIso, todayIso } from './date';
+import { defaultDayFor } from './MealPlanPage';
 
 export function MealPlanIndexRedirect() {
   const { principal } = useAuth();
@@ -10,9 +11,10 @@ export function MealPlanIndexRedirect() {
 
   useEffect(() => {
     if (!principal?.member_id) return;
+    const weekStart = startOfWeekIso(todayIso());
     void navigate({
-      to: '/meal-plan/$weekStart',
-      params: { weekStart: startOfWeekIso(todayIso()) },
+      to: '/meal-plan/$weekStart/$day',
+      params: { weekStart, day: defaultDayFor(weekStart) },
       replace: true,
     });
   }, [navigate, principal?.member_id]);

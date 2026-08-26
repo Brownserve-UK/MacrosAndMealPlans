@@ -5,8 +5,8 @@ use rust_decimal::Decimal;
 use time::{Date, OffsetDateTime};
 
 use super::{
-    ConsumptionRecordId, HouseholdMemberId, MealPlanComponentId, MealPlanEntryId, NutritionFacts,
-    Product, ProductId, Quantity, Revision, UserId,
+    ConsumptionRecordId, HouseholdMemberId, MealPlanComponentId, MealPlanEntryId, MealSlot,
+    NutritionFacts, Product, ProductId, Quantity, Revision, UserId,
 };
 use crate::error::ValidationErrors;
 
@@ -203,6 +203,7 @@ pub struct ConsumptionRecord {
     pub recorded_by: Option<UserId>,
     pub meal_plan_entry_id: Option<MealPlanEntryId>,
     pub meal_plan_component_id: Option<MealPlanComponentId>,
+    pub slot: MealSlot,
     pub amount: ConsumedAmount,
     pub consumed_on: Date,
     pub consumed_at: OffsetDateTime,
@@ -221,6 +222,7 @@ pub struct NewConsumptionRecord {
     pub recorded_by: Option<UserId>,
     pub meal_plan_entry_id: Option<MealPlanEntryId>,
     pub meal_plan_component_id: Option<MealPlanComponentId>,
+    pub slot: MealSlot,
     pub amount: ConsumedAmount,
     pub consumed_on: Date,
     pub consumed_at: Option<OffsetDateTime>,
@@ -236,6 +238,7 @@ impl NewConsumptionRecord {
 
 #[derive(Debug, Clone, Default)]
 pub struct ConsumptionRecordPatch {
+    pub slot: Option<MealSlot>,
     pub amount: Option<ConsumedAmount>,
     pub consumed_on: Option<Date>,
     pub consumed_at: Option<OffsetDateTime>,
@@ -243,7 +246,10 @@ pub struct ConsumptionRecordPatch {
 
 impl ConsumptionRecordPatch {
     pub fn is_empty(&self) -> bool {
-        self.amount.is_none() && self.consumed_on.is_none() && self.consumed_at.is_none()
+        self.slot.is_none()
+            && self.amount.is_none()
+            && self.consumed_on.is_none()
+            && self.consumed_at.is_none()
     }
 
     pub fn validate(&self) -> crate::error::Result<()> {

@@ -9,8 +9,8 @@ pub use catalogue::CatalogueService;
 pub use diary::{DayTotals, DiaryDay, DiaryEntry, DiaryService};
 pub use household::HouseholdService;
 pub use meal_plan::{
-    MealPlanComponentView, MealPlanDay, MealPlanEntryView, MealPlanService, MealPlanWeek,
-    NutritionSummary,
+    MealItem, MealItemSource, MealPlanComponentView, MealPlanDay, MealPlanEntryView,
+    MealPlanService, MealPlanWeek, MealSlotView, NutritionSummary,
 };
 pub use nutrition_target::NutritionTargetService;
 pub use seed::{SeedIngredient, SeedReport};

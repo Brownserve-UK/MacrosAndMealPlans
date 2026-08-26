@@ -285,7 +285,9 @@ impl MealPlanRepository for PgMealPlanRepository {
                 .map_err(|error| repository_error("rolling back a meal reopen", error))?;
             return Ok(outcome);
         }
-        sqlx::query("DELETE FROM consumption_record WHERE meal_plan_entry_id = $1")
+        sqlx::query(
+            "DELETE FROM consumption_record WHERE meal_plan_component_id IN (SELECT id FROM meal_plan_component WHERE entry_id = $1)",
+        )
             .bind(entry.id.as_uuid())
             .execute(&mut *tx)
             .await
@@ -444,12 +446,13 @@ async fn insert_consumption(
 ) -> Result<()> {
     let (kind, value, unit) = amount_bindings(&record.amount);
     let nutrition = nutrition_bindings(&record.nutrition);
-    sqlx::query("INSERT INTO consumption_record (id, member_id, product_id, recorded_by, meal_plan_component_id, amount_kind, amount_value, amount_unit, consumed_on, consumed_at, nutrition_basis_amount, nutrition_basis_unit, energy_kcal, protein_g, carbohydrate_g, sugar_g, fat_g, saturated_fat_g, fibre_g, salt_g, cholesterol_mg, nutrition_extra, nutrition_quality, revision, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26)")
+    sqlx::query("INSERT INTO consumption_record (id, member_id, product_id, recorded_by, meal_plan_component_id, slot, amount_kind, amount_value, amount_unit, consumed_on, consumed_at, nutrition_basis_amount, nutrition_basis_unit, energy_kcal, protein_g, carbohydrate_g, sugar_g, fat_g, saturated_fat_g, fibre_g, salt_g, cholesterol_mg, nutrition_extra, nutrition_quality, revision, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27)")
         .bind(record.id.as_uuid())
         .bind(record.member_id.as_uuid())
         .bind(record.product_id.as_uuid())
         .bind(record.recorded_by.map(|id| id.as_uuid()))
         .bind(record.meal_plan_component_id.map(|id| id.as_uuid()))
+        .bind(record.slot.code())
         .bind(kind)
         .bind(value)
         .bind(unit)

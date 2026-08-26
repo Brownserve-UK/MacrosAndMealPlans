@@ -3,7 +3,8 @@ use mmp_core::domain::{
     NewMealPlanComponent, NewMealPlanEntry, Patch,
 };
 use mmp_core::services::{
-    MealPlanComponentView, MealPlanDay, MealPlanEntryView, MealPlanWeek, NutritionSummary,
+    MealItem, MealItemSource, MealPlanComponentView, MealPlanDay, MealPlanEntryView, MealPlanWeek,
+    MealSlotView, NutritionSummary,
 };
 use serde::{Deserialize, Serialize};
 use time::{Date, OffsetDateTime, Time};
@@ -119,11 +120,97 @@ impl From<MealPlanEntryView> for MealPlanEntryDto {
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum MealItemSourceDto {
+    Planned { entry_id: Uuid, component_id: Uuid },
+    Logged { record_id: Uuid },
+}
+
+impl From<MealItemSource> for MealItemSourceDto {
+    fn from(value: MealItemSource) -> Self {
+        match value {
+            MealItemSource::Planned {
+                entry_id,
+                component_id,
+            } => Self::Planned {
+                entry_id: entry_id.as_uuid(),
+                component_id: component_id.as_uuid(),
+            },
+            MealItemSource::Logged { record_id } => Self::Logged {
+                record_id: record_id.as_uuid(),
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct MealItemDto {
+    #[serde(flatten)]
+    pub source: MealItemSourceDto,
+    #[serde(rename = "linked_record_id", skip_serializing_if = "Option::is_none")]
+    pub record_id: Option<Uuid>,
+    pub status: MealPlanStatus,
+    pub product_id: Uuid,
+    pub product_name: String,
+    pub amount: AmountDto,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub planned_amount: Option<AmountDto>,
+    #[serde(skip_serializing_if = "Option::is_none", with = "iso_date::option")]
+    #[schema(value_type = Option<String>, format = Date)]
+    pub planned_on: Option<Date>,
+    #[serde(skip_serializing_if = "Option::is_none", with = "iso_time::option")]
+    #[schema(value_type = Option<String>, example = "18:30")]
+    pub at: Option<Time>,
+    pub nutrition: NutritionDto,
+    pub quality: mmp_core::domain::NutritionQuality,
+    pub needs_attention: bool,
+    pub revision: i64,
+}
+
+impl From<MealItem> for MealItemDto {
+    fn from(value: MealItem) -> Self {
+        Self {
+            source: value.source.into(),
+            record_id: value.record_id.map(|id| id.as_uuid()),
+            status: value.status,
+            product_id: value.product_id.as_uuid(),
+            product_name: value.product_name,
+            amount: value.amount.into(),
+            planned_amount: value.planned_amount.map(Into::into),
+            planned_on: value.planned_on,
+            at: value.at,
+            nutrition: value.nutrition.into(),
+            quality: value.quality,
+            needs_attention: value.needs_attention,
+            revision: value.revision.get(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct MealSlotViewDto {
+    pub slot: MealSlot,
+    pub items: Vec<MealItemDto>,
+    pub nutrition: NutritionSummaryDto,
+}
+
+impl From<MealSlotView> for MealSlotViewDto {
+    fn from(value: MealSlotView) -> Self {
+        Self {
+            slot: value.slot,
+            items: value.items.into_iter().map(Into::into).collect(),
+            nutrition: value.nutrition.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct MealPlanDayDto {
     #[serde(with = "iso_date")]
     #[schema(value_type = String, format = Date)]
     pub date: Date,
     pub entries: Vec<MealPlanEntryDto>,
+    pub slots: Vec<MealSlotViewDto>,
     pub actual: NutritionSummaryDto,
     pub remaining_planned: NutritionSummaryDto,
     pub projected: NutritionSummaryDto,
@@ -136,6 +223,7 @@ impl From<MealPlanDay> for MealPlanDayDto {
         Self {
             date: value.date,
             entries: value.entries.into_iter().map(Into::into).collect(),
+            slots: value.slots.into_iter().map(Into::into).collect(),
             actual: value.actual.into(),
             remaining_planned: value.remaining_planned.into(),
             projected: value.projected.into(),

@@ -893,6 +893,7 @@ fn consumption_record(member_id: HouseholdMemberId, product_id: ProductId) -> Co
         recorded_by: None,
         meal_plan_entry_id: None,
         meal_plan_component_id: None,
+        slot: MealSlot::Breakfast,
         amount: ConsumedAmount::Measure(Quantity::new(Decimal::new(150, 0), Unit::Millilitre)),
         consumed_on: date!(2026 - 08 - 22),
         consumed_at: now,
@@ -918,6 +919,7 @@ async fn round_trips_a_measured_consumption_record(pool: PgPool) {
     let loaded = repo.get(original.id).await.unwrap().expect("should exist");
 
     assert_eq!(loaded.amount, original.amount);
+    assert_eq!(loaded.slot, MealSlot::Breakfast);
     assert_eq!(loaded.nutrition.energy_kcal, Some(Decimal::new(96, 0)));
     assert_eq!(loaded.quality, NutritionQuality::Partial);
     assert_eq!(loaded.consumed_on, date!(2026 - 08 - 22));
