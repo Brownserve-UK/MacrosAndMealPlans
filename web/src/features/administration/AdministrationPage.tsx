@@ -11,6 +11,12 @@ const SECTIONS = [
     detail: 'Sign-in and roles',
     needs: 'account:admin',
   },
+  {
+    to: '/administration/meal-times' as const,
+    label: 'Meal times',
+    detail: 'Default times for planned meals',
+    needs: 'household:write',
+  },
 ] as const;
 
 export function AdministrationPage() {

@@ -6,6 +6,7 @@ import DialogActions from '@mui/material/DialogActions';
 import DialogContent from '@mui/material/DialogContent';
 import DialogTitle from '@mui/material/DialogTitle';
 import Divider from '@mui/material/Divider';
+import MenuItem from '@mui/material/MenuItem';
 import Stack from '@mui/material/Stack';
 import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
@@ -23,7 +24,7 @@ import {
 import { combineDateTime, formatFullDate } from './date';
 import { formatAmount } from './format';
 import { ProductPicker } from './ProductPicker';
-import { labelForSlot } from './slots';
+import { labelForSlot, SLOTS } from './slots';
 
 type AddKind = 'planned' | 'eaten';
 
@@ -32,6 +33,7 @@ type EntryDraft = {
   product: Product | null;
   amount: AmountDraft;
   time: string;
+  slot: MealSlot;
 };
 
 type AddedItem = {
@@ -42,12 +44,13 @@ type AddedItem = {
   amount: Amount;
 };
 
-function emptyDraft(kind: AddKind): EntryDraft {
+function emptyDraft(kind: AddKind, slot: MealSlot): EntryDraft {
   return {
     kind,
     product: null,
     amount: amountDraftFrom(null),
     time: '',
+    slot,
   };
 }
 
@@ -86,14 +89,15 @@ export function AddFoodDialog({
   const createConsumption = useCreateConsumption();
   const createPlan = useCreateMealPlanEntry();
   const updatePlan = useUpdateMealPlanEntry();
-  const [draft, setDraft] = useState(() => emptyDraft(kind));
+  const [draft, setDraft] = useState(() => emptyDraft(kind, slot));
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [failure, setFailure] = useState<string | null>(null);
   const [added, setAdded] = useState<AddedItem[]>([]);
   const busy = createConsumption.isPending || createPlan.isPending || updatePlan.isPending;
+  const slotLocked = Boolean(entry) || added.length > 0;
 
   function resetAndClose() {
-    setDraft(emptyDraft(kind));
+    setDraft(emptyDraft(kind, slot));
     setErrors({});
     setFailure(null);
     setAdded([]);
@@ -119,7 +123,7 @@ export function AddFoodDialog({
         await createConsumption.mutateAsync({
           member_id: memberId,
           product_id: draft.product.id,
-          slot,
+          slot: draft.slot,
           amount,
           consumed_on: date,
           consumed_at: draft.time ? combineDateTime(date, draft.time) : null,
@@ -135,7 +139,7 @@ export function AddFoodDialog({
           amount,
         },
       ]);
-      setDraft(emptyDraft(draft.kind));
+      setDraft(emptyDraft(draft.kind, draft.slot));
       setErrors({});
     } catch (caught) {
       if (caught instanceof ApiError) {
@@ -174,7 +178,7 @@ export function AddFoodDialog({
       } else {
         await createPlan.mutateAsync({
           planned_on: date,
-          slot,
+          slot: draft.slot,
           components,
         });
       }
@@ -190,10 +194,25 @@ export function AddFoodDialog({
         <DialogTitle sx={{ pb: 0.75 }}>{kind === 'planned' ? 'Add planned meal' : 'Add food'}</DialogTitle>
         <DialogContent>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2.5 }}>
-            {labelForSlot(slot)} · {formatFullDate(date)}
+            {slotLocked ? `${labelForSlot(draft.slot)} · ` : ''}{formatFullDate(date)}
           </Typography>
           <Stack spacing={3}>
             {failure ? <Alert severity="error">{failure}</Alert> : null}
+
+            {slotLocked ? null : (
+              <TextField
+                select
+                label="Meal"
+                value={draft.slot}
+                onChange={(event) => setDraft({ ...draft, slot: event.target.value as MealSlot })}
+              >
+                {SLOTS.map((candidate) => (
+                  <MenuItem key={candidate.value} value={candidate.value}>
+                    {candidate.label}
+                  </MenuItem>
+                ))}
+              </TextField>
+            )}
 
             {added.length > 0 ? (
               <Stack spacing={0.5} divider={<Divider />}>

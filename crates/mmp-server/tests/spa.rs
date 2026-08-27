@@ -5,12 +5,14 @@ use axum::http::{Request, StatusCode, header};
 use http_body_util::BodyExt;
 use mmp_core::ports::SystemClock;
 use mmp_core::services::{
-    CatalogueService, DiaryService, HouseholdService, MealPlanService, NutritionTargetService,
+    CatalogueService, DiaryService, HouseholdService, HouseholdSettingsService, MealPlanService,
+    NutritionTargetService,
 };
 use mmp_core::testing::{
     InMemoryAccessGrantRepository, InMemoryConsumptionRecordRepository,
-    InMemoryHouseholdMemberRepository, InMemoryIngredientRepository, InMemoryMealPlanRepository,
-    InMemoryNutritionTargetRepository, InMemoryProductRepository, InMemoryUserRepository,
+    InMemoryHouseholdMemberRepository, InMemoryHouseholdSettingsRepository,
+    InMemoryIngredientRepository, InMemoryMealPlanRepository, InMemoryNutritionTargetRepository,
+    InMemoryProductRepository, InMemoryUserRepository,
 };
 use mmp_server::auth::DevBasicAuthProvider;
 use mmp_server::{AppState, app};
@@ -45,6 +47,10 @@ fn app_with_web(dist: &std::path::Path) -> axum::Router {
             Arc::new(SystemClock),
         ),
         household.clone(),
+        HouseholdSettingsService::new(
+            Arc::new(InMemoryHouseholdSettingsRepository::new()),
+            Arc::new(SystemClock),
+        ),
         DiaryService::new(
             Arc::new(consumption.clone()),
             Arc::new(products.clone()),
@@ -165,6 +171,10 @@ async fn without_a_web_build_the_api_still_works() {
             Arc::new(SystemClock),
         ),
         household.clone(),
+        HouseholdSettingsService::new(
+            Arc::new(InMemoryHouseholdSettingsRepository::new()),
+            Arc::new(SystemClock),
+        ),
         DiaryService::new(
             Arc::new(consumption.clone()),
             Arc::new(products.clone()),

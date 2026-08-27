@@ -22,6 +22,7 @@ pub fn build(state: AppState) -> (Router, utoipa::openapi::OpenApi) {
         .merge(routes::diary::router())
         .merge(routes::meal_plan::router())
         .merge(routes::nutrition_target::router())
+        .merge(routes::settings::router())
         .split_for_parts();
 
     let router = router
@@ -72,6 +73,10 @@ pub fn stub_state() -> AppState {
             Arc::new(SystemClock),
         ),
         household.clone(),
+        mmp_core::services::HouseholdSettingsService::new(
+            Arc::new(NoopHouseholdSettings),
+            Arc::new(SystemClock),
+        ),
         mmp_core::services::DiaryService::new(
             consumption.clone(),
             products.clone(),
@@ -90,7 +95,31 @@ pub fn stub_state() -> AppState {
 }
 
 struct NoopIngredients;
+struct NoopHouseholdSettings;
 struct NoopProducts;
+
+#[async_trait::async_trait]
+impl mmp_core::ports::HouseholdSettingsRepository for NoopHouseholdSettings {
+    async fn get(&self) -> mmp_core::Result<mmp_core::domain::HouseholdSettings> {
+        Ok(mmp_core::domain::HouseholdSettings {
+            meal_times: mmp_core::domain::MealTimes {
+                breakfast: time::macros::time!(08:00),
+                lunch: time::macros::time!(12:30),
+                dinner: time::macros::time!(18:00),
+            },
+            revision: mmp_core::domain::Revision::INITIAL,
+            created_at: time::OffsetDateTime::UNIX_EPOCH,
+            updated_at: time::OffsetDateTime::UNIX_EPOCH,
+        })
+    }
+    async fn update(
+        &self,
+        _: &mmp_core::domain::HouseholdSettings,
+        _: mmp_core::domain::Revision,
+    ) -> mmp_core::Result<mmp_core::ports::UpdateOutcome> {
+        Ok(mmp_core::ports::UpdateOutcome::NotFound)
+    }
+}
 struct NoopMembers;
 struct NoopUsers;
 struct NoopGrants;

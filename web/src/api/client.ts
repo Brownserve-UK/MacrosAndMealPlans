@@ -29,6 +29,7 @@ export type MealItem = components['schemas']['MealItemDto'];
 export type MealItemSource = components['schemas']['MealItemSourceDto'];
 export type MealSlotView = components['schemas']['MealSlotViewDto'];
 export type Meta = components['schemas']['MetaDto'];
+export type MealTimesSettings = components['schemas']['HouseholdSettingsDto'];
 export type NutritionTarget = components['schemas']['NutritionTargetDto'];
 export type NutritionGoals = components['schemas']['NutritionGoalsDto'];
 export type TargetDirection = components['schemas']['TargetDirectionDto'];

@@ -432,3 +432,21 @@ CREATE TABLE nutrition_target (
 
 CREATE UNIQUE INDEX nutrition_target_member_effective_from_unique
     ON nutrition_target (member_id, effective_from);
+
+CREATE TABLE household_settings (
+    singleton       BOOLEAN PRIMARY KEY DEFAULT TRUE,
+
+    breakfast_time  TIME NOT NULL,
+    lunch_time      TIME NOT NULL,
+    dinner_time     TIME NOT NULL,
+
+    revision        BIGINT NOT NULL DEFAULT 1,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    CONSTRAINT household_settings_singleton
+        CHECK (singleton)
+);
+
+INSERT INTO household_settings (singleton, breakfast_time, lunch_time, dinner_time)
+VALUES (TRUE, '08:00', '12:30', '18:00');

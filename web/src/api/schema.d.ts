@@ -116,6 +116,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/household/meal-times": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getHouseholdMealTimes"];
+        put: operations["updateHouseholdMealTimes"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/ingredients": {
         parameters: {
             query?: never;
@@ -886,6 +902,14 @@ export interface components {
             /** Format: date-time */
             updated_at: string;
         };
+        HouseholdSettingsDto: components["schemas"]["MealTimesDto"] & {
+            /** Format: date-time */
+            created_at: string;
+            /** Format: int64 */
+            revision: number;
+            /** Format: date-time */
+            updated_at: string;
+        };
         IngredientDto: {
             /** Format: date-time */
             archived_at?: string | null;
@@ -1054,6 +1078,14 @@ export interface components {
             items: components["schemas"]["MealItemDto"][];
             nutrition: components["schemas"]["NutritionSummaryDto"];
             slot: components["schemas"]["MealSlot"];
+        };
+        MealTimesDto: {
+            /** @example 08:00 */
+            breakfast: string;
+            /** @example 18:00 */
+            dinner: string;
+            /** @example 12:30 */
+            lunch: string;
         };
         MemberAccessGrantDto: {
             /** Format: date-time */
@@ -1307,6 +1339,14 @@ export interface components {
             /** @example 18:30 */
             planned_time?: string | null;
             slot?: null | components["schemas"]["MealSlot"];
+        };
+        UpdateMealTimesRequest: {
+            /** @example 08:00 */
+            breakfast?: string | null;
+            /** @example 18:00 */
+            dinner?: string | null;
+            /** @example 12:30 */
+            lunch?: string | null;
         };
         UpdateMemberRequest: {
             display_name?: string | null;
@@ -1719,6 +1759,82 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HealthDto"];
+                };
+            };
+        };
+    };
+    getHouseholdMealTimes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The household's default meal times */
+            200: {
+                headers: {
+                    /** @description The revision to send back as If-Match */
+                    ETag?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HouseholdSettingsDto"];
+                };
+            };
+        };
+    };
+    updateHouseholdMealTimes: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The revision you loaded */
+                "If-Match": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateMealTimesRequest"];
+            };
+        };
+        responses: {
+            /** @description Updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HouseholdSettingsDto"];
+                };
+            };
+            /** @description Not permitted */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Someone else changed it first */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description If-Match is required */
+            428: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
         };

@@ -6,9 +6,9 @@ use time::Date;
 use super::{PageRequest, Paginated};
 use crate::domain::{
     AccessScope, CatalogueOrigin, ConsumptionRecord, ConsumptionRecordId, HouseholdMember,
-    HouseholdMemberId, Ingredient, IngredientId, MealPlanComponent, MealPlanComponentId,
-    MealPlanEntry, MealPlanEntryId, MemberAccessGrant, NutritionTarget, NutritionTargetId, Product,
-    ProductId, Revision, Role, User, UserId,
+    HouseholdMemberId, HouseholdSettings, Ingredient, IngredientId, MealPlanComponent,
+    MealPlanComponentId, MealPlanEntry, MealPlanEntryId, MemberAccessGrant, NutritionTarget,
+    NutritionTargetId, Product, ProductId, Revision, Role, User, UserId,
 };
 use crate::error::Result;
 
@@ -239,6 +239,17 @@ pub trait MealPlanRepository: Send + Sync + 'static {
         component_id: MealPlanComponentId,
         expected: Revision,
         actor_id: UserId,
+    ) -> Result<UpdateOutcome>;
+}
+
+#[async_trait]
+pub trait HouseholdSettingsRepository: Send + Sync + 'static {
+    async fn get(&self) -> Result<HouseholdSettings>;
+
+    async fn update(
+        &self,
+        settings: &HouseholdSettings,
+        expected: Revision,
     ) -> Result<UpdateOutcome>;
 }
 

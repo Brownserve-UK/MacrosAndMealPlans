@@ -11,19 +11,19 @@ use mmp_core::domain::{
 };
 use mmp_core::ports::{
     AccessGrantRepository, ConsumptionQuery, ConsumptionRecordRepository,
-    HouseholdMemberRepository, IngredientQuery, IngredientRepository, MealPlanQuery,
-    MealPlanRepository, MemberQuery, NutritionTargetRepository, PageRequest, ProductQuery,
-    ProductRepository, UpdateOutcome, UserRepository,
+    HouseholdMemberRepository, HouseholdSettingsRepository, IngredientQuery, IngredientRepository,
+    MealPlanQuery, MealPlanRepository, MemberQuery, NutritionTargetRepository, PageRequest,
+    ProductQuery, ProductRepository, UpdateOutcome, UserRepository,
 };
 use mmp_postgres::{
     PgAccessGrantRepository, PgConsumptionRecordRepository, PgHouseholdMemberRepository,
-    PgIngredientRepository, PgMealPlanRepository, PgNutritionTargetRepository, PgProductRepository,
-    PgUserRepository,
+    PgHouseholdSettingsRepository, PgIngredientRepository, PgMealPlanRepository,
+    PgNutritionTargetRepository, PgProductRepository, PgUserRepository,
 };
 use rust_decimal::Decimal;
 use sqlx::PgPool;
 use time::OffsetDateTime;
-use time::macros::date;
+use time::macros::{date, time};
 use uuid::Uuid;
 
 fn ingredient(name: &str) -> Ingredient {
@@ -1670,4 +1670,40 @@ async fn nutrition_targets_can_be_deleted(pool: PgPool) {
         UpdateOutcome::Updated
     );
     assert!(repo.get(original.id).await.unwrap().is_none());
+}
+
+#[sqlx::test]
+async fn household_settings_are_seeded_with_defaults(pool: PgPool) {
+    let repo = PgHouseholdSettingsRepository::new(pool);
+    let settings = repo.get().await.unwrap();
+    assert_eq!(settings.meal_times.breakfast, time!(08:00));
+    assert_eq!(settings.meal_times.lunch, time!(12:30));
+    assert_eq!(settings.meal_times.dinner, time!(18:00));
+    assert_eq!(settings.revision, Revision::INITIAL);
+}
+
+#[sqlx::test]
+async fn household_settings_updates_report_revision_outcomes(pool: PgPool) {
+    let repo = PgHouseholdSettingsRepository::new(pool);
+    let original = repo.get().await.unwrap();
+
+    let mut updated = original;
+    updated.meal_times.lunch = time!(13:15);
+    updated.revision = original.revision.next();
+    assert_eq!(
+        repo.update(&updated, original.revision).await.unwrap(),
+        UpdateOutcome::Updated
+    );
+
+    let stored = repo.get().await.unwrap();
+    assert_eq!(stored.meal_times.lunch, time!(13:15));
+    assert_eq!(stored.meal_times.breakfast, time!(08:00));
+
+    let stale = repo.update(&updated, original.revision).await.unwrap();
+    assert_eq!(
+        stale,
+        UpdateOutcome::RevisionMismatch {
+            actual: updated.revision,
+        }
+    );
 }

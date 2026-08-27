@@ -8,12 +8,14 @@ use base64::engine::general_purpose::STANDARD;
 use http_body_util::BodyExt;
 use mmp_core::ports::FixedClock;
 use mmp_core::services::{
-    CatalogueService, DiaryService, HouseholdService, MealPlanService, NutritionTargetService,
+    CatalogueService, DiaryService, HouseholdService, HouseholdSettingsService, MealPlanService,
+    NutritionTargetService,
 };
 use mmp_core::testing::{
     InMemoryAccessGrantRepository, InMemoryConsumptionRecordRepository,
-    InMemoryHouseholdMemberRepository, InMemoryIngredientRepository, InMemoryMealPlanRepository,
-    InMemoryNutritionTargetRepository, InMemoryProductRepository, InMemoryUserRepository,
+    InMemoryHouseholdMemberRepository, InMemoryHouseholdSettingsRepository,
+    InMemoryIngredientRepository, InMemoryMealPlanRepository, InMemoryNutritionTargetRepository,
+    InMemoryProductRepository, InMemoryUserRepository,
 };
 use mmp_server::AppState;
 use mmp_server::auth::DevBasicAuthProvider;
@@ -47,6 +49,10 @@ async fn app() -> Router {
             clock.clone(),
         ),
         household.clone(),
+        HouseholdSettingsService::new(
+            Arc::new(InMemoryHouseholdSettingsRepository::new()),
+            clock.clone(),
+        ),
         DiaryService::new(
             Arc::new(consumption.clone()),
             Arc::new(products.clone()),
@@ -1623,6 +1629,111 @@ async fn a_meal_plan_entry_round_trips_through_the_week() {
         json!(128.0)
     );
     assert_eq!(week["projected"]["nutrition"]["energy_kcal"], json!(128.0));
+}
+
+#[tokio::test]
+async fn household_meal_times_are_published_with_defaults_and_an_etag() {
+    let app = app().await;
+    let (status, body, headers) =
+        send(&app, Call::new("GET", "/api/v1/household/meal-times")).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["breakfast"], "08:00");
+    assert_eq!(body["lunch"], "12:30");
+    assert_eq!(body["dinner"], "18:00");
+    assert_eq!(etag(&headers), "1");
+}
+
+#[tokio::test]
+async fn a_household_manager_can_change_a_meal_time() {
+    let app = app().await;
+    let (status, body, _) = send(
+        &app,
+        Call::new("PUT", "/api/v1/household/meal-times")
+            .if_match(1)
+            .body(json!({ "lunch": "13:15" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["lunch"], "13:15");
+    assert_eq!(body["breakfast"], "08:00");
+    assert_eq!(body["revision"], json!(2));
+
+    let (_, reread, _) = send(&app, Call::new("GET", "/api/v1/household/meal-times")).await;
+    assert_eq!(reread["lunch"], "13:15");
+}
+
+#[tokio::test]
+async fn a_stale_meal_times_revision_conflicts() {
+    let app = app().await;
+    let (status, _, _) = send(
+        &app,
+        Call::new("PUT", "/api/v1/household/meal-times")
+            .if_match(9)
+            .body(json!({ "dinner": "19:00" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn a_basic_user_cannot_change_meal_times() {
+    let app = app().await;
+    create_user(&app, "sam", &["basic_user"]).await;
+    let (status, _, _) = send(
+        &app,
+        Call::new("PUT", "/api/v1/household/meal-times")
+            .signed_in_as("sam")
+            .if_match(1)
+            .body(json!({ "dinner": "19:00" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn a_planned_meal_without_a_time_inherits_the_household_default() {
+    let app = app().await;
+    let product = create_milk_product(&app).await;
+
+    let (status, dinner, _) = send(
+        &app,
+        Call::new("POST", "/api/v1/meal-plan-entries").body(json!({
+            "planned_on": "2026-08-27",
+            "slot": "dinner",
+            "components": [{"product_id": product["id"], "amount": measured_amount(150.0)}]
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{dinner}");
+    assert_eq!(dinner["planned_time"], "18:00");
+
+    let (_, snack, _) = send(
+        &app,
+        Call::new("POST", "/api/v1/meal-plan-entries").body(json!({
+            "planned_on": "2026-08-27",
+            "slot": "snacks",
+            "components": [{"product_id": product["id"], "amount": measured_amount(20.0)}]
+        })),
+    )
+    .await;
+    assert_eq!(snack["planned_time"], Value::Null);
+}
+
+#[tokio::test]
+async fn an_explicit_planned_time_is_kept_over_the_default() {
+    let app = app().await;
+    let product = create_milk_product(&app).await;
+    let (_, entry, _) = send(
+        &app,
+        Call::new("POST", "/api/v1/meal-plan-entries").body(json!({
+            "planned_on": "2026-08-27",
+            "planned_time": "20:45",
+            "slot": "dinner",
+            "components": [{"product_id": product["id"], "amount": measured_amount(150.0)}]
+        })),
+    )
+    .await;
+    assert_eq!(entry["planned_time"], "20:45");
 }
 
 #[tokio::test]

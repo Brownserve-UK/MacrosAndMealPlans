@@ -3,15 +3,15 @@ use std::str::FromStr;
 
 use mmp_core::domain::{
     AccessScope, CatalogueOrigin, ConsumedAmount, ConsumptionRecord, ConsumptionRecordId,
-    HouseholdMember, HouseholdMemberId, Ingredient, IngredientId, MealPlanComponentId,
-    MealPlanEntryId, MealSlot, MemberAccessGrant, NutritionFacts, NutritionGoals, NutritionQuality,
-    NutritionTarget, NutritionTargetId, Product, ProductId, Provenance, Quantity, Revision, Role,
-    Unit, User, UserId,
+    HouseholdMember, HouseholdMemberId, HouseholdSettings, Ingredient, IngredientId,
+    MealPlanComponentId, MealPlanEntryId, MealSlot, MealTimes, MemberAccessGrant, NutritionFacts,
+    NutritionGoals, NutritionQuality, NutritionTarget, NutritionTargetId, Product, ProductId,
+    Provenance, Quantity, Revision, Role, Unit, User, UserId,
 };
 use mmp_core::{CoreError, RepositoryError};
 use rust_decimal::Decimal;
 use sqlx::types::Json;
-use time::{Date, OffsetDateTime};
+use time::{Date, OffsetDateTime, Time};
 use uuid::Uuid;
 
 type Extra = Json<BTreeMap<String, Decimal>>;
@@ -317,6 +317,31 @@ impl From<NutritionTargetRow> for NutritionTarget {
                 fibre_g: row.fibre_g,
                 salt_g: row.salt_g,
                 cholesterol_mg: row.cholesterol_mg,
+            },
+            revision: Revision::new(row.revision),
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+        }
+    }
+}
+
+#[derive(Debug, sqlx::FromRow)]
+pub struct HouseholdSettingsRow {
+    pub breakfast_time: Time,
+    pub lunch_time: Time,
+    pub dinner_time: Time,
+    pub revision: i64,
+    pub created_at: OffsetDateTime,
+    pub updated_at: OffsetDateTime,
+}
+
+impl From<HouseholdSettingsRow> for HouseholdSettings {
+    fn from(row: HouseholdSettingsRow) -> Self {
+        HouseholdSettings {
+            meal_times: MealTimes {
+                breakfast: row.breakfast_time,
+                lunch: row.lunch_time,
+                dinner: row.dinner_time,
             },
             revision: Revision::new(row.revision),
             created_at: row.created_at,

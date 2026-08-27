@@ -7,15 +7,16 @@ use async_trait::async_trait;
 
 use crate::domain::{
     AccessScope, ConsumptionRecord, ConsumptionRecordId, HouseholdMember, HouseholdMemberId,
-    Ingredient, IngredientId, MealPlanEntry, MealPlanEntryId, MemberAccessGrant, NutritionTarget,
-    NutritionTargetId, Product, ProductId, Revision, Role, User, UserId,
+    HouseholdSettings, Ingredient, IngredientId, MealPlanEntry, MealPlanEntryId, MealTimes,
+    MemberAccessGrant, NutritionTarget, NutritionTargetId, Product, ProductId, Revision, Role, User,
+    UserId,
 };
 use crate::error::{CoreError, Result};
 use crate::ports::{
     AccessGrantRepository, ConsumptionQuery, ConsumptionRecordRepository,
-    HouseholdMemberRepository, IngredientQuery, IngredientRepository, MealPlanQuery,
-    MealPlanRepository, MemberQuery, NutritionTargetRepository, Paginated, ProductQuery,
-    ProductRepository, SortDirection, UpdateOutcome, UserQuery, UserRepository,
+    HouseholdMemberRepository, HouseholdSettingsRepository, IngredientQuery, IngredientRepository,
+    MealPlanQuery, MealPlanRepository, MemberQuery, NutritionTargetRepository, Paginated,
+    ProductQuery, ProductRepository, SortDirection, UpdateOutcome, UserQuery, UserRepository,
 };
 
 // This _should_ reflect the indexs that a real database would enforce
@@ -1052,5 +1053,55 @@ impl NutritionTargetRepository for InMemoryNutritionTargetRepository {
                 Ok(UpdateOutcome::Updated)
             }
         }
+    }
+}
+
+#[derive(Clone)]
+pub struct InMemoryHouseholdSettingsRepository {
+    row: Arc<Mutex<HouseholdSettings>>,
+}
+
+impl InMemoryHouseholdSettingsRepository {
+    pub fn new() -> Self {
+        Self {
+            row: Arc::new(Mutex::new(HouseholdSettings {
+                meal_times: MealTimes {
+                    breakfast: time::macros::time!(08:00),
+                    lunch: time::macros::time!(12:30),
+                    dinner: time::macros::time!(18:00),
+                },
+                revision: Revision::INITIAL,
+                created_at: time::OffsetDateTime::UNIX_EPOCH,
+                updated_at: time::OffsetDateTime::UNIX_EPOCH,
+            })),
+        }
+    }
+}
+
+impl Default for InMemoryHouseholdSettingsRepository {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl HouseholdSettingsRepository for InMemoryHouseholdSettingsRepository {
+    async fn get(&self) -> Result<HouseholdSettings> {
+        Ok(*self.row.lock().unwrap())
+    }
+
+    async fn update(
+        &self,
+        settings: &HouseholdSettings,
+        expected: Revision,
+    ) -> Result<UpdateOutcome> {
+        let mut row = self.row.lock().unwrap();
+        if row.revision != expected {
+            return Ok(UpdateOutcome::RevisionMismatch {
+                actual: row.revision,
+            });
+        }
+        *row = *settings;
+        Ok(UpdateOutcome::Updated)
     }
 }

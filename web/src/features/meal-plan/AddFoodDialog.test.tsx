@@ -175,6 +175,21 @@ describe('AddFoodDialog', () => {
     expect(mocks.createPlan).not.toHaveBeenCalled();
   });
 
+  it('logs food against a meal chosen in the dialog', async () => {
+    mocks.createConsumption.mockResolvedValue({});
+    renderDialog(todayIso(), 'breakfast');
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('combobox', { name: 'Meal' }));
+    await user.click(screen.getByRole('option', { name: 'Lunch' }));
+    await pickMilkAndEnterAmount();
+
+    await user.click(screen.getByRole('button', { name: 'Add' }));
+
+    expect(mocks.createConsumption).toHaveBeenCalledWith(
+      expect.objectContaining({ slot: 'lunch' }),
+    );
+  });
+
   it('does not expose planned state in the food log', async () => {
     const onClose = renderDialog(todayIso(), 'breakfast');
     const user = await pickMilkAndEnterAmount();

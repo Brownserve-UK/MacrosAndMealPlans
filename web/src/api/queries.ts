@@ -27,6 +27,7 @@ export const keys = {
   products: (params: ProductListParams) => ['products', params] as const,
   product: (id: string) => ['product', id] as const,
   nutritionTargets: (memberId: string) => ['nutritionTargets', memberId] as const,
+  mealTimes: ['mealTimes'] as const,
 };
 
 export function useUnits() {
@@ -42,6 +43,32 @@ export function useMeta() {
     queryKey: keys.meta,
     staleTime: Infinity,
     queryFn: async () => unwrap(await client.GET('/api/v1/meta')),
+  });
+}
+
+export function useMealTimes() {
+  return useQuery({
+    queryKey: keys.mealTimes,
+    queryFn: async () => unwrap(await client.GET('/api/v1/household/meal-times')),
+  });
+}
+
+export function useUpdateMealTimes() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: {
+      revision: number;
+      body: components['schemas']['UpdateMealTimesRequest'];
+    }) =>
+      unwrap(
+        await client.PUT('/api/v1/household/meal-times', {
+          params: { header: ifMatch(input.revision) },
+          body: input.body,
+        }),
+      ),
+    onSuccess: (updated) => {
+      qc.setQueryData(keys.mealTimes, updated);
+    },
   });
 }
 

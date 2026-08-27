@@ -393,7 +393,7 @@ function SlotSection({
         ) : null}
       </Stack>
       {visibleItems.length === 0 ? (
-        workspace === 'today' && allowChanges ? (
+        allowChanges ? (
           <Button
             fullWidth
             startIcon={<AddIcon />}
@@ -408,7 +408,7 @@ function SlotSection({
               borderRadius: 2,
             }}
           >
-            Add food
+            {workspace === 'planner' ? 'Add planned food' : 'Add food'}
           </Button>
         ) : (
           <Paper variant="outlined" sx={{ px: 2, py: 1.5 }}>

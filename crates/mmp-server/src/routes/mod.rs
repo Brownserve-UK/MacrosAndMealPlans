@@ -6,6 +6,7 @@ pub mod members;
 pub mod meta;
 pub mod nutrition_target;
 pub mod products;
+pub mod settings;
 pub mod users;
 
 use mmp_core::domain::HouseholdMemberId;

@@ -1,6 +1,7 @@
 mod access;
 mod consumption;
 mod household;
+mod household_settings;
 mod ids;
 mod ingredient;
 mod meal_plan;
@@ -20,6 +21,7 @@ pub use household::{
     HouseholdMember, HouseholdMemberPatch, MAX_USERNAME_LEN, MIN_USERNAME_LEN, MemberAccessGrant,
     NewHouseholdMember, NewUser, User, UserPatch,
 };
+pub use household_settings::{HouseholdSettings, HouseholdSettingsPatch, MealTimes};
 pub use ids::{ConsumptionRecordId, HouseholdMemberId, IngredientId, ProductId, Revision, UserId};
 pub use ids::{MealPlanComponentId, MealPlanEntryId, NutritionTargetId};
 pub use ingredient::{

@@ -135,10 +135,12 @@ async fn create(
     Json(body): Json<CreateMealPlanEntryRequest>,
 ) -> ApiResult<Created<MealPlanEntryDto>> {
     let member = personal_member(&state, &principal).await?;
-    let created = state
-        .meal_plan
-        .create(body.into_domain(member, principal.user_id))
-        .await?;
+    let mut new_entry = body.into_domain(member, principal.user_id);
+    if new_entry.planned_time.is_none() {
+        let settings = state.household_settings.get().await?;
+        new_entry.planned_time = settings.meal_times.for_slot(new_entry.slot);
+    }
+    let created = state.meal_plan.create(new_entry).await?;
     Ok(Created(created.entry.revision, created.into()))
 }
 

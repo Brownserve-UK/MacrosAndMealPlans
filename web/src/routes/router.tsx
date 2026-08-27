@@ -2,6 +2,7 @@ import { createRootRoute, createRoute, createRouter, redirect } from '@tanstack/
 import { AppShell } from '../components/AppShell';
 import { AccountsPage } from '../features/administration/AccountsPage';
 import { AdministrationPage } from '../features/administration/AdministrationPage';
+import { MealTimesPage } from '../features/administration/MealTimesPage';
 import { HouseholdPage } from '../features/household/HouseholdPage';
 import { MemberPage } from '../features/household/MemberPage';
 import { MealPlanIndexRedirect } from '../features/meal-plan/MealPlanIndexRedirect';
@@ -205,6 +206,12 @@ const accountsRoute = createRoute({
   component: AccountsPage,
 });
 
+const mealTimesRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/administration/meal-times',
+  component: MealTimesPage,
+});
+
 const profileRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/profile',
@@ -234,6 +241,7 @@ const routeTree = rootRoute.addChildren([
   memberRoute,
   administrationRoute,
   accountsRoute,
+  mealTimesRoute,
   profileRoute,
 ]);
 
