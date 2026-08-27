@@ -432,7 +432,7 @@ impl Loader<'_> {
                         id: Some(id),
                         member_id: self.member.id,
                         planned_on: date,
-                        planned_time: Some(slot_time(slot)),
+                        planned_time: slot_time(slot),
                         slot,
                         components: components_for(slot),
                         actor_id: self.actor.id,
@@ -744,14 +744,14 @@ fn meal_id(date: Date, slot: MealSlot) -> MealPlanEntryId {
     MealPlanEntryId::from_uuid(sample_uuid("meal-plan-entry", &format!("{date}:{slot}")))
 }
 
-fn slot_time(slot: MealSlot) -> Time {
+fn slot_time(slot: MealSlot) -> Option<Time> {
     let (hour, minute) = match slot {
         MealSlot::Breakfast => (7, 30),
         MealSlot::Lunch => (12, 30),
         MealSlot::Dinner => (18, 30),
-        MealSlot::Snacks => (20, 30),
+        MealSlot::Snacks => return None,
     };
-    Time::from_hms(hour, minute, 0).unwrap()
+    Some(Time::from_hms(hour, minute, 0).unwrap())
 }
 
 fn quantity(amount: i64, unit: Unit) -> Quantity {

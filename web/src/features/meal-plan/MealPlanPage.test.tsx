@@ -95,6 +95,13 @@ const plannedEntry = {
   updated_at: '2026-08-24T10:00:00Z',
 } satisfies MealPlanEntry;
 
+const snackEntry = {
+  ...plannedEntry,
+  id: 'entry-snacks',
+  planned_time: '20:30',
+  slot: 'snacks',
+} satisfies MealPlanEntry;
+
 let breakfastItems: MealItem[] = [];
 
 function week(): MealPlanWeek {
@@ -113,7 +120,7 @@ function week(): MealPlanWeek {
         : [{ slot: 'breakfast' as const, items: [], nutrition }, ...emptySlots];
     return {
       date: iso,
-      entries: iso === DAY ? [plannedEntry] : [],
+      entries: iso === DAY ? [plannedEntry, snackEntry] : [],
       slots,
       actual: nutrition,
       remaining_planned: nutrition,
@@ -248,6 +255,13 @@ describe('MealPlanPage', () => {
       revision: 3,
       body: { planned_time: '09:15' },
     });
+  });
+
+  it('does not offer a planned time for snacks', () => {
+    renderPage('planner');
+
+    expect(screen.queryByRole('button', { name: '20:30' })).not.toBeInTheDocument();
+    expect(screen.queryByText('· 20:30')).not.toBeInTheDocument();
   });
 
   it('does not offer the slot time control in the food log', () => {

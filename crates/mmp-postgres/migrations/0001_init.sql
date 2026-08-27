@@ -450,3 +450,11 @@ CREATE TABLE household_settings (
 
 INSERT INTO household_settings (singleton, breakfast_time, lunch_time, dinner_time)
 VALUES (TRUE, '08:00', '12:30', '18:00');
+
+UPDATE meal_plan_entry
+SET planned_time = NULL
+WHERE slot = 'snacks' AND planned_time IS NOT NULL;
+
+ALTER TABLE meal_plan_entry
+    ADD CONSTRAINT meal_plan_entry_snacks_have_no_planned_time
+        CHECK (slot <> 'snacks' OR planned_time IS NULL);

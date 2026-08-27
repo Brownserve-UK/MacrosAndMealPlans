@@ -151,6 +151,42 @@ async fn a_member_has_one_meal_entry_per_day_and_slot() {
 }
 
 #[tokio::test]
+async fn snacks_never_have_a_planned_time() {
+    let h = harness();
+    let food = product("Food", 200);
+    h.products.seed(food.clone());
+    let entry = h
+        .service
+        .create(NewMealPlanEntry {
+            id: None,
+            member_id: h.member_id,
+            planned_on: date!(2026 - 08 - 25),
+            planned_time: Some(time!(20:30)),
+            slot: MealSlot::Snacks,
+            components: vec![measured(food.id, 100)],
+            actor_id: h.actor_id,
+        })
+        .await
+        .unwrap();
+    assert_eq!(entry.entry.planned_time, None);
+
+    let updated = h
+        .service
+        .update(
+            entry.entry.id,
+            entry.entry.revision,
+            MealPlanEntryPatch {
+                planned_time: Some(Some(time!(21:00))),
+                ..Default::default()
+            },
+            h.actor_id,
+        )
+        .await
+        .unwrap();
+    assert_eq!(updated.entry.planned_time, None);
+}
+
+#[tokio::test]
 async fn a_week_projects_every_planned_component() {
     let h = harness();
     let pasta = product("Pasta", 200);

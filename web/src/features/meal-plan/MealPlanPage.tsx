@@ -359,6 +359,7 @@ function SlotSection({
 }) {
   const visibleItems = workspace === 'planner' ? items.filter((item) => item.kind === 'planned') : items;
   const slotEntry = entries.find((entry) => entry.slot === slot);
+  const allowsPlannedTime = slot !== 'snacks';
   const groups = new Map<string, MealItem[]>();
   const firstPlannedGroup = new Map<string, string>();
   for (const item of visibleItems) {
@@ -378,9 +379,9 @@ function SlotSection({
           <Typography variant="overline" color="text.secondary">
             {label}
           </Typography>
-          {workspace === 'planner' && slotEntry ? (
+          {workspace === 'planner' && slotEntry && allowsPlannedTime ? (
             <SlotTimeControl entry={slotEntry} />
-          ) : slotEntry?.planned_time ? (
+          ) : allowsPlannedTime && slotEntry?.planned_time ? (
             <Typography variant="overline" color="text.secondary">
               · {slotEntry.planned_time}
             </Typography>

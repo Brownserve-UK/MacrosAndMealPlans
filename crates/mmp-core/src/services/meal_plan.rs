@@ -162,7 +162,11 @@ impl MealPlanService {
             id: input.id.unwrap_or_default(),
             member_id: input.member_id,
             planned_on: input.planned_on,
-            planned_time: input.planned_time,
+            planned_time: input
+                .slot
+                .allows_planned_time()
+                .then_some(input.planned_time)
+                .flatten(),
             slot: input.slot,
             status: MealPlanStatus::Planned,
             components: make_components(input.components),
@@ -216,6 +220,9 @@ impl MealPlanService {
         }
         if let Some(slot) = patch.slot {
             entry.slot = slot;
+        }
+        if !entry.slot.allows_planned_time() {
+            entry.planned_time = None;
         }
         entry.updated_by = actor_id;
         entry.updated_at = now;

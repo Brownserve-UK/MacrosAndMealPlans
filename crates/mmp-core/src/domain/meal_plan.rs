@@ -45,6 +45,10 @@ impl MealSlot {
             MealSlot::Snacks => 3,
         }
     }
+
+    pub const fn allows_planned_time(self) -> bool {
+        !matches!(self, MealSlot::Snacks)
+    }
 }
 
 impl fmt::Display for MealSlot {

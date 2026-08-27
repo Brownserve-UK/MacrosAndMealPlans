@@ -111,12 +111,16 @@ impl ComponentRow {
 }
 
 fn assemble(row: EntryRow, components: Vec<MealPlanComponent>) -> Result<MealPlanEntry> {
+    let slot = MealSlot::from_str(&row.slot).map_err(|_| bad_value("slot", &row.slot))?;
     Ok(MealPlanEntry {
         id: MealPlanEntryId::from(row.id),
         member_id: row.member_id.into(),
         planned_on: row.planned_on,
-        planned_time: row.planned_time,
-        slot: MealSlot::from_str(&row.slot).map_err(|_| bad_value("slot", &row.slot))?,
+        planned_time: slot
+            .allows_planned_time()
+            .then_some(row.planned_time)
+            .flatten(),
+        slot,
         status: MealPlanStatus::from_str(&row.status)
             .map_err(|_| bad_value("status", &row.status))?,
         components,

@@ -1691,7 +1691,7 @@ async fn a_basic_user_cannot_change_meal_times() {
 }
 
 #[tokio::test]
-async fn a_planned_meal_without_a_time_inherits_the_household_default() {
+async fn meal_times_default_for_timed_slots_but_not_snacks() {
     let app = app().await;
     let product = create_milk_product(&app).await;
 
@@ -1711,6 +1711,7 @@ async fn a_planned_meal_without_a_time_inherits_the_household_default() {
         &app,
         Call::new("POST", "/api/v1/meal-plan-entries").body(json!({
             "planned_on": "2026-08-27",
+            "planned_time": "20:45",
             "slot": "snacks",
             "components": [{"product_id": product["id"], "amount": measured_amount(20.0)}]
         })),
