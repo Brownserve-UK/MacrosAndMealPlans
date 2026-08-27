@@ -22,6 +22,7 @@ pub fn build(state: AppState) -> (Router, utoipa::openapi::OpenApi) {
         .merge(routes::diary::router())
         .merge(routes::meal_plan::router())
         .merge(routes::nutrition_target::router())
+        .merge(routes::recipes::router())
         .merge(routes::settings::router())
         .split_for_parts();
 
@@ -90,8 +91,39 @@ pub fn stub_state() -> AppState {
             Arc::new(SystemClock),
         ),
         mmp_core::services::NutritionTargetService::new(targets, Arc::new(SystemClock)),
+        mmp_core::services::RecipeService::new(
+            Arc::new(NoopRecipes),
+            Arc::new(NoopProducts),
+            Arc::new(SystemClock),
+        ),
         Arc::new(crate::auth::DevBasicAuthProvider::new(household, "")),
     )
+}
+
+#[async_trait::async_trait]
+impl mmp_core::ports::RecipeRepository for NoopRecipes {
+    async fn get(
+        &self,
+        _: mmp_core::domain::RecipeId,
+    ) -> mmp_core::Result<Option<mmp_core::domain::Recipe>> {
+        Ok(None)
+    }
+    async fn list(
+        &self,
+        q: &mmp_core::ports::RecipeQuery,
+    ) -> mmp_core::Result<mmp_core::ports::Paginated<mmp_core::domain::Recipe>> {
+        Ok(mmp_core::ports::Paginated::new(vec![], 0, q.page))
+    }
+    async fn insert(&self, _: &mmp_core::domain::Recipe) -> mmp_core::Result<()> {
+        Ok(())
+    }
+    async fn update(
+        &self,
+        _: &mmp_core::domain::Recipe,
+        _: mmp_core::domain::Revision,
+    ) -> mmp_core::Result<mmp_core::ports::UpdateOutcome> {
+        Ok(mmp_core::ports::UpdateOutcome::NotFound)
+    }
 }
 
 struct NoopIngredients;
@@ -126,6 +158,7 @@ struct NoopGrants;
 struct NoopConsumptionRecords;
 struct NoopMealPlans;
 struct NoopNutritionTargets;
+struct NoopRecipes;
 
 #[async_trait::async_trait]
 impl mmp_core::ports::NutritionTargetRepository for NoopNutritionTargets {

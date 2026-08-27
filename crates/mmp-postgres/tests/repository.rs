@@ -6,19 +6,20 @@ use mmp_core::domain::{
     HouseholdMember, HouseholdMemberId, Ingredient, IngredientId, MealPlanComponent,
     MealPlanComponentId, MealPlanComponentSnapshot, MealPlanEntry, MealPlanEntryId, MealPlanStatus,
     MealSlot, MemberAccessGrant, NutritionFacts, NutritionGoals, NutritionQuality, NutritionTarget,
-    NutritionTargetId, Product, ProductId, Provenance, Quantity, Revision, Role, Unit, User,
-    UserId,
+    NutritionTargetId, Product, ProductId, Provenance, Quantity, Recipe, RecipeComponent,
+    RecipeComponentId, RecipeId, RecipeVisibility, Revision, Role, Unit, User, UserId,
 };
 use mmp_core::ports::{
     AccessGrantRepository, ConsumptionQuery, ConsumptionRecordRepository,
     HouseholdMemberRepository, HouseholdSettingsRepository, IngredientQuery, IngredientRepository,
     MealPlanQuery, MealPlanRepository, MemberQuery, NutritionTargetRepository, PageRequest,
-    ProductQuery, ProductRepository, UpdateOutcome, UserRepository,
+    ProductQuery, ProductRepository, RecipeQuery, RecipeRepository, SortDirection, UpdateOutcome,
+    UserRepository,
 };
 use mmp_postgres::{
     PgAccessGrantRepository, PgConsumptionRecordRepository, PgHouseholdMemberRepository,
     PgHouseholdSettingsRepository, PgIngredientRepository, PgMealPlanRepository,
-    PgNutritionTargetRepository, PgProductRepository, PgUserRepository,
+    PgNutritionTargetRepository, PgProductRepository, PgRecipeRepository, PgUserRepository,
 };
 use rust_decimal::Decimal;
 use sqlx::PgPool;
@@ -1706,4 +1707,155 @@ async fn household_settings_updates_report_revision_outcomes(pool: PgPool) {
             actual: updated.revision,
         }
     );
+}
+
+async fn seed_recipe_dependencies(pool: &PgPool) -> (UserId, ProductId, ProductId) {
+    let users = PgUserRepository::new(pool.clone());
+    let owner = user("cook", vec![Role::Admin]);
+    users.insert(&owner).await.unwrap();
+    let products = PgProductRepository::new(pool.clone());
+    let first = product("Recipe product one");
+    let second = product("Recipe product two");
+    products.insert(&first).await.unwrap();
+    products.insert(&second).await.unwrap();
+    (owner.id, first.id, second.id)
+}
+
+fn recipe_component(product_id: ProductId, position: i32) -> RecipeComponent {
+    RecipeComponent {
+        id: RecipeComponentId::new(),
+        product_id,
+        amount: ConsumedAmount::Measure(Quantity::new(Decimal::new(100, 0), Unit::Gram)),
+        position,
+    }
+}
+
+fn recipe(owner: UserId, components: Vec<RecipeComponent>) -> Recipe {
+    let now = OffsetDateTime::now_utc();
+    Recipe {
+        id: RecipeId::new(),
+        name: "Test Recipe".to_owned(),
+        servings: 2,
+        components,
+        owner_id: owner,
+        visibility: RecipeVisibility::Private,
+        created_by: owner,
+        updated_by: owner,
+        revision: Revision::INITIAL,
+        created_at: now,
+        updated_at: now,
+        archived_at: None,
+    }
+}
+
+#[sqlx::test]
+async fn round_trips_a_recipe_with_ordered_components(pool: PgPool) {
+    let (owner, first, second) = seed_recipe_dependencies(&pool).await;
+    let repo = PgRecipeRepository::new(pool);
+    let original = recipe(
+        owner,
+        vec![recipe_component(first, 0), recipe_component(second, 1)],
+    );
+    repo.insert(&original).await.unwrap();
+
+    let loaded = repo.get(original.id).await.unwrap().unwrap();
+    assert_eq!(loaded.name, "Test Recipe");
+    assert_eq!(loaded.owner_id, owner);
+    assert_eq!(loaded.visibility, RecipeVisibility::Private);
+    assert_eq!(loaded.components.len(), 2);
+    assert_eq!(loaded.components[0].position, 0);
+    assert_eq!(loaded.components[0].product_id, first);
+    assert_eq!(loaded.components[1].product_id, second);
+}
+
+#[sqlx::test]
+async fn updating_a_recipe_reorders_and_preserves_component_ids(pool: PgPool) {
+    let (owner, first, second) = seed_recipe_dependencies(&pool).await;
+    let repo = PgRecipeRepository::new(pool);
+    let original = recipe(
+        owner,
+        vec![recipe_component(first, 0), recipe_component(second, 1)],
+    );
+    repo.insert(&original).await.unwrap();
+
+    let mut updated = original.clone();
+    updated.components = vec![
+        RecipeComponent {
+            position: 0,
+            ..original.components[1].clone()
+        },
+        RecipeComponent {
+            position: 1,
+            ..original.components[0].clone()
+        },
+    ];
+    updated.revision = updated.revision.next();
+
+    let outcome = repo.update(&updated, original.revision).await.unwrap();
+    assert_eq!(outcome, UpdateOutcome::Updated);
+
+    let loaded = repo.get(original.id).await.unwrap().unwrap();
+    assert_eq!(loaded.components[0].id, original.components[1].id);
+    assert_eq!(loaded.components[1].id, original.components[0].id);
+}
+
+#[sqlx::test]
+async fn a_stale_recipe_update_is_rejected_and_keeps_components(pool: PgPool) {
+    let (owner, first, second) = seed_recipe_dependencies(&pool).await;
+    let repo = PgRecipeRepository::new(pool);
+    let original = recipe(owner, vec![recipe_component(first, 0)]);
+    repo.insert(&original).await.unwrap();
+
+    let mut updated = original.clone();
+    updated.components = vec![recipe_component(second, 0)];
+    updated.revision = updated.revision.next();
+
+    let outcome = repo
+        .update(&updated, Revision::new(99))
+        .await
+        .unwrap();
+    assert!(matches!(outcome, UpdateOutcome::RevisionMismatch { .. }));
+
+    // The rollback must leave the original single component untouched.
+    let loaded = repo.get(original.id).await.unwrap().unwrap();
+    assert_eq!(loaded.components.len(), 1);
+    assert_eq!(loaded.components[0].product_id, first);
+}
+
+#[sqlx::test]
+async fn lists_recipes_scoped_to_owner_and_excludes_archived(pool: PgPool) {
+    let (owner, first, _second) = seed_recipe_dependencies(&pool).await;
+    let stranger = user("stranger", vec![Role::Admin]);
+    PgUserRepository::new(pool.clone())
+        .insert(&stranger)
+        .await
+        .unwrap();
+    let repo = PgRecipeRepository::new(pool);
+
+    repo.insert(&recipe(owner, vec![recipe_component(first, 0)]))
+        .await
+        .unwrap();
+    let mut archived = recipe(owner, vec![recipe_component(first, 0)]);
+    archived.archived_at = Some(OffsetDateTime::now_utc());
+    repo.insert(&archived).await.unwrap();
+    repo.insert(&recipe(stranger.id, vec![recipe_component(first, 0)]))
+        .await
+        .unwrap();
+
+    let query = RecipeQuery {
+        owner_id: owner,
+        search: None,
+        include_archived: false,
+        page: PageRequest::default(),
+        sort: SortDirection::Ascending,
+    };
+    let page = repo.list(&query).await.unwrap();
+    assert_eq!(page.total, 1, "only the owner's non-archived recipe should list");
+
+    let with_archived = RecipeQuery {
+        include_archived: true,
+        ..query
+    };
+    let page = repo.list(&with_archived).await.unwrap();
+    assert_eq!(page.total, 2, "including archived shows both of the owner's recipes");
 }

@@ -8,15 +8,16 @@ use async_trait::async_trait;
 use crate::domain::{
     AccessScope, ConsumptionRecord, ConsumptionRecordId, HouseholdMember, HouseholdMemberId,
     HouseholdSettings, Ingredient, IngredientId, MealPlanEntry, MealPlanEntryId, MealTimes,
-    MemberAccessGrant, NutritionTarget, NutritionTargetId, Product, ProductId, Revision, Role, User,
-    UserId,
+    MemberAccessGrant, NutritionTarget, NutritionTargetId, Product, ProductId, Recipe, RecipeId,
+    Revision, Role, User, UserId,
 };
 use crate::error::{CoreError, Result};
 use crate::ports::{
     AccessGrantRepository, ConsumptionQuery, ConsumptionRecordRepository,
     HouseholdMemberRepository, HouseholdSettingsRepository, IngredientQuery, IngredientRepository,
     MealPlanQuery, MealPlanRepository, MemberQuery, NutritionTargetRepository, Paginated,
-    ProductQuery, ProductRepository, SortDirection, UpdateOutcome, UserQuery, UserRepository,
+    ProductQuery, ProductRepository, RecipeQuery, RecipeRepository, SortDirection, UpdateOutcome,
+    UserQuery, UserRepository,
 };
 
 // This _should_ reflect the indexs that a real database would enforce
@@ -1103,5 +1104,69 @@ impl HouseholdSettingsRepository for InMemoryHouseholdSettingsRepository {
         }
         *row = *settings;
         Ok(UpdateOutcome::Updated)
+    }
+}
+
+#[derive(Default, Clone)]
+pub struct InMemoryRecipeRepository {
+    rows: Arc<Mutex<HashMap<RecipeId, Recipe>>>,
+}
+
+impl InMemoryRecipeRepository {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn seed(&self, recipe: Recipe) {
+        self.rows.lock().unwrap().insert(recipe.id, recipe);
+    }
+
+    pub fn count(&self) -> usize {
+        self.rows.lock().unwrap().len()
+    }
+}
+
+#[async_trait]
+impl RecipeRepository for InMemoryRecipeRepository {
+    async fn get(&self, id: RecipeId) -> Result<Option<Recipe>> {
+        Ok(self.rows.lock().unwrap().get(&id).cloned())
+    }
+
+    async fn list(&self, query: &RecipeQuery) -> Result<Paginated<Recipe>> {
+        let rows = self.rows.lock().unwrap();
+        let items: Vec<Recipe> = rows
+            .values()
+            .filter(|r| r.owner_id == query.owner_id)
+            .filter(|r| query.include_archived || !r.is_archived())
+            .filter(|r| {
+                query
+                    .search
+                    .as_deref()
+                    .is_none_or(|needle| matches(&r.name, needle))
+            })
+            .cloned()
+            .collect();
+        Ok(paginate(items, query.page, query.sort, |r| r.name.clone()))
+    }
+
+    async fn insert(&self, recipe: &Recipe) -> Result<()> {
+        self.rows.lock().unwrap().insert(recipe.id, recipe.clone());
+        Ok(())
+    }
+
+    async fn update(&self, recipe: &Recipe, expected: Revision) -> Result<UpdateOutcome> {
+        let mut rows = self.rows.lock().unwrap();
+        match rows.get(&recipe.id) {
+            None => Ok(UpdateOutcome::NotFound),
+            Some(existing) if existing.revision != expected => {
+                Ok(UpdateOutcome::RevisionMismatch {
+                    actual: existing.revision,
+                })
+            }
+            Some(_) => {
+                rows.insert(recipe.id, recipe.clone());
+                Ok(UpdateOutcome::Updated)
+            }
+        }
     }
 }

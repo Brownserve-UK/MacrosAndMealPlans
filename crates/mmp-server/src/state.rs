@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use mmp_core::services::{
     CatalogueService, DiaryService, HouseholdService, HouseholdSettingsService, MealPlanService,
-    NutritionTargetService,
+    NutritionTargetService, RecipeService,
 };
 
 use crate::auth::AuthProvider;
@@ -15,10 +15,12 @@ pub struct AppState {
     pub diary: DiaryService,
     pub meal_plan: MealPlanService,
     pub nutrition_targets: NutritionTargetService,
+    pub recipes: RecipeService,
     pub auth: Arc<dyn AuthProvider>,
 }
 
 impl AppState {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         catalogue: CatalogueService,
         household: Arc<HouseholdService>,
@@ -26,6 +28,7 @@ impl AppState {
         diary: DiaryService,
         meal_plan: MealPlanService,
         nutrition_targets: NutritionTargetService,
+        recipes: RecipeService,
         auth: Arc<dyn AuthProvider>,
     ) -> Self {
         Self {
@@ -35,6 +38,7 @@ impl AppState {
             diary,
             meal_plan,
             nutrition_targets,
+            recipes,
             auth,
         }
     }

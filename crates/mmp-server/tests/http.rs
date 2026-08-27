@@ -9,13 +9,13 @@ use http_body_util::BodyExt;
 use mmp_core::ports::FixedClock;
 use mmp_core::services::{
     CatalogueService, DiaryService, HouseholdService, HouseholdSettingsService, MealPlanService,
-    NutritionTargetService,
+    NutritionTargetService, RecipeService,
 };
 use mmp_core::testing::{
     InMemoryAccessGrantRepository, InMemoryConsumptionRecordRepository,
     InMemoryHouseholdMemberRepository, InMemoryHouseholdSettingsRepository,
     InMemoryIngredientRepository, InMemoryMealPlanRepository, InMemoryNutritionTargetRepository,
-    InMemoryProductRepository, InMemoryUserRepository,
+    InMemoryProductRepository, InMemoryRecipeRepository, InMemoryUserRepository,
 };
 use mmp_server::AppState;
 use mmp_server::auth::DevBasicAuthProvider;
@@ -42,6 +42,11 @@ async fn app() -> Router {
     let products = InMemoryProductRepository::new();
     let consumption = InMemoryConsumptionRecordRepository::new();
     let targets = InMemoryNutritionTargetRepository::new();
+    let recipes = RecipeService::new(
+        Arc::new(InMemoryRecipeRepository::new()),
+        Arc::new(products.clone()),
+        clock.clone(),
+    );
     let state = AppState::new(
         CatalogueService::new(
             Arc::new(InMemoryIngredientRepository::new()),
@@ -66,6 +71,7 @@ async fn app() -> Router {
             clock.clone(),
         ),
         NutritionTargetService::new(Arc::new(targets), clock),
+        recipes,
         Arc::new(DevBasicAuthProvider::new(household, PASSWORD)),
     );
     mmp_server::app::build(state).0
@@ -2387,4 +2393,51 @@ async fn a_midweek_target_reports_insufficient_weekly_coverage() {
     assert_eq!(week["insufficient_target_coverage"], json!(["energy_kcal"]));
     assert!(week["days"][0]["target"].is_null());
     assert_eq!(week["days"][2]["target"]["energy_kcal"], 2000.0);
+}
+
+#[tokio::test]
+async fn creates_a_recipe_and_derives_its_nutrition() {
+    let app = app().await;
+    let product = create_milk_product(&app).await;
+    let product_id = product["id"].as_str().unwrap();
+
+    let (status, recipe, _) = send(
+        &app,
+        Call::new("POST", "/api/v1/recipes").body(json!({
+            "name": "Warm Milk",
+            "servings": 2,
+            "components": [
+                {"product_id": product_id, "amount": measured_amount(100.0)}
+            ]
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{recipe}");
+    assert_eq!(recipe["visibility"], "private");
+    let recipe_id = recipe["id"].as_str().unwrap().to_owned();
+
+    let (status, fetched, headers) = send(
+        &app,
+        Call::new("GET", format!("/api/v1/recipes/{recipe_id}")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{fetched}");
+    assert_eq!(fetched["components"][0]["product_id"], product_id);
+    assert!(!etag(&headers).is_empty());
+
+    // 100g of a 64 kcal/100g product across 2 servings => 32 kcal per serving.
+    let (status, nutrition, _) = send(
+        &app,
+        Call::new("GET", format!("/api/v1/recipes/{recipe_id}/nutrition")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{nutrition}");
+    assert_eq!(nutrition["nutrition"]["energy_kcal"], 32.0);
+}
+
+#[tokio::test]
+async fn recipes_require_authentication() {
+    let app = app().await;
+    let (status, _, _) = send(&app, Call::new("GET", "/api/v1/recipes").anonymous()).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
 }

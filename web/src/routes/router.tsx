@@ -11,6 +11,8 @@ import { IngredientPage } from '../features/ingredients/IngredientPage';
 import { IngredientsPage } from '../features/ingredients/IngredientsPage';
 import { ProductPage } from '../features/products/ProductPage';
 import { ProductsPage } from '../features/products/ProductsPage';
+import { RecipePage } from '../features/recipes/RecipePage';
+import { RecipesPage } from '../features/recipes/RecipesPage';
 import { ProfilePage } from '../features/profile/ProfilePage';
 
 const rootRoute = createRootRoute({ component: AppShell });
@@ -179,6 +181,21 @@ const productRoute = createRoute({
   },
 });
 
+const recipesRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/recipes',
+  component: RecipesPage,
+});
+
+const recipeRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/recipes/$id',
+  component: function EditRecipe() {
+    const { id } = recipeRoute.useParams();
+    return <RecipePage id={id} />;
+  },
+});
+
 const householdRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/household',
@@ -237,6 +254,8 @@ const routeTree = rootRoute.addChildren([
   ingredientRoute,
   productsRoute,
   productRoute,
+  recipesRoute,
+  recipeRoute,
   householdRoute,
   memberRoute,
   administrationRoute,

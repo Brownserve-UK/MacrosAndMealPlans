@@ -4,6 +4,7 @@ mod household;
 mod household_settings;
 mod meal_plan;
 mod nutrition_target;
+mod recipe;
 mod seed;
 
 pub use catalogue::CatalogueService;
@@ -15,4 +16,5 @@ pub use meal_plan::{
     MealPlanService, MealPlanWeek, MealSlotView, NutritionSummary,
 };
 pub use nutrition_target::NutritionTargetService;
+pub use recipe::RecipeService;
 pub use seed::{SeedIngredient, SeedReport};

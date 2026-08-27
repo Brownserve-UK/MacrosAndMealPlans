@@ -8,6 +8,7 @@ import LogoutIcon from '@mui/icons-material/LogoutOutlined';
 import PeopleIcon from '@mui/icons-material/PeopleOutlined';
 import PersonIcon from '@mui/icons-material/PersonOutlined';
 import RestaurantIcon from '@mui/icons-material/RestaurantOutlined';
+import RestaurantMenuIcon from '@mui/icons-material/RestaurantMenuOutlined';
 import AppBar from '@mui/material/AppBar';
 import Divider from '@mui/material/Divider';
 import Menu from '@mui/material/Menu';
@@ -36,6 +37,7 @@ const NAV = [
   { to: '/planner', label: 'Planner', icon: <CalendarMonthIcon fontSize="small" />, needs: undefined },
   { to: '/ingredients', label: 'Ingredients', icon: <RestaurantIcon fontSize="small" />, needs: 'catalogue:read' },
   { to: '/products', label: 'Products', icon: <InventoryIcon fontSize="small" />, needs: 'catalogue:read' },
+  { to: '/recipes', label: 'Recipes', icon: <RestaurantMenuIcon fontSize="small" />, needs: 'catalogue:read' },
   { to: '/household', label: 'Household', icon: <PeopleIcon fontSize="small" />, needs: 'household:read' },
 ] as const;
 

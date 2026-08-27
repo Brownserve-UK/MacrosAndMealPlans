@@ -8,7 +8,7 @@ use crate::domain::{
     AccessScope, CatalogueOrigin, ConsumptionRecord, ConsumptionRecordId, HouseholdMember,
     HouseholdMemberId, HouseholdSettings, Ingredient, IngredientId, MealPlanComponent,
     MealPlanComponentId, MealPlanEntry, MealPlanEntryId, MemberAccessGrant, NutritionTarget,
-    NutritionTargetId, Product, ProductId, Revision, Role, User, UserId,
+    NutritionTargetId, Product, ProductId, Recipe, RecipeId, Revision, Role, User, UserId,
 };
 use crate::error::Result;
 
@@ -79,6 +79,15 @@ pub struct MealPlanQuery {
     pub member_id: HouseholdMemberId,
     pub from: Date,
     pub to: Date,
+}
+
+#[derive(Debug, Clone)]
+pub struct RecipeQuery {
+    pub owner_id: UserId,
+    pub search: Option<String>,
+    pub include_archived: bool,
+    pub page: PageRequest,
+    pub sort: SortDirection,
 }
 
 #[async_trait]
@@ -240,6 +249,17 @@ pub trait MealPlanRepository: Send + Sync + 'static {
         expected: Revision,
         actor_id: UserId,
     ) -> Result<UpdateOutcome>;
+}
+
+#[async_trait]
+pub trait RecipeRepository: Send + Sync + 'static {
+    async fn get(&self, id: RecipeId) -> Result<Option<Recipe>>;
+
+    async fn list(&self, query: &RecipeQuery) -> Result<Paginated<Recipe>>;
+
+    async fn insert(&self, recipe: &Recipe) -> Result<()>;
+
+    async fn update(&self, recipe: &Recipe, expected: Revision) -> Result<UpdateOutcome>;
 }
 
 #[async_trait]

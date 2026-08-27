@@ -7,8 +7,9 @@ use mmp_core::domain::{
     AccessScope, ActualMealPlanComponent, ConfirmMealPlanComponent, ConfirmMealPlanEntry,
     ConsumedAmount, ConsumptionRecordId, HouseholdMember, HouseholdMemberId, IngredientId,
     MealPlanEntryId, MealPlanStatus, MealSlot, NewConsumptionRecord, NewHouseholdMember,
-    NewMealPlanComponent, NewMealPlanEntry, NewNutritionTarget, NewProduct, NewUser,
-    NutritionFacts, NutritionGoals, ProductId, Provenance, Quantity, Role, Unit, User, UserId,
+    NewMealPlanComponent, NewMealPlanEntry, NewNutritionTarget, NewProduct, NewRecipe,
+    NewRecipeComponent, NewUser, NutritionFacts, NutritionGoals, ProductId, Provenance, Quantity,
+    RecipeId, Role, Unit, User, UserId,
 };
 use mmp_server::state::AppState;
 use rust_decimal::Decimal;
@@ -49,6 +50,7 @@ pub struct Report {
     pub users_created: usize,
     pub members_created: usize,
     pub products_created: usize,
+    pub recipes_created: usize,
     pub targets_created: usize,
     pub meals_created: usize,
     pub meals_resolved: usize,
@@ -107,6 +109,7 @@ pub async fn load(
 
     loader.load_accounts().await?;
     loader.load_products().await?;
+    loader.load_recipes().await?;
     loader.load_targets().await?;
 
     match scenario {
@@ -263,6 +266,37 @@ impl Loader<'_> {
                 })
                 .await?;
             self.report.products_created += 1;
+        }
+        Ok(())
+    }
+
+    async fn load_recipes(&mut self) -> anyhow::Result<()> {
+        for spec in recipe_specs() {
+            let id = recipe_id(spec.key);
+            match self.state.recipes.get_recipe(id, self.actor.id).await {
+                Ok(_) => continue,
+                Err(CoreError::NotFound { .. }) => {}
+                Err(error) => return Err(error.into()),
+            }
+            self.state
+                .recipes
+                .create_recipe(NewRecipe {
+                    id: Some(id),
+                    name: spec.name.to_owned(),
+                    servings: spec.servings,
+                    components: spec
+                        .components
+                        .iter()
+                        .map(|(product_key, amount)| NewRecipeComponent {
+                            id: None,
+                            product_id: product_id(product_key),
+                            amount: *amount,
+                        })
+                        .collect(),
+                    actor_id: self.actor.id,
+                })
+                .await?;
+            self.report.recipes_created += 1;
         }
         Ok(())
     }
@@ -474,9 +508,8 @@ impl Loader<'_> {
                         component.component.revision,
                         ConfirmMealPlanComponent {
                             consumed_on: date,
-                            consumed_at: Some(
-                                PrimitiveDateTime::new(date, slot_time(slot)).assume_utc(),
-                            ),
+                            consumed_at: slot_time(slot)
+                                .map(|time| PrimitiveDateTime::new(date, time).assume_utc()),
                             amount: component.component.amount,
                             actor_id: self.actor.id,
                         },
@@ -513,9 +546,8 @@ impl Loader<'_> {
                         view.entry.revision,
                         ConfirmMealPlanEntry {
                             consumed_on: date,
-                            consumed_at: Some(
-                                PrimitiveDateTime::new(date, slot_time(slot)).assume_utc(),
-                            ),
+                            consumed_at: slot_time(slot)
+                                .map(|time| PrimitiveDateTime::new(date, time).assume_utc()),
                             components,
                             actor_id: self.actor.id,
                         },
@@ -738,6 +770,53 @@ fn sample_uuid(resource: &str, key: &str) -> Uuid {
 
 fn product_id(key: &str) -> ProductId {
     ProductId::from_uuid(sample_uuid("product", key))
+}
+
+fn recipe_id(key: &str) -> RecipeId {
+    RecipeId::from_uuid(sample_uuid("recipe", key))
+}
+
+struct RecipeSpec {
+    key: &'static str,
+    name: &'static str,
+    servings: i32,
+    components: Vec<(&'static str, ConsumedAmount)>,
+}
+
+fn recipe_specs() -> Vec<RecipeSpec> {
+    vec![
+        RecipeSpec {
+            key: "porridge",
+            name: "Morning Porridge",
+            servings: 2,
+            components: vec![
+                (
+                    "rolled-oats",
+                    ConsumedAmount::Measure(quantity(100, Unit::Gram)),
+                ),
+                (
+                    "whole-milk",
+                    ConsumedAmount::Measure(quantity(400, Unit::Millilitre)),
+                ),
+                ("banana", ConsumedAmount::Measure(quantity(1, Unit::Item))),
+            ],
+        },
+        RecipeSpec {
+            key: "chicken-and-rice",
+            name: "Chicken and Rice",
+            servings: 4,
+            components: vec![
+                (
+                    "chicken-breast",
+                    ConsumedAmount::Measure(quantity(600, Unit::Gram)),
+                ),
+                (
+                    "basmati-rice",
+                    ConsumedAmount::Measure(quantity(300, Unit::Gram)),
+                ),
+            ],
+        },
+    ]
 }
 
 fn meal_id(date: Date, slot: MealSlot) -> MealPlanEntryId {

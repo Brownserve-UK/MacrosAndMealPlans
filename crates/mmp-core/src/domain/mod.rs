@@ -11,6 +11,7 @@ mod patch;
 mod product;
 mod provenance;
 mod quantity;
+mod recipe;
 
 pub use access::{AccessScope, Permission, Role, UnknownAccessScope, UnknownRole};
 pub use consumption::{
@@ -23,7 +24,9 @@ pub use household::{
 };
 pub use household_settings::{HouseholdSettings, HouseholdSettingsPatch, MealTimes};
 pub use ids::{ConsumptionRecordId, HouseholdMemberId, IngredientId, ProductId, Revision, UserId};
-pub use ids::{MealPlanComponentId, MealPlanEntryId, NutritionTargetId};
+pub use ids::{
+    MealPlanComponentId, MealPlanEntryId, NutritionTargetId, RecipeComponentId, RecipeId,
+};
 pub use ingredient::{
     Ingredient, IngredientPatch, IngredientSummary, MAX_NAME_LEN, NewIngredient, validate_name,
 };
@@ -44,3 +47,7 @@ pub use product::{
 };
 pub use provenance::{CatalogueOrigin, Provenance, UnknownOrigin};
 pub use quantity::{ConversionError, Dimension, Quantity, Unit, UnknownUnit};
+pub use recipe::{
+    MAX_SERVINGS, NewRecipe, NewRecipeComponent, Recipe, RecipeComponent, RecipePatch,
+    RecipeVisibility, UnknownRecipeVisibility, recipe_nutrition,
+};

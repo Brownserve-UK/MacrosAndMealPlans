@@ -1,6 +1,14 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { client, ifMatch, unwrap } from './client';
-import type { Amount, ConsumptionRecord, Ingredient, Member, Product, User } from './client';
+import type {
+  Amount,
+  ConsumptionRecord,
+  Ingredient,
+  Member,
+  Product,
+  Recipe,
+  User,
+} from './client';
 import type { components } from './schema';
 
 export type IngredientListParams = {
@@ -17,6 +25,13 @@ export type ProductListParams = IngredientListParams & {
   mapped_ingredient_id?: string;
 };
 
+export type RecipeListParams = {
+  q?: string;
+  include_archived?: boolean;
+  page?: number;
+  per_page?: number;
+};
+
 export const keys = {
   units: ['units'] as const,
   meta: ['meta'] as const,
@@ -26,6 +41,9 @@ export const keys = {
   ingredientProducts: (id: string) => ['ingredient', id, 'products'] as const,
   products: (params: ProductListParams) => ['products', params] as const,
   product: (id: string) => ['product', id] as const,
+  recipes: (params: RecipeListParams) => ['recipes', params] as const,
+  recipe: (id: string) => ['recipe', id] as const,
+  recipeNutrition: (id: string) => ['recipe', id, 'nutrition'] as const,
   nutritionTargets: (memberId: string) => ['nutritionTargets', memberId] as const,
   mealTimes: ['mealTimes'] as const,
 };
@@ -752,5 +770,87 @@ export function useDeleteNutritionTarget() {
         }),
       ),
     onSuccess: (_data, variables) => invalidate(variables.memberId),
+  });
+}
+
+export function useRecipes(params: RecipeListParams) {
+  return useQuery({
+    queryKey: keys.recipes(params),
+    placeholderData: keepPreviousData,
+    queryFn: async () => unwrap(await client.GET('/api/v1/recipes', { params: { query: params } })),
+  });
+}
+
+export function useRecipe(id: string) {
+  return useQuery({
+    queryKey: keys.recipe(id),
+    queryFn: async () =>
+      unwrap(await client.GET('/api/v1/recipes/{id}', { params: { path: { id } } })),
+  });
+}
+
+export function useRecipeNutrition(id: string) {
+  return useQuery({
+    queryKey: keys.recipeNutrition(id),
+    queryFn: async () =>
+      unwrap(await client.GET('/api/v1/recipes/{id}/nutrition', { params: { path: { id } } })),
+  });
+}
+
+export function useCreateRecipe() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (body: components['schemas']['CreateRecipeRequest']) =>
+      unwrap(await client.POST('/api/v1/recipes', { body })),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['recipes'] }),
+  });
+}
+
+export function useUpdateRecipe() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: {
+      id: string;
+      revision: number;
+      body: components['schemas']['UpdateRecipeRequest'];
+    }) =>
+      unwrap(
+        await client.PATCH('/api/v1/recipes/{id}', {
+          params: { path: { id: input.id }, header: ifMatch(input.revision) },
+          body: input.body,
+        }),
+      ),
+    onSuccess: (updated: Recipe) => {
+      qc.setQueryData(keys.recipe(updated.id), updated);
+      void qc.invalidateQueries({ queryKey: ['recipes'] });
+      void qc.invalidateQueries({ queryKey: keys.recipeNutrition(updated.id) });
+    },
+  });
+}
+
+export function useSetRecipeArchived() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: { id: string; revision: number; archived: boolean }) => {
+      const path = input.archived
+        ? ('/api/v1/recipes/{id}/archive' as const)
+        : ('/api/v1/recipes/{id}/unarchive' as const);
+      return unwrap(
+        await client.POST(path, {
+          params: { path: { id: input.id }, header: ifMatch(input.revision) },
+        }),
+      );
+    },
+    onSuccess: (updated: Recipe) => {
+      qc.setQueryData(keys.recipe(updated.id), updated);
+      void qc.invalidateQueries({ queryKey: ['recipes'] });
+    },
+  });
+}
+
+export function useRecipeNutritionPreview() {
+  return useMutation({
+    mutationFn: async (body: components['schemas']['RecipeNutritionPreviewRequest']) =>
+      unwrap(await client.POST('/api/v1/recipes/nutrition-preview', { body })),
   });
 }

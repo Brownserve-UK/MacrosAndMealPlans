@@ -138,17 +138,19 @@ export function AmountFields({
 }) {
   const units = useUnits();
   const available = units.data;
+  const unitsReady = available !== undefined;
   const options = useMemo(() => amountOptionsFor(product, available ?? []), [product, available]);
   const hint = unitHint(product, draft);
-  const disabled = product === null;
+  const disabled = product === null || !unitsReady;
 
   const selectedKey = optionKeyFor(draft);
   const offered = options.some((option) => option.key === selectedKey);
 
   useEffect(() => {
+    if (!unitsReady) return;
     const fallback = options[0];
     if (!offered && fallback) onChange(applyOptionKey(draft, fallback.key));
-  }, [offered, options, draft, onChange]);
+  }, [unitsReady, offered, options, draft, onChange]);
 
   return (
     <Grid container spacing={2}>

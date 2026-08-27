@@ -28,12 +28,8 @@ impl HouseholdSettingsRepository for PgHouseholdSettingsRepository {
             .fetch_optional(&self.pool)
             .await
             .map_err(|e| repository_error("loading household settings", e))?;
-        row.map(Into::into).ok_or_else(|| {
-            repository_error(
-                "loading household settings",
-                sqlx::Error::RowNotFound,
-            )
-        })
+        row.map(Into::into)
+            .ok_or_else(|| repository_error("loading household settings", sqlx::Error::RowNotFound))
     }
 
     async fn update(

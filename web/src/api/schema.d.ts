@@ -612,6 +612,102 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/recipes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listRecipes"];
+        put?: never;
+        post: operations["createRecipe"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/recipes/nutrition-preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["previewRecipeNutrition"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/recipes/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getRecipe"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch: operations["updateRecipe"];
+        trace?: never;
+    };
+    "/api/v1/recipes/{id}/archive": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["archiveRecipe"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/recipes/{id}/nutrition": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getRecipeNutrition"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/recipes/{id}/unarchive": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["unarchiveRecipe"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/units": {
         parameters: {
             query?: never;
@@ -840,6 +936,18 @@ export interface components {
             /** Format: int32 */
             servings_per_pack?: number | null;
             shopping_section?: string | null;
+        };
+        CreateRecipeRequest: {
+            components: components["schemas"]["RecipeComponentRequest"][];
+            /** Format: uuid */
+            id?: string | null;
+            /** @example Chicken Curry */
+            name: string;
+            /**
+             * Format: int32
+             * @example 4
+             */
+            servings: number;
         };
         CreateUserRequest: {
             display_name?: string | null;
@@ -1296,6 +1404,66 @@ export interface components {
             amount: number;
             unit: components["schemas"]["Unit"];
         };
+        RecipeComponentDto: {
+            amount: components["schemas"]["AmountDto"];
+            /** Format: uuid */
+            id: string;
+            /** Format: int32 */
+            position: number;
+            /** Format: uuid */
+            product_id: string;
+        };
+        RecipeComponentRequest: {
+            amount: components["schemas"]["AmountDto"];
+            /** Format: uuid */
+            id?: string | null;
+            /** Format: uuid */
+            product_id: string;
+        };
+        RecipeDto: {
+            /** Format: date-time */
+            archived_at?: string | null;
+            components: components["schemas"]["RecipeComponentDto"][];
+            /** Format: date-time */
+            created_at: string;
+            /** Format: uuid */
+            created_by: string;
+            /** Format: uuid */
+            id: string;
+            /** @example Chicken Curry */
+            name: string;
+            /** Format: uuid */
+            owner_id: string;
+            /** Format: int64 */
+            revision: number;
+            /**
+             * Format: int32
+             * @example 4
+             */
+            servings: number;
+            /** Format: date-time */
+            updated_at: string;
+            /** Format: uuid */
+            updated_by: string;
+            visibility: components["schemas"]["RecipeVisibility"];
+        };
+        RecipeNutritionDto: {
+            nutrition: components["schemas"]["NutritionDto"];
+            quality: components["schemas"]["NutritionQuality"];
+        };
+        RecipeNutritionPreviewRequest: {
+            components: components["schemas"]["RecipeComponentRequest"][];
+            /**
+             * Format: int32
+             * @example 4
+             */
+            servings: number;
+        };
+        RecipePage: components["schemas"]["PageMeta"] & {
+            items: components["schemas"]["RecipeDto"][];
+        };
+        /** @enum {string} */
+        RecipeVisibility: "private" | "shared";
         /** @enum {string} */
         Role: "admin" | "household_manager" | "nutritionist" | "basic_user";
         SetMappingRequest: {
@@ -1383,6 +1551,12 @@ export interface components {
             /** Format: int32 */
             servings_per_pack?: number | null;
             shopping_section?: string | null;
+        };
+        UpdateRecipeRequest: {
+            components?: components["schemas"]["RecipeComponentRequest"][] | null;
+            name?: string | null;
+            /** Format: int32 */
+            servings?: number | null;
         };
         UpdateUserRequest: {
             display_name?: string | null;
@@ -3292,6 +3466,264 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ProductDto"];
+                };
+            };
+        };
+    };
+    listRecipes: {
+        parameters: {
+            query?: {
+                q?: string;
+                include_archived?: boolean;
+                page?: number;
+                per_page?: number;
+                sort?: components["schemas"]["SortDirectionDto"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of the signed-in user's recipes */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecipePage"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    createRecipe: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateRecipeRequest"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecipeDto"];
+                };
+            };
+            /** @description Validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    previewRecipeNutrition: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RecipeNutritionPreviewRequest"];
+            };
+        };
+        responses: {
+            /** @description Derived per-serving nutrition for an unsaved draft */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecipeNutritionDto"];
+                };
+            };
+        };
+    };
+    getRecipe: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Recipe id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The recipe */
+            200: {
+                headers: {
+                    /** @description The revision to send back as If-Match */
+                    ETag?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecipeDto"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    updateRecipe: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The revision you loaded */
+                "If-Match": string;
+            };
+            path: {
+                /** @description Recipe id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateRecipeRequest"];
+            };
+        };
+        responses: {
+            /** @description Updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecipeDto"];
+                };
+            };
+            /** @description Someone else changed it first */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description If-Match is required */
+            428: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    archiveRecipe: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The revision you loaded */
+                "If-Match": string;
+            };
+            path: {
+                /** @description Recipe id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Archived */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecipeDto"];
+                };
+            };
+        };
+    };
+    getRecipeNutrition: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Recipe id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Derived per-serving nutrition */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecipeNutritionDto"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    unarchiveRecipe: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The revision you loaded */
+                "If-Match": string;
+            };
+            path: {
+                /** @description Recipe id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Restored */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecipeDto"];
                 };
             };
         };

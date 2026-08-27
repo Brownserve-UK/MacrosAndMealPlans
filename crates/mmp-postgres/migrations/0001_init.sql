@@ -458,3 +458,53 @@ WHERE slot = 'snacks' AND planned_time IS NOT NULL;
 ALTER TABLE meal_plan_entry
     ADD CONSTRAINT meal_plan_entry_snacks_have_no_planned_time
         CHECK (slot <> 'snacks' OR planned_time IS NULL);
+
+CREATE TABLE recipe (
+    id            UUID PRIMARY KEY,
+    name          TEXT NOT NULL,
+    servings      INTEGER NOT NULL,
+    owner_id      UUID NOT NULL REFERENCES app_user (id) ON DELETE RESTRICT,
+    visibility    TEXT NOT NULL DEFAULT 'private',
+
+    created_by    UUID NOT NULL REFERENCES app_user (id) ON DELETE RESTRICT,
+    updated_by    UUID NOT NULL REFERENCES app_user (id) ON DELETE RESTRICT,
+    revision      BIGINT NOT NULL DEFAULT 1,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    archived_at   TIMESTAMPTZ,
+
+    CONSTRAINT recipe_name_not_blank
+        CHECK (btrim(name) <> ''),
+    CONSTRAINT recipe_servings_positive
+        CHECK (servings > 0),
+    CONSTRAINT recipe_visibility_valid
+        CHECK (visibility IN ('private', 'shared'))
+);
+
+CREATE INDEX recipe_owner ON recipe (owner_id, archived_at);
+CREATE INDEX recipe_name_trgm ON recipe USING gin (name gin_trgm_ops);
+
+CREATE TABLE recipe_component (
+    id            UUID PRIMARY KEY,
+    recipe_id     UUID NOT NULL REFERENCES recipe (id) ON DELETE CASCADE,
+    position      INTEGER NOT NULL,
+    product_id    UUID NOT NULL REFERENCES product (id) ON DELETE RESTRICT,
+    amount_kind   TEXT NOT NULL,
+    amount_value  NUMERIC(16, 4) NOT NULL,
+    amount_unit   TEXT,
+
+    CONSTRAINT recipe_component_position_non_negative
+        CHECK (position >= 0),
+    CONSTRAINT recipe_component_amount_kind_valid
+        CHECK (amount_kind IN ('measure', 'servings', 'packs')),
+    CONSTRAINT recipe_component_amount_value_positive
+        CHECK (amount_value > 0),
+    CONSTRAINT recipe_component_amount_unit_present
+        CHECK ((amount_kind = 'measure') = (amount_unit IS NOT NULL)),
+    CONSTRAINT recipe_component_amount_unit_valid
+        CHECK (amount_unit IS NULL OR amount_unit IN ('mg', 'g', 'kg', 'oz', 'lb', 'ml', 'l', 'tsp', 'tbsp', 'fl_oz', 'cup', 'item', 'piece', 'slice', 'clove', 'can', 'pack', 'bunch')),
+    UNIQUE (recipe_id, position)
+);
+
+CREATE INDEX recipe_component_recipe ON recipe_component (recipe_id, position);
+CREATE INDEX recipe_component_product ON recipe_component (product_id);

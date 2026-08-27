@@ -38,6 +38,26 @@ impl NutritionFacts {
         self.named_values().all(|(_, value)| value.is_none()) && self.extra.is_empty()
     }
 
+    pub fn scale(&self, factor: Decimal) -> NutritionFacts {
+        NutritionFacts {
+            basis: self.basis,
+            energy_kcal: self.energy_kcal.map(|v| v * factor),
+            protein_g: self.protein_g.map(|v| v * factor),
+            carbohydrate_g: self.carbohydrate_g.map(|v| v * factor),
+            sugar_g: self.sugar_g.map(|v| v * factor),
+            fat_g: self.fat_g.map(|v| v * factor),
+            saturated_fat_g: self.saturated_fat_g.map(|v| v * factor),
+            fibre_g: self.fibre_g.map(|v| v * factor),
+            salt_g: self.salt_g.map(|v| v * factor),
+            cholesterol_mg: self.cholesterol_mg.map(|v| v * factor),
+            extra: self
+                .extra
+                .iter()
+                .map(|(k, v)| (k.clone(), v * factor))
+                .collect(),
+        }
+    }
+
     pub fn named_values(&self) -> impl Iterator<Item = (&'static str, Option<Decimal>)> {
         [
             ("energy_kcal", self.energy_kcal),

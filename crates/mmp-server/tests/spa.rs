@@ -6,13 +6,13 @@ use http_body_util::BodyExt;
 use mmp_core::ports::SystemClock;
 use mmp_core::services::{
     CatalogueService, DiaryService, HouseholdService, HouseholdSettingsService, MealPlanService,
-    NutritionTargetService,
+    NutritionTargetService, RecipeService,
 };
 use mmp_core::testing::{
     InMemoryAccessGrantRepository, InMemoryConsumptionRecordRepository,
     InMemoryHouseholdMemberRepository, InMemoryHouseholdSettingsRepository,
     InMemoryIngredientRepository, InMemoryMealPlanRepository, InMemoryNutritionTargetRepository,
-    InMemoryProductRepository, InMemoryUserRepository,
+    InMemoryProductRepository, InMemoryRecipeRepository, InMemoryUserRepository,
 };
 use mmp_server::auth::DevBasicAuthProvider;
 use mmp_server::{AppState, app};
@@ -40,6 +40,11 @@ fn app_with_web(dist: &std::path::Path) -> axum::Router {
     let products = InMemoryProductRepository::new();
     let consumption = InMemoryConsumptionRecordRepository::new();
     let targets = InMemoryNutritionTargetRepository::new();
+    let recipes = RecipeService::new(
+        Arc::new(InMemoryRecipeRepository::new()),
+        Arc::new(products.clone()),
+        Arc::new(SystemClock),
+    );
     let state = AppState::new(
         CatalogueService::new(
             Arc::new(InMemoryIngredientRepository::new()),
@@ -64,6 +69,7 @@ fn app_with_web(dist: &std::path::Path) -> axum::Router {
             Arc::new(SystemClock),
         ),
         NutritionTargetService::new(Arc::new(targets), Arc::new(SystemClock)),
+        recipes,
         Arc::new(DevBasicAuthProvider::new(household, "changeme")),
     );
     let (router, _) = app::build(state);
@@ -164,6 +170,11 @@ async fn without_a_web_build_the_api_still_works() {
     let products = InMemoryProductRepository::new();
     let consumption = InMemoryConsumptionRecordRepository::new();
     let targets = InMemoryNutritionTargetRepository::new();
+    let recipes = RecipeService::new(
+        Arc::new(InMemoryRecipeRepository::new()),
+        Arc::new(products.clone()),
+        Arc::new(SystemClock),
+    );
     let state = AppState::new(
         CatalogueService::new(
             Arc::new(InMemoryIngredientRepository::new()),
@@ -188,6 +199,7 @@ async fn without_a_web_build_the_api_still_works() {
             Arc::new(SystemClock),
         ),
         NutritionTargetService::new(Arc::new(targets), Arc::new(SystemClock)),
+        recipes,
         Arc::new(DevBasicAuthProvider::new(household, "changeme")),
     );
     let (router, _) = app::build(state);

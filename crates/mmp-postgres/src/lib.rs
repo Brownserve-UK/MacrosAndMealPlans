@@ -7,6 +7,7 @@ mod ingredient;
 mod meal_plan;
 mod nutrition_target;
 mod product;
+mod recipe;
 mod rows;
 mod user;
 
@@ -18,6 +19,7 @@ pub use ingredient::PgIngredientRepository;
 pub use meal_plan::PgMealPlanRepository;
 pub use nutrition_target::PgNutritionTargetRepository;
 pub use product::PgProductRepository;
+pub use recipe::PgRecipeRepository;
 pub use user::PgUserRepository;
 
 use std::time::Duration;

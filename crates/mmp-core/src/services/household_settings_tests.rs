@@ -40,7 +40,10 @@ async fn update_changes_only_supplied_times_and_bumps_the_revision() {
     assert_eq!(updated.meal_times.breakfast, time!(07:15));
     assert_eq!(updated.meal_times.lunch, time!(12:30));
     assert_eq!(updated.revision, Revision::INITIAL.next());
-    assert_eq!(service.get().await.unwrap().meal_times.breakfast, time!(07:15));
+    assert_eq!(
+        service.get().await.unwrap().meal_times.breakfast,
+        time!(07:15)
+    );
 }
 
 #[tokio::test]

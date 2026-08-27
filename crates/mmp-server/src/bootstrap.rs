@@ -5,13 +5,13 @@ use mmp_core::domain::{NewHouseholdMember, NewUser, Role};
 use mmp_core::ports::SystemClock;
 use mmp_core::services::{
     CatalogueService, DiaryService, HouseholdService, HouseholdSettingsService, MealPlanService,
-    NutritionTargetService, SeedIngredient, SeedReport,
+    NutritionTargetService, RecipeService, SeedIngredient, SeedReport,
 };
 use mmp_postgres::PgPool;
 use mmp_postgres::{
     PgAccessGrantRepository, PgConsumptionRecordRepository, PgHouseholdMemberRepository,
     PgHouseholdSettingsRepository, PgIngredientRepository, PgMealPlanRepository,
-    PgNutritionTargetRepository, PgProductRepository, PgUserRepository,
+    PgNutritionTargetRepository, PgProductRepository, PgRecipeRepository, PgUserRepository,
 };
 
 use crate::auth::DevBasicAuthProvider;
@@ -108,6 +108,11 @@ pub fn app_state(config: &Config, pool: &PgPool) -> AppState {
         Arc::new(PgHouseholdSettingsRepository::new(pool.clone())),
         Arc::new(SystemClock),
     );
+    let recipes = RecipeService::new(
+        Arc::new(PgRecipeRepository::new(pool.clone())),
+        Arc::new(PgProductRepository::new(pool.clone())),
+        Arc::new(SystemClock),
+    );
     AppState::new(
         catalogue_service(pool),
         household.clone(),
@@ -115,6 +120,7 @@ pub fn app_state(config: &Config, pool: &PgPool) -> AppState {
         diary,
         meal_plan,
         nutrition_targets,
+        recipes,
         Arc::new(DevBasicAuthProvider::new(
             household,
             config.dev_password.clone(),
