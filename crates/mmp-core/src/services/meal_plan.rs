@@ -6,11 +6,11 @@ use time::{Date, Duration, Time};
 use rust_decimal::Decimal;
 
 use crate::domain::{
-    ConfirmMealPlanEntry, ConsumedAmount, ConsumptionRecord, ConsumptionRecordId, MealPlanComponent,
-    MealPlanComponentId, MealPlanComponentSnapshot, MealPlanEntry, MealPlanEntryId,
-    MealPlanEntryPatch, MealPlanStatus, MealSlot, NUTRIENT_KEYS, NewMealPlanComponent,
-    NewMealPlanEntry, NutritionFacts, NutritionGoals, NutritionQuality, Product, ProductId,
-    Revision, nutrition_for, resolve_on, sum_nutrition, validate_components,
+    ConfirmMealPlanComponent, ConfirmMealPlanEntry, ConsumedAmount, ConsumptionRecord,
+    ConsumptionRecordId, MealPlanComponent, MealPlanComponentId, MealPlanComponentSnapshot,
+    MealPlanEntry, MealPlanEntryId, MealPlanEntryPatch, MealPlanStatus, MealSlot, NUTRIENT_KEYS,
+    NewMealPlanComponent, NewMealPlanEntry, NutritionFacts, NutritionGoals, NutritionQuality,
+    Product, ProductId, Revision, nutrition_for, resolve_on, sum_nutrition, validate_components,
 };
 use crate::error::{CoreError, Result, ValidationErrors};
 use crate::ports::{
@@ -68,11 +68,15 @@ pub struct MealItem {
     pub planned_amount: Option<ConsumedAmount>,
     pub planned_on: Option<Date>,
     pub at: Option<Time>,
+    pub consumed_at: Option<time::OffsetDateTime>,
     pub nutrition: NutritionFacts,
     pub quality: NutritionQuality,
     pub needs_attention: bool,
     pub revision: Revision,
+    pub record_revision: Option<Revision>,
 }
+
+type MealItemOrder = uuid::Uuid;
 
 #[derive(Debug, Clone)]
 pub struct MealSlotView {
@@ -138,6 +142,19 @@ impl MealPlanService {
 
     pub async fn create_unchecked(&self, input: NewMealPlanEntry) -> Result<MealPlanEntryView> {
         validate_components(&input.components)?;
+        let existing = self
+            .plans
+            .list(&MealPlanQuery {
+                member_id: input.member_id,
+                from: input.planned_on,
+                to: input.planned_on,
+            })
+            .await?;
+        if existing.iter().any(|entry| entry.slot == input.slot) {
+            return Err(CoreError::conflict(
+                "That meal slot already exists. Add food to the existing meal instead.",
+            ));
+        }
         self.validate_products(&input.components, &HashSet::new())
             .await?;
         let now = self.clock.now();
@@ -178,6 +195,7 @@ impl MealPlanService {
         require_revision(id, expected, entry.revision)?;
         require_planned(&entry)?;
 
+        let now = self.clock.now();
         if let Some(components) = patch.components {
             validate_components(&components)?;
             let existing_products = entry
@@ -187,7 +205,7 @@ impl MealPlanService {
                 .collect();
             self.validate_products(&components, &existing_products)
                 .await?;
-            entry.components = make_components(components);
+            entry.components = merge_components(&entry.components, components)?;
         }
         if let Some(planned_on) = patch.planned_on {
             ensure_not_past(&*self.clock, planned_on)?;
@@ -200,7 +218,7 @@ impl MealPlanService {
             entry.slot = slot;
         }
         entry.updated_by = actor_id;
-        entry.updated_at = self.clock.now();
+        entry.updated_at = now;
         entry.revision = entry.revision.next();
         commit_outcome(self.plans.update(&entry, expected).await?, id, expected)?;
         self.present(entry, &[]).await
@@ -211,6 +229,165 @@ impl MealPlanService {
         require_revision(id, expected, entry.revision)?;
         require_planned(&entry)?;
         commit_outcome(self.plans.delete(id, expected).await?, id, expected)
+    }
+
+    pub async fn mark_component_eaten(
+        &self,
+        id: MealPlanEntryId,
+        component_id: MealPlanComponentId,
+        expected: Revision,
+        input: ConfirmMealPlanComponent,
+    ) -> Result<MealPlanEntryView> {
+        let entry = self.get_entry(id).await?;
+        ensure_due(&*self.clock, entry.planned_on)?;
+        self.mark_component_eaten_unchecked(id, component_id, expected, input)
+            .await
+    }
+
+    pub async fn mark_component_eaten_unchecked(
+        &self,
+        id: MealPlanEntryId,
+        component_id: MealPlanComponentId,
+        expected: Revision,
+        input: ConfirmMealPlanComponent,
+    ) -> Result<MealPlanEntryView> {
+        let mut entry = self.get_entry(id).await?;
+        let component = entry
+            .components
+            .iter_mut()
+            .find(|component| component.id == component_id)
+            .ok_or_else(|| CoreError::not_found("meal plan component", component_id))?;
+        require_component_revision(component_id, expected, component.revision)?;
+        require_component_planned(component)?;
+        let product = self
+            .products
+            .get(component.product_id)
+            .await?
+            .ok_or_else(|| CoreError::not_found(PRODUCT, component.product_id))?;
+        ensure_resolvable(&product, &input.amount, "amount")?;
+        let planned = nutrition_for(&product, &component.amount);
+        component.snapshot = Some(MealPlanComponentSnapshot {
+            product_name: product.name.clone(),
+            nutrition: planned.facts,
+            quality: planned.quality,
+        });
+        component.status = MealPlanStatus::Eaten;
+        component.resolved_by = Some(input.actor_id);
+        component.resolved_at = Some(self.clock.now());
+        component.revision = component.revision.next();
+
+        let actual = nutrition_for(&product, &input.amount);
+        let now = self.clock.now();
+        let record = ConsumptionRecord {
+            id: Default::default(),
+            member_id: entry.member_id,
+            product_id: component.product_id,
+            recorded_by: Some(input.actor_id),
+            meal_plan_entry_id: Some(entry.id),
+            meal_plan_component_id: Some(component.id),
+            slot: entry.slot,
+            amount: input.amount,
+            consumed_on: input.consumed_on,
+            consumed_at: input.consumed_at,
+            nutrition: actual.facts,
+            quality: actual.quality,
+            revision: Revision::INITIAL,
+            created_at: now,
+            updated_at: now,
+        };
+        let resolved_component = component.clone();
+        update_entry_progress(&mut entry, input.actor_id, now);
+        commit_component_outcome(
+            self.plans
+                .resolve_component(id, &resolved_component, expected, Some(&record))
+                .await?,
+            component_id,
+            expected,
+        )?;
+        self.get(id).await
+    }
+
+    pub async fn mark_component_not_eaten(
+        &self,
+        id: MealPlanEntryId,
+        component_id: MealPlanComponentId,
+        expected: Revision,
+        actor_id: crate::domain::UserId,
+    ) -> Result<MealPlanEntryView> {
+        let entry = self.get_entry(id).await?;
+        ensure_due(&*self.clock, entry.planned_on)?;
+        self.mark_component_not_eaten_unchecked(id, component_id, expected, actor_id)
+            .await
+    }
+
+    pub async fn mark_component_not_eaten_unchecked(
+        &self,
+        id: MealPlanEntryId,
+        component_id: MealPlanComponentId,
+        expected: Revision,
+        actor_id: crate::domain::UserId,
+    ) -> Result<MealPlanEntryView> {
+        let mut entry = self.get_entry(id).await?;
+        let component = entry
+            .components
+            .iter_mut()
+            .find(|component| component.id == component_id)
+            .ok_or_else(|| CoreError::not_found("meal plan component", component_id))?;
+        require_component_revision(component_id, expected, component.revision)?;
+        require_component_planned(component)?;
+        let product = self
+            .products
+            .get(component.product_id)
+            .await?
+            .ok_or_else(|| CoreError::not_found(PRODUCT, component.product_id))?;
+        let planned = nutrition_for(&product, &component.amount);
+        component.snapshot = Some(MealPlanComponentSnapshot {
+            product_name: product.name,
+            nutrition: planned.facts,
+            quality: planned.quality,
+        });
+        let now = self.clock.now();
+        component.status = MealPlanStatus::NotEaten;
+        component.resolved_by = Some(actor_id);
+        component.resolved_at = Some(now);
+        component.revision = component.revision.next();
+        let resolved_component = component.clone();
+        update_entry_progress(&mut entry, actor_id, now);
+        commit_component_outcome(
+            self.plans
+                .resolve_component(id, &resolved_component, expected, None)
+                .await?,
+            component_id,
+            expected,
+        )?;
+        self.get(id).await
+    }
+
+    pub async fn reopen_component(
+        &self,
+        id: MealPlanEntryId,
+        component_id: MealPlanComponentId,
+        expected: Revision,
+        actor_id: crate::domain::UserId,
+    ) -> Result<MealPlanEntryView> {
+        let entry = self.get_entry(id).await?;
+        let component = entry
+            .components
+            .iter()
+            .find(|component| component.id == component_id)
+            .ok_or_else(|| CoreError::not_found("meal plan component", component_id))?;
+        require_component_revision(component_id, expected, component.revision)?;
+        if component.status == MealPlanStatus::Planned {
+            return Err(CoreError::conflict("This item has not been resolved yet."));
+        }
+        commit_component_outcome(
+            self.plans
+                .reopen_component(id, component_id, expected, actor_id)
+                .await?,
+            component_id,
+            expected,
+        )?;
+        self.get(id).await
     }
 
     pub async fn mark_not_eaten(
@@ -235,6 +412,12 @@ impl MealPlanService {
         require_planned(&entry)?;
         self.freeze(&mut entry).await?;
         let now = self.clock.now();
+        for component in &mut entry.components {
+            component.status = MealPlanStatus::NotEaten;
+            component.resolved_by = Some(actor_id);
+            component.resolved_at = Some(now);
+            component.revision = component.revision.next();
+        }
         entry.status = MealPlanStatus::NotEaten;
         entry.resolved_by = Some(actor_id);
         entry.resolved_at = Some(now);
@@ -268,7 +451,7 @@ impl MealPlanService {
     ) -> Result<MealPlanEntryView> {
         let mut entry = self.get_entry(id).await?;
         require_revision(id, expected, entry.revision)?;
-        require_planned(&entry)?;
+        require_pending_components(&entry)?;
         validate_actual_components(&entry, &input)?;
         self.freeze(&mut entry).await?;
 
@@ -279,8 +462,12 @@ impl MealPlanService {
             .map(|actual| (actual.component_id, actual.amount))
             .collect();
         let now = self.clock.now();
-        let mut records = Vec::with_capacity(entry.components.len());
-        for component in &entry.components {
+        let mut records = Vec::with_capacity(input.components.len());
+        for component in entry
+            .components
+            .iter()
+            .filter(|component| component.status == MealPlanStatus::Planned)
+        {
             let product = products
                 .get(&component.product_id)
                 .ok_or_else(|| CoreError::not_found(PRODUCT, component.product_id))?;
@@ -310,12 +497,16 @@ impl MealPlanService {
             });
         }
 
-        entry.status = MealPlanStatus::Eaten;
-        entry.resolved_by = Some(input.actor_id);
-        entry.resolved_at = Some(now);
-        entry.updated_by = input.actor_id;
-        entry.updated_at = now;
-        entry.revision = entry.revision.next();
+        for component in &mut entry.components {
+            if component.status == MealPlanStatus::Planned {
+                component.status = MealPlanStatus::Eaten;
+                component.resolved_by = Some(input.actor_id);
+                component.resolved_at = Some(now);
+                component.revision = component.revision.next();
+            }
+        }
+
+        update_entry_progress(&mut entry, input.actor_id, now);
         commit_outcome(
             self.plans.resolve(&entry, expected, &records).await?,
             id,
@@ -335,6 +526,10 @@ impl MealPlanService {
         require_resolved(&entry)?;
         for component in &mut entry.components {
             component.snapshot = None;
+            component.status = MealPlanStatus::Planned;
+            component.resolved_by = None;
+            component.resolved_at = None;
+            component.revision = component.revision.next();
         }
         entry.status = MealPlanStatus::Planned;
         entry.resolved_by = None;
@@ -376,7 +571,8 @@ impl MealPlanService {
         }
 
         let mut presented_by_date: BTreeMap<Date, Vec<MealPlanEntryView>> = BTreeMap::new();
-        let mut items_by_slot: HashMap<(Date, MealSlot), Vec<MealItem>> = HashMap::new();
+        let mut items_by_slot: HashMap<(Date, MealSlot), Vec<(MealItemOrder, MealItem)>> =
+            HashMap::new();
         for entry in entries {
             let linked = records_by_entry
                 .get(&entry.id)
@@ -384,9 +580,9 @@ impl MealPlanService {
                 .unwrap_or(&[]);
             let date = entry.planned_on;
             let view = self.present(entry, linked).await?;
-            for (item_date, item) in items_for_entry(&view) {
+            for (item_date, order, item) in items_for_entry(&view) {
                 let bucket = (item_date, view.entry.slot);
-                items_by_slot.entry(bucket).or_default().push(item);
+                items_by_slot.entry(bucket).or_default().push((order, item));
             }
             presented_by_date.entry(date).or_default().push(view);
         }
@@ -414,7 +610,7 @@ impl MealPlanService {
             items_by_slot
                 .entry(bucket)
                 .or_default()
-                .push(logged_item(record, product_name));
+                .push((record.id.as_uuid(), logged_item(record, product_name)));
         }
 
         let mut days = Vec::with_capacity(7);
@@ -426,21 +622,19 @@ impl MealPlanService {
                     view.entry.slot.order(),
                     view.entry.planned_time,
                     view.entry.created_at,
+                    view.entry.id,
                 )
             });
             let actual = summary(records.iter().filter(|record| record.consumed_on == date));
-            let remaining_planned = summary_from_views(
-                day_entries
-                    .iter()
-                    .filter(|view| view.entry.status == MealPlanStatus::Planned),
-            );
+            let remaining_planned = summary_from_views(day_entries.iter());
             let projected = combine_summaries(&actual, &remaining_planned);
             let target = resolve_on(&targets, date).map(|target| target.goals.clone());
             let slots = MealSlot::ALL
                 .into_iter()
                 .map(|slot| {
                     let mut items = items_by_slot.remove(&(date, slot)).unwrap_or_default();
-                    items.sort_by_key(|item| (item.at.unwrap_or(Time::MIDNIGHT), item.product_name.clone()));
+                    items.sort_by_key(|(order, _)| *order);
+                    let items: Vec<_> = items.into_iter().map(|(_, item)| item).collect();
                     let nutrition = item_summary(&items);
                     MealSlotView {
                         slot,
@@ -551,11 +745,7 @@ impl MealPlanService {
         entry: MealPlanEntry,
         records: &[ConsumptionRecord],
     ) -> Result<MealPlanEntryView> {
-        let products = if entry.status == MealPlanStatus::Planned {
-            self.products_for_entry(&entry).await?
-        } else {
-            HashMap::new()
-        };
+        let products = self.products_for_entry(&entry).await?;
         let records_by_component: HashMap<_, _> = records
             .iter()
             .filter_map(|record| record.meal_plan_component_id.map(|id| (id, record.clone())))
@@ -620,19 +810,99 @@ fn make_components(input: Vec<NewMealPlanComponent>) -> Vec<MealPlanComponent> {
         .into_iter()
         .enumerate()
         .map(|(position, component)| MealPlanComponent {
-            id: Default::default(),
+            id: component.id.unwrap_or_default(),
             product_id: component.product_id,
             amount: component.amount,
             position: i32::try_from(position).unwrap_or(i32::MAX),
             snapshot: None,
+            status: MealPlanStatus::Planned,
+            resolved_by: None,
+            resolved_at: None,
+            revision: Revision::INITIAL,
+            display_order: uuid::Uuid::now_v7(),
         })
         .collect()
+}
+
+fn merge_components(
+    existing: &[MealPlanComponent],
+    input: Vec<NewMealPlanComponent>,
+) -> Result<Vec<MealPlanComponent>> {
+    let mut used = HashSet::new();
+    let mut errors = ValidationErrors::new();
+    let components = input
+        .into_iter()
+        .enumerate()
+        .map(|(position, component)| {
+            let Some(id) = component.id else {
+                return MealPlanComponent {
+                    id: Default::default(),
+                    product_id: component.product_id,
+                    amount: component.amount,
+                    position: i32::try_from(position).unwrap_or(i32::MAX),
+                    snapshot: None,
+                    status: MealPlanStatus::Planned,
+                    resolved_by: None,
+                    resolved_at: None,
+                    revision: Revision::INITIAL,
+                    display_order: uuid::Uuid::now_v7(),
+                };
+            };
+            if !used.insert(id) {
+                errors.push(
+                    format!("components.{position}.id"),
+                    "Use each component once",
+                );
+            }
+            let Some(previous) = existing.iter().find(|candidate| candidate.id == id) else {
+                errors.push(
+                    format!("components.{position}.id"),
+                    "That component does not belong to this meal",
+                );
+                return MealPlanComponent {
+                    id,
+                    product_id: component.product_id,
+                    amount: component.amount,
+                    position: i32::try_from(position).unwrap_or(i32::MAX),
+                    snapshot: None,
+                    status: MealPlanStatus::Planned,
+                    resolved_by: None,
+                    resolved_at: None,
+                    revision: Revision::INITIAL,
+                    display_order: uuid::Uuid::now_v7(),
+                };
+            };
+            let position = i32::try_from(position).unwrap_or(i32::MAX);
+            let changed = previous.product_id != component.product_id
+                || previous.amount != component.amount
+                || previous.position != position;
+            MealPlanComponent {
+                id,
+                product_id: component.product_id,
+                amount: component.amount,
+                position,
+                snapshot: previous.snapshot.clone(),
+                status: previous.status,
+                resolved_by: previous.resolved_by,
+                resolved_at: previous.resolved_at,
+                revision: if changed {
+                    previous.revision.next()
+                } else {
+                    previous.revision
+                },
+                display_order: previous.display_order,
+            }
+        })
+        .collect();
+    errors.into_result()?;
+    Ok(components)
 }
 
 fn validate_actual_components(entry: &MealPlanEntry, input: &ConfirmMealPlanEntry) -> Result<()> {
     let expected: HashSet<_> = entry
         .components
         .iter()
+        .filter(|component| component.status == MealPlanStatus::Planned)
         .map(|component| component.id)
         .collect();
     let actual: HashSet<_> = input
@@ -653,6 +923,20 @@ fn validate_actual_components(entry: &MealPlanEntry, input: &ConfirmMealPlanEntr
         }
     }
     errors.into_result()
+}
+
+fn require_pending_components(entry: &MealPlanEntry) -> Result<()> {
+    if entry
+        .components
+        .iter()
+        .any(|component| component.status == MealPlanStatus::Planned)
+    {
+        Ok(())
+    } else {
+        Err(CoreError::conflict(
+            "This meal has no remaining planned items.",
+        ))
+    }
 }
 
 fn ensure_not_past(clock: &dyn Clock, planned_on: Date) -> Result<()> {
@@ -704,6 +988,84 @@ fn require_revision(id: MealPlanEntryId, expected: Revision, actual: Revision) -
     }
 }
 
+fn require_component_revision(
+    id: MealPlanComponentId,
+    expected: Revision,
+    actual: Revision,
+) -> Result<()> {
+    if expected == actual {
+        Ok(())
+    } else {
+        Err(CoreError::RevisionMismatch {
+            resource: "meal plan component",
+            id: id.to_string(),
+            expected,
+            actual,
+        })
+    }
+}
+
+fn require_component_planned(component: &MealPlanComponent) -> Result<()> {
+    if component.status == MealPlanStatus::Planned {
+        Ok(())
+    } else {
+        Err(CoreError::conflict("This item has already been resolved."))
+    }
+}
+
+fn update_entry_progress(
+    entry: &mut MealPlanEntry,
+    actor_id: crate::domain::UserId,
+    now: time::OffsetDateTime,
+) {
+    let planned = entry
+        .components
+        .iter()
+        .filter(|component| component.status == MealPlanStatus::Planned)
+        .count();
+    let eaten = entry
+        .components
+        .iter()
+        .filter(|component| component.status == MealPlanStatus::Eaten)
+        .count();
+    entry.status = if planned == entry.components.len() {
+        MealPlanStatus::Planned
+    } else if eaten == entry.components.len() {
+        MealPlanStatus::Eaten
+    } else if planned == 0 && eaten == 0 {
+        MealPlanStatus::NotEaten
+    } else {
+        MealPlanStatus::PartiallyResolved
+    };
+    entry.updated_by = actor_id;
+    entry.updated_at = now;
+    entry.revision = entry.revision.next();
+    if entry.status == MealPlanStatus::Planned {
+        entry.resolved_by = None;
+        entry.resolved_at = None;
+    } else {
+        entry.resolved_by = Some(actor_id);
+        entry.resolved_at = Some(now);
+    }
+}
+
+fn commit_component_outcome(
+    outcome: UpdateOutcome,
+    id: MealPlanComponentId,
+    expected: Revision,
+) -> Result<()> {
+    match outcome {
+        UpdateOutcome::Updated => Ok(()),
+        UpdateOutcome::RevisionMismatch { actual } => Err(CoreError::RevisionMismatch {
+            resource: "meal plan component",
+            id: id.to_string(),
+            expected,
+            actual,
+        }),
+        UpdateOutcome::NotFound => Err(CoreError::not_found("meal plan component", id)),
+    }
+}
+
 fn commit_outcome(outcome: UpdateOutcome, id: MealPlanEntryId, expected: Revision) -> Result<()> {
     match outcome {
         UpdateOutcome::Updated => Ok(()),
@@ -726,10 +1088,11 @@ fn ensure_resolvable(product: &Product, amount: &ConsumedAmount, field: &str) ->
     Ok(())
 }
 
-fn items_for_entry(view: &MealPlanEntryView) -> Vec<(Date, MealItem)> {
+fn items_for_entry(view: &MealPlanEntryView) -> Vec<(Date, MealItemOrder, MealItem)> {
     view.components
         .iter()
         .map(|component| {
+            let order = component.component.display_order;
             let source = MealItemSource::Planned {
                 entry_id: view.entry.id,
                 component_id: component.component.id,
@@ -737,6 +1100,7 @@ fn items_for_entry(view: &MealPlanEntryView) -> Vec<(Date, MealItem)> {
             match &component.consumption_record {
                 Some(record) => (
                     record.consumed_on,
+                    order,
                     MealItem {
                         source,
                         record_id: Some(record.id),
@@ -748,29 +1112,34 @@ fn items_for_entry(view: &MealPlanEntryView) -> Vec<(Date, MealItem)> {
                             .then_some(component.component.amount),
                         planned_on: (record.consumed_on != view.entry.planned_on)
                             .then_some(view.entry.planned_on),
-                        at: Some(record.consumed_at.time()),
-                        nutrition: component.nutrition.clone(),
-                        quality: component.quality,
+                        at: None,
+                        consumed_at: record.consumed_at,
+                        nutrition: record.nutrition.clone(),
+                        quality: record.quality,
                         needs_attention: view.needs_attention,
-                        revision: view.entry.revision,
+                        revision: component.component.revision,
+                        record_revision: Some(record.revision),
                     },
                 ),
                 None => (
                     view.entry.planned_on,
+                    order,
                     MealItem {
                         source,
                         record_id: None,
-                        status: view.entry.status,
+                        status: component.component.status,
                         product_id: component.component.product_id,
                         product_name: component.product_name.clone(),
                         amount: component.component.amount,
                         planned_amount: None,
                         planned_on: None,
                         at: view.entry.planned_time,
+                        consumed_at: None,
                         nutrition: component.nutrition.clone(),
                         quality: component.quality,
                         needs_attention: view.needs_attention,
-                        revision: view.entry.revision,
+                        revision: component.component.revision,
+                        record_revision: None,
                     },
                 ),
             }
@@ -790,22 +1159,28 @@ fn logged_item(record: &ConsumptionRecord, product_name: String) -> MealItem {
         amount: record.amount,
         planned_amount: None,
         planned_on: None,
-        at: Some(record.consumed_at.time()),
+        at: None,
+        consumed_at: record.consumed_at,
         nutrition: record.nutrition.clone(),
         quality: record.quality,
         needs_attention: false,
         revision: record.revision,
+        record_revision: Some(record.revision),
     }
 }
 
 fn item_summary(items: &[MealItem]) -> NutritionSummary {
+    let included: Vec<_> = items
+        .iter()
+        .filter(|item| item.status != MealPlanStatus::NotEaten)
+        .collect();
     NutritionSummary {
-        nutrition: sum_nutrition(items.iter().map(|item| &item.nutrition)),
-        unknown_count: items
+        nutrition: sum_nutrition(included.iter().map(|item| &item.nutrition)),
+        unknown_count: included
             .iter()
             .filter(|item| item.quality == NutritionQuality::Unknown)
             .count() as i64,
-        partial_count: items
+        partial_count: included
             .iter()
             .filter(|item| item.quality == NutritionQuality::Partial)
             .count() as i64,
@@ -842,7 +1217,21 @@ fn summary<'a>(records: impl Iterator<Item = &'a ConsumptionRecord>) -> Nutritio
 }
 
 fn summary_from_views<'a>(views: impl Iterator<Item = &'a MealPlanEntryView>) -> NutritionSummary {
-    combine_many(views.map(|view| &view.planned))
+    let components: Vec<_> = views
+        .flat_map(|view| view.components.iter())
+        .filter(|component| component.component.status == MealPlanStatus::Planned)
+        .collect();
+    NutritionSummary {
+        nutrition: sum_nutrition(components.iter().map(|component| &component.nutrition)),
+        unknown_count: components
+            .iter()
+            .filter(|component| component.quality == NutritionQuality::Unknown)
+            .count() as i64,
+        partial_count: components
+            .iter()
+            .filter(|component| component.quality == NutritionQuality::Partial)
+            .count() as i64,
+    }
 }
 
 fn combine_many<'a>(summaries: impl Iterator<Item = &'a NutritionSummary>) -> NutritionSummary {

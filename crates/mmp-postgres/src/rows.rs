@@ -368,7 +368,7 @@ pub struct ConsumptionRecordRow {
     pub amount_value: Decimal,
     pub amount_unit: Option<String>,
     pub consumed_on: Date,
-    pub consumed_at: OffsetDateTime,
+    pub consumed_at: Option<OffsetDateTime>,
     pub nutrition_basis_amount: Option<Decimal>,
     pub nutrition_basis_unit: Option<String>,
     pub energy_kcal: Option<Decimal>,

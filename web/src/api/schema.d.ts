@@ -228,6 +228,54 @@ export interface paths {
         patch: operations["updateMealPlanEntry"];
         trace?: never;
     };
+    "/api/v1/meal-plan-entries/{id}/components/{component_id}/eaten": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["markMealPlanComponentEaten"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/meal-plan-entries/{id}/components/{component_id}/not-eaten": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["markMealPlanComponentNotEaten"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/meal-plan-entries/{id}/components/{component_id}/reopen": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["reopenMealPlanComponent"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/meal-plan-entries/{id}/eaten": {
         parameters: {
             query?: never;
@@ -688,7 +736,7 @@ export interface components {
         ConsumptionRecordDto: {
             amount: components["schemas"]["AmountDto"];
             /** Format: date-time */
-            consumed_at: string;
+            consumed_at?: string | null;
             /**
              * Format: date
              * @example 2026-08-22
@@ -871,10 +919,17 @@ export interface components {
             /** Format: uuid */
             user_id: string;
         };
+        MarkMealPlanComponentEatenRequest: {
+            amount: components["schemas"]["AmountDto"];
+            /** Format: date-time */
+            consumed_at?: string | null;
+            /** Format: date */
+            consumed_on: string;
+        };
         MarkMealPlanEatenRequest: {
             components: components["schemas"]["ActualMealPlanComponentRequest"][];
             /** Format: date-time */
-            consumed_at: string;
+            consumed_at?: string | null;
             /** Format: date */
             consumed_on: string;
         };
@@ -882,6 +937,8 @@ export interface components {
             amount: components["schemas"]["AmountDto"];
             /** @example 18:30 */
             at?: string | null;
+            /** Format: date-time */
+            consumed_at?: string | null;
             /** Format: uuid */
             linked_record_id?: string | null;
             needs_attention: boolean;
@@ -893,6 +950,8 @@ export interface components {
             product_id: string;
             product_name: string;
             quality: components["schemas"]["NutritionQuality"];
+            /** Format: int64 */
+            record_revision?: number | null;
             /** Format: int64 */
             revision: number;
             status: components["schemas"]["MealPlanStatus"];
@@ -922,9 +981,14 @@ export interface components {
             product_id: string;
             product_name: string;
             quality: components["schemas"]["NutritionQuality"];
+            /** Format: int64 */
+            revision: number;
+            status: components["schemas"]["MealPlanStatus"];
         };
         MealPlanComponentRequest: {
             amount: components["schemas"]["AmountDto"];
+            /** Format: uuid */
+            id?: string | null;
             /** Format: uuid */
             product_id: string;
         };
@@ -969,7 +1033,7 @@ export interface components {
             updated_by: string;
         };
         /** @enum {string} */
-        MealPlanStatus: "planned" | "eaten" | "not_eaten";
+        MealPlanStatus: "planned" | "partially_resolved" | "eaten" | "not_eaten";
         MealPlanWeekDto: {
             actual: components["schemas"]["NutritionSummaryDto"];
             days: components["schemas"]["MealPlanDayDto"][];
@@ -1975,6 +2039,82 @@ export interface operations {
                 "application/json": components["schemas"]["UpdateMealPlanEntryRequest"];
             };
         };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MealPlanEntryDto"];
+                };
+            };
+        };
+    };
+    markMealPlanComponentEaten: {
+        parameters: {
+            query?: never;
+            header: {
+                "If-Match": string;
+            };
+            path: {
+                id: string;
+                component_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MarkMealPlanComponentEatenRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MealPlanEntryDto"];
+                };
+            };
+        };
+    };
+    markMealPlanComponentNotEaten: {
+        parameters: {
+            query?: never;
+            header: {
+                "If-Match": string;
+            };
+            path: {
+                id: string;
+                component_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MealPlanEntryDto"];
+                };
+            };
+        };
+    };
+    reopenMealPlanComponent: {
+        parameters: {
+            query?: never;
+            header: {
+                "If-Match": string;
+            };
+            path: {
+                id: string;
+                component_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
         responses: {
             200: {
                 headers: {

@@ -8,13 +8,13 @@ import Stack from '@mui/material/Stack';
 import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
 import { useState, type FormEvent } from 'react';
-import { ApiError, type MealItem, type MealSlot, type Product } from '../../api/client';
+import { ApiError, type MealItem, type MealPlanEntry, type MealSlot, type Product } from '../../api/client';
 import {
   useDeleteConsumption,
   useDeleteMealPlanEntry,
-  useMarkMealPlanNotEaten,
+  useMarkMealPlanComponentNotEaten,
   useProduct,
-  useReopenMealPlanEntry,
+  useReopenMealPlanComponent,
   useUpdateConsumption,
   useUpdateMealPlanEntry,
 } from '../../api/queries';
@@ -28,7 +28,7 @@ import {
   validateAmountDraft,
   type AmountDraft,
 } from './AmountFields';
-import { combineDateTime, nowTime } from './date';
+import { combineDateTime, extractTime } from './date';
 import { ProductPicker } from './ProductPicker';
 import { SLOTS } from './slots';
 
@@ -46,6 +46,8 @@ export function EditFoodDialog({
   date,
   slot,
   memberId,
+  entry = null,
+  workspace = 'today',
 }: {
   open: boolean;
   onClose: () => void;
@@ -53,14 +55,16 @@ export function EditFoodDialog({
   date: string;
   slot: MealSlot;
   memberId: string;
+  entry?: MealPlanEntry | null;
+  workspace?: 'today' | 'planner';
 }) {
   const product = useProduct(item.product_id);
   const updateConsumption = useUpdateConsumption();
   const deleteConsumption = useDeleteConsumption();
   const updateEntry = useUpdateMealPlanEntry();
   const deleteEntry = useDeleteMealPlanEntry();
-  const markNotEaten = useMarkMealPlanNotEaten();
-  const reopenEntry = useReopenMealPlanEntry();
+  const markNotEaten = useMarkMealPlanComponentNotEaten();
+  const reopenComponent = useReopenMealPlanComponent();
 
   const isLogged = item.kind === 'logged';
   const isPlanned = item.kind === 'planned';
@@ -70,7 +74,7 @@ export function EditFoodDialog({
     product: null as Product | null,
     amount: amountToDraft(item),
     date,
-    time: item.at ?? nowTime(),
+    time: item.consumed_at ? extractTime(item.consumed_at) : item.at ?? '',
     slot,
   }));
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -83,7 +87,7 @@ export function EditFoodDialog({
     updateEntry.isPending ||
     deleteEntry.isPending ||
     markNotEaten.isPending ||
-    reopenEntry.isPending;
+    reopenComponent.isPending;
 
   function handleClose() {
     if (busy) return;
@@ -125,11 +129,11 @@ export function EditFoodDialog({
     try {
       await updateConsumption.mutateAsync({
         id: item.linked_record_id,
-        revision: item.revision,
+        revision: item.record_revision ?? item.revision,
         body: {
           amount,
           consumed_on: draft.date,
-          consumed_at: combineDateTime(draft.date, draft.time || nowTime()),
+          consumed_at: draft.time ? combineDateTime(draft.date, draft.time) : null,
           ...(isLogged ? { slot: draft.slot } : {}),
         },
       });
@@ -152,14 +156,18 @@ export function EditFoodDialog({
     if (!amount || !chosenProduct) return;
 
     try {
+      const components = entry?.components.map((component) =>
+        component.id === item.component_id
+          ? { id: component.id, product_id: chosenProduct.id, amount }
+          : { id: component.id, product_id: component.product_id, amount: component.amount },
+      ) ?? [{ product_id: chosenProduct.id, amount }];
       await updateEntry.mutateAsync({
         id: item.entry_id,
-        revision: item.revision,
+        revision: entry?.revision ?? item.revision,
         body: {
           planned_on: draft.date,
-          planned_time: draft.time || null,
           slot: draft.slot,
-          components: [{ product_id: chosenProduct.id, amount }],
+          components,
         },
       });
       handleClose();
@@ -177,7 +185,22 @@ export function EditFoodDialog({
           memberId,
         });
       } else {
-        await deleteEntry.mutateAsync({ id: item.entry_id, revision: item.revision });
+        const remaining = entry?.components.filter((component) => component.id !== item.component_id) ?? [];
+        if (remaining.length === 0) {
+          await deleteEntry.mutateAsync({ id: item.entry_id, revision: entry?.revision ?? item.revision });
+        } else {
+          await updateEntry.mutateAsync({
+            id: item.entry_id,
+            revision: entry?.revision ?? item.revision,
+            body: {
+              components: remaining.map((component) => ({
+                id: component.id,
+                product_id: component.product_id,
+                amount: component.amount,
+              })),
+            },
+          });
+        }
       }
       handleClose();
     } catch (caught) {
@@ -188,7 +211,11 @@ export function EditFoodDialog({
   async function onNotEaten() {
     if (item.kind !== 'planned') return;
     try {
-      await markNotEaten.mutateAsync({ id: item.entry_id, revision: item.revision });
+      await markNotEaten.mutateAsync({
+        id: item.entry_id,
+        componentId: item.component_id,
+        revision: item.revision,
+      });
       handleClose();
     } catch (caught) {
       report(caught, 'Could not update.');
@@ -198,7 +225,11 @@ export function EditFoodDialog({
   async function onUndo() {
     if (item.kind !== 'planned') return;
     try {
-      await reopenEntry.mutateAsync({ id: item.entry_id, revision: item.revision });
+      await reopenComponent.mutateAsync({
+        id: item.entry_id,
+        componentId: item.component_id,
+        revision: item.revision,
+      });
       handleClose();
     } catch (caught) {
       report(caught, 'Could not undo.');
@@ -215,6 +246,23 @@ export function EditFoodDialog({
         <DialogActions sx={{ justifyContent: 'space-between', px: 3, pb: 2 }}>
           <Button onClick={onUndo} disabled={busy}>
             {busy ? 'Reopening…' : 'Reopen to plan'}
+          </Button>
+          <Button onClick={handleClose}>Close</Button>
+        </DialogActions>
+      </FormDialog>
+    );
+  }
+
+  if (workspace === 'today' && item.status === 'planned' && item.kind === 'planned') {
+    return (
+      <FormDialog open={open} onClose={handleClose} maxWidth="sm" fullWidth>
+        <DialogTitle>{item.product_name}</DialogTitle>
+        <DialogContent>
+          <Typography color="text.secondary">This item is still planned.</Typography>
+        </DialogContent>
+        <DialogActions sx={{ justifyContent: 'space-between', px: 3, pb: 2 }}>
+          <Button color="warning" onClick={onNotEaten} disabled={busy}>
+            Not eaten
           </Button>
           <Button onClick={handleClose}>Close</Button>
         </DialogActions>
@@ -267,14 +315,16 @@ export function EditFoodDialog({
                 slotProps={{ inputLabel: { shrink: true } }}
                 fullWidth
               />
-              <TextField
-                type="time"
-                label={linked ? 'Time eaten' : 'Time'}
-                value={draft.time}
-                onChange={(e) => setDraft({ ...draft, time: e.target.value })}
-                slotProps={{ inputLabel: { shrink: true } }}
-                fullWidth
-              />
+              {linked ? (
+                <TextField
+                  type="time"
+                  label="Time eaten"
+                  value={draft.time}
+                  onChange={(e) => setDraft({ ...draft, time: e.target.value })}
+                  slotProps={{ inputLabel: { shrink: true } }}
+                  fullWidth
+                />
+              ) : null}
             </Stack>
 
             {isLogged || !linked ? (
@@ -298,9 +348,11 @@ export function EditFoodDialog({
           <Stack direction="row" spacing={1}>
             {isPlanned && !linked ? (
               <>
-                <Button color="warning" onClick={onNotEaten} disabled={busy}>
-                  Not eaten
-                </Button>
+                {workspace === 'today' ? (
+                  <Button color="warning" onClick={onNotEaten} disabled={busy}>
+                    Not eaten
+                  </Button>
+                ) : null}
                 <Button color="error" onClick={onRemove} disabled={busy}>
                   Remove
                 </Button>

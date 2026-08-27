@@ -70,8 +70,13 @@ export function nowTime(): string {
   return formatTimeOfDay(new Date());
 }
 
-export function extractTime(iso: string): string {
-  return formatTimeOfDay(new Date(iso));
+export function extractTime(iso: string, timeZone?: string): string {
+  return new Intl.DateTimeFormat('en-GB', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+    timeZone,
+  }).format(new Date(iso));
 }
 
 export function combineDateTime(date: string, time: string): string {

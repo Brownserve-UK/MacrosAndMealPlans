@@ -4,11 +4,11 @@ use std::str::FromStr;
 use anyhow::{Context, bail};
 use mmp_core::CoreError;
 use mmp_core::domain::{
-    AccessScope, ActualMealPlanComponent, ConfirmMealPlanEntry, ConsumedAmount,
-    ConsumptionRecordId, HouseholdMember, HouseholdMemberId, IngredientId, MealPlanEntryId,
-    MealPlanStatus, MealSlot, NewConsumptionRecord, NewHouseholdMember, NewMealPlanComponent,
-    NewMealPlanEntry, NewNutritionTarget, NewProduct, NewUser, NutritionFacts, NutritionGoals,
-    ProductId, Provenance, Quantity, Role, Unit, User, UserId,
+    AccessScope, ActualMealPlanComponent, ConfirmMealPlanComponent, ConfirmMealPlanEntry,
+    ConsumedAmount, ConsumptionRecordId, HouseholdMember, HouseholdMemberId, IngredientId,
+    MealPlanEntryId, MealPlanStatus, MealSlot, NewConsumptionRecord, NewHouseholdMember,
+    NewMealPlanComponent, NewMealPlanEntry, NewNutritionTarget, NewProduct, NewUser,
+    NutritionFacts, NutritionGoals, ProductId, Provenance, Quantity, Role, Unit, User, UserId,
 };
 use mmp_server::state::AppState;
 use rust_decimal::Decimal;
@@ -66,6 +66,7 @@ struct Loader<'a> {
 #[derive(Clone, Copy)]
 enum Outcome {
     Planned,
+    PartiallyEaten { component_index: usize },
     Eaten { varied: bool },
     NotEaten,
 }
@@ -341,7 +342,7 @@ impl Loader<'_> {
         self.ensure_meal(
             wednesday,
             MealSlot::Breakfast,
-            Outcome::Eaten { varied: true },
+            Outcome::PartiallyEaten { component_index: 1 },
         )
         .await?;
         self.ensure_meal(wednesday, MealSlot::Lunch, Outcome::Eaten { varied: true })
@@ -400,7 +401,7 @@ impl Loader<'_> {
         .await?;
 
         let wednesday = self.week_start + Duration::days(2);
-        self.ensure_meal(wednesday, MealSlot::Breakfast, Outcome::NotEaten)
+        self.ensure_meal(wednesday, MealSlot::Breakfast, Outcome::Planned)
             .await?;
         self.ensure_meal(wednesday, MealSlot::Dinner, Outcome::Planned)
             .await?;
@@ -443,6 +444,7 @@ impl Loader<'_> {
 
         let desired = match outcome {
             Outcome::Planned => MealPlanStatus::Planned,
+            Outcome::PartiallyEaten { .. } => MealPlanStatus::PartiallyResolved,
             Outcome::Eaten { .. } => MealPlanStatus::Eaten,
             Outcome::NotEaten => MealPlanStatus::NotEaten,
         };
@@ -459,6 +461,29 @@ impl Loader<'_> {
 
         match outcome {
             Outcome::Planned => {}
+            Outcome::PartiallyEaten { component_index } => {
+                let component = view
+                    .components
+                    .get(component_index)
+                    .context("sample partial meal component does not exist")?;
+                self.state
+                    .meal_plan
+                    .mark_component_eaten_unchecked(
+                        view.entry.id,
+                        component.component.id,
+                        component.component.revision,
+                        ConfirmMealPlanComponent {
+                            consumed_on: date,
+                            consumed_at: Some(
+                                PrimitiveDateTime::new(date, slot_time(slot)).assume_utc(),
+                            ),
+                            amount: component.component.amount,
+                            actor_id: self.actor.id,
+                        },
+                    )
+                    .await?;
+                self.report.meals_resolved += 1;
+            }
             Outcome::NotEaten => {
                 self.state
                     .meal_plan
@@ -488,7 +513,9 @@ impl Loader<'_> {
                         view.entry.revision,
                         ConfirmMealPlanEntry {
                             consumed_on: date,
-                            consumed_at: PrimitiveDateTime::new(date, slot_time(slot)).assume_utc(),
+                            consumed_at: Some(
+                                PrimitiveDateTime::new(date, slot_time(slot)).assume_utc(),
+                            ),
                             components,
                             actor_id: self.actor.id,
                         },
@@ -683,6 +710,7 @@ fn components_for(slot: MealSlot) -> Vec<NewMealPlanComponent> {
     values
         .into_iter()
         .map(|(key, amount)| NewMealPlanComponent {
+            id: None,
             product_id: product_id(key),
             amount,
         })

@@ -206,7 +206,7 @@ pub struct ConsumptionRecord {
     pub slot: MealSlot,
     pub amount: ConsumedAmount,
     pub consumed_on: Date,
-    pub consumed_at: OffsetDateTime,
+    pub consumed_at: Option<OffsetDateTime>,
     pub nutrition: NutritionFacts,
     pub quality: NutritionQuality,
     pub revision: Revision,
@@ -241,7 +241,7 @@ pub struct ConsumptionRecordPatch {
     pub slot: Option<MealSlot>,
     pub amount: Option<ConsumedAmount>,
     pub consumed_on: Option<Date>,
-    pub consumed_at: Option<OffsetDateTime>,
+    pub consumed_at: Option<Option<OffsetDateTime>>,
 }
 
 impl ConsumptionRecordPatch {

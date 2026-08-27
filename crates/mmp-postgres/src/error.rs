@@ -54,7 +54,7 @@ const TABLES: [(&str, &str); 9] = [
     ("nutrition_target_", "nutrition target"),
 ];
 
-const UNIQUE_CONSTRAINTS: [(&str, &str, &str); 16] = [
+const UNIQUE_CONSTRAINTS: [(&str, &str, &str); 17] = [
     ("ingredient_name_unique", "ingredient", "name"),
     ("ingredient_seed_key_unique", "ingredient", "seed_key"),
     ("ingredient_pkey", "ingredient", "id"),
@@ -71,6 +71,11 @@ const UNIQUE_CONSTRAINTS: [(&str, &str, &str); 16] = [
     ),
     ("consumption_record_pkey", "consumption record", "id"),
     ("meal_plan_entry_pkey", "meal plan entry", "id"),
+    (
+        "meal_plan_entry_member_day_slot_unique",
+        "meal plan entry",
+        "slot",
+    ),
     ("meal_plan_component_pkey", "meal plan component", "id"),
     (
         "consumption_record_meal_plan_component_unique",

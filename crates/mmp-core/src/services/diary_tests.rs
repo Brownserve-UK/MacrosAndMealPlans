@@ -103,9 +103,35 @@ async fn records_a_consumption_at_the_initial_revision_with_scaled_nutrition() {
 
     assert_eq!(recorded.revision, Revision::INITIAL);
     assert_eq!(recorded.slot, MealSlot::Breakfast);
+    assert_eq!(recorded.consumed_at, None);
     assert_eq!(recorded.nutrition.energy_kcal, Some(Decimal::new(300, 0)));
     assert_eq!(recorded.quality, NutritionQuality::Known);
     assert_eq!(h.records.count(), 1);
+}
+
+#[tokio::test]
+async fn an_explicit_consumption_time_can_be_cleared() {
+    let h = harness();
+    let product = seed_product(&h, known_nutrition());
+    let member = HouseholdMemberId::new();
+    let mut input = measure_150g(product.id, member);
+    input.consumed_at = Some(datetime!(2026-08-22 08:30 UTC));
+    let recorded = h.service.record(input).await.unwrap();
+
+    let amended = h
+        .service
+        .amend(
+            recorded.id,
+            recorded.revision,
+            ConsumptionRecordPatch {
+                consumed_at: Some(None),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(amended.consumed_at, None);
 }
 
 #[tokio::test]

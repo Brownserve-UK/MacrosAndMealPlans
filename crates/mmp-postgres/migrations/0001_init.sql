@@ -205,7 +205,7 @@ CREATE TABLE consumption_record (
     amount_unit   TEXT,
 
     consumed_on   DATE NOT NULL,
-    consumed_at   TIMESTAMPTZ NOT NULL,
+    consumed_at   TIMESTAMPTZ,
     slot          TEXT NOT NULL,
 
     nutrition_basis_amount  NUMERIC(16, 4),
@@ -287,13 +287,15 @@ CREATE TABLE meal_plan_entry (
     CONSTRAINT meal_plan_entry_slot_valid
         CHECK (slot IN ('breakfast', 'lunch', 'dinner', 'snacks')),
     CONSTRAINT meal_plan_entry_status_valid
-        CHECK (status IN ('planned', 'eaten', 'not_eaten')),
+        CHECK (status IN ('planned', 'partially_resolved', 'eaten', 'not_eaten')),
     CONSTRAINT meal_plan_entry_resolution_complete
         CHECK ((status = 'planned') = (resolved_by IS NULL AND resolved_at IS NULL))
 );
 
 CREATE INDEX meal_plan_entry_member_day
     ON meal_plan_entry (member_id, planned_on, slot, planned_time);
+CREATE UNIQUE INDEX meal_plan_entry_member_day_slot_unique
+    ON meal_plan_entry (member_id, planned_on, slot);
 CREATE INDEX meal_plan_entry_status_day
     ON meal_plan_entry (status, planned_on);
 
@@ -319,9 +321,18 @@ CREATE TABLE meal_plan_component (
     cholesterol_mg      NUMERIC(12, 3),
     nutrition_extra     JSONB,
     nutrition_quality   TEXT,
+    status          TEXT NOT NULL DEFAULT 'planned',
+    resolved_by     UUID REFERENCES app_user (id) ON DELETE RESTRICT,
+    resolved_at     TIMESTAMPTZ,
+    revision        BIGINT NOT NULL DEFAULT 1,
+    display_order   UUID NOT NULL,
 
     CONSTRAINT meal_plan_component_position_non_negative
         CHECK (position >= 0),
+    CONSTRAINT meal_plan_component_status_valid
+        CHECK (status IN ('planned', 'eaten', 'not_eaten')),
+    CONSTRAINT meal_plan_component_resolution_complete
+        CHECK ((status = 'planned') = (resolved_by IS NULL AND resolved_at IS NULL)),
     CONSTRAINT meal_plan_component_amount_kind_valid
         CHECK (amount_kind IN ('measure', 'servings', 'packs')),
     CONSTRAINT meal_plan_component_amount_value_positive

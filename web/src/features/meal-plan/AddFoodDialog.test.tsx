@@ -2,13 +2,14 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Product } from '../../api/client';
+import type { MealPlanEntry, Product } from '../../api/client';
 import { AddFoodDialog } from './AddFoodDialog';
 import { todayIso } from './date';
 
 const mocks = vi.hoisted(() => ({
   createConsumption: vi.fn(),
   createPlan: vi.fn(),
+  updatePlan: vi.fn(),
   milk: {
     id: '10000000-0000-0000-0000-000000000001',
     name: 'Whole Milk',
@@ -22,6 +23,7 @@ const milk = mocks.milk as Product;
 vi.mock('../../api/queries', () => ({
   useCreateConsumption: () => ({ isPending: false, mutateAsync: mocks.createConsumption }),
   useCreateMealPlanEntry: () => ({ isPending: false, mutateAsync: mocks.createPlan }),
+  useUpdateMealPlanEntry: () => ({ isPending: false, mutateAsync: mocks.updatePlan }),
   useProducts: () => ({ data: { items: [mocks.milk] }, isLoading: false }),
   useUnits: () => ({
     data: [
@@ -31,7 +33,12 @@ vi.mock('../../api/queries', () => ({
   }),
 }));
 
-function renderDialog(date: string, slot: 'breakfast' | 'lunch' | 'dinner' | 'snacks') {
+function renderDialog(
+  date: string,
+  slot: 'breakfast' | 'lunch' | 'dinner' | 'snacks',
+  kind: 'planned' | 'eaten' = 'eaten',
+  entry: MealPlanEntry | null = null,
+) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
@@ -44,6 +51,8 @@ function renderDialog(date: string, slot: 'breakfast' | 'lunch' | 'dinner' | 'sn
         memberId="20000000-0000-0000-0000-000000000001"
         date={date}
         slot={slot}
+        kind={kind}
+        entry={entry}
       />
     </QueryClientProvider>,
   );
@@ -65,15 +74,18 @@ describe('AddFoodDialog', () => {
 
   it('adds future food to the selected meal plan without offering a state toggle', async () => {
     mocks.createPlan.mockResolvedValue({});
-    const onClose = renderDialog('2999-08-26', 'dinner');
+    const onClose = renderDialog('2999-08-26', 'dinner', 'planned');
+    expect(screen.queryByLabelText(/Planned meal time/)).not.toBeInTheDocument();
     const user = await pickMilkAndEnterAmount();
 
     expect(screen.queryByRole('button', { name: 'Eaten' })).not.toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: 'Add to plan' }));
+    await user.click(screen.getByRole('button', { name: 'Add to meal' }));
+
+    expect(mocks.createPlan).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: 'Save meal' }));
 
     expect(mocks.createPlan).toHaveBeenCalledWith({
       planned_on: '2999-08-26',
-      planned_time: null,
       slot: 'dinner',
       components: [
         {
@@ -82,44 +94,97 @@ describe('AddFoodDialog', () => {
         },
       ],
     });
-    expect(onClose).not.toHaveBeenCalled();
-
-    await user.click(screen.getByRole('button', { name: 'Done' }));
     expect(onClose).toHaveBeenCalled();
   });
 
   it('logs food eaten today by default and keeps the dialog open to add more', async () => {
     mocks.createConsumption.mockResolvedValue({});
     const onClose = renderDialog(todayIso(), 'lunch');
+    expect(screen.getByLabelText('Time eaten (optional)')).toHaveValue('');
     const user = await pickMilkAndEnterAmount();
 
     await user.click(screen.getByRole('button', { name: 'Add' }));
 
-    expect(mocks.createConsumption).toHaveBeenCalledWith(
-      expect.objectContaining({
-        member_id: '20000000-0000-0000-0000-000000000001',
-        product_id: milk.id,
-        slot: 'lunch',
-        amount: { kind: 'measure', value: 250, unit: 'ml' },
-        consumed_on: todayIso(),
-      }),
-    );
+    expect(mocks.createConsumption).toHaveBeenCalledWith({
+      member_id: '20000000-0000-0000-0000-000000000001',
+      product_id: milk.id,
+      slot: 'lunch',
+      amount: { kind: 'measure', value: 250, unit: 'ml' },
+      consumed_on: todayIso(),
+      consumed_at: null,
+    });
     expect(onClose).not.toHaveBeenCalled();
     expect(screen.getByText('Whole Milk')).toBeInTheDocument();
     expect(screen.getByRole('combobox', { name: 'Product' })).toHaveValue('');
   });
 
-  it('switches to planned when eaten is not what happened', async () => {
+  it('appends planned food to the existing meal slot and retains its time', async () => {
+    mocks.updatePlan.mockResolvedValue({});
+    const entry = {
+      id: 'entry-1',
+      member_id: 'member-1',
+      planned_on: '2999-08-26',
+      planned_time: '18:30',
+      slot: 'dinner',
+      status: 'planned',
+      components: [
+        {
+          id: 'component-1',
+          product_id: 'product-existing',
+          product_name: 'Oats',
+          amount: { kind: 'measure', value: 80, unit: 'g' },
+          position: 0,
+          nutrition: {},
+          quality: 'unknown',
+          status: 'planned',
+          revision: 1,
+        },
+      ],
+      planned: { nutrition: {}, unknown_count: 1, partial_count: 0 },
+      needs_attention: false,
+      created_by: 'user-1',
+      updated_by: 'user-1',
+      revision: 4,
+      created_at: '2026-08-26T10:00:00Z',
+      updated_at: '2026-08-26T10:00:00Z',
+    } satisfies MealPlanEntry;
+    renderDialog('2999-08-26', 'dinner', 'planned', entry);
+    expect(screen.queryByLabelText(/Planned meal time/)).not.toBeInTheDocument();
+    const user = await pickMilkAndEnterAmount();
+
+    await user.click(screen.getByRole('button', { name: 'Add to meal' }));
+    await user.click(screen.getByRole('button', { name: 'Save meal' }));
+
+    expect(mocks.updatePlan).toHaveBeenCalledWith({
+      id: 'entry-1',
+      revision: 4,
+      body: {
+        components: [
+          {
+            id: 'component-1',
+            product_id: 'product-existing',
+            amount: { kind: 'measure', value: 80, unit: 'g' },
+          },
+          {
+            product_id: milk.id,
+            amount: { kind: 'measure', value: 250, unit: 'ml' },
+          },
+        ],
+      },
+    });
+    expect(mocks.createPlan).not.toHaveBeenCalled();
+  });
+
+  it('does not expose planned state in the food log', async () => {
     const onClose = renderDialog(todayIso(), 'breakfast');
     const user = await pickMilkAndEnterAmount();
 
-    await user.click(screen.getByRole('button', { name: 'Planned' }));
-    mocks.createPlan.mockResolvedValue({});
-    await user.click(screen.getByRole('button', { name: 'Add to plan' }));
+    expect(screen.queryByRole('button', { name: 'Planned' })).not.toBeInTheDocument();
+    mocks.createConsumption.mockResolvedValue({});
+    await user.click(screen.getByRole('button', { name: 'Add' }));
 
-    expect(mocks.createPlan).toHaveBeenCalledWith(
-      expect.objectContaining({ planned_on: todayIso(), slot: 'breakfast' }),
-    );
+    expect(mocks.createConsumption).toHaveBeenCalled();
+    expect(mocks.createPlan).not.toHaveBeenCalled();
     expect(onClose).not.toHaveBeenCalled();
   });
 });

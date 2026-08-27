@@ -605,6 +605,60 @@ export function useReopenMealPlanEntry() {
   });
 }
 
+export function useMarkMealPlanComponentEaten() {
+  const invalidate = useMealPlanInvalidation();
+  return useMutation({
+    mutationFn: async (input: {
+      id: string;
+      componentId: string;
+      revision: number;
+      body: components['schemas']['MarkMealPlanComponentEatenRequest'];
+    }) =>
+      unwrap(
+        await client.POST('/api/v1/meal-plan-entries/{id}/components/{component_id}/eaten', {
+          params: {
+            path: { id: input.id, component_id: input.componentId },
+            header: ifMatch(input.revision),
+          },
+          body: input.body,
+        }),
+      ),
+    onSuccess: (entry) => invalidate(entry.member_id),
+  });
+}
+
+export function useMarkMealPlanComponentNotEaten() {
+  const invalidate = useMealPlanInvalidation();
+  return useMutation({
+    mutationFn: async (input: { id: string; componentId: string; revision: number }) =>
+      unwrap(
+        await client.POST('/api/v1/meal-plan-entries/{id}/components/{component_id}/not-eaten', {
+          params: {
+            path: { id: input.id, component_id: input.componentId },
+            header: ifMatch(input.revision),
+          },
+        }),
+      ),
+    onSuccess: (entry) => invalidate(entry.member_id),
+  });
+}
+
+export function useReopenMealPlanComponent() {
+  const invalidate = useMealPlanInvalidation();
+  return useMutation({
+    mutationFn: async (input: { id: string; componentId: string; revision: number }) =>
+      unwrap(
+        await client.POST('/api/v1/meal-plan-entries/{id}/components/{component_id}/reopen', {
+          params: {
+            path: { id: input.id, component_id: input.componentId },
+            header: ifMatch(input.revision),
+          },
+        }),
+      ),
+    onSuccess: (entry) => invalidate(entry.member_id),
+  });
+}
+
 export function useNutritionTargets(memberId: string) {
   return useQuery({
     queryKey: keys.nutritionTargets(memberId),

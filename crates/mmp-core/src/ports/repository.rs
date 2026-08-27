@@ -6,8 +6,9 @@ use time::Date;
 use super::{PageRequest, Paginated};
 use crate::domain::{
     AccessScope, CatalogueOrigin, ConsumptionRecord, ConsumptionRecordId, HouseholdMember,
-    HouseholdMemberId, Ingredient, IngredientId, MealPlanEntry, MealPlanEntryId, MemberAccessGrant,
-    NutritionTarget, NutritionTargetId, Product, ProductId, Revision, Role, User, UserId,
+    HouseholdMemberId, Ingredient, IngredientId, MealPlanComponent, MealPlanComponentId,
+    MealPlanEntry, MealPlanEntryId, MemberAccessGrant, NutritionTarget, NutritionTargetId, Product,
+    ProductId, Revision, Role, User, UserId,
 };
 use crate::error::Result;
 
@@ -223,6 +224,22 @@ pub trait MealPlanRepository: Send + Sync + 'static {
     ) -> Result<UpdateOutcome>;
 
     async fn reopen(&self, entry: &MealPlanEntry, expected: Revision) -> Result<UpdateOutcome>;
+
+    async fn resolve_component(
+        &self,
+        entry_id: MealPlanEntryId,
+        component: &MealPlanComponent,
+        expected: Revision,
+        consumption: Option<&ConsumptionRecord>,
+    ) -> Result<UpdateOutcome>;
+
+    async fn reopen_component(
+        &self,
+        entry_id: MealPlanEntryId,
+        component_id: MealPlanComponentId,
+        expected: Revision,
+        actor_id: UserId,
+    ) -> Result<UpdateOutcome>;
 }
 
 #[async_trait]

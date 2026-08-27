@@ -27,8 +27,8 @@ vi.mock('../../api/queries', () => ({
   useDeleteConsumption: () => ({ isPending: false, mutateAsync: mocks.deleteConsumption }),
   useUpdateMealPlanEntry: () => ({ isPending: false, mutateAsync: mocks.updateEntry }),
   useDeleteMealPlanEntry: () => ({ isPending: false, mutateAsync: mocks.deleteEntry }),
-  useMarkMealPlanNotEaten: () => ({ isPending: false, mutateAsync: mocks.markNotEaten }),
-  useReopenMealPlanEntry: () => ({ isPending: false, mutateAsync: mocks.reopen }),
+  useMarkMealPlanComponentNotEaten: () => ({ isPending: false, mutateAsync: mocks.markNotEaten }),
+  useReopenMealPlanComponent: () => ({ isPending: false, mutateAsync: mocks.reopen }),
   useUnits: () => ({
     data: [
       { code: 'g', label: 'gram', dimension: 'mass', convertible: true },
@@ -97,7 +97,11 @@ describe('EditFoodDialog', () => {
 
     await user.click(screen.getByRole('button', { name: 'Not eaten' }));
 
-    expect(mocks.markNotEaten).toHaveBeenCalledWith({ id: 'entry-1', revision: 3 });
+    expect(mocks.markNotEaten).toHaveBeenCalledWith({
+      id: 'entry-1',
+      componentId: 'component-1',
+      revision: 3,
+    });
     expect(onClose).toHaveBeenCalled();
   });
 

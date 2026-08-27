@@ -6,7 +6,7 @@ use axum::http::{Request, StatusCode, header};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use http_body_util::BodyExt;
-use mmp_core::ports::SystemClock;
+use mmp_core::ports::FixedClock;
 use mmp_core::services::{
     CatalogueService, DiaryService, HouseholdService, MealPlanService, NutritionTargetService,
 };
@@ -18,17 +18,19 @@ use mmp_core::testing::{
 use mmp_server::AppState;
 use mmp_server::auth::DevBasicAuthProvider;
 use serde_json::{Value, json};
+use time::macros::datetime;
 use tower::ServiceExt;
 
 const USER: &str = "admin";
 const PASSWORD: &str = "changeme";
 
 async fn app() -> Router {
+    let clock = Arc::new(FixedClock::new(datetime!(2026-08-26 12:00 UTC)));
     let household = Arc::new(HouseholdService::new(
         Arc::new(InMemoryHouseholdMemberRepository::new()),
         Arc::new(InMemoryUserRepository::new()),
         Arc::new(InMemoryAccessGrantRepository::new()),
-        Arc::new(SystemClock),
+        clock.clone(),
     ));
 
     mmp_server::bootstrap::ensure_bootstrap_user(&household, USER)
@@ -42,22 +44,22 @@ async fn app() -> Router {
         CatalogueService::new(
             Arc::new(InMemoryIngredientRepository::new()),
             Arc::new(products.clone()),
-            Arc::new(SystemClock),
+            clock.clone(),
         ),
         household.clone(),
         DiaryService::new(
             Arc::new(consumption.clone()),
             Arc::new(products.clone()),
-            Arc::new(SystemClock),
+            clock.clone(),
         ),
         MealPlanService::new(
             Arc::new(InMemoryMealPlanRepository::new(consumption.clone())),
             Arc::new(products),
             Arc::new(consumption),
             Arc::new(targets.clone()),
-            Arc::new(SystemClock),
+            clock.clone(),
         ),
-        NutritionTargetService::new(Arc::new(targets), Arc::new(SystemClock)),
+        NutritionTargetService::new(Arc::new(targets), clock),
         Arc::new(DevBasicAuthProvider::new(household, PASSWORD)),
     );
     mmp_server::app::build(state).0
@@ -545,6 +547,11 @@ async fn the_openapi_document_describes_the_routes() {
     assert!(paths.get("/api/v1/ingredients/{id}").is_some());
     assert!(paths.get("/api/v1/products/{id}/ingredient").is_some());
     assert!(paths.get("/api/v1/meal-plan/{week_start}").is_some());
+    assert!(
+        paths
+            .get("/api/v1/meal-plan-entries/{id}/components/{component_id}/eaten")
+            .is_some()
+    );
     assert!(paths.get("/api/v1/meal-plan/members").is_none());
     assert!(
         paths
@@ -1221,6 +1228,7 @@ async fn creates_a_consumption_record_with_scaled_nutrition() {
     assert_eq!(status, StatusCode::CREATED, "{body}");
     assert_eq!(body["revision"], 1);
     assert_eq!(body["slot"], "breakfast");
+    assert_eq!(body["consumed_at"], Value::Null);
     assert_eq!(body["nutrition"]["energy_kcal"], json!(96.0));
     assert_eq!(etag(&headers), "1");
 }
@@ -1618,6 +1626,53 @@ async fn a_meal_plan_entry_round_trips_through_the_week() {
 }
 
 #[tokio::test]
+async fn confirming_one_component_leaves_the_rest_of_the_meal_pending() {
+    let app = app().await;
+    let product = create_milk_product(&app).await;
+    let entry = send(
+        &app,
+        Call::new("POST", "/api/v1/meal-plan-entries").body(json!({
+            "planned_on": "2026-08-25",
+            "planned_time": "08:00",
+            "slot": "breakfast",
+            "components": [
+                {"product_id": product["id"], "amount": measured_amount(80.0)},
+                {"product_id": product["id"], "amount": measured_amount(250.0)},
+                {"product_id": product["id"], "amount": measured_amount(100.0)}
+            ]
+        })),
+    )
+    .await
+    .1;
+    let entry_id = entry["id"].as_str().unwrap();
+    let component_id = entry["components"][2]["id"].as_str().unwrap();
+
+    let (status, updated, _) = send(
+        &app,
+        Call::new(
+            "POST",
+            format!("/api/v1/meal-plan-entries/{entry_id}/components/{component_id}/eaten"),
+        )
+        .if_match(1)
+        .body(json!({
+            "consumed_on": "2026-08-25",
+            "consumed_at": "2026-08-25T08:00:00Z",
+            "amount": measured_amount(100.0)
+        })),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "{updated}");
+    assert_eq!(updated["status"], "partially_resolved");
+    assert_eq!(updated["components"][0]["status"], "planned");
+    assert_eq!(updated["components"][1]["status"], "planned");
+    assert_eq!(updated["components"][2]["status"], "eaten");
+    assert!(updated["components"][0]["consumption_record"].is_null());
+    assert!(updated["components"][1]["consumption_record"].is_null());
+    assert!(updated["components"][2]["consumption_record"].is_object());
+}
+
+#[tokio::test]
 async fn the_week_slots_projection_flattens_planned_and_logged_food_together() {
     let app = app().await;
     let member_id = send(&app, Call::new("GET", "/api/v1/auth/me")).await.1["member_id"]
@@ -1658,8 +1713,19 @@ async fn the_week_slots_projection_flattens_planned_and_logged_food_together() {
     assert_eq!(breakfast["slot"], "breakfast");
     let items = breakfast["items"].as_array().unwrap();
     assert_eq!(items.len(), 2, "{items:?}");
-    assert!(items.iter().any(|item| item["kind"] == "planned" && item["status"] == "planned"));
-    assert!(items.iter().any(|item| item["kind"] == "logged" && item["status"] == "eaten"));
+    assert!(
+        items
+            .iter()
+            .any(|item| item["kind"] == "planned" && item["status"] == "planned")
+    );
+    let logged_item = items.iter().find(|item| item["kind"] == "logged").unwrap();
+    assert_eq!(logged_item["consumed_at"], "2026-08-25T08:15:00Z");
+    assert!(logged_item["at"].is_null());
+    assert!(
+        items
+            .iter()
+            .any(|item| item["kind"] == "logged" && item["status"] == "eaten")
+    );
 }
 
 #[tokio::test]

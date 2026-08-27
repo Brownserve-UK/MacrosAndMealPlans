@@ -23,6 +23,7 @@ fn a_meal_needs_a_component() {
 #[test]
 fn a_component_needs_a_positive_amount() {
     let components = vec![NewMealPlanComponent {
+        id: None,
         product_id: ProductId::new(),
         amount: ConsumedAmount::Servings(Decimal::ZERO),
     }];

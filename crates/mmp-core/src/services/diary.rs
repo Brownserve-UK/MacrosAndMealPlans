@@ -81,7 +81,7 @@ impl DiaryService {
             slot: input.slot,
             amount: input.amount,
             consumed_on: input.consumed_on,
-            consumed_at: input.consumed_at.unwrap_or(now),
+            consumed_at: input.consumed_at,
             nutrition: scaled.facts,
             quality: scaled.quality,
             revision: Revision::INITIAL,

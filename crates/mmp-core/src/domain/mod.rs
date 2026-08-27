@@ -26,9 +26,10 @@ pub use ingredient::{
     Ingredient, IngredientPatch, IngredientSummary, MAX_NAME_LEN, NewIngredient, validate_name,
 };
 pub use meal_plan::{
-    ActualMealPlanComponent, ConfirmMealPlanEntry, MealPlanComponent, MealPlanComponentSnapshot,
-    MealPlanEntry, MealPlanEntryPatch, MealPlanStatus, MealSlot, NewMealPlanComponent,
-    NewMealPlanEntry, UnknownMealPlanStatus, UnknownMealSlot, validate_components,
+    ActualMealPlanComponent, ConfirmMealPlanComponent, ConfirmMealPlanEntry, MealPlanComponent,
+    MealPlanComponentSnapshot, MealPlanEntry, MealPlanEntryPatch, MealPlanStatus, MealSlot,
+    NewMealPlanComponent, NewMealPlanEntry, UnknownMealPlanStatus, UnknownMealSlot,
+    validate_components,
 };
 pub use nutrition::NutritionFacts;
 pub use nutrition_target::{

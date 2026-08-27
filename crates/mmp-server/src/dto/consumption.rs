@@ -1,6 +1,6 @@
 use mmp_core::domain::{
     ConsumedAmount, ConsumptionRecord, ConsumptionRecordId, ConsumptionRecordPatch, MealSlot,
-    NewConsumptionRecord, NutritionQuality, Quantity, Unit,
+    NewConsumptionRecord, NutritionQuality, Patch, Quantity, Unit,
 };
 use mmp_core::services::{DayTotals, DiaryDay, DiaryEntry};
 use rust_decimal::Decimal;
@@ -83,9 +83,9 @@ pub struct ConsumptionRecordDto {
     #[serde(with = "iso_date")]
     #[schema(value_type = String, format = Date, example = "2026-08-22")]
     pub consumed_on: Date,
-    #[serde(with = "time::serde::rfc3339")]
-    #[schema(value_type = String, format = DateTime)]
-    pub consumed_at: OffsetDateTime,
+    #[serde(default, with = "time::serde::rfc3339::option")]
+    #[schema(value_type = Option<String>, format = DateTime)]
+    pub consumed_at: Option<OffsetDateTime>,
     pub nutrition: NutritionDto,
     pub quality: NutritionQuality,
     pub revision: i64,
@@ -159,19 +159,27 @@ pub struct UpdateConsumptionRequest {
     #[serde(default, with = "iso_date::option")]
     #[schema(value_type = Option<String>, format = Date)]
     pub consumed_on: Option<Date>,
-    #[serde(default, with = "time::serde::rfc3339::option")]
+    #[serde(default)]
     #[schema(value_type = Option<String>, format = DateTime)]
-    pub consumed_at: Option<OffsetDateTime>,
+    pub consumed_at: Patch<String>,
 }
 
-impl From<UpdateConsumptionRequest> for ConsumptionRecordPatch {
-    fn from(value: UpdateConsumptionRequest) -> Self {
-        Self {
-            slot: value.slot,
-            amount: value.amount.map(Into::into),
-            consumed_on: value.consumed_on,
-            consumed_at: value.consumed_at,
-        }
+impl UpdateConsumptionRequest {
+    pub fn into_domain(self) -> Result<ConsumptionRecordPatch, String> {
+        let consumed_at = match self.consumed_at {
+            Patch::Unchanged => None,
+            Patch::Clear => Some(None),
+            Patch::Set(value) => Some(Some(
+                OffsetDateTime::parse(&value, &time::format_description::well_known::Rfc3339)
+                    .map_err(|_| "Consumption time must be an RFC 3339 timestamp".to_owned())?,
+            )),
+        };
+        Ok(ConsumptionRecordPatch {
+            slot: self.slot,
+            amount: self.amount.map(Into::into),
+            consumed_on: self.consumed_on,
+            consumed_at,
+        })
     }
 }
 

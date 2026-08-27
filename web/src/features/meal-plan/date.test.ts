@@ -60,6 +60,10 @@ describe('combineDateTime and extractTime', () => {
     const instant = combineDateTime('2026-08-22', '14:30');
     expect(extractTime(instant)).toBe('14:30');
   });
+
+  it('presents an instant in the selected local timezone', () => {
+    expect(extractTime('2026-08-25T17:30:00Z', 'Europe/London')).toBe('18:30');
+  });
 });
 
 describe('meal plan dates', () => {

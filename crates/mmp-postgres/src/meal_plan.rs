@@ -60,6 +60,11 @@ struct ComponentRow {
     cholesterol_mg: Option<Decimal>,
     nutrition_extra: Option<Extra>,
     nutrition_quality: Option<String>,
+    status: String,
+    resolved_by: Option<Uuid>,
+    resolved_at: Option<OffsetDateTime>,
+    revision: i64,
+    display_order: Uuid,
 }
 
 impl ComponentRow {
@@ -95,6 +100,12 @@ impl ComponentRow {
             amount: parse_amount(&self.amount_kind, self.amount_value, self.amount_unit)?,
             position: self.position,
             snapshot,
+            status: MealPlanStatus::from_str(&self.status)
+                .map_err(|_| bad_value("status", &self.status))?,
+            resolved_by: self.resolved_by.map(UserId::from),
+            resolved_at: self.resolved_at,
+            revision: Revision::new(self.revision),
+            display_order: self.display_order,
         })
     }
 }
@@ -121,7 +132,7 @@ fn assemble(row: EntryRow, components: Vec<MealPlanComponent>) -> Result<MealPla
 
 const GET_ENTRY: &str = "SELECT id, member_id, planned_on, planned_time, slot, status, created_by, updated_by, resolved_by, resolved_at, revision, created_at, updated_at FROM meal_plan_entry WHERE id = $1";
 const LIST_ENTRIES: &str = "SELECT id, member_id, planned_on, planned_time, slot, status, created_by, updated_by, resolved_by, resolved_at, revision, created_at, updated_at FROM meal_plan_entry WHERE member_id = $1 AND planned_on >= $2 AND planned_on <= $3 ORDER BY planned_on, CASE slot WHEN 'breakfast' THEN 0 WHEN 'lunch' THEN 1 WHEN 'dinner' THEN 2 ELSE 3 END, planned_time NULLS LAST, created_at, id";
-const LIST_COMPONENTS: &str = "SELECT id, entry_id, position, product_id, amount_kind, amount_value, amount_unit, frozen_product_name, nutrition_basis_amount, nutrition_basis_unit, energy_kcal, protein_g, carbohydrate_g, sugar_g, fat_g, saturated_fat_g, fibre_g, salt_g, cholesterol_mg, nutrition_extra, nutrition_quality FROM meal_plan_component WHERE entry_id = ANY($1) ORDER BY entry_id, position";
+const LIST_COMPONENTS: &str = "SELECT id, entry_id, position, product_id, amount_kind, amount_value, amount_unit, frozen_product_name, nutrition_basis_amount, nutrition_basis_unit, energy_kcal, protein_g, carbohydrate_g, sugar_g, fat_g, saturated_fat_g, fibre_g, salt_g, cholesterol_mg, nutrition_extra, nutrition_quality, status, resolved_by, resolved_at, revision, display_order FROM meal_plan_component WHERE entry_id = ANY($1) ORDER BY entry_id, position";
 
 pub struct PgMealPlanRepository {
     pool: PgPool,
@@ -298,6 +309,86 @@ impl MealPlanRepository for PgMealPlanRepository {
             .map_err(|error| repository_error("committing a meal reopen", error))?;
         Ok(UpdateOutcome::Updated)
     }
+
+    async fn resolve_component(
+        &self,
+        entry_id: MealPlanEntryId,
+        component: &MealPlanComponent,
+        expected: Revision,
+        consumption: Option<&ConsumptionRecord>,
+    ) -> Result<UpdateOutcome> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|error| repository_error("starting a component outcome", error))?;
+        let outcome = update_component_outcome(&mut tx, entry_id, component, expected).await?;
+        if outcome != UpdateOutcome::Updated {
+            tx.rollback()
+                .await
+                .map_err(|error| repository_error("rolling back a component outcome", error))?;
+            return Ok(outcome);
+        }
+        if let Some(record) = consumption {
+            insert_consumption(&mut tx, record).await?;
+        }
+        refresh_entry_progress(
+            &mut tx,
+            entry_id,
+            component
+                .resolved_by
+                .ok_or_else(|| bad_value("resolved_by", "missing"))?,
+            component
+                .resolved_at
+                .ok_or_else(|| bad_value("resolved_at", "missing"))?,
+        )
+        .await?;
+        tx.commit()
+            .await
+            .map_err(|error| repository_error("committing a component outcome", error))?;
+        Ok(UpdateOutcome::Updated)
+    }
+
+    async fn reopen_component(
+        &self,
+        entry_id: MealPlanEntryId,
+        component_id: MealPlanComponentId,
+        expected: Revision,
+        actor_id: UserId,
+    ) -> Result<UpdateOutcome> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|error| repository_error("starting a component reopen", error))?;
+        let affected = sqlx::query(
+            "UPDATE meal_plan_component SET status = 'planned', resolved_by = NULL, resolved_at = NULL, frozen_product_name = NULL, nutrition_basis_amount = NULL, nutrition_basis_unit = NULL, energy_kcal = NULL, protein_g = NULL, carbohydrate_g = NULL, sugar_g = NULL, fat_g = NULL, saturated_fat_g = NULL, fibre_g = NULL, salt_g = NULL, cholesterol_mg = NULL, nutrition_extra = NULL, nutrition_quality = NULL, revision = revision + 1 WHERE id = $1 AND entry_id = $2 AND revision = $3",
+        )
+        .bind(component_id.as_uuid())
+        .bind(entry_id.as_uuid())
+        .bind(expected.get())
+        .execute(&mut *tx)
+        .await
+        .map_err(|error| map_db_error(error, "reopening a meal plan component"))?
+        .rows_affected();
+        if affected == 0 {
+            let outcome = current_component_outcome(&mut *tx, component_id).await?;
+            tx.rollback()
+                .await
+                .map_err(|error| repository_error("rolling back a component reopen", error))?;
+            return Ok(outcome);
+        }
+        sqlx::query("DELETE FROM consumption_record WHERE meal_plan_component_id = $1")
+            .bind(component_id.as_uuid())
+            .execute(&mut *tx)
+            .await
+            .map_err(|error| map_db_error(error, "removing component consumption"))?;
+        refresh_entry_progress(&mut tx, entry_id, actor_id, OffsetDateTime::now_utc()).await?;
+        tx.commit()
+            .await
+            .map_err(|error| repository_error("committing a component reopen", error))?;
+        Ok(UpdateOutcome::Updated)
+    }
 }
 
 async fn insert_entry(tx: &mut Transaction<'_, Postgres>, entry: &MealPlanEntry) -> Result<()> {
@@ -375,13 +466,98 @@ where
     })
 }
 
+async fn current_component_outcome<'e, E>(
+    executor: E,
+    id: MealPlanComponentId,
+) -> Result<UpdateOutcome>
+where
+    E: sqlx::Executor<'e, Database = Postgres>,
+{
+    let current: Option<(i64,)> =
+        sqlx::query_as("SELECT revision FROM meal_plan_component WHERE id = $1")
+            .bind(id.as_uuid())
+            .fetch_optional(executor)
+            .await
+            .map_err(|error| repository_error("re-reading a component revision", error))?;
+    Ok(match current {
+        Some((actual,)) => UpdateOutcome::RevisionMismatch {
+            actual: Revision::new(actual),
+        },
+        None => UpdateOutcome::NotFound,
+    })
+}
+
+async fn update_component_outcome(
+    tx: &mut Transaction<'_, Postgres>,
+    entry_id: MealPlanEntryId,
+    component: &MealPlanComponent,
+    expected: Revision,
+) -> Result<UpdateOutcome> {
+    let snapshot = component
+        .snapshot
+        .as_ref()
+        .ok_or_else(|| bad_value("meal_plan_component_snapshot", "missing"))?;
+    let nutrition = nutrition_bindings(&snapshot.nutrition);
+    let affected = sqlx::query(
+        "UPDATE meal_plan_component SET frozen_product_name = $3, nutrition_basis_amount = $4, nutrition_basis_unit = $5, energy_kcal = $6, protein_g = $7, carbohydrate_g = $8, sugar_g = $9, fat_g = $10, saturated_fat_g = $11, fibre_g = $12, salt_g = $13, cholesterol_mg = $14, nutrition_extra = $15, nutrition_quality = $16, status = $17, resolved_by = $18, resolved_at = $19, revision = $20 WHERE id = $1 AND entry_id = $2 AND revision = $21",
+    )
+    .bind(component.id.as_uuid())
+    .bind(entry_id.as_uuid())
+    .bind(&snapshot.product_name)
+    .bind(nutrition.basis_amount)
+    .bind(nutrition.basis_unit)
+    .bind(nutrition.energy_kcal)
+    .bind(nutrition.protein_g)
+    .bind(nutrition.carbohydrate_g)
+    .bind(nutrition.sugar_g)
+    .bind(nutrition.fat_g)
+    .bind(nutrition.saturated_fat_g)
+    .bind(nutrition.fibre_g)
+    .bind(nutrition.salt_g)
+    .bind(nutrition.cholesterol_mg)
+    .bind(nutrition.extra)
+    .bind(snapshot.quality.code())
+    .bind(component.status.code())
+    .bind(component.resolved_by.map(|id| id.as_uuid()))
+    .bind(component.resolved_at)
+    .bind(component.revision.get())
+    .bind(expected.get())
+    .execute(&mut **tx)
+    .await
+    .map_err(|error| map_db_error(error, "resolving a meal plan component"))?
+    .rows_affected();
+    if affected == 1 {
+        Ok(UpdateOutcome::Updated)
+    } else {
+        current_component_outcome(&mut **tx, component.id).await
+    }
+}
+
+async fn refresh_entry_progress(
+    tx: &mut Transaction<'_, Postgres>,
+    entry_id: MealPlanEntryId,
+    actor_id: UserId,
+    now: OffsetDateTime,
+) -> Result<()> {
+    sqlx::query(
+        "WITH progress AS (SELECT count(*) AS total, count(*) FILTER (WHERE status = 'planned') AS planned, count(*) FILTER (WHERE status = 'eaten') AS eaten, count(*) FILTER (WHERE status = 'not_eaten') AS not_eaten FROM meal_plan_component WHERE entry_id = $1), state AS (SELECT CASE WHEN planned = total THEN 'planned' WHEN eaten = total THEN 'eaten' WHEN not_eaten = total THEN 'not_eaten' ELSE 'partially_resolved' END AS status FROM progress) UPDATE meal_plan_entry SET status = state.status, updated_by = $2, resolved_by = CASE WHEN state.status = 'planned' THEN NULL ELSE $2 END, resolved_at = CASE WHEN state.status = 'planned' THEN NULL ELSE $3 END, revision = revision + 1, updated_at = $3 FROM state WHERE id = $1",
+    )
+    .bind(entry_id.as_uuid())
+    .bind(actor_id.as_uuid())
+    .bind(now)
+    .execute(&mut **tx)
+    .await
+    .map_err(|error| map_db_error(error, "refreshing meal progress"))?;
+    Ok(())
+}
+
 async fn insert_components(
     tx: &mut Transaction<'_, Postgres>,
     entry: &MealPlanEntry,
 ) -> Result<()> {
     for component in &entry.components {
         let (kind, value, unit) = amount_bindings(&component.amount);
-        sqlx::query("INSERT INTO meal_plan_component (id, entry_id, position, product_id, amount_kind, amount_value, amount_unit) VALUES ($1, $2, $3, $4, $5, $6, $7)")
+        sqlx::query("INSERT INTO meal_plan_component (id, entry_id, position, product_id, amount_kind, amount_value, amount_unit, status, resolved_by, resolved_at, revision, display_order) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)")
             .bind(component.id.as_uuid())
             .bind(entry.id.as_uuid())
             .bind(component.position)
@@ -389,6 +565,11 @@ async fn insert_components(
             .bind(kind)
             .bind(value)
             .bind(unit)
+            .bind(component.status.code())
+            .bind(component.resolved_by.map(|id| id.as_uuid()))
+            .bind(component.resolved_at)
+            .bind(component.revision.get())
+            .bind(component.display_order)
             .execute(&mut **tx)
             .await
             .map_err(|error| map_db_error(error, "creating a meal plan component"))?;
@@ -406,7 +587,7 @@ async fn freeze_components(
             .as_ref()
             .ok_or_else(|| bad_value("meal_plan_component_snapshot", "missing"))?;
         let nutrition = nutrition_bindings(&snapshot.nutrition);
-        sqlx::query("UPDATE meal_plan_component SET frozen_product_name = $2, nutrition_basis_amount = $3, nutrition_basis_unit = $4, energy_kcal = $5, protein_g = $6, carbohydrate_g = $7, sugar_g = $8, fat_g = $9, saturated_fat_g = $10, fibre_g = $11, salt_g = $12, cholesterol_mg = $13, nutrition_extra = $14, nutrition_quality = $15 WHERE id = $1")
+        sqlx::query("UPDATE meal_plan_component SET frozen_product_name = $2, nutrition_basis_amount = $3, nutrition_basis_unit = $4, energy_kcal = $5, protein_g = $6, carbohydrate_g = $7, sugar_g = $8, fat_g = $9, saturated_fat_g = $10, fibre_g = $11, salt_g = $12, cholesterol_mg = $13, nutrition_extra = $14, nutrition_quality = $15, status = $16, resolved_by = $17, resolved_at = $18, revision = $19 WHERE id = $1")
             .bind(component.id.as_uuid())
             .bind(&snapshot.product_name)
             .bind(nutrition.basis_amount)
@@ -422,6 +603,10 @@ async fn freeze_components(
             .bind(nutrition.cholesterol_mg)
             .bind(nutrition.extra)
             .bind(snapshot.quality.code())
+            .bind(component.status.code())
+            .bind(component.resolved_by.map(|id| id.as_uuid()))
+            .bind(component.resolved_at)
+            .bind(component.revision.get())
             .execute(&mut **tx)
             .await
             .map_err(|error| map_db_error(error, "freezing a meal plan component"))?;
@@ -431,8 +616,12 @@ async fn freeze_components(
 
 async fn thaw_components(tx: &mut Transaction<'_, Postgres>, entry: &MealPlanEntry) -> Result<()> {
     for component in &entry.components {
-        sqlx::query("UPDATE meal_plan_component SET frozen_product_name = NULL, nutrition_basis_amount = NULL, nutrition_basis_unit = NULL, energy_kcal = NULL, protein_g = NULL, carbohydrate_g = NULL, sugar_g = NULL, fat_g = NULL, saturated_fat_g = NULL, fibre_g = NULL, salt_g = NULL, cholesterol_mg = NULL, nutrition_extra = NULL, nutrition_quality = NULL WHERE id = $1")
+        sqlx::query("UPDATE meal_plan_component SET frozen_product_name = NULL, nutrition_basis_amount = NULL, nutrition_basis_unit = NULL, energy_kcal = NULL, protein_g = NULL, carbohydrate_g = NULL, sugar_g = NULL, fat_g = NULL, saturated_fat_g = NULL, fibre_g = NULL, salt_g = NULL, cholesterol_mg = NULL, nutrition_extra = NULL, nutrition_quality = NULL, status = $2, resolved_by = $3, resolved_at = $4, revision = $5 WHERE id = $1")
             .bind(component.id.as_uuid())
+            .bind(component.status.code())
+            .bind(component.resolved_by.map(|id| id.as_uuid()))
+            .bind(component.resolved_at)
+            .bind(component.revision.get())
             .execute(&mut **tx)
             .await
             .map_err(|error| map_db_error(error, "thawing a meal plan component"))?;

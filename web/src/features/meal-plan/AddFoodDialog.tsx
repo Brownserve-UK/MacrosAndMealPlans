@@ -1,7 +1,6 @@
 import CheckIcon from '@mui/icons-material/CheckCircleOutlineOutlined';
 import RadioButtonUncheckedIcon from '@mui/icons-material/RadioButtonUncheckedOutlined';
 import Alert from '@mui/material/Alert';
-import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
 import DialogActions from '@mui/material/DialogActions';
 import DialogContent from '@mui/material/DialogContent';
@@ -9,12 +8,10 @@ import DialogTitle from '@mui/material/DialogTitle';
 import Divider from '@mui/material/Divider';
 import Stack from '@mui/material/Stack';
 import TextField from '@mui/material/TextField';
-import ToggleButton from '@mui/material/ToggleButton';
-import ToggleButtonGroup from '@mui/material/ToggleButtonGroup';
 import Typography from '@mui/material/Typography';
 import { useState, type FormEvent } from 'react';
-import { ApiError, type Amount, type MealSlot, type Product } from '../../api/client';
-import { useCreateConsumption, useCreateMealPlanEntry } from '../../api/queries';
+import { ApiError, type Amount, type MealPlanEntry, type MealSlot, type Product } from '../../api/client';
+import { useCreateConsumption, useCreateMealPlanEntry, useUpdateMealPlanEntry } from '../../api/queries';
 import { FormDialog } from '../../components/FormDialog';
 import {
   AmountFields,
@@ -23,7 +20,7 @@ import {
   validateAmountDraft,
   type AmountDraft,
 } from './AmountFields';
-import { combineDateTime, formatFullDate, nowTime, todayIso } from './date';
+import { combineDateTime, formatFullDate } from './date';
 import { formatAmount } from './format';
 import { ProductPicker } from './ProductPicker';
 import { labelForSlot } from './slots';
@@ -35,30 +32,22 @@ type EntryDraft = {
   product: Product | null;
   amount: AmountDraft;
   time: string;
-  showTime: boolean;
 };
 
 type AddedItem = {
   key: string;
   kind: AddKind;
+  productId: string;
   productName: string;
   amount: Amount;
 };
-
-function allowedKinds(date: string): AddKind[] {
-  const today = todayIso();
-  if (date > today) return ['planned'];
-  if (date < today) return ['eaten'];
-  return ['eaten', 'planned'];
-}
 
 function emptyDraft(kind: AddKind): EntryDraft {
   return {
     kind,
     product: null,
     amount: amountDraftFrom(null),
-    time: kind === 'eaten' ? nowTime() : '',
-    showTime: false,
+    time: '',
   };
 }
 
@@ -83,24 +72,28 @@ export function AddFoodDialog({
   memberId,
   date,
   slot,
+  kind = 'eaten',
+  entry = null,
 }: {
   open: boolean;
   onClose: () => void;
   memberId: string;
   date: string;
   slot: MealSlot;
+  kind?: AddKind;
+  entry?: MealPlanEntry | null;
 }) {
   const createConsumption = useCreateConsumption();
   const createPlan = useCreateMealPlanEntry();
-  const kinds = allowedKinds(date);
-  const [draft, setDraft] = useState(() => emptyDraft(kinds[0] ?? 'eaten'));
+  const updatePlan = useUpdateMealPlanEntry();
+  const [draft, setDraft] = useState(() => emptyDraft(kind));
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [failure, setFailure] = useState<string | null>(null);
   const [added, setAdded] = useState<AddedItem[]>([]);
-  const busy = createConsumption.isPending || createPlan.isPending;
+  const busy = createConsumption.isPending || createPlan.isPending || updatePlan.isPending;
 
   function resetAndClose() {
-    setDraft(emptyDraft(kinds[0] ?? 'eaten'));
+    setDraft(emptyDraft(kind));
     setErrors({});
     setFailure(null);
     setAdded([]);
@@ -109,14 +102,6 @@ export function AddFoodDialog({
 
   function handleClose() {
     if (!busy) resetAndClose();
-  }
-
-  function setKind(kind: AddKind) {
-    setDraft({
-      ...draft,
-      kind,
-      time: kind === 'eaten' && !draft.time ? nowTime() : draft.time,
-    });
   }
 
   async function onSubmit(event: FormEvent) {
@@ -130,26 +115,25 @@ export function AddFoodDialog({
     if (!draft.product || !amount) return;
 
     try {
-      if (draft.kind === 'planned') {
-        await createPlan.mutateAsync({
-          planned_on: date,
-          planned_time: draft.time || null,
-          slot,
-          components: [{ product_id: draft.product.id, amount }],
-        });
-      } else {
+      if (draft.kind === 'eaten') {
         await createConsumption.mutateAsync({
           member_id: memberId,
           product_id: draft.product.id,
           slot,
           amount,
           consumed_on: date,
-          consumed_at: combineDateTime(date, draft.time || nowTime()),
+          consumed_at: draft.time ? combineDateTime(date, draft.time) : null,
         });
       }
       setAdded([
         ...added,
-        { key: crypto.randomUUID(), kind: draft.kind, productName: draft.product.name, amount },
+        {
+          key: crypto.randomUUID(),
+          kind: draft.kind,
+          productId: draft.product.id,
+          productName: draft.product.name,
+          amount,
+        },
       ]);
       setDraft(emptyDraft(draft.kind));
       setErrors({});
@@ -164,10 +148,46 @@ export function AddFoodDialog({
     }
   }
 
+  async function finishPlan() {
+    if (kind !== 'planned' || added.length === 0) {
+      handleClose();
+      return;
+    }
+    setFailure(null);
+    try {
+      const components = added.map((item) => ({ product_id: item.productId, amount: item.amount }));
+      if (entry) {
+        await updatePlan.mutateAsync({
+          id: entry.id,
+          revision: entry.revision,
+          body: {
+            components: [
+              ...entry.components.map((component) => ({
+                id: component.id,
+                product_id: component.product_id,
+                amount: component.amount,
+              })),
+              ...components,
+            ],
+          },
+        });
+      } else {
+        await createPlan.mutateAsync({
+          planned_on: date,
+          slot,
+          components,
+        });
+      }
+      resetAndClose();
+    } catch (caught) {
+      setFailure(caught instanceof ApiError ? caught.message : 'Could not add to the plan.');
+    }
+  }
+
   return (
     <FormDialog open={open} onClose={handleClose} maxWidth="sm" fullWidth>
       <form onSubmit={onSubmit}>
-        <DialogTitle sx={{ pb: 0.75 }}>Add food</DialogTitle>
+        <DialogTitle sx={{ pb: 0.75 }}>{kind === 'planned' ? 'Add planned meal' : 'Add food'}</DialogTitle>
         <DialogContent>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2.5 }}>
             {labelForSlot(slot)} · {formatFullDate(date)}
@@ -211,58 +231,32 @@ export function AddFoodDialog({
               autoFocus
             />
 
+            {draft.kind === 'eaten' ? (
+              <TextField
+                type="time"
+                label="Time eaten (optional)"
+                value={draft.time}
+                onChange={(event) => setDraft({ ...draft, time: event.target.value })}
+                slotProps={{ inputLabel: { shrink: true } }}
+              />
+            ) : null}
+
             {draft.product ? (
-              <>
-                <AmountFields
-                  product={draft.product}
-                  draft={draft.amount}
-                  errors={errors}
-                  onChange={(amount) => setDraft({ ...draft, amount })}
-                />
-
-                {kinds.length > 1 ? (
-                  <ToggleButtonGroup
-                    value={draft.kind}
-                    exclusive
-                    fullWidth
-                    size="small"
-                    aria-label="Add food as"
-                    onChange={(_event, value: AddKind | null) => value && setKind(value)}
-                  >
-                    <ToggleButton value="planned">Planned</ToggleButton>
-                    <ToggleButton value="eaten">Eaten</ToggleButton>
-                  </ToggleButtonGroup>
-                ) : null}
-
-                {draft.showTime ? (
-                  <TextField
-                    type="time"
-                    label={draft.kind === 'eaten' ? 'Time eaten' : 'Time'}
-                    value={draft.time}
-                    onChange={(event) => setDraft({ ...draft, time: event.target.value })}
-                    slotProps={{ inputLabel: { shrink: true } }}
-                  />
-                ) : (
-                  <Box>
-                    <Button
-                      size="small"
-                      onClick={() => setDraft({ ...draft, showTime: true })}
-                      sx={{ px: 0 }}
-                    >
-                      Adjust time
-                    </Button>
-                  </Box>
-                )}
-              </>
+              <AmountFields
+                product={draft.product}
+                draft={draft.amount}
+                errors={errors}
+                onChange={(amount) => setDraft({ ...draft, amount })}
+              />
             ) : null}
           </Stack>
         </DialogContent>
         <DialogActions>
-          <Button onClick={handleClose} disabled={busy}>
-            {added.length > 0 ? 'Done' : 'Cancel'}
+          <Button onClick={kind === 'planned' && added.length > 0 ? finishPlan : handleClose} disabled={busy}>
+            {kind === 'planned' && added.length > 0 ? 'Save meal' : added.length > 0 ? 'Done' : 'Cancel'}
           </Button>
           <Button type="submit" variant="contained" disabled={busy || !draft.product}>
-            {busy ? 'Adding…' : draft.kind === 'planned' ? 'Add to plan' : 'Add'}
+            {busy ? 'Adding…' : draft.kind === 'planned' ? 'Add to meal' : 'Add'}
           </Button>
         </DialogActions>
       </form>

@@ -5,7 +5,7 @@ import { EmptyState, Loading } from '../../components/States';
 import { startOfWeekIso, todayIso } from './date';
 import { defaultDayFor } from './MealPlanPage';
 
-export function MealPlanIndexRedirect() {
+export function MealPlanIndexRedirect({ workspace }: { workspace: 'today' | 'planner' }) {
   const { principal } = useAuth();
   const navigate = useNavigate();
 
@@ -13,19 +13,19 @@ export function MealPlanIndexRedirect() {
     if (!principal?.member_id) return;
     const weekStart = startOfWeekIso(todayIso());
     void navigate({
-      to: '/meal-plan/$weekStart/$day',
+      to: workspace === 'today' ? '/food-log/$weekStart/$day' : '/planner/$weekStart/$day',
       params: { weekStart, day: defaultDayFor(weekStart) },
       replace: true,
     });
-  }, [navigate, principal?.member_id]);
+  }, [navigate, principal?.member_id, workspace]);
 
   if (!principal?.member_id) {
     return (
       <EmptyState
-        title="No meal plan yet"
+        title={workspace === 'today' ? 'Food log unavailable' : 'Meal planner unavailable'}
         description="Your account is not linked to an active household member."
       />
     );
   }
-  return <Loading label="Loading meal plan" />;
+  return <Loading label={workspace === 'today' ? 'Loading food log' : 'Loading meal planner'} />;
 }

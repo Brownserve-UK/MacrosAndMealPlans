@@ -2,6 +2,7 @@ use std::fmt;
 use std::str::FromStr;
 
 use time::{Date, OffsetDateTime, Time};
+use uuid::Uuid;
 
 use super::{
     ConsumedAmount, HouseholdMemberId, MealPlanComponentId, MealPlanEntryId, NutritionFacts,
@@ -72,13 +73,15 @@ impl FromStr for MealSlot {
 #[serde(rename_all = "snake_case")]
 pub enum MealPlanStatus {
     Planned,
+    PartiallyResolved,
     Eaten,
     NotEaten,
 }
 
 impl MealPlanStatus {
-    pub const ALL: [MealPlanStatus; 3] = [
+    pub const ALL: [MealPlanStatus; 4] = [
         MealPlanStatus::Planned,
+        MealPlanStatus::PartiallyResolved,
         MealPlanStatus::Eaten,
         MealPlanStatus::NotEaten,
     ];
@@ -86,6 +89,7 @@ impl MealPlanStatus {
     pub const fn code(self) -> &'static str {
         match self {
             MealPlanStatus::Planned => "planned",
+            MealPlanStatus::PartiallyResolved => "partially_resolved",
             MealPlanStatus::Eaten => "eaten",
             MealPlanStatus::NotEaten => "not_eaten",
         }
@@ -127,6 +131,11 @@ pub struct MealPlanComponent {
     pub amount: ConsumedAmount,
     pub position: i32,
     pub snapshot: Option<MealPlanComponentSnapshot>,
+    pub status: MealPlanStatus,
+    pub resolved_by: Option<UserId>,
+    pub resolved_at: Option<OffsetDateTime>,
+    pub revision: Revision,
+    pub display_order: Uuid,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -149,6 +158,7 @@ pub struct MealPlanEntry {
 
 #[derive(Debug, Clone)]
 pub struct NewMealPlanComponent {
+    pub id: Option<MealPlanComponentId>,
     pub product_id: ProductId,
     pub amount: ConsumedAmount,
 }
@@ -181,8 +191,16 @@ pub struct ActualMealPlanComponent {
 #[derive(Debug, Clone)]
 pub struct ConfirmMealPlanEntry {
     pub consumed_on: Date,
-    pub consumed_at: OffsetDateTime,
+    pub consumed_at: Option<OffsetDateTime>,
     pub components: Vec<ActualMealPlanComponent>,
+    pub actor_id: UserId,
+}
+
+#[derive(Debug, Clone)]
+pub struct ConfirmMealPlanComponent {
+    pub consumed_on: Date,
+    pub consumed_at: Option<OffsetDateTime>,
+    pub amount: ConsumedAmount,
     pub actor_id: UserId,
 }
 

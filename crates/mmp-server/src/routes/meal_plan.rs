@@ -1,7 +1,7 @@
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
-use mmp_core::domain::{HouseholdMemberId, MealPlanEntryId, Role};
+use mmp_core::domain::{HouseholdMemberId, MealPlanComponentId, MealPlanEntryId, Role};
 use time::{Date, Weekday};
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
@@ -10,8 +10,8 @@ use uuid::Uuid;
 use crate::auth::Principal;
 use crate::dto::common::iso_date;
 use crate::dto::{
-    CreateMealPlanEntryRequest, MarkMealPlanEatenRequest, MealPlanEntryDto, MealPlanWeekDto,
-    UpdateMealPlanEntryRequest,
+    CreateMealPlanEntryRequest, MarkMealPlanComponentEatenRequest, MarkMealPlanEatenRequest,
+    MealPlanEntryDto, MealPlanWeekDto, UpdateMealPlanEntryRequest,
 };
 use crate::error::{ApiError, ApiResult};
 use crate::http::{Created, IfMatch, Tagged};
@@ -25,9 +25,16 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(mark_eaten))
         .routes(routes!(mark_not_eaten))
         .routes(routes!(reopen))
+        .routes(routes!(mark_component_eaten))
+        .routes(routes!(mark_component_not_eaten))
+        .routes(routes!(reopen_component))
 }
 
 fn entry_id(id: Uuid) -> MealPlanEntryId {
+    id.into()
+}
+
+fn component_id(id: Uuid) -> MealPlanComponentId {
     id.into()
 }
 
@@ -283,4 +290,86 @@ async fn reopen(
         .reopen(id, revision, principal.user_id)
         .await?;
     Ok(Tagged(updated.entry.revision, updated.into()))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/meal-plan-entries/{id}/components/{component_id}/eaten",
+    operation_id = "markMealPlanComponentEaten",
+    params(("id" = Uuid, Path), ("component_id" = Uuid, Path), ("If-Match" = String, Header)),
+    request_body = MarkMealPlanComponentEatenRequest,
+    responses((status = 200, body = MealPlanEntryDto)),
+    tag = "meal-plan",
+    security(("basic" = []))
+)]
+async fn mark_component_eaten(
+    State(state): State<AppState>,
+    principal: Principal,
+    Path((id, component)): Path<(Uuid, Uuid)>,
+    IfMatch(revision): IfMatch,
+    Json(body): Json<MarkMealPlanComponentEatenRequest>,
+) -> ApiResult<Json<MealPlanEntryDto>> {
+    let id = entry_id(id);
+    let current = state.meal_plan.get(id).await?;
+    require_personal_entry(&state, &principal, current.entry.member_id).await?;
+    let updated = state
+        .meal_plan
+        .mark_component_eaten(
+            id,
+            component_id(component),
+            revision,
+            body.into_domain(principal.user_id),
+        )
+        .await?;
+    Ok(Json(updated.into()))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/meal-plan-entries/{id}/components/{component_id}/not-eaten",
+    operation_id = "markMealPlanComponentNotEaten",
+    params(("id" = Uuid, Path), ("component_id" = Uuid, Path), ("If-Match" = String, Header)),
+    responses((status = 200, body = MealPlanEntryDto)),
+    tag = "meal-plan",
+    security(("basic" = []))
+)]
+async fn mark_component_not_eaten(
+    State(state): State<AppState>,
+    principal: Principal,
+    Path((id, component)): Path<(Uuid, Uuid)>,
+    IfMatch(revision): IfMatch,
+) -> ApiResult<Json<MealPlanEntryDto>> {
+    let id = entry_id(id);
+    let current = state.meal_plan.get(id).await?;
+    require_personal_entry(&state, &principal, current.entry.member_id).await?;
+    let updated = state
+        .meal_plan
+        .mark_component_not_eaten(id, component_id(component), revision, principal.user_id)
+        .await?;
+    Ok(Json(updated.into()))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/meal-plan-entries/{id}/components/{component_id}/reopen",
+    operation_id = "reopenMealPlanComponent",
+    params(("id" = Uuid, Path), ("component_id" = Uuid, Path), ("If-Match" = String, Header)),
+    responses((status = 200, body = MealPlanEntryDto)),
+    tag = "meal-plan",
+    security(("basic" = []))
+)]
+async fn reopen_component(
+    State(state): State<AppState>,
+    principal: Principal,
+    Path((id, component)): Path<(Uuid, Uuid)>,
+    IfMatch(revision): IfMatch,
+) -> ApiResult<Json<MealPlanEntryDto>> {
+    let id = entry_id(id);
+    let current = state.meal_plan.get(id).await?;
+    require_personal_entry(&state, &principal, current.entry.member_id).await?;
+    let updated = state
+        .meal_plan
+        .reopen_component(id, component_id(component), revision, principal.user_id)
+        .await?;
+    Ok(Json(updated.into()))
 }

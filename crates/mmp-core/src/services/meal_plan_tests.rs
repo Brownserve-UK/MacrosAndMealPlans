@@ -6,10 +6,10 @@ use time::macros::{date, datetime, time};
 
 use super::*;
 use crate::domain::{
-    ActualMealPlanComponent, ConsumedAmount, HouseholdMemberId, MealPlanEntryPatch, MealPlanStatus,
-    MealSlot, NewConsumptionRecord, NewMealPlanComponent, NewMealPlanEntry, NewNutritionTarget,
-    NutritionFacts, NutritionGoals, Product, ProductId, Provenance, Quantity, Revision, Unit,
-    UserId,
+    ActualMealPlanComponent, ConfirmMealPlanComponent, ConsumedAmount, HouseholdMemberId,
+    MealPlanEntryPatch, MealPlanStatus, MealSlot, NewConsumptionRecord, NewMealPlanComponent,
+    NewMealPlanEntry, NewNutritionTarget, NutritionFacts, NutritionGoals, Product, ProductId,
+    Provenance, Quantity, Revision, Unit, UserId,
 };
 use crate::ports::FixedClock;
 use crate::services::{DiaryService, NutritionTargetService};
@@ -87,6 +87,7 @@ fn product(name: &str, energy_per_100g: i64) -> Product {
 
 fn measured(product_id: ProductId, grams: i64) -> NewMealPlanComponent {
     NewMealPlanComponent {
+        id: None,
         product_id,
         amount: ConsumedAmount::Measure(Quantity::new(Decimal::new(grams, 0), Unit::Gram)),
     }
@@ -123,6 +124,30 @@ async fn planned(h: &Harness, components: Vec<NewMealPlanComponent>) -> MealPlan
         })
         .await
         .unwrap()
+}
+
+#[tokio::test]
+async fn a_member_has_one_meal_entry_per_day_and_slot() {
+    let h = harness();
+    let food = product("Food", 200);
+    h.products.seed(food.clone());
+    planned(&h, vec![measured(food.id, 100)]).await;
+
+    let error = h
+        .service
+        .create(NewMealPlanEntry {
+            id: None,
+            member_id: h.member_id,
+            planned_on: date!(2026 - 08 - 25),
+            planned_time: Some(time!(19:00)),
+            slot: MealSlot::Dinner,
+            components: vec![measured(food.id, 50)],
+            actor_id: h.actor_id,
+        })
+        .await
+        .unwrap_err();
+
+    assert!(matches!(error, CoreError::Conflict { .. }));
 }
 
 #[tokio::test]
@@ -210,7 +235,7 @@ async fn confirming_eaten_creates_one_linked_diary_record_per_component() {
             entry.entry.revision,
             ConfirmMealPlanEntry {
                 consumed_on: date!(2026 - 08 - 26),
-                consumed_at: datetime!(2026-08-26 19:15 UTC),
+                consumed_at: Some(datetime!(2026-08-26 19:15 UTC)),
                 components: entry
                     .components
                     .iter()
@@ -233,6 +258,291 @@ async fn confirming_eaten_creates_one_linked_diary_record_per_component() {
                 && record.meal_plan_component_id == Some(component.component.id)
         })
     }));
+}
+
+#[tokio::test]
+async fn confirming_one_component_does_not_resolve_its_siblings() {
+    let h = harness();
+    let oats = product("Oats", 200);
+    let milk = product("Milk", 100);
+    let banana = product("Banana", 80);
+    h.products.seed(oats.clone());
+    h.products.seed(milk.clone());
+    h.products.seed(banana.clone());
+    let entry = planned(
+        &h,
+        vec![
+            measured(oats.id, 80),
+            measured(milk.id, 250),
+            measured(banana.id, 100),
+        ],
+    )
+    .await;
+    let banana_component = entry.components[2].component.clone();
+
+    let updated = h
+        .service
+        .mark_component_eaten_unchecked(
+            entry.entry.id,
+            banana_component.id,
+            banana_component.revision,
+            ConfirmMealPlanComponent {
+                consumed_on: date!(2026 - 08 - 25),
+                consumed_at: Some(datetime!(2026-08-25 08:00 UTC)),
+                amount: banana_component.amount,
+                actor_id: h.actor_id,
+            },
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(updated.entry.status, MealPlanStatus::PartiallyResolved);
+    assert_eq!(
+        updated.components[0].component.status,
+        MealPlanStatus::Planned
+    );
+    assert_eq!(
+        updated.components[1].component.status,
+        MealPlanStatus::Planned
+    );
+    assert_eq!(
+        updated.components[2].component.status,
+        MealPlanStatus::Eaten
+    );
+    assert_eq!(h.records.count(), 1);
+
+    let week = h
+        .service
+        .week(h.member_id, date!(2026 - 08 - 24))
+        .await
+        .unwrap();
+    let dinner = week.days[1]
+        .slots
+        .iter()
+        .find(|slot| slot.slot == MealSlot::Dinner)
+        .unwrap();
+    let component_ids: Vec<_> = dinner
+        .items
+        .iter()
+        .filter_map(|item| match item.source {
+            MealItemSource::Planned { component_id, .. } => Some(component_id),
+            MealItemSource::Logged { .. } => None,
+        })
+        .collect();
+    assert_eq!(
+        component_ids,
+        entry
+            .components
+            .iter()
+            .map(|component| component.component.id)
+            .collect::<Vec<_>>()
+    );
+}
+
+#[tokio::test]
+async fn editing_one_component_preserves_its_siblings() {
+    let h = harness();
+    let oats = product("Oats", 200);
+    let milk = product("Milk", 100);
+    let banana = product("Banana", 80);
+    h.products.seed(oats.clone());
+    h.products.seed(milk.clone());
+    h.products.seed(banana.clone());
+    let entry = planned(
+        &h,
+        vec![
+            measured(oats.id, 80),
+            measured(milk.id, 250),
+            measured(banana.id, 100),
+        ],
+    )
+    .await;
+    let original_ids: Vec<_> = entry
+        .components
+        .iter()
+        .map(|component| component.component.id)
+        .collect();
+    let components = entry
+        .components
+        .iter()
+        .enumerate()
+        .map(|(index, component)| NewMealPlanComponent {
+            id: Some(component.component.id),
+            product_id: component.component.product_id,
+            amount: if index == 2 {
+                ConsumedAmount::Measure(Quantity::new(Decimal::new(120, 0), Unit::Gram))
+            } else {
+                component.component.amount
+            },
+        })
+        .collect();
+
+    let updated = h
+        .service
+        .update(
+            entry.entry.id,
+            entry.entry.revision,
+            MealPlanEntryPatch {
+                components: Some(components),
+                ..Default::default()
+            },
+            h.actor_id,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        updated
+            .components
+            .iter()
+            .map(|component| component.component.id)
+            .collect::<Vec<_>>(),
+        original_ids
+    );
+    assert_eq!(updated.components[0].component.revision, Revision::INITIAL);
+    assert_eq!(updated.components[1].component.revision, Revision::INITIAL);
+    assert_eq!(
+        updated.components[2].component.revision,
+        Revision::INITIAL.next()
+    );
+}
+
+#[tokio::test]
+async fn later_planned_components_append_after_food_already_logged_in_the_slot() {
+    let h = harness();
+    let oats = product("Oats", 200);
+    let milk = product("Milk", 100);
+    let shake = product("Protein Shake", 120);
+    let latte = product("Latte", 90);
+    h.products.seed(oats.clone());
+    h.products.seed(milk.clone());
+    h.products.seed(shake.clone());
+    h.products.seed(latte.clone());
+    let entry = planned(&h, vec![measured(oats.id, 80), measured(milk.id, 250)]).await;
+
+    h.diary
+        .record(NewConsumptionRecord {
+            id: None,
+            member_id: h.member_id,
+            product_id: shake.id,
+            recorded_by: Some(h.actor_id),
+            meal_plan_entry_id: None,
+            meal_plan_component_id: None,
+            slot: MealSlot::Dinner,
+            amount: ConsumedAmount::Measure(Quantity::new(Decimal::new(300, 0), Unit::Gram)),
+            consumed_on: date!(2026 - 08 - 25),
+            consumed_at: Some(datetime!(2026-08-25 18:35 UTC)),
+        })
+        .await
+        .unwrap();
+
+    let mut components: Vec<_> = entry
+        .components
+        .iter()
+        .map(|component| NewMealPlanComponent {
+            id: Some(component.component.id),
+            product_id: component.component.product_id,
+            amount: component.component.amount,
+        })
+        .collect();
+    components.push(measured(latte.id, 250));
+    h.service
+        .update(
+            entry.entry.id,
+            entry.entry.revision,
+            MealPlanEntryPatch {
+                components: Some(components),
+                ..Default::default()
+            },
+            h.actor_id,
+        )
+        .await
+        .unwrap();
+
+    let week = h
+        .service
+        .week(h.member_id, date!(2026 - 08 - 24))
+        .await
+        .unwrap();
+    let dinner = week.days[1]
+        .slots
+        .iter()
+        .find(|slot| slot.slot == MealSlot::Dinner)
+        .unwrap();
+    assert_eq!(
+        dinner
+            .items
+            .iter()
+            .map(|item| item.product_name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["Oats", "Milk", "Protein Shake", "Latte"]
+    );
+}
+
+#[tokio::test]
+async fn marking_remaining_eaten_skips_an_item_marked_not_eaten() {
+    let h = harness();
+    let first = product("First", 200);
+    let second = product("Second", 100);
+    let third = product("Third", 80);
+    h.products.seed(first.clone());
+    h.products.seed(second.clone());
+    h.products.seed(third.clone());
+    let entry = planned(
+        &h,
+        vec![
+            measured(first.id, 80),
+            measured(second.id, 250),
+            measured(third.id, 100),
+        ],
+    )
+    .await;
+    let rejected = h
+        .service
+        .mark_component_not_eaten_unchecked(
+            entry.entry.id,
+            entry.components[0].component.id,
+            entry.components[0].component.revision,
+            h.actor_id,
+        )
+        .await
+        .unwrap();
+    let pending: Vec<_> = rejected
+        .components
+        .iter()
+        .filter(|component| component.component.status == MealPlanStatus::Planned)
+        .map(|component| ActualMealPlanComponent {
+            component_id: component.component.id,
+            amount: component.component.amount,
+        })
+        .collect();
+
+    let resolved = h
+        .service
+        .mark_eaten_unchecked(
+            rejected.entry.id,
+            rejected.entry.revision,
+            ConfirmMealPlanEntry {
+                consumed_on: date!(2026 - 08 - 25),
+                consumed_at: Some(datetime!(2026-08-25 08:00 UTC)),
+                components: pending,
+                actor_id: h.actor_id,
+            },
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resolved.entry.status, MealPlanStatus::PartiallyResolved);
+    assert_eq!(
+        resolved.components[0].component.status,
+        MealPlanStatus::NotEaten
+    );
+    assert!(
+        resolved.components[1..]
+            .iter()
+            .all(|component| component.component.status == MealPlanStatus::Eaten)
+    );
+    assert_eq!(h.records.count(), 2);
 }
 
 #[tokio::test]
@@ -308,7 +618,7 @@ async fn linked_diary_records_can_be_amended_but_not_deleted() {
             entry.entry.revision,
             ConfirmMealPlanEntry {
                 consumed_on: date!(2026 - 08 - 25),
-                consumed_at: datetime!(2026-08-25 18:30 UTC),
+                consumed_at: Some(datetime!(2026-08-25 18:30 UTC)),
                 components: vec![ActualMealPlanComponent {
                     component_id: entry.components[0].component.id,
                     amount: entry.components[0].component.amount,
@@ -411,7 +721,7 @@ async fn reopening_an_eaten_entry_removes_its_diary_records() {
             entry.entry.revision,
             ConfirmMealPlanEntry {
                 consumed_on: date!(2026 - 08 - 25),
-                consumed_at: datetime!(2026-08-25 18:30 UTC),
+                consumed_at: Some(datetime!(2026-08-25 18:30 UTC)),
                 components: vec![ActualMealPlanComponent {
                     component_id: entry.components[0].component.id,
                     amount: entry.components[0].component.amount,
@@ -599,7 +909,7 @@ async fn a_reopened_entry_can_be_edited_and_confirmed_again() {
             entry.entry.revision,
             ConfirmMealPlanEntry {
                 consumed_on: date!(2026 - 08 - 25),
-                consumed_at: datetime!(2026-08-25 18:30 UTC),
+                consumed_at: Some(datetime!(2026-08-25 18:30 UTC)),
                 components: vec![ActualMealPlanComponent {
                     component_id: entry.components[0].component.id,
                     amount: entry.components[0].component.amount,
@@ -636,7 +946,7 @@ async fn a_reopened_entry_can_be_edited_and_confirmed_again() {
             edited.entry.revision,
             ConfirmMealPlanEntry {
                 consumed_on: date!(2026 - 08 - 26),
-                consumed_at: datetime!(2026-08-26 18:30 UTC),
+                consumed_at: Some(datetime!(2026-08-26 18:30 UTC)),
                 components: vec![ActualMealPlanComponent {
                     component_id: edited.components[0].component.id,
                     amount: edited.components[0].component.amount,
@@ -740,7 +1050,7 @@ async fn date_policy_forbids_resolving_a_plan_that_is_not_yet_due() {
             entry.entry.revision,
             ConfirmMealPlanEntry {
                 consumed_on: date!(2026 - 08 - 30),
-                consumed_at: datetime!(2026-08-30 18:30 UTC),
+                consumed_at: Some(datetime!(2026-08-30 18:30 UTC)),
                 components: entry
                     .components
                     .iter()
@@ -789,7 +1099,7 @@ async fn the_week_projects_a_planned_item_and_moves_it_once_eaten() {
             entry.entry.revision,
             ConfirmMealPlanEntry {
                 consumed_on: date!(2026 - 08 - 26),
-                consumed_at: datetime!(2026-08-26 19:00 UTC),
+                consumed_at: Some(datetime!(2026-08-26 19:00 UTC)),
                 components: vec![ActualMealPlanComponent {
                     component_id: entry.components[0].component.id,
                     amount: ConsumedAmount::Measure(Quantity::new(

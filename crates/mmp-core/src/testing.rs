@@ -632,7 +632,7 @@ impl ConsumptionRecordRepository for InMemoryConsumptionRecordRepository {
             .filter(|r| query.to.is_none_or(|to| r.consumed_on <= to))
             .cloned()
             .collect();
-        items.sort_by_key(|r| r.consumed_at);
+        items.sort_by_key(|r| (r.created_at, r.id));
         if query.sort == SortDirection::Descending {
             items.reverse();
         }
@@ -658,7 +658,7 @@ impl ConsumptionRecordRepository for InMemoryConsumptionRecordRepository {
             .filter(|record| record.consumed_on >= from && record.consumed_on <= to)
             .cloned()
             .collect();
-        records.sort_by_key(|record| (record.consumed_at, record.id));
+        records.sort_by_key(|record| (record.created_at, record.id));
         Ok(records)
     }
 
@@ -674,7 +674,7 @@ impl ConsumptionRecordRepository for InMemoryConsumptionRecordRepository {
             .filter(|record| record.meal_plan_entry_id == Some(entry_id))
             .cloned()
             .collect();
-        records.sort_by_key(|record| (record.consumed_at, record.id));
+        records.sort_by_key(|record| (record.created_at, record.id));
         Ok(records)
     }
 
@@ -755,6 +755,7 @@ impl MealPlanRepository for InMemoryMealPlanRepository {
                 entry.slot.order(),
                 entry.planned_time,
                 entry.created_at,
+                entry.id,
             )
         });
         Ok(entries)
@@ -842,6 +843,115 @@ impl MealPlanRepository for InMemoryMealPlanRepository {
         records.retain(|_, record| record.meal_plan_entry_id != Some(entry.id));
         rows.insert(entry.id, entry.clone());
         Ok(UpdateOutcome::Updated)
+    }
+
+    async fn resolve_component(
+        &self,
+        entry_id: MealPlanEntryId,
+        component: &crate::domain::MealPlanComponent,
+        expected: Revision,
+        consumption: Option<&ConsumptionRecord>,
+    ) -> Result<UpdateOutcome> {
+        let mut rows = self.rows.lock().unwrap();
+        let Some(entry) = rows.get_mut(&entry_id) else {
+            return Ok(UpdateOutcome::NotFound);
+        };
+        let Some(current) = entry
+            .components
+            .iter_mut()
+            .find(|candidate| candidate.id == component.id)
+        else {
+            return Ok(UpdateOutcome::NotFound);
+        };
+        if current.revision != expected {
+            return Ok(UpdateOutcome::RevisionMismatch {
+                actual: current.revision,
+            });
+        }
+        if let Some(record) = consumption {
+            let mut records = self.consumption.rows.lock().unwrap();
+            if records.values().any(|existing| {
+                existing.meal_plan_component_id == Some(component.id)
+                    && existing.member_id == record.member_id
+            }) {
+                return Err(CoreError::conflict("That item has already been confirmed."));
+            }
+            records.insert(record.id, record.clone());
+        }
+        *current = component.clone();
+        refresh_in_memory_progress(entry, component.resolved_by, component.resolved_at);
+        Ok(UpdateOutcome::Updated)
+    }
+
+    async fn reopen_component(
+        &self,
+        entry_id: MealPlanEntryId,
+        component_id: crate::domain::MealPlanComponentId,
+        expected: Revision,
+        actor_id: UserId,
+    ) -> Result<UpdateOutcome> {
+        let mut rows = self.rows.lock().unwrap();
+        let Some(entry) = rows.get_mut(&entry_id) else {
+            return Ok(UpdateOutcome::NotFound);
+        };
+        let Some(component) = entry
+            .components
+            .iter_mut()
+            .find(|candidate| candidate.id == component_id)
+        else {
+            return Ok(UpdateOutcome::NotFound);
+        };
+        if component.revision != expected {
+            return Ok(UpdateOutcome::RevisionMismatch {
+                actual: component.revision,
+            });
+        }
+        component.snapshot = None;
+        component.status = crate::domain::MealPlanStatus::Planned;
+        component.resolved_by = None;
+        component.resolved_at = None;
+        component.revision = component.revision.next();
+        self.consumption
+            .rows
+            .lock()
+            .unwrap()
+            .retain(|_, record| record.meal_plan_component_id != Some(component_id));
+        refresh_in_memory_progress(entry, Some(actor_id), Some(time::OffsetDateTime::now_utc()));
+        Ok(UpdateOutcome::Updated)
+    }
+}
+
+fn refresh_in_memory_progress(
+    entry: &mut MealPlanEntry,
+    actor_id: Option<UserId>,
+    at: Option<time::OffsetDateTime>,
+) {
+    let planned = entry
+        .components
+        .iter()
+        .filter(|component| component.status == crate::domain::MealPlanStatus::Planned)
+        .count();
+    let eaten = entry
+        .components
+        .iter()
+        .filter(|component| component.status == crate::domain::MealPlanStatus::Eaten)
+        .count();
+    entry.status = if planned == entry.components.len() {
+        crate::domain::MealPlanStatus::Planned
+    } else if eaten == entry.components.len() {
+        crate::domain::MealPlanStatus::Eaten
+    } else if planned == 0 && eaten == 0 {
+        crate::domain::MealPlanStatus::NotEaten
+    } else {
+        crate::domain::MealPlanStatus::PartiallyResolved
+    };
+    entry.revision = entry.revision.next();
+    if entry.status == crate::domain::MealPlanStatus::Planned {
+        entry.resolved_by = None;
+        entry.resolved_at = None;
+    } else {
+        entry.resolved_by = actor_id;
+        entry.resolved_at = at;
     }
 }
 

@@ -24,6 +24,7 @@ use rust_decimal::Decimal;
 use sqlx::PgPool;
 use time::OffsetDateTime;
 use time::macros::date;
+use uuid::Uuid;
 
 fn ingredient(name: &str) -> Ingredient {
     let now = OffsetDateTime::now_utc();
@@ -896,7 +897,7 @@ fn consumption_record(member_id: HouseholdMemberId, product_id: ProductId) -> Co
         slot: MealSlot::Breakfast,
         amount: ConsumedAmount::Measure(Quantity::new(Decimal::new(150, 0), Unit::Millilitre)),
         consumed_on: date!(2026 - 08 - 22),
-        consumed_at: now,
+        consumed_at: Some(now),
         nutrition: NutritionFacts {
             basis: Some(Quantity::new(Decimal::new(150, 0), Unit::Millilitre)),
             energy_kcal: Some(Decimal::new(96, 0)),
@@ -924,6 +925,19 @@ async fn round_trips_a_measured_consumption_record(pool: PgPool) {
     assert_eq!(loaded.quality, NutritionQuality::Partial);
     assert_eq!(loaded.consumed_on, date!(2026 - 08 - 22));
     assert_eq!(loaded.revision, Revision::INITIAL);
+}
+
+#[sqlx::test]
+async fn round_trips_a_consumption_record_with_an_unknown_time(pool: PgPool) {
+    let (member_id, product_id) = seed_member_and_product(&pool).await;
+    let repo = PgConsumptionRecordRepository::new(pool);
+    let mut original = consumption_record(member_id, product_id);
+    original.consumed_at = None;
+
+    repo.insert(&original).await.unwrap();
+    let loaded = repo.get(original.id).await.unwrap().unwrap();
+
+    assert_eq!(loaded.consumed_at, None);
 }
 
 #[sqlx::test]
@@ -1086,6 +1100,9 @@ fn meal_plan_entry(
     actor_id: UserId,
 ) -> MealPlanEntry {
     let now = OffsetDateTime::now_utc();
+    let now = now
+        .replace_nanosecond(now.nanosecond() / 1_000 * 1_000)
+        .unwrap();
     MealPlanEntry {
         id: MealPlanEntryId::new(),
         member_id,
@@ -1099,6 +1116,11 @@ fn meal_plan_entry(
             amount: ConsumedAmount::Measure(Quantity::new(Decimal::new(150, 0), Unit::Millilitre)),
             position: 0,
             snapshot: None,
+            status: MealPlanStatus::Planned,
+            resolved_by: None,
+            resolved_at: None,
+            revision: Revision::INITIAL,
+            display_order: Uuid::now_v7(),
         }],
         created_by: actor_id,
         updated_by: actor_id,
@@ -1144,6 +1166,10 @@ async fn resolving_a_meal_freezes_components_and_links_consumption(pool: PgPool)
     resolved.resolved_by = Some(actor_id);
     resolved.resolved_at = Some(resolved.updated_at);
     resolved.revision = resolved.revision.next();
+    resolved.components[0].status = MealPlanStatus::Eaten;
+    resolved.components[0].resolved_by = Some(actor_id);
+    resolved.components[0].resolved_at = Some(resolved.updated_at);
+    resolved.components[0].revision = resolved.components[0].revision.next();
     resolved.components[0].snapshot = Some(MealPlanComponentSnapshot {
         product_name: "Whole Milk".to_owned(),
         nutrition: NutritionFacts {
@@ -1174,6 +1200,63 @@ async fn resolving_a_meal_freezes_components_and_links_consumption(pool: PgPool)
 }
 
 #[sqlx::test]
+async fn resolving_and_reopening_one_component_preserves_its_sibling(pool: PgPool) {
+    let (member_id, product_id, actor_id) = seed_meal_plan_dependencies(&pool).await;
+    let plans = PgMealPlanRepository::new(pool.clone());
+    let consumption = PgConsumptionRecordRepository::new(pool);
+    let mut original = meal_plan_entry(member_id, product_id, actor_id);
+    let mut sibling = original.components[0].clone();
+    sibling.id = MealPlanComponentId::new();
+    sibling.position = 1;
+    original.components.push(sibling.clone());
+    plans.insert(&original).await.unwrap();
+
+    let mut resolved = original.components[0].clone();
+    resolved.snapshot = Some(MealPlanComponentSnapshot {
+        product_name: "Whole Milk".to_owned(),
+        nutrition: NutritionFacts::default(),
+        quality: NutritionQuality::Unknown,
+    });
+    resolved.status = MealPlanStatus::Eaten;
+    resolved.resolved_by = Some(actor_id);
+    resolved.resolved_at = Some(original.updated_at);
+    resolved.revision = resolved.revision.next();
+    let mut record = consumption_record(member_id, product_id);
+    record.meal_plan_entry_id = Some(original.id);
+    record.meal_plan_component_id = Some(resolved.id);
+
+    let outcome = plans
+        .resolve_component(
+            original.id,
+            &resolved,
+            original.components[0].revision,
+            Some(&record),
+        )
+        .await
+        .unwrap();
+    assert_eq!(outcome, UpdateOutcome::Updated);
+
+    let partially_resolved = plans.get(original.id).await.unwrap().unwrap();
+    assert_eq!(partially_resolved.status, MealPlanStatus::PartiallyResolved);
+    assert_eq!(partially_resolved.components[0], resolved);
+    assert_eq!(partially_resolved.components[1], sibling);
+    assert!(consumption.get(record.id).await.unwrap().is_some());
+
+    let outcome = plans
+        .reopen_component(original.id, resolved.id, resolved.revision, actor_id)
+        .await
+        .unwrap();
+    assert_eq!(outcome, UpdateOutcome::Updated);
+
+    let reopened = plans.get(original.id).await.unwrap().unwrap();
+    assert_eq!(reopened.status, MealPlanStatus::Planned);
+    assert_eq!(reopened.components[0].status, MealPlanStatus::Planned);
+    assert_eq!(reopened.components[0].snapshot, None);
+    assert_eq!(reopened.components[1], sibling);
+    assert!(consumption.get(record.id).await.unwrap().is_none());
+}
+
+#[sqlx::test]
 async fn updating_a_meal_plan_entry_replaces_its_components(pool: PgPool) {
     let (member_id, product_id, actor_id) = seed_meal_plan_dependencies(&pool).await;
     let other_product = product("Other product");
@@ -1193,6 +1276,11 @@ async fn updating_a_meal_plan_entry_replaces_its_components(pool: PgPool) {
             amount: ConsumedAmount::Servings(Decimal::new(2, 0)),
             position: 0,
             snapshot: None,
+            status: MealPlanStatus::Planned,
+            resolved_by: None,
+            resolved_at: None,
+            revision: Revision::INITIAL,
+            display_order: Uuid::now_v7(),
         },
         MealPlanComponent {
             id: MealPlanComponentId::new(),
@@ -1200,6 +1288,11 @@ async fn updating_a_meal_plan_entry_replaces_its_components(pool: PgPool) {
             amount: ConsumedAmount::Servings(Decimal::new(1, 0)),
             position: 1,
             snapshot: None,
+            status: MealPlanStatus::Planned,
+            resolved_by: None,
+            resolved_at: None,
+            revision: Revision::INITIAL,
+            display_order: Uuid::now_v7(),
         },
     ];
     updated.revision = updated.revision.next();
@@ -1249,6 +1342,8 @@ async fn resolving_with_a_stale_revision_leaves_the_entry_untouched(pool: PgPool
 
     let mut resolved = original.clone();
     resolved.status = MealPlanStatus::Eaten;
+    resolved.resolved_by = Some(actor_id);
+    resolved.resolved_at = Some(resolved.updated_at);
     resolved.revision = resolved.revision.next();
     let mut record = consumption_record(member_id, product_id);
     record.meal_plan_entry_id = Some(original.id);
@@ -1309,6 +1404,10 @@ async fn reopening_a_meal_removes_its_consumption_and_clears_the_snapshot(pool: 
     resolved.resolved_by = Some(actor_id);
     resolved.resolved_at = Some(resolved.updated_at);
     resolved.revision = resolved.revision.next();
+    resolved.components[0].status = MealPlanStatus::Eaten;
+    resolved.components[0].resolved_by = Some(actor_id);
+    resolved.components[0].resolved_at = Some(resolved.updated_at);
+    resolved.components[0].revision = resolved.components[0].revision.next();
     resolved.components[0].snapshot = Some(MealPlanComponentSnapshot {
         product_name: "Whole Milk".to_owned(),
         nutrition: NutritionFacts {
@@ -1331,6 +1430,10 @@ async fn reopening_a_meal_removes_its_consumption_and_clears_the_snapshot(pool: 
     reopened.resolved_by = None;
     reopened.resolved_at = None;
     reopened.components[0].snapshot = None;
+    reopened.components[0].status = MealPlanStatus::Planned;
+    reopened.components[0].resolved_by = None;
+    reopened.components[0].resolved_at = None;
+    reopened.components[0].revision = reopened.components[0].revision.next();
     reopened.revision = reopened.revision.next();
 
     let outcome = plans.reopen(&reopened, resolved.revision).await.unwrap();
@@ -1348,7 +1451,13 @@ async fn a_component_cannot_be_confirmed_by_two_consumption_records(pool: PgPool
 
     let mut resolved = original.clone();
     resolved.status = MealPlanStatus::Eaten;
+    resolved.resolved_by = Some(actor_id);
+    resolved.resolved_at = Some(resolved.updated_at);
     resolved.revision = resolved.revision.next();
+    resolved.components[0].status = MealPlanStatus::Eaten;
+    resolved.components[0].resolved_by = Some(actor_id);
+    resolved.components[0].resolved_at = Some(resolved.updated_at);
+    resolved.components[0].revision = resolved.components[0].revision.next();
     resolved.components[0].snapshot = Some(MealPlanComponentSnapshot {
         product_name: "Whole Milk".to_owned(),
         nutrition: NutritionFacts::default(),
@@ -1365,7 +1474,7 @@ async fn a_component_cannot_be_confirmed_by_two_consumption_records(pool: PgPool
         .resolve(&resolved, original.revision, &[first, second])
         .await
         .unwrap_err();
-    assert!(matches!(error, CoreError::Duplicate { .. }));
+    assert!(matches!(error, CoreError::Duplicate { .. }), "{error:?}");
 }
 
 fn target(

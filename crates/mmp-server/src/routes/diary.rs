@@ -112,7 +112,12 @@ async fn update(
     let existing = state.diary.get(id).await?;
     require_member_access(&state, &principal, existing.member_id).await?;
 
-    let updated = state.diary.amend(id, revision, body.into()).await?;
+    let patch = body.into_domain().map_err(|message| {
+        let mut errors = mmp_core::ValidationErrors::new();
+        errors.push("consumed_at", message);
+        mmp_core::CoreError::Validation(errors)
+    })?;
+    let updated = state.diary.amend(id, revision, patch).await?;
     Ok(Tagged(updated.revision, updated.into()))
 }
 

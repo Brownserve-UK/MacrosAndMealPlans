@@ -34,27 +34,27 @@ const LIST_ASC: &str = concat!(
     columns!(),
     " FROM consumption_record c LEFT JOIN meal_plan_component mpc ON mpc.id = c.meal_plan_component_id",
     filter!(),
-    " ORDER BY c.consumed_at ASC, c.id ASC LIMIT $4 OFFSET $5"
+    " ORDER BY c.created_at ASC, c.id ASC LIMIT $4 OFFSET $5"
 );
 const LIST_DESC: &str = concat!(
     "SELECT ",
     columns!(),
     " FROM consumption_record c LEFT JOIN meal_plan_component mpc ON mpc.id = c.meal_plan_component_id",
     filter!(),
-    " ORDER BY c.consumed_at DESC, c.id DESC LIMIT $4 OFFSET $5"
+    " ORDER BY c.created_at DESC, c.id DESC LIMIT $4 OFFSET $5"
 );
 const LIST_PERIOD: &str = concat!(
     "SELECT ",
     columns!(),
     " FROM consumption_record c LEFT JOIN meal_plan_component mpc ON mpc.id = c.meal_plan_component_id ",
     "WHERE c.member_id = $1 AND c.consumed_on >= $2 AND c.consumed_on <= $3 ",
-    "ORDER BY c.consumed_at ASC, c.id ASC"
+    "ORDER BY c.created_at ASC, c.id ASC"
 );
 const LIST_FOR_MEAL_PLAN_ENTRY: &str = concat!(
     "SELECT ",
     columns!(),
     " FROM consumption_record c JOIN meal_plan_component mpc ON mpc.id = c.meal_plan_component_id ",
-    "WHERE mpc.entry_id = $1 ORDER BY c.consumed_at ASC, c.id ASC"
+    "WHERE mpc.entry_id = $1 ORDER BY c.created_at ASC, c.id ASC"
 );
 const CURRENT_REVISION: &str = "SELECT revision FROM consumption_record WHERE id = $1";
 const DELETE: &str = "DELETE FROM consumption_record WHERE id = $1";

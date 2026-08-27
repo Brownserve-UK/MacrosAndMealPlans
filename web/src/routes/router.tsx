@@ -18,34 +18,133 @@ const indexRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/',
   beforeLoad: () => {
-    throw redirect({ to: '/meal-plan' });
+    throw redirect({ to: '/food-log' });
   },
 });
 
-const mealPlanIndexRoute = createRoute({
+const foodLogIndexRoute = createRoute({
   getParentRoute: () => rootRoute,
-  path: '/meal-plan',
-  component: MealPlanIndexRedirect,
+  path: '/food-log',
+  component: () => <MealPlanIndexRedirect workspace="today" />,
 });
 
-const mealPlanWeekRoute = createRoute({
+const foodLogWeekRoute = createRoute({
   getParentRoute: () => rootRoute,
-  path: '/meal-plan/$weekStart',
+  path: '/food-log/$weekStart',
   beforeLoad: ({ params }) => {
     throw redirect({
-      to: '/meal-plan/$weekStart/$day',
+      to: '/food-log/$weekStart/$day',
       params: { weekStart: params.weekStart, day: defaultDayFor(params.weekStart) },
       replace: true,
     });
   },
 });
 
-const mealPlanDayRoute = createRoute({
+const foodLogDayRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/food-log/$weekStart/$day',
+  component: function ViewFoodLog() {
+    const { weekStart, day } = foodLogDayRoute.useParams();
+    return <MealPlanPage weekStart={weekStart} day={day} workspace="today" />;
+  },
+});
+
+const plannerIndexRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/planner',
+  component: () => <MealPlanIndexRedirect workspace="planner" />,
+});
+
+const plannerWeekRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/planner/$weekStart',
+  beforeLoad: ({ params }) => {
+    throw redirect({
+      to: '/planner/$weekStart/$day',
+      params: { weekStart: params.weekStart, day: defaultDayFor(params.weekStart) },
+      replace: true,
+    });
+  },
+});
+
+const plannerDayRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/planner/$weekStart/$day',
+  component: function ViewPlanner() {
+    const { weekStart, day } = plannerDayRoute.useParams();
+    return <MealPlanPage weekStart={weekStart} day={day} workspace="planner" />;
+  },
+});
+
+const legacyMealPlanRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/meal-plan',
+  beforeLoad: () => {
+    throw redirect({ to: '/food-log', replace: true });
+  },
+});
+
+const legacyMealPlanWeekRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/meal-plan/$weekStart',
+  beforeLoad: ({ params }) => {
+    throw redirect({
+      to: '/food-log/$weekStart',
+      params: { weekStart: params.weekStart },
+      replace: true,
+    });
+  },
+});
+
+const legacyMealPlanDayRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/meal-plan/$weekStart/$day',
-  component: function ViewMealPlanDay() {
-    const { weekStart, day } = mealPlanDayRoute.useParams();
-    return <MealPlanPage weekStart={weekStart} day={day} />;
+  beforeLoad: ({ params }) => {
+    throw redirect({
+      to: '/food-log/$weekStart/$day',
+      params,
+      replace: true,
+    });
+  },
+});
+
+const legacyDiaryRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/diary',
+  beforeLoad: () => {
+    throw redirect({ to: '/food-log', replace: true });
+  },
+});
+
+const legacyTodayRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/today',
+  beforeLoad: () => {
+    throw redirect({ to: '/food-log', replace: true });
+  },
+});
+
+const legacyTodayWeekRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/today/$weekStart',
+  beforeLoad: ({ params }) => {
+    throw redirect({
+      to: '/food-log/$weekStart',
+      params: { weekStart: params.weekStart },
+      replace: true,
+    });
+  },
+});
+
+const legacyTodayDayRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/today/$weekStart/$day',
+  beforeLoad: ({ params }) => {
+    throw redirect({
+      to: '/food-log/$weekStart/$day',
+      params,
+      replace: true,
+    });
   },
 });
 
@@ -114,9 +213,19 @@ const profileRoute = createRoute({
 
 const routeTree = rootRoute.addChildren([
   indexRoute,
-  mealPlanIndexRoute,
-  mealPlanWeekRoute,
-  mealPlanDayRoute,
+  foodLogIndexRoute,
+  foodLogWeekRoute,
+  foodLogDayRoute,
+  plannerIndexRoute,
+  plannerWeekRoute,
+  plannerDayRoute,
+  legacyMealPlanRoute,
+  legacyMealPlanWeekRoute,
+  legacyMealPlanDayRoute,
+  legacyDiaryRoute,
+  legacyTodayRoute,
+  legacyTodayWeekRoute,
+  legacyTodayDayRoute,
   ingredientsRoute,
   ingredientRoute,
   productsRoute,

@@ -1,6 +1,6 @@
 use mmp_core::domain::{
-    ActualMealPlanComponent, ConfirmMealPlanEntry, MealPlanEntryPatch, MealPlanStatus, MealSlot,
-    NewMealPlanComponent, NewMealPlanEntry, Patch,
+    ActualMealPlanComponent, ConfirmMealPlanComponent, ConfirmMealPlanEntry, MealPlanEntryPatch,
+    MealPlanStatus, MealSlot, NewMealPlanComponent, NewMealPlanEntry, Patch,
 };
 use mmp_core::services::{
     MealItem, MealItemSource, MealPlanComponentView, MealPlanDay, MealPlanEntryView, MealPlanWeek,
@@ -40,6 +40,8 @@ pub struct MealPlanComponentDto {
     pub position: i32,
     pub nutrition: NutritionDto,
     pub quality: mmp_core::domain::NutritionQuality,
+    pub status: MealPlanStatus,
+    pub revision: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub consumption_record: Option<ConsumptionRecordDto>,
 }
@@ -54,6 +56,8 @@ impl From<MealPlanComponentView> for MealPlanComponentDto {
             position: value.component.position,
             nutrition: value.nutrition.into(),
             quality: value.quality,
+            status: value.component.status,
+            revision: value.component.revision.get(),
             consumption_record: value.consumption_record.map(Into::into),
         }
     }
@@ -161,10 +165,15 @@ pub struct MealItemDto {
     #[serde(skip_serializing_if = "Option::is_none", with = "iso_time::option")]
     #[schema(value_type = Option<String>, example = "18:30")]
     pub at: Option<Time>,
+    #[serde(default, with = "time::serde::rfc3339::option")]
+    #[schema(value_type = Option<String>, format = DateTime)]
+    pub consumed_at: Option<OffsetDateTime>,
     pub nutrition: NutritionDto,
     pub quality: mmp_core::domain::NutritionQuality,
     pub needs_attention: bool,
     pub revision: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub record_revision: Option<i64>,
 }
 
 impl From<MealItem> for MealItemDto {
@@ -179,10 +188,12 @@ impl From<MealItem> for MealItemDto {
             planned_amount: value.planned_amount.map(Into::into),
             planned_on: value.planned_on,
             at: value.at,
+            consumed_at: value.consumed_at,
             nutrition: value.nutrition.into(),
             quality: value.quality,
             needs_attention: value.needs_attention,
             revision: value.revision.get(),
+            record_revision: value.record_revision.map(|revision| revision.get()),
         }
     }
 }
@@ -269,6 +280,8 @@ impl From<MealPlanWeek> for MealPlanWeekDto {
 
 #[derive(Debug, Clone, Deserialize, ToSchema)]
 pub struct MealPlanComponentRequest {
+    #[serde(default)]
+    pub id: Option<Uuid>,
     pub product_id: Uuid,
     pub amount: AmountDto,
 }
@@ -276,6 +289,7 @@ pub struct MealPlanComponentRequest {
 impl From<MealPlanComponentRequest> for NewMealPlanComponent {
     fn from(value: MealPlanComponentRequest) -> Self {
         Self {
+            id: value.id.map(Into::into),
             product_id: value.product_id.into(),
             amount: value.amount.into(),
         }
@@ -359,9 +373,9 @@ pub struct MarkMealPlanEatenRequest {
     #[serde(with = "iso_date")]
     #[schema(value_type = String, format = Date)]
     pub consumed_on: Date,
-    #[serde(with = "time::serde::rfc3339")]
-    #[schema(value_type = String, format = DateTime)]
-    pub consumed_at: OffsetDateTime,
+    #[serde(default, with = "time::serde::rfc3339::option")]
+    #[schema(value_type = Option<String>, format = DateTime)]
+    pub consumed_at: Option<OffsetDateTime>,
     pub components: Vec<ActualMealPlanComponentRequest>,
 }
 
@@ -378,6 +392,28 @@ impl MarkMealPlanEatenRequest {
                     amount: component.amount.into(),
                 })
                 .collect(),
+            actor_id,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+pub struct MarkMealPlanComponentEatenRequest {
+    #[serde(with = "iso_date")]
+    #[schema(value_type = String, format = Date)]
+    pub consumed_on: Date,
+    #[serde(default, with = "time::serde::rfc3339::option")]
+    #[schema(value_type = Option<String>, format = DateTime)]
+    pub consumed_at: Option<OffsetDateTime>,
+    pub amount: AmountDto,
+}
+
+impl MarkMealPlanComponentEatenRequest {
+    pub fn into_domain(self, actor_id: mmp_core::domain::UserId) -> ConfirmMealPlanComponent {
+        ConfirmMealPlanComponent {
+            consumed_on: self.consumed_on,
+            consumed_at: self.consumed_at,
+            amount: self.amount.into(),
             actor_id,
         }
     }
