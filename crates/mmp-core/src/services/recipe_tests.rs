@@ -6,8 +6,9 @@ use time::macros::datetime;
 
 use crate::CoreError;
 use crate::domain::{
-    ConsumedAmount, NewRecipe, NewRecipeComponent, NutritionFacts, NutritionQuality, Product,
-    ProductId, Provenance, Quantity, RecipePatch, Revision, Unit, UserId,
+    ConsumedAmount, MealCategory, NewRecipe, NewRecipeComponent, NewRecipeInstruction,
+    NutritionFacts, NutritionQuality, Product, ProductId, Provenance, Quantity, RecipePatch,
+    RecipePhotoDerivatives, Revision, Unit, UserId,
 };
 use crate::ports::{FixedClock, PageRequest, RecipeQuery, SortDirection};
 use crate::services::RecipeService;
@@ -92,8 +93,16 @@ fn new_recipe(actor: UserId, components: Vec<NewRecipeComponent>) -> NewRecipe {
     NewRecipe {
         id: None,
         name: "Soup".to_owned(),
+        description: None,
         servings: 2,
+        preparation_minutes: None,
+        cooking_minutes: None,
+        notes: None,
         components,
+        instructions: vec![],
+        meal_categories: vec![],
+        country_categories: vec![],
+        tags: vec![],
         actor_id: actor,
     }
 }
@@ -138,6 +147,89 @@ async fn rejects_an_unknown_product() {
         .unwrap_err();
 
     assert!(matches!(err, CoreError::Validation(_)));
+}
+
+#[tokio::test]
+async fn normalises_metadata_and_preserves_instruction_order() {
+    let h = harness();
+    let actor = UserId::new();
+    let product = seed_product(&h.products, 200);
+    let mut input = new_recipe(actor, vec![component(product)]);
+    input.description = Some("  Warming soup  ".to_owned());
+    input.notes = Some("   ".to_owned());
+    input.preparation_minutes = Some(10);
+    input.cooking_minutes = Some(20);
+    input.instructions = vec![
+        NewRecipeInstruction {
+            id: None,
+            text: "  Chop  ".to_owned(),
+        },
+        NewRecipeInstruction {
+            id: None,
+            text: "Cook".to_owned(),
+        },
+    ];
+    input.meal_categories = vec![MealCategory::Lunch, MealCategory::Lunch];
+    input.country_categories = vec!["GB".to_owned(), "GB".to_owned()];
+    input.tags = vec![
+        " Quick ".to_owned(),
+        "quick".to_owned(),
+        "Family".to_owned(),
+    ];
+
+    let recipe = h.service.create_recipe(input).await.unwrap();
+
+    assert_eq!(recipe.description.as_deref(), Some("Warming soup"));
+    assert_eq!(recipe.notes, None);
+    assert_eq!(recipe.instructions[0].text, "Chop");
+    assert_eq!(recipe.instructions[1].position, 1);
+    assert_eq!(recipe.meal_categories, vec![MealCategory::Lunch]);
+    assert_eq!(recipe.country_categories, vec!["GB"]);
+    assert_eq!(recipe.tags, vec!["Quick", "Family"]);
+}
+
+#[tokio::test]
+async fn photo_changes_increment_recipe_and_photo_revisions() {
+    let h = harness();
+    let actor = UserId::new();
+    let product = seed_product(&h.products, 200);
+    let recipe = h
+        .service
+        .create_recipe(new_recipe(actor, vec![component(product)]))
+        .await
+        .unwrap();
+    let derivatives = RecipePhotoDerivatives {
+        hero_jpeg: vec![1],
+        card_jpeg: vec![2],
+        hero_width: 10,
+        hero_height: 5,
+        card_width: 10,
+        card_height: 5,
+    };
+
+    let with_photo = h
+        .service
+        .replace_photo(recipe.id, recipe.revision, derivatives.clone(), actor)
+        .await
+        .unwrap();
+    assert_eq!(with_photo.revision, Revision::new(2));
+    assert_eq!(with_photo.photo_version, Some(1));
+
+    let replaced = h
+        .service
+        .replace_photo(with_photo.id, with_photo.revision, derivatives, actor)
+        .await
+        .unwrap();
+    assert_eq!(replaced.revision, Revision::new(3));
+    assert_eq!(replaced.photo_version, Some(2));
+
+    let deleted = h
+        .service
+        .delete_photo(replaced.id, replaced.revision, actor)
+        .await
+        .unwrap();
+    assert_eq!(deleted.revision, Revision::new(4));
+    assert_eq!(deleted.photo_version, None);
 }
 
 #[tokio::test]

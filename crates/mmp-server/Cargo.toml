@@ -12,6 +12,7 @@ async-trait = "0.1.92"
 axum = "0.8.9"
 base64 = "0.23.1"
 dotenvy = "0.15.7"
+image = { version = "0.25.8", default-features = false, features = ["jpeg", "png", "webp"] }
 mmp-core = { version = "0.1.0", path = "../mmp-core", features = ["openapi"] }
 mmp-postgres = { version = "0.1.0", path = "../mmp-postgres" }
 rust_decimal = { version = "1.42.1", features = ["serde", "serde-with-float"] }

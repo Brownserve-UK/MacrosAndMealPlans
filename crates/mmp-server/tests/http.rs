@@ -1,3 +1,4 @@
+use std::io::Cursor;
 use std::sync::Arc;
 
 use axum::Router;
@@ -6,6 +7,7 @@ use axum::http::{Request, StatusCode, header};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use http_body_util::BodyExt;
+use image::{DynamicImage, ImageFormat, RgbImage};
 use mmp_core::ports::FixedClock;
 use mmp_core::services::{
     CatalogueService, DiaryService, HouseholdService, HouseholdSettingsService, MealPlanService,
@@ -160,6 +162,39 @@ async fn send(app: &Router, call: Call) -> (StatusCode, Value, axum::http::Heade
         serde_json::from_slice(&bytes).unwrap_or(Value::Null)
     };
     (status, value, headers)
+}
+
+async fn send_bytes(
+    app: &Router,
+    method: &'static str,
+    path: impl Into<String>,
+    content_type: &'static str,
+    body: Vec<u8>,
+    revision: Option<&str>,
+) -> (StatusCode, Vec<u8>, axum::http::HeaderMap) {
+    let mut builder = Request::builder()
+        .method(method)
+        .uri(path.into())
+        .header(header::AUTHORIZATION, credential())
+        .header(header::CONTENT_TYPE, content_type);
+    if let Some(revision) = revision {
+        builder = builder.header(header::IF_MATCH, format!("\"{revision}\""));
+    }
+    let response = app
+        .clone()
+        .oneshot(builder.body(Body::from(body)).unwrap())
+        .await
+        .unwrap();
+    let status = response.status();
+    let headers = response.headers().clone();
+    let bytes = response
+        .into_body()
+        .collect()
+        .await
+        .unwrap()
+        .to_bytes()
+        .to_vec();
+    (status, bytes, headers)
 }
 
 fn etag(headers: &axum::http::HeaderMap) -> String {
@@ -2405,7 +2440,14 @@ async fn creates_a_recipe_and_derives_its_nutrition() {
         &app,
         Call::new("POST", "/api/v1/recipes").body(json!({
             "name": "Warm Milk",
+            "description": "A quiet drink",
             "servings": 2,
+            "preparation_minutes": 5,
+            "cooking_minutes": 10,
+            "instructions": [{"text": "Warm gently"}],
+            "meal_categories": ["snack"],
+            "country_categories": ["GB"],
+            "tags": ["Quick", "quick"],
             "components": [
                 {"product_id": product_id, "amount": measured_amount(100.0)}
             ]
@@ -2423,6 +2465,12 @@ async fn creates_a_recipe_and_derives_its_nutrition() {
     .await;
     assert_eq!(status, StatusCode::OK, "{fetched}");
     assert_eq!(fetched["components"][0]["product_id"], product_id);
+    assert_eq!(
+        fetched["components"][0]["product_name"],
+        "Tesco Whole Milk 1L"
+    );
+    assert_eq!(fetched["instructions"][0]["text"], "Warm gently");
+    assert_eq!(fetched["tags"], json!(["Quick"]));
     assert!(!etag(&headers).is_empty());
 
     // 100g of a 64 kcal/100g product across 2 servings => 32 kcal per serving.
@@ -2433,6 +2481,146 @@ async fn creates_a_recipe_and_derives_its_nutrition() {
     .await;
     assert_eq!(status, StatusCode::OK, "{nutrition}");
     assert_eq!(nutrition["nutrition"]["energy_kcal"], 32.0);
+}
+
+#[tokio::test]
+async fn uploads_caches_and_deletes_a_recipe_photo() {
+    let app = app().await;
+    let product = create_milk_product(&app).await;
+    let (status, recipe, headers) = send(
+        &app,
+        Call::new("POST", "/api/v1/recipes").body(json!({
+            "name": "Photo recipe",
+            "servings": 1,
+            "components": [{"product_id": product["id"], "amount": measured_amount(100.0)}]
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{recipe}");
+    let id = recipe["id"].as_str().unwrap();
+    let revision = etag(&headers);
+    let image = DynamicImage::ImageRgb8(RgbImage::from_pixel(800, 400, image::Rgb([90, 40, 20])));
+    let mut png = Vec::new();
+    image
+        .write_to(&mut Cursor::new(&mut png), ImageFormat::Png)
+        .unwrap();
+
+    let (status, _, _) = send_bytes(
+        &app,
+        "PUT",
+        format!("/api/v1/recipes/{id}/photo"),
+        "image/gif",
+        png.clone(),
+        Some(&revision),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+
+    let (status, _, _) = send_bytes(
+        &app,
+        "PUT",
+        format!("/api/v1/recipes/{id}/photo"),
+        "image/png",
+        b"not an image".to_vec(),
+        Some(&revision),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+
+    let (status, _, _) = send_bytes(
+        &app,
+        "PUT",
+        format!("/api/v1/recipes/{id}/photo"),
+        "image/png",
+        png.clone(),
+        Some("999"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+
+    let (status, _, _) = send_bytes(
+        &app,
+        "PUT",
+        format!("/api/v1/recipes/{id}/photo"),
+        "image/png",
+        vec![0; 20 * 1024 * 1024 + 1],
+        Some(&revision),
+    )
+    .await;
+    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+
+    let (status, uploaded, headers) = send_bytes(
+        &app,
+        "PUT",
+        format!("/api/v1/recipes/{id}/photo"),
+        "image/png",
+        png,
+        Some(&revision),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "{}",
+        String::from_utf8_lossy(&uploaded)
+    );
+    let uploaded: Value = serde_json::from_slice(&uploaded).unwrap();
+    assert_eq!(uploaded["photo_version"], 1);
+    let photo_revision = etag(&headers);
+
+    let (status, photo, headers) = send_bytes(
+        &app,
+        "GET",
+        format!("/api/v1/recipes/{id}/photo/card"),
+        "application/octet-stream",
+        vec![],
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(photo.starts_with(&[0xff, 0xd8]));
+    assert_eq!(headers.get(header::CONTENT_TYPE).unwrap(), "image/jpeg");
+    assert!(
+        headers
+            .get(header::CACHE_CONTROL)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .contains("private")
+    );
+    let photo_etag = headers.get(header::ETAG).unwrap().clone();
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!("/api/v1/recipes/{id}/photo/card"))
+                .header(header::AUTHORIZATION, credential())
+                .header(header::IF_NONE_MATCH, photo_etag)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
+
+    let (status, deleted, _) = send_bytes(
+        &app,
+        "DELETE",
+        format!("/api/v1/recipes/{id}/photo"),
+        "application/octet-stream",
+        vec![],
+        Some(&photo_revision),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "{}",
+        String::from_utf8_lossy(&deleted)
+    );
+    let deleted: Value = serde_json::from_slice(&deleted).unwrap();
+    assert!(deleted["photo_version"].is_null());
 }
 
 #[tokio::test]

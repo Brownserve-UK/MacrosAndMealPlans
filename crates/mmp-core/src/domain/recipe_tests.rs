@@ -50,8 +50,16 @@ fn new_recipe(servings: i32, components: Vec<NewRecipeComponent>) -> NewRecipe {
     NewRecipe {
         id: None,
         name: "Test Recipe".to_owned(),
+        description: None,
         servings,
+        preparation_minutes: None,
+        cooking_minutes: None,
+        notes: None,
         components,
+        instructions: vec![],
+        meal_categories: vec![],
+        country_categories: vec![],
+        tags: vec![],
         actor_id: UserId::new(),
     }
 }

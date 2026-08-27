@@ -2,8 +2,11 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::domain::{
-    ConsumedNutrition, NewRecipe, NewRecipeComponent, ProductId, Recipe, RecipeComponent,
-    RecipeComponentId, RecipeId, RecipePatch, RecipeVisibility, Revision, UserId, recipe_nutrition,
+    ConsumedNutrition, NewRecipe, NewRecipeComponent, NewRecipeInstruction, Product, ProductId,
+    Recipe, RecipeComponent, RecipeComponentId, RecipeId, RecipeInstruction, RecipeInstructionId,
+    RecipePatch, RecipePhoto, RecipePhotoDerivatives, RecipeSummary, RecipeVisibility, Revision,
+    UserId, normalise_countries, normalise_optional_text, normalise_tags, normalise_unique,
+    recipe_nutrition,
 };
 use crate::error::{CoreError, Result, ValidationErrors};
 use crate::ports::{
@@ -36,13 +39,23 @@ impl RecipeService {
         input.validate()?;
         let name = input.name.trim().to_owned();
         let components = self.assemble_components(&input.components, &[]).await?;
+        let instructions = assemble_instructions(&input.instructions, &[])?;
 
         let now = self.clock.now();
         let recipe = Recipe {
             id: input.id.unwrap_or_default(),
             name,
+            description: normalise_optional_text(input.description),
             servings: input.servings,
+            preparation_minutes: input.preparation_minutes,
+            cooking_minutes: input.cooking_minutes,
+            notes: normalise_optional_text(input.notes),
             components,
+            instructions,
+            meal_categories: normalise_unique(input.meal_categories),
+            country_categories: normalise_countries(input.country_categories),
+            tags: normalise_tags(input.tags),
+            photo_version: None,
             owner_id: input.actor_id,
             visibility: RecipeVisibility::Private,
             created_by: input.actor_id,
@@ -67,8 +80,20 @@ impl RecipeService {
         Ok(recipe)
     }
 
-    pub async fn list_recipes(&self, query: &RecipeQuery) -> Result<Paginated<Recipe>> {
+    pub async fn list_recipes(&self, query: &RecipeQuery) -> Result<Paginated<RecipeSummary>> {
         self.recipes.list(query).await
+    }
+
+    pub async fn products_for(&self, recipe: &Recipe) -> Result<Vec<Product>> {
+        self.products
+            .get_many(
+                &recipe
+                    .components
+                    .iter()
+                    .map(|component| component.product_id)
+                    .collect::<Vec<_>>(),
+            )
+            .await
     }
 
     pub async fn update_recipe(
@@ -89,13 +114,29 @@ impl RecipeService {
         if let Some(name) = patch.name {
             current.name = name.trim().to_owned();
         }
+        current.description = normalise_optional_text(patch.description.apply(current.description));
         if let Some(servings) = patch.servings {
             current.servings = servings;
         }
+        current.preparation_minutes = patch.preparation_minutes.apply(current.preparation_minutes);
+        current.cooking_minutes = patch.cooking_minutes.apply(current.cooking_minutes);
+        current.notes = normalise_optional_text(patch.notes.apply(current.notes));
         if let Some(components) = patch.components {
             current.components = self
                 .assemble_components(&components, &current.components)
                 .await?;
+        }
+        if let Some(instructions) = patch.instructions {
+            current.instructions = assemble_instructions(&instructions, &current.instructions)?;
+        }
+        if let Some(categories) = patch.meal_categories {
+            current.meal_categories = normalise_unique(categories);
+        }
+        if let Some(countries) = patch.country_categories {
+            current.country_categories = normalise_countries(countries);
+        }
+        if let Some(tags) = patch.tags {
+            current.tags = normalise_tags(tags);
         }
 
         current.revision = current.revision.next();
@@ -132,6 +173,58 @@ impl RecipeService {
         let recipe = self.get_recipe(id, actor).await?;
         self.derive_nutrition(&recipe.components, recipe.servings)
             .await
+    }
+
+    pub async fn get_photo(&self, id: RecipeId, actor: UserId) -> Result<RecipePhoto> {
+        self.get_recipe(id, actor).await?;
+        self.recipes
+            .get_photo(id)
+            .await?
+            .ok_or_else(|| CoreError::not_found("recipe photo", id))
+    }
+
+    pub async fn replace_photo(
+        &self,
+        id: RecipeId,
+        expected: Revision,
+        derivatives: RecipePhotoDerivatives,
+        actor: UserId,
+    ) -> Result<Recipe> {
+        let mut current = self.get_recipe(id, actor).await?;
+        require_revision(id, expected, current.revision)?;
+        let now = self.clock.now();
+        let version = current.photo_version.unwrap_or(0) + 1;
+        current.photo_version = Some(version);
+        current.revision = current.revision.next();
+        current.updated_by = actor;
+        current.updated_at = now;
+        let photo = RecipePhoto {
+            recipe_id: id,
+            version,
+            derivatives,
+            updated_at: now,
+        };
+        self.commit_photo(&current, expected, Some(&photo)).await?;
+        Ok(current)
+    }
+
+    pub async fn delete_photo(
+        &self,
+        id: RecipeId,
+        expected: Revision,
+        actor: UserId,
+    ) -> Result<Recipe> {
+        let mut current = self.get_recipe(id, actor).await?;
+        require_revision(id, expected, current.revision)?;
+        if current.photo_version.is_none() {
+            return Ok(current);
+        }
+        current.photo_version = None;
+        current.revision = current.revision.next();
+        current.updated_by = actor;
+        current.updated_at = self.clock.now();
+        self.commit_photo(&current, expected, None).await?;
+        Ok(current)
     }
 
     pub async fn nutrition_preview(
@@ -232,6 +325,55 @@ impl RecipeService {
             UpdateOutcome::NotFound => Err(CoreError::not_found(RECIPE, recipe.id)),
         }
     }
+
+    async fn commit_photo(
+        &self,
+        recipe: &Recipe,
+        expected: Revision,
+        photo: Option<&RecipePhoto>,
+    ) -> Result<()> {
+        match self.recipes.update_photo(recipe, expected, photo).await? {
+            UpdateOutcome::Updated => Ok(()),
+            UpdateOutcome::RevisionMismatch { actual } => Err(CoreError::RevisionMismatch {
+                resource: RECIPE,
+                id: recipe.id.to_string(),
+                expected,
+                actual,
+            }),
+            UpdateOutcome::NotFound => Err(CoreError::not_found(RECIPE, recipe.id)),
+        }
+    }
+}
+
+fn assemble_instructions(
+    submitted: &[NewRecipeInstruction],
+    existing: &[RecipeInstruction],
+) -> Result<Vec<RecipeInstruction>> {
+    let allowed: HashSet<RecipeInstructionId> = existing.iter().map(|step| step.id).collect();
+    let mut errors = ValidationErrors::new();
+    let mut seen = HashSet::new();
+    let mut instructions = Vec::with_capacity(submitted.len());
+    for (index, instruction) in submitted.iter().enumerate() {
+        let id = match instruction.id {
+            Some(id) => {
+                if !existing.is_empty() && !allowed.contains(&id) {
+                    errors.push(format!("instructions.{index}.id"), "Unknown step");
+                }
+                id
+            }
+            None => RecipeInstructionId::new(),
+        };
+        if !seen.insert(id) {
+            errors.push(format!("instructions.{index}.id"), "Duplicate step");
+        }
+        instructions.push(RecipeInstruction {
+            id,
+            text: instruction.text.trim().to_owned(),
+            position: index as i32,
+        });
+    }
+    errors.into_result()?;
+    Ok(instructions)
 }
 
 fn require_revision(id: RecipeId, expected: Revision, actual: Revision) -> Result<()> {

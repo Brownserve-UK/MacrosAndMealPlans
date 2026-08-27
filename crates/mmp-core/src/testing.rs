@@ -9,7 +9,7 @@ use crate::domain::{
     AccessScope, ConsumptionRecord, ConsumptionRecordId, HouseholdMember, HouseholdMemberId,
     HouseholdSettings, Ingredient, IngredientId, MealPlanEntry, MealPlanEntryId, MealTimes,
     MemberAccessGrant, NutritionTarget, NutritionTargetId, Product, ProductId, Recipe, RecipeId,
-    Revision, Role, User, UserId,
+    RecipePhoto, RecipeSummary, Revision, Role, User, UserId,
 };
 use crate::error::{CoreError, Result};
 use crate::ports::{
@@ -1110,6 +1110,7 @@ impl HouseholdSettingsRepository for InMemoryHouseholdSettingsRepository {
 #[derive(Default, Clone)]
 pub struct InMemoryRecipeRepository {
     rows: Arc<Mutex<HashMap<RecipeId, Recipe>>>,
+    photos: Arc<Mutex<HashMap<RecipeId, RecipePhoto>>>,
 }
 
 impl InMemoryRecipeRepository {
@@ -1132,9 +1133,9 @@ impl RecipeRepository for InMemoryRecipeRepository {
         Ok(self.rows.lock().unwrap().get(&id).cloned())
     }
 
-    async fn list(&self, query: &RecipeQuery) -> Result<Paginated<Recipe>> {
+    async fn list(&self, query: &RecipeQuery) -> Result<Paginated<RecipeSummary>> {
         let rows = self.rows.lock().unwrap();
-        let items: Vec<Recipe> = rows
+        let items: Vec<RecipeSummary> = rows
             .values()
             .filter(|r| r.owner_id == query.owner_id)
             .filter(|r| query.include_archived || !r.is_archived())
@@ -1144,7 +1145,22 @@ impl RecipeRepository for InMemoryRecipeRepository {
                     .as_deref()
                     .is_none_or(|needle| matches(&r.name, needle))
             })
-            .cloned()
+            .map(|recipe| RecipeSummary {
+                id: recipe.id,
+                name: recipe.name.clone(),
+                description: recipe.description.clone(),
+                servings: recipe.servings,
+                preparation_minutes: recipe.preparation_minutes,
+                cooking_minutes: recipe.cooking_minutes,
+                component_count: recipe.components.len() as i64,
+                meal_categories: recipe.meal_categories.clone(),
+                country_categories: recipe.country_categories.clone(),
+                tags: recipe.tags.clone(),
+                photo_version: recipe.photo_version,
+                revision: recipe.revision,
+                updated_at: recipe.updated_at,
+                archived_at: recipe.archived_at,
+            })
             .collect();
         Ok(paginate(items, query.page, query.sort, |r| r.name.clone()))
     }
@@ -1168,5 +1184,30 @@ impl RecipeRepository for InMemoryRecipeRepository {
                 Ok(UpdateOutcome::Updated)
             }
         }
+    }
+
+    async fn get_photo(&self, id: RecipeId) -> Result<Option<RecipePhoto>> {
+        Ok(self.photos.lock().unwrap().get(&id).cloned())
+    }
+
+    async fn update_photo(
+        &self,
+        recipe: &Recipe,
+        expected: Revision,
+        photo: Option<&RecipePhoto>,
+    ) -> Result<UpdateOutcome> {
+        let outcome = self.update(recipe, expected).await?;
+        if outcome == UpdateOutcome::Updated {
+            let mut photos = self.photos.lock().unwrap();
+            match photo {
+                Some(photo) => {
+                    photos.insert(recipe.id, photo.clone());
+                }
+                None => {
+                    photos.remove(&recipe.id);
+                }
+            }
+        }
+        Ok(outcome)
     }
 }

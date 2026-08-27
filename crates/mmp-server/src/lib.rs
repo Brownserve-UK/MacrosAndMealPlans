@@ -6,6 +6,7 @@ pub mod dto;
 pub mod error;
 pub mod http;
 pub mod openapi;
+pub mod photo;
 pub mod routes;
 pub mod state;
 

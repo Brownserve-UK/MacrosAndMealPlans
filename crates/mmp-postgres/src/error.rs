@@ -101,6 +101,7 @@ fn unique_violation(constraint: &str) -> Option<(&'static str, &'static str)> {
         "household_member_pkey" => Some(("household member", "id")),
         "member_access_grant_pkey" => Some(("access grant", "id")),
         "meal_plan_component_entry_id_position_key" => Some(("meal plan component", "position")),
+        "recipe_tag_case_insensitive" => Some(("recipe", "tag")),
         "user_role_pkey" => Some(("user", "role")),
         _ => None,
     }

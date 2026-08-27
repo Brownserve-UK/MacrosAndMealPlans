@@ -111,7 +111,7 @@ impl mmp_core::ports::RecipeRepository for NoopRecipes {
     async fn list(
         &self,
         q: &mmp_core::ports::RecipeQuery,
-    ) -> mmp_core::Result<mmp_core::ports::Paginated<mmp_core::domain::Recipe>> {
+    ) -> mmp_core::Result<mmp_core::ports::Paginated<mmp_core::domain::RecipeSummary>> {
         Ok(mmp_core::ports::Paginated::new(vec![], 0, q.page))
     }
     async fn insert(&self, _: &mmp_core::domain::Recipe) -> mmp_core::Result<()> {
@@ -121,6 +121,20 @@ impl mmp_core::ports::RecipeRepository for NoopRecipes {
         &self,
         _: &mmp_core::domain::Recipe,
         _: mmp_core::domain::Revision,
+    ) -> mmp_core::Result<mmp_core::ports::UpdateOutcome> {
+        Ok(mmp_core::ports::UpdateOutcome::NotFound)
+    }
+    async fn get_photo(
+        &self,
+        _: mmp_core::domain::RecipeId,
+    ) -> mmp_core::Result<Option<mmp_core::domain::RecipePhoto>> {
+        Ok(None)
+    }
+    async fn update_photo(
+        &self,
+        _: &mmp_core::domain::Recipe,
+        _: mmp_core::domain::Revision,
+        _: Option<&mmp_core::domain::RecipePhoto>,
     ) -> mmp_core::Result<mmp_core::ports::UpdateOutcome> {
         Ok(mmp_core::ports::UpdateOutcome::NotFound)
     }

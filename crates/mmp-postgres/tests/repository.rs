@@ -3,11 +3,12 @@
 use mmp_core::CoreError;
 use mmp_core::domain::{
     AccessScope, CatalogueOrigin, ConsumedAmount, ConsumptionRecord, ConsumptionRecordId,
-    HouseholdMember, HouseholdMemberId, Ingredient, IngredientId, MealPlanComponent,
+    HouseholdMember, HouseholdMemberId, Ingredient, IngredientId, MealCategory, MealPlanComponent,
     MealPlanComponentId, MealPlanComponentSnapshot, MealPlanEntry, MealPlanEntryId, MealPlanStatus,
     MealSlot, MemberAccessGrant, NutritionFacts, NutritionGoals, NutritionQuality, NutritionTarget,
     NutritionTargetId, Product, ProductId, Provenance, Quantity, Recipe, RecipeComponent,
-    RecipeComponentId, RecipeId, RecipeVisibility, Revision, Role, Unit, User, UserId,
+    RecipeComponentId, RecipeId, RecipeInstruction, RecipeInstructionId, RecipePhoto,
+    RecipePhotoDerivatives, RecipeVisibility, Revision, Role, Unit, User, UserId,
 };
 use mmp_core::ports::{
     AccessGrantRepository, ConsumptionQuery, ConsumptionRecordRepository,
@@ -1735,8 +1736,17 @@ fn recipe(owner: UserId, components: Vec<RecipeComponent>) -> Recipe {
     Recipe {
         id: RecipeId::new(),
         name: "Test Recipe".to_owned(),
+        description: None,
         servings: 2,
+        preparation_minutes: None,
+        cooking_minutes: None,
+        notes: None,
         components,
+        instructions: vec![],
+        meal_categories: vec![],
+        country_categories: vec![],
+        tags: vec![],
+        photo_version: None,
         owner_id: owner,
         visibility: RecipeVisibility::Private,
         created_by: owner,
@@ -1752,10 +1762,29 @@ fn recipe(owner: UserId, components: Vec<RecipeComponent>) -> Recipe {
 async fn round_trips_a_recipe_with_ordered_components(pool: PgPool) {
     let (owner, first, second) = seed_recipe_dependencies(&pool).await;
     let repo = PgRecipeRepository::new(pool);
-    let original = recipe(
+    let mut original = recipe(
         owner,
         vec![recipe_component(first, 0), recipe_component(second, 1)],
     );
+    original.description = Some("A complete recipe".to_owned());
+    original.preparation_minutes = Some(10);
+    original.cooking_minutes = Some(20);
+    original.notes = Some("Serve warm".to_owned());
+    original.instructions = vec![
+        RecipeInstruction {
+            id: RecipeInstructionId::new(),
+            text: "First".to_owned(),
+            position: 0,
+        },
+        RecipeInstruction {
+            id: RecipeInstructionId::new(),
+            text: "Second".to_owned(),
+            position: 1,
+        },
+    ];
+    original.meal_categories = vec![MealCategory::Dinner];
+    original.country_categories = vec!["GB".to_owned()];
+    original.tags = vec!["Family".to_owned()];
     repo.insert(&original).await.unwrap();
 
     let loaded = repo.get(original.id).await.unwrap().unwrap();
@@ -1766,6 +1795,62 @@ async fn round_trips_a_recipe_with_ordered_components(pool: PgPool) {
     assert_eq!(loaded.components[0].position, 0);
     assert_eq!(loaded.components[0].product_id, first);
     assert_eq!(loaded.components[1].product_id, second);
+    assert_eq!(loaded.description, original.description);
+    assert_eq!(loaded.instructions, original.instructions);
+    assert_eq!(loaded.meal_categories, vec![MealCategory::Dinner]);
+    assert_eq!(loaded.country_categories, vec!["GB"]);
+    assert_eq!(loaded.tags, vec!["Family"]);
+}
+
+#[sqlx::test]
+async fn replaces_and_deletes_recipe_photo_derivatives(pool: PgPool) {
+    let (owner, first, _second) = seed_recipe_dependencies(&pool).await;
+    let repo = PgRecipeRepository::new(pool);
+    let original = recipe(owner, vec![recipe_component(first, 0)]);
+    repo.insert(&original).await.unwrap();
+
+    let mut with_photo = original.clone();
+    with_photo.photo_version = Some(1);
+    with_photo.revision = Revision::new(2);
+    let photo = RecipePhoto {
+        recipe_id: original.id,
+        version: 1,
+        derivatives: RecipePhotoDerivatives {
+            hero_jpeg: vec![1, 2, 3],
+            card_jpeg: vec![4, 5],
+            hero_width: 100,
+            hero_height: 50,
+            card_width: 50,
+            card_height: 25,
+        },
+        updated_at: OffsetDateTime::now_utc(),
+    };
+    assert_eq!(
+        repo.update_photo(&with_photo, original.revision, Some(&photo))
+            .await
+            .unwrap(),
+        UpdateOutcome::Updated
+    );
+    assert_eq!(
+        repo.get_photo(original.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .derivatives
+            .card_jpeg,
+        vec![4, 5]
+    );
+
+    let mut without_photo = with_photo.clone();
+    without_photo.photo_version = None;
+    without_photo.revision = Revision::new(3);
+    assert_eq!(
+        repo.update_photo(&without_photo, with_photo.revision, None)
+            .await
+            .unwrap(),
+        UpdateOutcome::Updated
+    );
+    assert!(repo.get_photo(original.id).await.unwrap().is_none());
 }
 
 #[sqlx::test]
@@ -1810,10 +1895,7 @@ async fn a_stale_recipe_update_is_rejected_and_keeps_components(pool: PgPool) {
     updated.components = vec![recipe_component(second, 0)];
     updated.revision = updated.revision.next();
 
-    let outcome = repo
-        .update(&updated, Revision::new(99))
-        .await
-        .unwrap();
+    let outcome = repo.update(&updated, Revision::new(99)).await.unwrap();
     assert!(matches!(outcome, UpdateOutcome::RevisionMismatch { .. }));
 
     // The rollback must leave the original single component untouched.
@@ -1850,12 +1932,18 @@ async fn lists_recipes_scoped_to_owner_and_excludes_archived(pool: PgPool) {
         sort: SortDirection::Ascending,
     };
     let page = repo.list(&query).await.unwrap();
-    assert_eq!(page.total, 1, "only the owner's non-archived recipe should list");
+    assert_eq!(
+        page.total, 1,
+        "only the owner's non-archived recipe should list"
+    );
 
     let with_archived = RecipeQuery {
         include_archived: true,
         ..query
     };
     let page = repo.list(&with_archived).await.unwrap();
-    assert_eq!(page.total, 2, "including archived shows both of the owner's recipes");
+    assert_eq!(
+        page.total, 2,
+        "including archived shows both of the owner's recipes"
+    );
 }

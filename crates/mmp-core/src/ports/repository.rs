@@ -8,7 +8,8 @@ use crate::domain::{
     AccessScope, CatalogueOrigin, ConsumptionRecord, ConsumptionRecordId, HouseholdMember,
     HouseholdMemberId, HouseholdSettings, Ingredient, IngredientId, MealPlanComponent,
     MealPlanComponentId, MealPlanEntry, MealPlanEntryId, MemberAccessGrant, NutritionTarget,
-    NutritionTargetId, Product, ProductId, Recipe, RecipeId, Revision, Role, User, UserId,
+    NutritionTargetId, Product, ProductId, Recipe, RecipeId, RecipePhoto, RecipeSummary, Revision,
+    Role, User, UserId,
 };
 use crate::error::Result;
 
@@ -255,11 +256,20 @@ pub trait MealPlanRepository: Send + Sync + 'static {
 pub trait RecipeRepository: Send + Sync + 'static {
     async fn get(&self, id: RecipeId) -> Result<Option<Recipe>>;
 
-    async fn list(&self, query: &RecipeQuery) -> Result<Paginated<Recipe>>;
+    async fn list(&self, query: &RecipeQuery) -> Result<Paginated<RecipeSummary>>;
 
     async fn insert(&self, recipe: &Recipe) -> Result<()>;
 
     async fn update(&self, recipe: &Recipe, expected: Revision) -> Result<UpdateOutcome>;
+
+    async fn get_photo(&self, id: RecipeId) -> Result<Option<RecipePhoto>>;
+
+    async fn update_photo(
+        &self,
+        recipe: &Recipe,
+        expected: Revision,
+        photo: Option<&RecipePhoto>,
+    ) -> Result<UpdateOutcome>;
 }
 
 #[async_trait]

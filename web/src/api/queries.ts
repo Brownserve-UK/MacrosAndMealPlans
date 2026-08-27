@@ -1,5 +1,5 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { client, ifMatch, unwrap } from './client';
+import { authenticatedFetch, client, ifMatch, unwrap, unwrapFetchJson } from './client';
 import type {
   Amount,
   ConsumptionRecord,
@@ -44,6 +44,8 @@ export const keys = {
   recipes: (params: RecipeListParams) => ['recipes', params] as const,
   recipe: (id: string) => ['recipe', id] as const,
   recipeNutrition: (id: string) => ['recipe', id, 'nutrition'] as const,
+  recipePhoto: (id: string, size: 'card' | 'hero', version: number) =>
+    ['recipe', id, 'photo', size, version] as const,
   nutritionTargets: (memberId: string) => ['nutritionTargets', memberId] as const,
   mealTimes: ['mealTimes'] as const,
 };
@@ -797,6 +799,25 @@ export function useRecipeNutrition(id: string) {
   });
 }
 
+export function useRecipePhoto(
+  id: string,
+  size: 'card' | 'hero',
+  version: number | null | undefined,
+) {
+  return useQuery({
+    queryKey: keys.recipePhoto(id, size, version ?? 0),
+    enabled: version != null,
+    staleTime: Infinity,
+    queryFn: async () => {
+      const response = await authenticatedFetch(
+        `/api/v1/recipes/${id}/photo/${size}?v=${version}`,
+      );
+      if (!response.ok) throw new Error('Could not load the recipe photo.');
+      return response.blob();
+    },
+  });
+}
+
 export function useCreateRecipe() {
   const qc = useQueryClient();
   return useMutation({
@@ -824,6 +845,43 @@ export function useUpdateRecipe() {
       qc.setQueryData(keys.recipe(updated.id), updated);
       void qc.invalidateQueries({ queryKey: ['recipes'] });
       void qc.invalidateQueries({ queryKey: keys.recipeNutrition(updated.id) });
+    },
+  });
+}
+
+export function useUploadRecipePhoto() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: { id: string; revision: number; file: File }) => {
+      const response = await authenticatedFetch(`/api/v1/recipes/${input.id}/photo`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': input.file.type,
+          'If-Match': `"${input.revision}"`,
+        },
+        body: input.file,
+      });
+      return unwrapFetchJson<Recipe>(response);
+    },
+    onSuccess: (updated) => {
+      qc.setQueryData(keys.recipe(updated.id), updated);
+      void qc.invalidateQueries({ queryKey: ['recipes'] });
+    },
+  });
+}
+
+export function useDeleteRecipePhoto() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: { id: string; revision: number }) =>
+      unwrap(
+        await client.DELETE('/api/v1/recipes/{id}/photo', {
+          params: { path: { id: input.id }, header: ifMatch(input.revision) },
+        }),
+      ),
+    onSuccess: (updated: Recipe) => {
+      qc.setQueryData(keys.recipe(updated.id), updated);
+      void qc.invalidateQueries({ queryKey: ['recipes'] });
     },
   });
 }

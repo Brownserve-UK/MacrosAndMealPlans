@@ -462,7 +462,12 @@ ALTER TABLE meal_plan_entry
 CREATE TABLE recipe (
     id            UUID PRIMARY KEY,
     name          TEXT NOT NULL,
+    description   TEXT,
     servings      INTEGER NOT NULL,
+    preparation_minutes INTEGER,
+    cooking_minutes INTEGER,
+    notes         TEXT,
+    photo_version BIGINT,
     owner_id      UUID NOT NULL REFERENCES app_user (id) ON DELETE RESTRICT,
     visibility    TEXT NOT NULL DEFAULT 'private',
 
@@ -477,6 +482,12 @@ CREATE TABLE recipe (
         CHECK (btrim(name) <> ''),
     CONSTRAINT recipe_servings_positive
         CHECK (servings > 0),
+    CONSTRAINT recipe_preparation_minutes_positive
+        CHECK (preparation_minutes IS NULL OR preparation_minutes > 0),
+    CONSTRAINT recipe_cooking_minutes_positive
+        CHECK (cooking_minutes IS NULL OR cooking_minutes > 0),
+    CONSTRAINT recipe_photo_version_positive
+        CHECK (photo_version IS NULL OR photo_version > 0),
     CONSTRAINT recipe_visibility_valid
         CHECK (visibility IN ('private', 'shared'))
 );
@@ -508,3 +519,79 @@ CREATE TABLE recipe_component (
 
 CREATE INDEX recipe_component_recipe ON recipe_component (recipe_id, position);
 CREATE INDEX recipe_component_product ON recipe_component (product_id);
+
+CREATE TABLE recipe_instruction (
+    id            UUID PRIMARY KEY,
+    recipe_id     UUID NOT NULL REFERENCES recipe (id) ON DELETE CASCADE,
+    position      INTEGER NOT NULL,
+    instruction   TEXT NOT NULL,
+
+    CONSTRAINT recipe_instruction_position_non_negative
+        CHECK (position >= 0),
+    CONSTRAINT recipe_instruction_not_blank
+        CHECK (btrim(instruction) <> ''),
+    UNIQUE (recipe_id, position)
+);
+
+CREATE INDEX recipe_instruction_recipe ON recipe_instruction (recipe_id, position);
+
+CREATE TABLE recipe_meal_category (
+    recipe_id     UUID NOT NULL REFERENCES recipe (id) ON DELETE CASCADE,
+    position      INTEGER NOT NULL,
+    category      TEXT NOT NULL,
+
+    CONSTRAINT recipe_meal_category_position_non_negative
+        CHECK (position >= 0),
+    CONSTRAINT recipe_meal_category_valid
+        CHECK (category IN ('breakfast', 'lunch', 'dinner', 'snack')),
+    PRIMARY KEY (recipe_id, category),
+    UNIQUE (recipe_id, position)
+);
+
+CREATE TABLE recipe_country_category (
+    recipe_id     UUID NOT NULL REFERENCES recipe (id) ON DELETE CASCADE,
+    position      INTEGER NOT NULL,
+    country_code  TEXT NOT NULL,
+
+    CONSTRAINT recipe_country_category_position_non_negative
+        CHECK (position >= 0),
+    CONSTRAINT recipe_country_category_code_valid
+        CHECK (country_code ~ '^[A-Z]{2}$'),
+    PRIMARY KEY (recipe_id, country_code),
+    UNIQUE (recipe_id, position)
+);
+
+CREATE TABLE recipe_tag (
+    recipe_id     UUID NOT NULL REFERENCES recipe (id) ON DELETE CASCADE,
+    position      INTEGER NOT NULL,
+    tag           TEXT NOT NULL,
+
+    CONSTRAINT recipe_tag_position_non_negative
+        CHECK (position >= 0),
+    CONSTRAINT recipe_tag_not_blank
+        CHECK (btrim(tag) <> ''),
+    PRIMARY KEY (recipe_id, tag),
+    UNIQUE (recipe_id, position)
+);
+
+CREATE UNIQUE INDEX recipe_tag_case_insensitive
+    ON recipe_tag (recipe_id, lower(tag));
+
+CREATE TABLE recipe_photo (
+    recipe_id     UUID PRIMARY KEY REFERENCES recipe (id) ON DELETE CASCADE,
+    version       BIGINT NOT NULL,
+    hero_jpeg     BYTEA NOT NULL,
+    card_jpeg     BYTEA NOT NULL,
+    hero_width    INTEGER NOT NULL,
+    hero_height   INTEGER NOT NULL,
+    card_width    INTEGER NOT NULL,
+    card_height   INTEGER NOT NULL,
+    updated_at    TIMESTAMPTZ NOT NULL,
+
+    CONSTRAINT recipe_photo_version_positive
+        CHECK (version > 0),
+    CONSTRAINT recipe_photo_dimensions_positive
+        CHECK (hero_width > 0 AND hero_height > 0 AND card_width > 0 AND card_height > 0),
+    CONSTRAINT recipe_photo_bytes_present
+        CHECK (octet_length(hero_jpeg) > 0 AND octet_length(card_jpeg) > 0)
+);

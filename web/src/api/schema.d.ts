@@ -692,6 +692,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/recipes/{id}/photo": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["putRecipePhoto"];
+        post?: never;
+        delete: operations["deleteRecipePhoto"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/recipes/{id}/photo/{size}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getRecipePhoto"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/recipes/{id}/unarchive": {
         parameters: {
             query?: never;
@@ -939,15 +971,25 @@ export interface components {
         };
         CreateRecipeRequest: {
             components: components["schemas"]["RecipeComponentRequest"][];
+            /** Format: int32 */
+            cooking_minutes?: number | null;
+            country_categories?: string[];
+            description?: string | null;
             /** Format: uuid */
             id?: string | null;
+            instructions?: components["schemas"]["RecipeInstructionRequest"][];
+            meal_categories?: components["schemas"]["MealCategory"][];
             /** @example Chicken Curry */
             name: string;
+            notes?: string | null;
+            /** Format: int32 */
+            preparation_minutes?: number | null;
             /**
              * Format: int32
              * @example 4
              */
             servings: number;
+            tags?: string[];
         };
         CreateUserRequest: {
             display_name?: string | null;
@@ -1065,6 +1107,8 @@ export interface components {
             /** Format: date */
             consumed_on: string;
         };
+        /** @enum {string} */
+        MealCategory: "breakfast" | "lunch" | "dinner" | "snack";
         MealItemDto: components["schemas"]["MealItemSourceDto"] & {
             amount: components["schemas"]["AmountDto"];
             /** @example 18:30 */
@@ -1412,6 +1456,7 @@ export interface components {
             position: number;
             /** Format: uuid */
             product_id: string;
+            product_name: string;
         };
         RecipeComponentRequest: {
             amount: components["schemas"]["AmountDto"];
@@ -1424,16 +1469,27 @@ export interface components {
             /** Format: date-time */
             archived_at?: string | null;
             components: components["schemas"]["RecipeComponentDto"][];
+            /** Format: int32 */
+            cooking_minutes?: number | null;
+            country_categories: string[];
             /** Format: date-time */
             created_at: string;
             /** Format: uuid */
             created_by: string;
+            description?: string | null;
             /** Format: uuid */
             id: string;
+            instructions: components["schemas"]["RecipeInstructionDto"][];
+            meal_categories: components["schemas"]["MealCategory"][];
             /** @example Chicken Curry */
             name: string;
+            notes?: string | null;
             /** Format: uuid */
             owner_id: string;
+            /** Format: int64 */
+            photo_version?: number | null;
+            /** Format: int32 */
+            preparation_minutes?: number | null;
             /** Format: int64 */
             revision: number;
             /**
@@ -1441,11 +1497,24 @@ export interface components {
              * @example 4
              */
             servings: number;
+            tags: string[];
             /** Format: date-time */
             updated_at: string;
             /** Format: uuid */
             updated_by: string;
             visibility: components["schemas"]["RecipeVisibility"];
+        };
+        RecipeInstructionDto: {
+            /** Format: uuid */
+            id: string;
+            /** Format: int32 */
+            position: number;
+            text: string;
+        };
+        RecipeInstructionRequest: {
+            /** Format: uuid */
+            id?: string | null;
+            text: string;
         };
         RecipeNutritionDto: {
             nutrition: components["schemas"]["NutritionDto"];
@@ -1460,7 +1529,32 @@ export interface components {
             servings: number;
         };
         RecipePage: components["schemas"]["PageMeta"] & {
-            items: components["schemas"]["RecipeDto"][];
+            items: components["schemas"]["RecipeSummaryDto"][];
+        };
+        RecipeSummaryDto: {
+            /** Format: date-time */
+            archived_at?: string | null;
+            /** Format: int64 */
+            component_count: number;
+            /** Format: int32 */
+            cooking_minutes?: number | null;
+            country_categories: string[];
+            description?: string | null;
+            /** Format: uuid */
+            id: string;
+            meal_categories: components["schemas"]["MealCategory"][];
+            name: string;
+            /** Format: int64 */
+            photo_version?: number | null;
+            /** Format: int32 */
+            preparation_minutes?: number | null;
+            /** Format: int64 */
+            revision: number;
+            /** Format: int32 */
+            servings: number;
+            tags: string[];
+            /** Format: date-time */
+            updated_at: string;
         };
         /** @enum {string} */
         RecipeVisibility: "private" | "shared";
@@ -1554,9 +1648,19 @@ export interface components {
         };
         UpdateRecipeRequest: {
             components?: components["schemas"]["RecipeComponentRequest"][] | null;
+            /** Format: int32 */
+            cooking_minutes?: number | null;
+            country_categories?: string[] | null;
+            description?: string | null;
+            instructions?: components["schemas"]["RecipeInstructionRequest"][] | null;
+            meal_categories?: components["schemas"]["MealCategory"][] | null;
             name?: string | null;
+            notes?: string | null;
+            /** Format: int32 */
+            preparation_minutes?: number | null;
             /** Format: int32 */
             servings?: number | null;
+            tags?: string[] | null;
         };
         UpdateUserRequest: {
             display_name?: string | null;
@@ -3690,6 +3794,139 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["RecipeNutritionDto"];
                 };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    putRecipePhoto: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The revision you loaded */
+                "If-Match": string;
+            };
+            path: {
+                /** @description Recipe id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "image/jpeg": number[];
+                "image/png": number[];
+                "image/webp": number[];
+            };
+        };
+        responses: {
+            /** @description Photo replaced */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecipeDto"];
+                };
+            };
+            /** @description Someone else changed it first */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Image exceeds 20 MB */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Image is not supported */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    deleteRecipePhoto: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The revision you loaded */
+                "If-Match": string;
+            };
+            path: {
+                /** @description Recipe id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Photo removed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecipeDto"];
+                };
+            };
+            /** @description Someone else changed it first */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    getRecipePhoto: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Recipe id */
+                id: string;
+                /** @description card or hero */
+                size: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Processed JPEG */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "image/jpeg": number[];
+                };
+            };
+            /** @description Not modified */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Not found */
             404: {

@@ -26,6 +26,7 @@ pub use household_settings::{HouseholdSettings, HouseholdSettingsPatch, MealTime
 pub use ids::{ConsumptionRecordId, HouseholdMemberId, IngredientId, ProductId, Revision, UserId};
 pub use ids::{
     MealPlanComponentId, MealPlanEntryId, NutritionTargetId, RecipeComponentId, RecipeId,
+    RecipeInstructionId,
 };
 pub use ingredient::{
     Ingredient, IngredientPatch, IngredientSummary, MAX_NAME_LEN, NewIngredient, validate_name,
@@ -48,6 +49,9 @@ pub use product::{
 pub use provenance::{CatalogueOrigin, Provenance, UnknownOrigin};
 pub use quantity::{ConversionError, Dimension, Quantity, Unit, UnknownUnit};
 pub use recipe::{
-    MAX_SERVINGS, NewRecipe, NewRecipeComponent, Recipe, RecipeComponent, RecipePatch,
-    RecipeVisibility, UnknownRecipeVisibility, recipe_nutrition,
+    MAX_SERVINGS, MealCategory, NewRecipe, NewRecipeComponent, NewRecipeInstruction, Recipe,
+    RecipeComponent, RecipeInstruction, RecipePatch, RecipePhoto, RecipePhotoDerivatives,
+    RecipeSummary, RecipeVisibility, UnknownMealCategory, UnknownRecipeVisibility,
+    normalise_countries, normalise_optional_text, normalise_tags, normalise_unique,
+    recipe_nutrition,
 };

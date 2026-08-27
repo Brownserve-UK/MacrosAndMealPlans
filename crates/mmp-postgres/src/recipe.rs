@@ -4,7 +4,9 @@ use std::str::FromStr;
 use async_trait::async_trait;
 use mmp_core::Result;
 use mmp_core::domain::{
-    Recipe, RecipeComponent, RecipeComponentId, RecipeId, RecipeVisibility, Revision, UserId,
+    MealCategory, Recipe, RecipeComponent, RecipeComponentId, RecipeId, RecipeInstruction,
+    RecipeInstructionId, RecipePhoto, RecipePhotoDerivatives, RecipeSummary, RecipeVisibility,
+    Revision, UserId,
 };
 use mmp_core::ports::{Paginated, RecipeQuery, RecipeRepository, SortDirection, UpdateOutcome};
 use rust_decimal::Decimal;
@@ -19,7 +21,12 @@ use crate::rows::{amount_bindings, bad_value, parse_amount};
 struct RecipeRow {
     id: Uuid,
     name: String,
+    description: Option<String>,
     servings: i32,
+    preparation_minutes: Option<i32>,
+    cooking_minutes: Option<i32>,
+    notes: Option<String>,
+    photo_version: Option<i64>,
     owner_id: Uuid,
     visibility: String,
     created_by: Uuid,
@@ -28,6 +35,51 @@ struct RecipeRow {
     created_at: OffsetDateTime,
     updated_at: OffsetDateTime,
     archived_at: Option<OffsetDateTime>,
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct InstructionRow {
+    id: Uuid,
+    recipe_id: Uuid,
+    position: i32,
+    instruction: String,
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct PositionedValueRow {
+    recipe_id: Uuid,
+    value: String,
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct RecipeSummaryRow {
+    id: Uuid,
+    name: String,
+    description: Option<String>,
+    servings: i32,
+    preparation_minutes: Option<i32>,
+    cooking_minutes: Option<i32>,
+    component_count: i64,
+    meal_categories: Vec<String>,
+    country_categories: Vec<String>,
+    tags: Vec<String>,
+    photo_version: Option<i64>,
+    revision: i64,
+    updated_at: OffsetDateTime,
+    archived_at: Option<OffsetDateTime>,
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct PhotoRow {
+    recipe_id: Uuid,
+    version: i64,
+    hero_jpeg: Vec<u8>,
+    card_jpeg: Vec<u8>,
+    hero_width: i32,
+    hero_height: i32,
+    card_width: i32,
+    card_height: i32,
+    updated_at: OffsetDateTime,
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -52,12 +104,31 @@ impl ComponentRow {
     }
 }
 
-fn assemble(row: RecipeRow, components: Vec<RecipeComponent>) -> Result<Recipe> {
+fn assemble(
+    row: RecipeRow,
+    components: Vec<RecipeComponent>,
+    instructions: Vec<RecipeInstruction>,
+    meal_categories: Vec<String>,
+    country_categories: Vec<String>,
+    tags: Vec<String>,
+) -> Result<Recipe> {
     Ok(Recipe {
         id: RecipeId::from(row.id),
         name: row.name,
+        description: row.description,
         servings: row.servings,
+        preparation_minutes: row.preparation_minutes,
+        cooking_minutes: row.cooking_minutes,
+        notes: row.notes,
         components,
+        instructions,
+        meal_categories: meal_categories
+            .into_iter()
+            .map(|value| MealCategory::from_str(&value).map_err(|_| bad_value("category", &value)))
+            .collect::<Result<Vec<_>>>()?,
+        country_categories,
+        tags,
+        photo_version: row.photo_version,
         owner_id: UserId::from(row.owner_id),
         visibility: RecipeVisibility::from_str(&row.visibility)
             .map_err(|_| bad_value("visibility", &row.visibility))?,
@@ -72,27 +143,36 @@ fn assemble(row: RecipeRow, components: Vec<RecipeComponent>) -> Result<Recipe> 
 
 macro_rules! columns {
     () => {
-        "id, name, servings, owner_id, visibility, created_by, updated_by, revision, created_at, updated_at, archived_at"
+        "id, name, description, servings, preparation_minutes, cooking_minutes, notes, photo_version, owner_id, visibility, created_by, updated_by, revision, created_at, updated_at, archived_at"
     };
 }
 
 const GET_BY_ID: &str = concat!("SELECT ", columns!(), " FROM recipe WHERE id = $1");
 const COUNT: &str = "SELECT count(*) FROM recipe WHERE owner_id = $1 AND ($2 OR archived_at IS NULL) AND ($3::text IS NULL OR name ILIKE '%' || $3 || '%')";
+macro_rules! summary_columns {
+    () => {
+        "id, name, description, servings, preparation_minutes, cooking_minutes, (SELECT count(*) FROM recipe_component rc WHERE rc.recipe_id = recipe.id) AS component_count, COALESCE((SELECT array_agg(category ORDER BY position) FROM recipe_meal_category rmc WHERE rmc.recipe_id = recipe.id), ARRAY[]::text[]) AS meal_categories, COALESCE((SELECT array_agg(country_code ORDER BY position) FROM recipe_country_category rcc WHERE rcc.recipe_id = recipe.id), ARRAY[]::text[]) AS country_categories, COALESCE((SELECT array_agg(tag ORDER BY position) FROM recipe_tag rt WHERE rt.recipe_id = recipe.id), ARRAY[]::text[]) AS tags, photo_version, revision, updated_at, archived_at"
+    };
+}
 const LIST_ASC: &str = concat!(
     "SELECT ",
-    columns!(),
+    summary_columns!(),
     " FROM recipe",
     " WHERE owner_id = $1 AND ($2 OR archived_at IS NULL) AND ($3::text IS NULL OR name ILIKE '%' || $3 || '%')",
     " ORDER BY CASE WHEN $3::text IS NULL THEN 0 ELSE similarity(name, $3) END DESC, lower(name) ASC LIMIT $4 OFFSET $5"
 );
 const LIST_DESC: &str = concat!(
     "SELECT ",
-    columns!(),
+    summary_columns!(),
     " FROM recipe",
     " WHERE owner_id = $1 AND ($2 OR archived_at IS NULL) AND ($3::text IS NULL OR name ILIKE '%' || $3 || '%')",
     " ORDER BY CASE WHEN $3::text IS NULL THEN 0 ELSE similarity(name, $3) END DESC, lower(name) DESC LIMIT $4 OFFSET $5"
 );
 const LIST_COMPONENTS: &str = "SELECT id, recipe_id, position, product_id, amount_kind, amount_value, amount_unit FROM recipe_component WHERE recipe_id = ANY($1) ORDER BY recipe_id, position";
+const LIST_INSTRUCTIONS: &str = "SELECT id, recipe_id, position, instruction FROM recipe_instruction WHERE recipe_id = ANY($1) ORDER BY recipe_id, position";
+const LIST_MEAL_CATEGORIES: &str = "SELECT recipe_id, category AS value FROM recipe_meal_category WHERE recipe_id = ANY($1) ORDER BY recipe_id, position";
+const LIST_COUNTRY_CATEGORIES: &str = "SELECT recipe_id, country_code AS value FROM recipe_country_category WHERE recipe_id = ANY($1) ORDER BY recipe_id, position";
+const LIST_TAGS: &str = "SELECT recipe_id, tag AS value FROM recipe_tag WHERE recipe_id = ANY($1) ORDER BY recipe_id, position";
 const CURRENT_REVISION: &str = "SELECT revision FROM recipe WHERE id = $1";
 
 pub struct PgRecipeRepository {
@@ -122,6 +202,53 @@ impl PgRecipeRepository {
         }
         Ok(grouped)
     }
+
+    async fn instructions_for(
+        &self,
+        ids: &[Uuid],
+    ) -> Result<HashMap<Uuid, Vec<RecipeInstruction>>> {
+        if ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let rows: Vec<InstructionRow> = sqlx::query_as(LIST_INSTRUCTIONS)
+            .bind(ids)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|error| repository_error("loading recipe instructions", error))?;
+        let mut grouped: HashMap<Uuid, Vec<RecipeInstruction>> = HashMap::new();
+        for row in rows {
+            grouped
+                .entry(row.recipe_id)
+                .or_default()
+                .push(RecipeInstruction {
+                    id: RecipeInstructionId::from(row.id),
+                    text: row.instruction,
+                    position: row.position,
+                });
+        }
+        Ok(grouped)
+    }
+
+    async fn values_for(
+        &self,
+        ids: &[Uuid],
+        sql: &'static str,
+        description: &'static str,
+    ) -> Result<HashMap<Uuid, Vec<String>>> {
+        if ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let rows: Vec<PositionedValueRow> = sqlx::query_as(sql)
+            .bind(ids)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|error| repository_error(description, error))?;
+        let mut grouped: HashMap<Uuid, Vec<String>> = HashMap::new();
+        for row in rows {
+            grouped.entry(row.recipe_id).or_default().push(row.value);
+        }
+        Ok(grouped)
+    }
 }
 
 #[async_trait]
@@ -137,13 +264,35 @@ impl RecipeRepository for PgRecipeRepository {
         };
         let recipe_id = row.id;
         let mut components = self.components_for(&[recipe_id]).await?;
+        let mut instructions = self.instructions_for(&[recipe_id]).await?;
+        let mut meal_categories = self
+            .values_for(
+                &[recipe_id],
+                LIST_MEAL_CATEGORIES,
+                "loading recipe meal categories",
+            )
+            .await?;
+        let mut country_categories = self
+            .values_for(
+                &[recipe_id],
+                LIST_COUNTRY_CATEGORIES,
+                "loading recipe country categories",
+            )
+            .await?;
+        let mut tags = self
+            .values_for(&[recipe_id], LIST_TAGS, "loading recipe tags")
+            .await?;
         Ok(Some(assemble(
             row,
             components.remove(&recipe_id).unwrap_or_default(),
+            instructions.remove(&recipe_id).unwrap_or_default(),
+            meal_categories.remove(&recipe_id).unwrap_or_default(),
+            country_categories.remove(&recipe_id).unwrap_or_default(),
+            tags.remove(&recipe_id).unwrap_or_default(),
         )?))
     }
 
-    async fn list(&self, query: &RecipeQuery) -> Result<Paginated<Recipe>> {
+    async fn list(&self, query: &RecipeQuery) -> Result<Paginated<RecipeSummary>> {
         let search = query.search.as_deref();
         let list_sql = match query.sort {
             SortDirection::Ascending => LIST_ASC,
@@ -158,7 +307,7 @@ impl RecipeRepository for PgRecipeRepository {
             .await
             .map_err(|error| repository_error("counting recipes", error))?;
 
-        let rows: Vec<RecipeRow> = sqlx::query_as(list_sql)
+        let rows: Vec<RecipeSummaryRow> = sqlx::query_as(list_sql)
             .bind(query.owner_id.as_uuid())
             .bind(query.include_archived)
             .bind(search)
@@ -168,15 +317,34 @@ impl RecipeRepository for PgRecipeRepository {
             .await
             .map_err(|error| repository_error("listing recipes", error))?;
 
-        let ids: Vec<_> = rows.iter().map(|row| row.id).collect();
-        let mut components = self.components_for(&ids).await?;
         let items = rows
             .into_iter()
-            .map(|row| {
-                let id = row.id;
-                assemble(row, components.remove(&id).unwrap_or_default())
+            .map(|row| -> Result<RecipeSummary> {
+                Ok(RecipeSummary {
+                    id: RecipeId::from(row.id),
+                    name: row.name,
+                    description: row.description,
+                    servings: row.servings,
+                    preparation_minutes: row.preparation_minutes,
+                    cooking_minutes: row.cooking_minutes,
+                    component_count: row.component_count,
+                    meal_categories: row
+                        .meal_categories
+                        .into_iter()
+                        .map(|value| {
+                            MealCategory::from_str(&value)
+                                .map_err(|_| bad_value("category", &value))
+                        })
+                        .collect::<Result<Vec<_>>>()?,
+                    country_categories: row.country_categories,
+                    tags: row.tags,
+                    photo_version: row.photo_version,
+                    revision: Revision::new(row.revision),
+                    updated_at: row.updated_at,
+                    archived_at: row.archived_at,
+                })
             })
-            .collect::<Result<Vec<Recipe>>>()?;
+            .collect::<Result<Vec<RecipeSummary>>>()?;
         Ok(Paginated::new(items, total.0, query.page))
     }
 
@@ -188,6 +356,7 @@ impl RecipeRepository for PgRecipeRepository {
             .map_err(|error| repository_error("starting a recipe transaction", error))?;
         insert_recipe(&mut tx, recipe).await?;
         insert_components(&mut tx, recipe).await?;
+        insert_metadata(&mut tx, recipe).await?;
         tx.commit()
             .await
             .map_err(|error| repository_error("committing a recipe", error))?;
@@ -213,20 +382,96 @@ impl RecipeRepository for PgRecipeRepository {
             .await
             .map_err(|error| map_db_error(error, "replacing recipe components"))?;
         insert_components(&mut tx, recipe).await?;
+        delete_metadata(&mut tx, recipe.id).await?;
+        insert_metadata(&mut tx, recipe).await?;
         tx.commit()
             .await
             .map_err(|error| repository_error("committing a recipe update", error))?;
+        Ok(UpdateOutcome::Updated)
+    }
+
+    async fn get_photo(&self, id: RecipeId) -> Result<Option<RecipePhoto>> {
+        let row: Option<PhotoRow> = sqlx::query_as("SELECT recipe_id, version, hero_jpeg, card_jpeg, hero_width, hero_height, card_width, card_height, updated_at FROM recipe_photo WHERE recipe_id = $1")
+            .bind(id.as_uuid())
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|error| repository_error("loading a recipe photo", error))?;
+        Ok(row.map(|row| RecipePhoto {
+            recipe_id: RecipeId::from(row.recipe_id),
+            version: row.version,
+            derivatives: RecipePhotoDerivatives {
+                hero_jpeg: row.hero_jpeg,
+                card_jpeg: row.card_jpeg,
+                hero_width: row.hero_width,
+                hero_height: row.hero_height,
+                card_width: row.card_width,
+                card_height: row.card_height,
+            },
+            updated_at: row.updated_at,
+        }))
+    }
+
+    async fn update_photo(
+        &self,
+        recipe: &Recipe,
+        expected: Revision,
+        photo: Option<&RecipePhoto>,
+    ) -> Result<UpdateOutcome> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|error| repository_error("starting a recipe photo update", error))?;
+        let outcome = update_recipe(&mut tx, recipe, expected).await?;
+        if outcome != UpdateOutcome::Updated {
+            tx.rollback()
+                .await
+                .map_err(|error| repository_error("rolling back a recipe photo update", error))?;
+            return Ok(outcome);
+        }
+        match photo {
+            Some(photo) => {
+                sqlx::query("INSERT INTO recipe_photo (recipe_id, version, hero_jpeg, card_jpeg, hero_width, hero_height, card_width, card_height, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ON CONFLICT (recipe_id) DO UPDATE SET version = EXCLUDED.version, hero_jpeg = EXCLUDED.hero_jpeg, card_jpeg = EXCLUDED.card_jpeg, hero_width = EXCLUDED.hero_width, hero_height = EXCLUDED.hero_height, card_width = EXCLUDED.card_width, card_height = EXCLUDED.card_height, updated_at = EXCLUDED.updated_at")
+                    .bind(photo.recipe_id.as_uuid())
+                    .bind(photo.version)
+                    .bind(&photo.derivatives.hero_jpeg)
+                    .bind(&photo.derivatives.card_jpeg)
+                    .bind(photo.derivatives.hero_width)
+                    .bind(photo.derivatives.hero_height)
+                    .bind(photo.derivatives.card_width)
+                    .bind(photo.derivatives.card_height)
+                    .bind(photo.updated_at)
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(|error| map_db_error(error, "replacing a recipe photo"))?;
+            }
+            None => {
+                sqlx::query("DELETE FROM recipe_photo WHERE recipe_id = $1")
+                    .bind(recipe.id.as_uuid())
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(|error| map_db_error(error, "deleting a recipe photo"))?;
+            }
+        }
+        tx.commit()
+            .await
+            .map_err(|error| repository_error("committing a recipe photo update", error))?;
         Ok(UpdateOutcome::Updated)
     }
 }
 
 async fn insert_recipe(tx: &mut Transaction<'_, Postgres>, recipe: &Recipe) -> Result<()> {
     sqlx::query(
-        "INSERT INTO recipe (id, name, servings, owner_id, visibility, created_by, updated_by, revision, created_at, updated_at, archived_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
+        "INSERT INTO recipe (id, name, description, servings, preparation_minutes, cooking_minutes, notes, photo_version, owner_id, visibility, created_by, updated_by, revision, created_at, updated_at, archived_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)",
     )
     .bind(recipe.id.as_uuid())
     .bind(&recipe.name)
+    .bind(&recipe.description)
     .bind(recipe.servings)
+    .bind(recipe.preparation_minutes)
+    .bind(recipe.cooking_minutes)
+    .bind(&recipe.notes)
+    .bind(recipe.photo_version)
     .bind(recipe.owner_id.as_uuid())
     .bind(recipe.visibility.code())
     .bind(recipe.created_by.as_uuid())
@@ -247,11 +492,16 @@ async fn update_recipe(
     expected: Revision,
 ) -> Result<UpdateOutcome> {
     let affected = sqlx::query(
-        "UPDATE recipe SET name = $2, servings = $3, visibility = $4, updated_by = $5, revision = $6, updated_at = $7, archived_at = $8 WHERE id = $1 AND revision = $9",
+        "UPDATE recipe SET name = $2, description = $3, servings = $4, preparation_minutes = $5, cooking_minutes = $6, notes = $7, photo_version = $8, visibility = $9, updated_by = $10, revision = $11, updated_at = $12, archived_at = $13 WHERE id = $1 AND revision = $14",
     )
     .bind(recipe.id.as_uuid())
     .bind(&recipe.name)
+    .bind(&recipe.description)
     .bind(recipe.servings)
+    .bind(recipe.preparation_minutes)
+    .bind(recipe.cooking_minutes)
+    .bind(&recipe.notes)
+    .bind(recipe.photo_version)
     .bind(recipe.visibility.code())
     .bind(recipe.updated_by.as_uuid())
     .bind(recipe.revision.get())
@@ -293,6 +543,95 @@ async fn insert_components(tx: &mut Transaction<'_, Postgres>, recipe: &Recipe) 
             .execute(&mut **tx)
             .await
             .map_err(|error| map_db_error(error, "creating a recipe component"))?;
+    }
+    Ok(())
+}
+
+async fn delete_metadata(tx: &mut Transaction<'_, Postgres>, id: RecipeId) -> Result<()> {
+    delete_metadata_rows(
+        tx,
+        id,
+        "DELETE FROM recipe_instruction WHERE recipe_id = $1",
+        "replacing recipe instructions",
+    )
+    .await?;
+    delete_metadata_rows(
+        tx,
+        id,
+        "DELETE FROM recipe_meal_category WHERE recipe_id = $1",
+        "replacing recipe meal categories",
+    )
+    .await?;
+    delete_metadata_rows(
+        tx,
+        id,
+        "DELETE FROM recipe_country_category WHERE recipe_id = $1",
+        "replacing recipe country categories",
+    )
+    .await?;
+    delete_metadata_rows(
+        tx,
+        id,
+        "DELETE FROM recipe_tag WHERE recipe_id = $1",
+        "replacing recipe tags",
+    )
+    .await?;
+    Ok(())
+}
+
+async fn delete_metadata_rows(
+    tx: &mut Transaction<'_, Postgres>,
+    id: RecipeId,
+    sql: &'static str,
+    description: &'static str,
+) -> Result<()> {
+    sqlx::query(sql)
+        .bind(id.as_uuid())
+        .execute(&mut **tx)
+        .await
+        .map_err(|error| map_db_error(error, description))?;
+    Ok(())
+}
+
+async fn insert_metadata(tx: &mut Transaction<'_, Postgres>, recipe: &Recipe) -> Result<()> {
+    for instruction in &recipe.instructions {
+        sqlx::query("INSERT INTO recipe_instruction (id, recipe_id, position, instruction) VALUES ($1, $2, $3, $4)")
+            .bind(instruction.id.as_uuid())
+            .bind(recipe.id.as_uuid())
+            .bind(instruction.position)
+            .bind(&instruction.text)
+            .execute(&mut **tx)
+            .await
+            .map_err(|error| map_db_error(error, "creating a recipe instruction"))?;
+    }
+    for (position, category) in recipe.meal_categories.iter().enumerate() {
+        sqlx::query(
+            "INSERT INTO recipe_meal_category (recipe_id, position, category) VALUES ($1, $2, $3)",
+        )
+        .bind(recipe.id.as_uuid())
+        .bind(position as i32)
+        .bind(category.code())
+        .execute(&mut **tx)
+        .await
+        .map_err(|error| map_db_error(error, "creating a recipe meal category"))?;
+    }
+    for (position, country) in recipe.country_categories.iter().enumerate() {
+        sqlx::query("INSERT INTO recipe_country_category (recipe_id, position, country_code) VALUES ($1, $2, $3)")
+            .bind(recipe.id.as_uuid())
+            .bind(position as i32)
+            .bind(country)
+            .execute(&mut **tx)
+            .await
+            .map_err(|error| map_db_error(error, "creating a recipe country category"))?;
+    }
+    for (position, tag) in recipe.tags.iter().enumerate() {
+        sqlx::query("INSERT INTO recipe_tag (recipe_id, position, tag) VALUES ($1, $2, $3)")
+            .bind(recipe.id.as_uuid())
+            .bind(position as i32)
+            .bind(tag)
+            .execute(&mut **tx)
+            .await
+            .map_err(|error| map_db_error(error, "creating a recipe tag"))?;
     }
     Ok(())
 }

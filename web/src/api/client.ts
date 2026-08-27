@@ -31,6 +31,7 @@ export type MealSlotView = components['schemas']['MealSlotViewDto'];
 export type Meta = components['schemas']['MetaDto'];
 export type MealTimesSettings = components['schemas']['HouseholdSettingsDto'];
 export type Recipe = components['schemas']['RecipeDto'];
+export type RecipeSummary = components['schemas']['RecipeSummaryDto'];
 export type RecipeComponent = components['schemas']['RecipeComponentDto'];
 export type RecipeNutrition = components['schemas']['RecipeNutritionDto'];
 export type NutritionTarget = components['schemas']['NutritionTargetDto'];
@@ -113,4 +114,20 @@ export function unwrap<T>(result: Result<T>): T {
 
 export function ifMatch(revision: number): { 'If-Match': string } {
   return { 'If-Match': `"${revision}"` };
+}
+
+export function authenticatedFetch(input: RequestInfo | URL, init: RequestInit = {}) {
+  const headers = new Headers(init.headers);
+  if (credential) headers.set('Authorization', credential);
+  return fetch(input, { ...init, headers });
+}
+
+export async function unwrapFetchJson<T>(response: Response): Promise<T> {
+  if (!response.ok) {
+    const problem = response.headers.get('content-type')?.includes('json')
+      ? ((await response.json()) as Problem)
+      : null;
+    throw new ApiError(response.status, problem);
+  }
+  return (await response.json()) as T;
 }

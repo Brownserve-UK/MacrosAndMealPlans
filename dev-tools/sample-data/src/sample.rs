@@ -8,8 +8,9 @@ use mmp_core::domain::{
     ConsumedAmount, ConsumptionRecordId, HouseholdMember, HouseholdMemberId, IngredientId,
     MealPlanEntryId, MealPlanStatus, MealSlot, NewConsumptionRecord, NewHouseholdMember,
     NewMealPlanComponent, NewMealPlanEntry, NewNutritionTarget, NewProduct, NewRecipe,
-    NewRecipeComponent, NewUser, NutritionFacts, NutritionGoals, ProductId, Provenance, Quantity,
-    RecipeId, Role, Unit, User, UserId,
+    NewRecipeComponent, NewRecipeInstruction, NewUser, NutritionFacts, NutritionGoals, Patch,
+    ProductId, Provenance, Quantity, RecipeId, RecipePatch, Role, Unit, User, UserId,
+    MealCategory,
 };
 use mmp_server::state::AppState;
 use rust_decimal::Decimal;
@@ -17,6 +18,7 @@ use time::{Date, Duration, PrimitiveDateTime, Time};
 use uuid::Uuid;
 
 const SAMPLE_NAMESPACE: Uuid = Uuid::from_u128(0x6d6d_7073_616d_706c_6580_4c2f_923b_8d10);
+const SAMPLE_RECIPE_IMAGE: &[u8] = include_bytes!("../assets/sample_recipe.png");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Scenario {
@@ -273,30 +275,94 @@ impl Loader<'_> {
     async fn load_recipes(&mut self) -> anyhow::Result<()> {
         for spec in recipe_specs() {
             let id = recipe_id(spec.key);
-            match self.state.recipes.get_recipe(id, self.actor.id).await {
-                Ok(_) => continue,
-                Err(CoreError::NotFound { .. }) => {}
-                Err(error) => return Err(error.into()),
-            }
-            self.state
-                .recipes
-                .create_recipe(NewRecipe {
-                    id: Some(id),
-                    name: spec.name.to_owned(),
-                    servings: spec.servings,
-                    components: spec
-                        .components
-                        .iter()
-                        .map(|(product_key, amount)| NewRecipeComponent {
-                            id: None,
-                            product_id: product_id(product_key),
-                            amount: *amount,
-                        })
-                        .collect(),
-                    actor_id: self.actor.id,
+            let countries: Vec<String> = spec
+                .country_categories
+                .iter()
+                .map(|country| (*country).to_owned())
+                .collect();
+            let tags: Vec<String> = spec.tags.iter().map(|tag| (*tag).to_owned()).collect();
+            let instructions: Vec<NewRecipeInstruction> = spec
+                .instructions
+                .iter()
+                .map(|text| NewRecipeInstruction {
+                    id: None,
+                    text: (*text).to_owned(),
                 })
-                .await?;
-            self.report.recipes_created += 1;
+                .collect();
+            let existing = match self.state.recipes.get_recipe(id, self.actor.id).await {
+                Ok(recipe) => Some(recipe),
+                Err(CoreError::NotFound { .. }) => None,
+                Err(error) => return Err(error.into()),
+            };
+            let recipe = if let Some(mut recipe) = existing {
+                let patch = RecipePatch {
+                    description: Patch::Set(spec.description.to_owned()),
+                    preparation_minutes: Patch::Set(spec.preparation_minutes),
+                    cooking_minutes: Patch::Set(spec.cooking_minutes),
+                    notes: Patch::Set(spec.notes.to_owned()),
+                    instructions: Some(instructions.clone()),
+                    meal_categories: Some(spec.meal_categories.clone()),
+                    country_categories: Some(countries.clone()),
+                    tags: Some(tags.clone()),
+                    ..RecipePatch::default()
+                };
+                if recipe.description.as_deref() != Some(spec.description)
+                    || recipe.preparation_minutes != Some(spec.preparation_minutes)
+                    || recipe.cooking_minutes != Some(spec.cooking_minutes)
+                    || recipe.notes.as_deref() != Some(spec.notes)
+                    || recipe.instructions.iter().map(|step| step.text.as_str()).collect::<Vec<_>>()
+                        != spec.instructions
+                    || recipe.meal_categories != spec.meal_categories
+                    || recipe.country_categories != countries
+                    || recipe.tags != tags
+                {
+                    recipe = self
+                        .state
+                        .recipes
+                        .update_recipe(id, recipe.revision, patch, self.actor.id)
+                        .await?;
+                }
+                recipe
+            } else {
+                let recipe = self
+                    .state
+                    .recipes
+                    .create_recipe(NewRecipe {
+                        id: Some(id),
+                        name: spec.name.to_owned(),
+                        description: Some(spec.description.to_owned()),
+                        servings: spec.servings,
+                        preparation_minutes: Some(spec.preparation_minutes),
+                        cooking_minutes: Some(spec.cooking_minutes),
+                        notes: Some(spec.notes.to_owned()),
+                        components: spec
+                            .components
+                            .iter()
+                            .map(|(product_key, amount)| NewRecipeComponent {
+                                id: None,
+                                product_id: product_id(product_key),
+                                amount: *amount,
+                            })
+                            .collect(),
+                        instructions,
+                        meal_categories: spec.meal_categories.clone(),
+                        country_categories: countries,
+                        tags,
+                        actor_id: self.actor.id,
+                    })
+                    .await?;
+                self.report.recipes_created += 1;
+                recipe
+            };
+            if spec.photo && recipe.photo_version.is_none() {
+                let derivatives = mmp_server::photo::process(SAMPLE_RECIPE_IMAGE)
+                    .map_err(|error| anyhow::anyhow!(error))?;
+                self
+                    .state
+                    .recipes
+                    .replace_photo(recipe.id, recipe.revision, derivatives, self.actor.id)
+                    .await?;
+            }
         }
         Ok(())
     }
@@ -780,7 +846,16 @@ struct RecipeSpec {
     key: &'static str,
     name: &'static str,
     servings: i32,
+    description: &'static str,
+    preparation_minutes: i32,
+    cooking_minutes: i32,
+    notes: &'static str,
     components: Vec<(&'static str, ConsumedAmount)>,
+    instructions: Vec<&'static str>,
+    meal_categories: Vec<MealCategory>,
+    country_categories: Vec<&'static str>,
+    tags: Vec<&'static str>,
+    photo: bool,
 }
 
 fn recipe_specs() -> Vec<RecipeSpec> {
@@ -789,6 +864,10 @@ fn recipe_specs() -> Vec<RecipeSpec> {
             key: "porridge",
             name: "Morning Porridge",
             servings: 2,
+            description: "Creamy oats with banana for a warm start to the day.",
+            preparation_minutes: 5,
+            cooking_minutes: 10,
+            notes: "Add the banana just before serving.",
             components: vec![
                 (
                     "rolled-oats",
@@ -800,11 +879,24 @@ fn recipe_specs() -> Vec<RecipeSpec> {
                 ),
                 ("banana", ConsumedAmount::Measure(quantity(1, Unit::Item))),
             ],
+            instructions: vec![
+                "Add the oats and milk to a saucepan.",
+                "Cook gently until creamy, stirring often.",
+                "Slice the banana over the porridge and serve.",
+            ],
+            meal_categories: vec![MealCategory::Breakfast],
+            country_categories: vec!["GB"],
+            tags: vec!["Quick", "Vegetarian"],
+            photo: false,
         },
         RecipeSpec {
             key: "chicken-and-rice",
             name: "Chicken and Rice",
             servings: 4,
+            description: "Tender chicken in a rich tomato sauce with fluffy basmati rice.",
+            preparation_minutes: 10,
+            cooking_minutes: 30,
+            notes: "Rest the chicken for five minutes before serving.",
             components: vec![
                 (
                     "chicken-breast",
@@ -815,6 +907,16 @@ fn recipe_specs() -> Vec<RecipeSpec> {
                     ConsumedAmount::Measure(quantity(300, Unit::Gram)),
                 ),
             ],
+            instructions: vec![
+                "Season the chicken and brown it in a hot pan.",
+                "Add the sauce and simmer until the chicken is cooked through.",
+                "Cook the basmati rice until tender.",
+                "Rest the chicken, then serve with the rice.",
+            ],
+            meal_categories: vec![MealCategory::Dinner],
+            country_categories: vec!["IN"],
+            tags: vec!["Family favourite", "High protein"],
+            photo: true,
         },
     ]
 }
