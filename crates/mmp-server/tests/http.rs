@@ -2611,3 +2611,110 @@ async fn recipes_require_authentication() {
     let (status, _, _) = send(&app, Call::new("GET", "/api/v1/recipes").anonymous()).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
 }
+
+async fn create_recipe(app: &Router, name: &str, product_id: &Value) -> Value {
+    let (status, body, _) = send(
+        app,
+        Call::new("POST", "/api/v1/recipes").body(json!({
+            "name": name,
+            "servings": 1,
+            "components": [{"product_id": product_id, "amount": measured_amount(100.0)}]
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    body
+}
+
+#[tokio::test]
+async fn updates_a_recipe_and_bumps_its_revision() {
+    let app = app().await;
+    let product = create_milk_product(&app).await;
+    let recipe = create_recipe(&app, "Draft name", &product["id"]).await;
+    let id = recipe["id"].as_str().unwrap();
+
+    let (status, _, _) = send(
+        &app,
+        Call::new("PATCH", format!("/api/v1/recipes/{id}")).body(json!({"name": "Final name"})),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::PRECONDITION_REQUIRED,
+        "a recipe update without If-Match must be refused"
+    );
+
+    let (status, updated, _) = send(
+        &app,
+        Call::new("PATCH", format!("/api/v1/recipes/{id}"))
+            .if_match(recipe["revision"].as_i64().unwrap())
+            .body(json!({"name": "Final name", "tags": ["Weeknight"]})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{updated}");
+    assert_eq!(updated["name"], "Final name");
+    assert_eq!(updated["tags"], json!(["Weeknight"]));
+    assert_eq!(
+        updated["revision"],
+        recipe["revision"].as_i64().unwrap() + 1
+    );
+}
+
+#[tokio::test]
+async fn archiving_a_recipe_hides_it_from_the_default_list() {
+    let app = app().await;
+    let product = create_milk_product(&app).await;
+    let recipe = create_recipe(&app, "Retired recipe", &product["id"]).await;
+    let id = recipe["id"].as_str().unwrap();
+
+    let (status, archived, _) = send(
+        &app,
+        Call::new("POST", format!("/api/v1/recipes/{id}/archive")).if_match(1),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{archived}");
+    assert!(!archived["archived_at"].is_null());
+
+    let (_, listed, _) = send(&app, Call::new("GET", "/api/v1/recipes")).await;
+    assert_eq!(listed["total"], 0);
+
+    let (_, listed, _) = send(
+        &app,
+        Call::new("GET", "/api/v1/recipes?include_archived=true"),
+    )
+    .await;
+    assert_eq!(listed["total"], 1);
+
+    let (status, restored, _) = send(
+        &app,
+        Call::new("POST", format!("/api/v1/recipes/{id}/unarchive"))
+            .if_match(archived["revision"].as_i64().unwrap()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{restored}");
+    assert!(restored["archived_at"].is_null());
+
+    let (_, listed, _) = send(&app, Call::new("GET", "/api/v1/recipes")).await;
+    assert_eq!(listed["total"], 1);
+}
+
+#[tokio::test]
+async fn lists_recipes_with_search_and_pagination() {
+    let app = app().await;
+    let product = create_milk_product(&app).await;
+    for n in 0..7 {
+        create_recipe(&app, &format!("Recipe {n}"), &product["id"]).await;
+    }
+    create_recipe(&app, "Lemon Drizzle", &product["id"]).await;
+
+    let (status, body, _) = send(&app, Call::new("GET", "/api/v1/recipes?page=2&per_page=3")).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["total"], 8);
+    assert_eq!(body["page"], 2);
+    assert_eq!(body["total_pages"], 3);
+    assert_eq!(body["items"].as_array().unwrap().len(), 3);
+
+    let (_, body, _) = send(&app, Call::new("GET", "/api/v1/recipes?q=lemon")).await;
+    assert_eq!(body["total"], 1);
+    assert_eq!(body["items"][0]["name"], "Lemon Drizzle");
+}

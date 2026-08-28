@@ -31,6 +31,7 @@ pub enum UpdateOutcome {
 pub struct IngredientQuery {
     pub search: Option<String>,
     pub origin: Option<CatalogueOrigin>,
+    pub needs_products: Option<bool>,
     pub include_archived: bool,
     pub page: PageRequest,
     pub sort: SortDirection,
@@ -43,6 +44,7 @@ pub struct ProductQuery {
     pub barcode: Option<String>,
     pub retailer: Option<String>,
     pub mapped_ingredient_id: Option<IngredientId>,
+    pub unmapped: Option<bool>,
     pub include_archived: bool,
     pub page: PageRequest,
     pub sort: SortDirection,

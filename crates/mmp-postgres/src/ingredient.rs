@@ -17,7 +17,13 @@ macro_rules! columns {
 
 macro_rules! filter {
     () => {
-        " WHERE ($1 OR archived_at IS NULL) AND ($2::text IS NULL OR origin = $2) AND ($3::text IS NULL OR name ILIKE '%' || $3 || '%')"
+        " WHERE ($1 OR archived_at IS NULL) \
+          AND ($2::text IS NULL OR origin = $2) \
+          AND ($3::text IS NULL OR name ILIKE '%' || $3 || '%') \
+          AND ($4::bool IS NULL \
+               OR EXISTS (SELECT 1 FROM product \
+                          WHERE product.mapped_ingredient_id = ingredient.id \
+                            AND product.archived_at IS NULL) = ($4 = false))"
     };
 }
 
@@ -38,14 +44,14 @@ const LIST_ASC: &str = concat!(
     columns!(),
     " FROM ingredient",
     filter!(),
-    " ORDER BY CASE WHEN $3::text IS NULL THEN 0 ELSE similarity(name, $3) END DESC, lower(name) ASC LIMIT $4 OFFSET $5"
+    " ORDER BY CASE WHEN $3::text IS NULL THEN 0 ELSE similarity(name, $3) END DESC, lower(name) ASC LIMIT $5 OFFSET $6"
 );
 const LIST_DESC: &str = concat!(
     "SELECT ",
     columns!(),
     " FROM ingredient",
     filter!(),
-    " ORDER BY CASE WHEN $3::text IS NULL THEN 0 ELSE similarity(name, $3) END DESC, lower(name) DESC LIMIT $4 OFFSET $5"
+    " ORDER BY CASE WHEN $3::text IS NULL THEN 0 ELSE similarity(name, $3) END DESC, lower(name) DESC LIMIT $5 OFFSET $6"
 );
 const CURRENT_REVISION: &str = "SELECT revision FROM ingredient WHERE id = $1";
 
@@ -100,6 +106,7 @@ impl IngredientRepository for PgIngredientRepository {
             .bind(query.include_archived)
             .bind(origin)
             .bind(search)
+            .bind(query.needs_products)
             .fetch_one(&self.pool)
             .await
             .map_err(|e| repository_error("counting ingredients", e))?;
@@ -108,6 +115,7 @@ impl IngredientRepository for PgIngredientRepository {
             .bind(query.include_archived)
             .bind(origin)
             .bind(search)
+            .bind(query.needs_products)
             .bind(query.page.limit())
             .bind(query.page.offset())
             .fetch_all(&self.pool)

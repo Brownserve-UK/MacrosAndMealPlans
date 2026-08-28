@@ -290,6 +290,7 @@ impl From<Paginated<Product>> for ProductPage {
 pub struct IngredientListQuery {
     pub q: Option<String>,
     pub origin: Option<CatalogueOrigin>,
+    pub needs_products: Option<bool>,
     pub include_archived: Option<bool>,
     pub page: Option<u32>,
     pub per_page: Option<u32>,
@@ -304,6 +305,7 @@ pub struct ProductListQuery {
     pub barcode: Option<String>,
     pub retailer: Option<String>,
     pub mapped_ingredient_id: Option<Uuid>,
+    pub unmapped: Option<bool>,
     pub include_archived: Option<bool>,
     pub page: Option<u32>,
     pub per_page: Option<u32>,

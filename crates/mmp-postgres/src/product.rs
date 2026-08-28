@@ -17,7 +17,7 @@ macro_rules! columns {
 
 macro_rules! filter {
     () => {
-        " WHERE ($1 OR archived_at IS NULL) AND ($2::text IS NULL OR origin = $2) AND ($3::text IS NULL OR name ILIKE '%' || $3 || '%') AND ($4::text IS NULL OR barcode = $4) AND ($5::text IS NULL OR retailer ILIKE '%' || $5 || '%') AND ($6::uuid IS NULL OR mapped_ingredient_id = $6)"
+        " WHERE ($1 OR archived_at IS NULL) AND ($2::text IS NULL OR origin = $2) AND ($3::text IS NULL OR name ILIKE '%' || $3 || '%') AND ($4::text IS NULL OR barcode = $4) AND ($5::text IS NULL OR retailer ILIKE '%' || $5 || '%') AND ($6::uuid IS NULL OR mapped_ingredient_id = $6) AND ($7::bool IS NULL OR (mapped_ingredient_id IS NULL) = $7)"
     };
 }
 
@@ -30,14 +30,14 @@ const LIST_ASC: &str = concat!(
     columns!(),
     " FROM product",
     filter!(),
-    " ORDER BY CASE WHEN $3::text IS NULL THEN 0 ELSE similarity(name, $3) END DESC, lower(name) ASC LIMIT $7 OFFSET $8"
+    " ORDER BY CASE WHEN $3::text IS NULL THEN 0 ELSE similarity(name, $3) END DESC, lower(name) ASC LIMIT $8 OFFSET $9"
 );
 const LIST_DESC: &str = concat!(
     "SELECT ",
     columns!(),
     " FROM product",
     filter!(),
-    " ORDER BY CASE WHEN $3::text IS NULL THEN 0 ELSE similarity(name, $3) END DESC, lower(name) DESC LIMIT $7 OFFSET $8"
+    " ORDER BY CASE WHEN $3::text IS NULL THEN 0 ELSE similarity(name, $3) END DESC, lower(name) DESC LIMIT $8 OFFSET $9"
 );
 const CURRENT_REVISION: &str = "SELECT revision FROM product WHERE id = $1";
 const COUNT_BY_INGREDIENT: &str = "SELECT mapped_ingredient_id, count(*) FROM product \
@@ -99,6 +99,7 @@ impl ProductRepository for PgProductRepository {
             .bind(query.barcode.as_deref())
             .bind(query.retailer.as_deref())
             .bind(mapped)
+            .bind(query.unmapped)
             .fetch_one(&self.pool)
             .await
             .map_err(|e| repository_error("counting products", e))?;
@@ -110,6 +111,7 @@ impl ProductRepository for PgProductRepository {
             .bind(query.barcode.as_deref())
             .bind(query.retailer.as_deref())
             .bind(mapped)
+            .bind(query.unmapped)
             .bind(query.page.limit())
             .bind(query.page.offset())
             .fetch_all(&self.pool)

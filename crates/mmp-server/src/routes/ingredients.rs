@@ -28,6 +28,7 @@ fn to_query(query: IngredientListQuery) -> IngredientQuery {
     IngredientQuery {
         search: query.q.filter(|q| !q.trim().is_empty()),
         origin: query.origin,
+        needs_products: query.needs_products,
         include_archived: query.include_archived.unwrap_or(false),
         page: PageRequest::new(
             query.page.unwrap_or(1),

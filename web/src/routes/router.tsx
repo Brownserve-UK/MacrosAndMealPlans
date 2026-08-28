@@ -1,5 +1,6 @@
 import { createRootRoute, createRoute, createRouter, redirect } from '@tanstack/react-router';
 import { AppShell } from '../components/AppShell';
+import { RouteError, RouteNotFound } from '../components/RouteStates';
 import { AccountsPage } from '../features/administration/AccountsPage';
 import { AdministrationPage } from '../features/administration/AdministrationPage';
 import { MealTimesPage } from '../features/administration/MealTimesPage';
@@ -203,7 +204,11 @@ const routeTree = rootRoute.addChildren([
   profileRoute,
 ]);
 
-export const router = createRouter({ routeTree });
+export const router = createRouter({
+  routeTree,
+  defaultNotFoundComponent: RouteNotFound,
+  defaultErrorComponent: RouteError,
+});
 
 declare module '@tanstack/react-router' {
   interface Register {

@@ -357,6 +357,84 @@ async fn listing_paginates(pool: PgPool) {
 }
 
 #[sqlx::test]
+async fn listing_filters_to_ingredients_without_products(pool: PgPool) {
+    let ingredients = PgIngredientRepository::new(pool.clone());
+    let products = PgProductRepository::new(pool);
+
+    let milk = ingredient("Whole Milk");
+    let flour = ingredient("Plain Flour");
+    let coriander = ingredient("Coriander");
+    ingredients.insert(&milk).await.unwrap();
+    ingredients.insert(&flour).await.unwrap();
+    ingredients.insert(&coriander).await.unwrap();
+
+    let mut tesco_milk = product("Tesco Whole Milk 1L");
+    tesco_milk.mapped_ingredient_id = Some(milk.id);
+    products.insert(&tesco_milk).await.unwrap();
+
+    let mut archived = product("Discontinued Flour");
+    archived.mapped_ingredient_id = Some(flour.id);
+    archived.archived_at = Some(OffsetDateTime::now_utc());
+    products.insert(&archived).await.unwrap();
+
+    let needs = ingredients
+        .list(&IngredientQuery {
+            needs_products: Some(true),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let mut names: Vec<&str> = needs.items.iter().map(|i| i.name.as_str()).collect();
+    names.sort_unstable();
+    assert_eq!(needs.total, 2);
+    assert_eq!(names, ["Coriander", "Plain Flour"]);
+
+    let has = ingredients
+        .list(&IngredientQuery {
+            needs_products: Some(false),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(has.total, 1);
+    assert_eq!(has.items[0].name, "Whole Milk");
+}
+
+#[sqlx::test]
+async fn the_needs_products_filter_paginates_over_the_filtered_set(pool: PgPool) {
+    let ingredients = PgIngredientRepository::new(pool.clone());
+    let products = PgProductRepository::new(pool);
+
+    for n in 0..5 {
+        ingredients
+            .insert(&ingredient(&format!("Bare Ingredient {n}")))
+            .await
+            .unwrap();
+    }
+    let stocked = ingredient("Stocked Ingredient");
+    ingredients.insert(&stocked).await.unwrap();
+    let mut p = product("A Product");
+    p.mapped_ingredient_id = Some(stocked.id);
+    products.insert(&p).await.unwrap();
+
+    let page = ingredients
+        .list(&IngredientQuery {
+            needs_products: Some(true),
+            page: PageRequest::new(2, 3),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(
+        page.total, 5,
+        "the count must exclude the stocked ingredient"
+    );
+    assert_eq!(page.items.len(), 2);
+    assert_eq!(page.total_pages(), 2);
+}
+
+#[sqlx::test]
 async fn finds_a_seeded_ingredient_by_its_key(pool: PgPool) {
     let repo = PgIngredientRepository::new(pool);
     let mut seeded = ingredient("Whole Milk");
@@ -463,6 +541,43 @@ async fn lists_products_filtered_by_mapped_ingredient(pool: PgPool) {
 
     assert_eq!(found.total, 1);
     assert_eq!(found.items[0].name, "Tesco Whole Milk 1L");
+}
+
+#[sqlx::test]
+async fn lists_only_unmapped_products(pool: PgPool) {
+    let ingredients = PgIngredientRepository::new(pool.clone());
+    let products = PgProductRepository::new(pool);
+
+    let milk = ingredient("Whole Milk");
+    ingredients.insert(&milk).await.unwrap();
+
+    let mut mapped = product("Tesco Whole Milk 1L");
+    mapped.mapped_ingredient_id = Some(milk.id);
+    products.insert(&mapped).await.unwrap();
+    products.insert(&product("Mystery Snack")).await.unwrap();
+    products.insert(&product("Unlabelled Sauce")).await.unwrap();
+
+    let unmapped = products
+        .list(&ProductQuery {
+            unmapped: Some(true),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let mut names: Vec<&str> = unmapped.items.iter().map(|p| p.name.as_str()).collect();
+    names.sort_unstable();
+    assert_eq!(unmapped.total, 2);
+    assert_eq!(names, ["Mystery Snack", "Unlabelled Sauce"]);
+
+    let mapped_only = products
+        .list(&ProductQuery {
+            unmapped: Some(false),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(mapped_only.total, 1);
+    assert_eq!(mapped_only.items[0].name, "Tesco Whole Milk 1L");
 }
 
 #[sqlx::test]

@@ -2086,6 +2086,7 @@ export interface operations {
             query?: {
                 q?: string;
                 origin?: components["schemas"]["CatalogueOrigin"];
+                needs_products?: boolean;
                 include_archived?: boolean;
                 page?: number;
                 per_page?: number;
@@ -3221,6 +3222,7 @@ export interface operations {
                 barcode?: string;
                 retailer?: string;
                 mapped_ingredient_id?: string;
+                unmapped?: boolean;
                 include_archived?: boolean;
                 page?: number;
                 per_page?: number;

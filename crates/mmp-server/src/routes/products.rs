@@ -32,6 +32,7 @@ pub(crate) fn to_query(query: ProductListQuery) -> ProductQuery {
         barcode: query.barcode.filter(|b| !b.trim().is_empty()),
         retailer: query.retailer.filter(|r| !r.trim().is_empty()),
         mapped_ingredient_id: query.mapped_ingredient_id.map(IngredientId::from),
+        unmapped: query.unmapped,
         include_archived: query.include_archived.unwrap_or(false),
         page: PageRequest::new(
             query.page.unwrap_or(1),

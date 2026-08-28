@@ -34,15 +34,13 @@ export function IngredientsPage() {
   const debounced = useDebounced(search, 300);
   const query = useIngredients({
     q: debounced || undefined,
+    needs_products: filter === 'needs_products' || undefined,
     include_archived: filter === 'archived' || undefined,
     page,
     per_page: PER_PAGE,
   });
 
-  if (query.isError) return <ErrorState error={query.error} onRetry={() => query.refetch()} />;
-
-  const all = query.data?.items ?? [];
-  const items = filter === 'needs_products' ? all.filter((i) => i.mapped_product_count === 0) : all;
+  const items = query.data?.items ?? [];
   const total = query.data?.total ?? 0;
   const pageCount = Math.max(1, Math.ceil(total / PER_PAGE));
 
@@ -87,7 +85,9 @@ export function IngredientsPage() {
         ))}
       </Stack>
 
-      {query.isLoading ? (
+      {query.isError ? (
+        <ErrorState error={query.error} onRetry={() => query.refetch()} />
+      ) : query.isLoading ? (
         <Loading label="Finding ingredients" />
       ) : items.length === 0 ? (
         <EmptyState

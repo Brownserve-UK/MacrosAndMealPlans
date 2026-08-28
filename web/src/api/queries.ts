@@ -12,6 +12,7 @@ import type { components } from './schema';
 export type IngredientListParams = {
   q?: string;
   origin?: components['schemas']['CatalogueOrigin'];
+  needs_products?: boolean;
   include_archived?: boolean;
   page?: number;
   per_page?: number;
@@ -21,6 +22,7 @@ export type ProductListParams = IngredientListParams & {
   barcode?: string;
   retailer?: string;
   mapped_ingredient_id?: string;
+  unmapped?: boolean;
 };
 
 export type RecipeListParams = {
@@ -365,6 +367,50 @@ export function useSetMemberAccount() {
   });
 }
 
+export function useMemberAccess(id: string) {
+  return useQuery({
+    queryKey: householdKeys.memberAccess(id),
+    queryFn: async () =>
+      unwrap(await client.GET('/api/v1/members/{id}/access', { params: { path: { id } } })),
+  });
+}
+
+export function useGrantMemberAccess() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: {
+      id: string;
+      body: components['schemas']['GrantAccessRequest'];
+    }) =>
+      unwrap(
+        await client.PUT('/api/v1/members/{id}/access', {
+          params: { path: { id: input.id } },
+          body: input.body,
+        }),
+      ),
+    onSuccess: (_data, input) =>
+      qc.invalidateQueries({ queryKey: householdKeys.memberAccess(input.id) }),
+  });
+}
+
+export function useRevokeMemberAccess() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: {
+      id: string;
+      userId: string;
+      scope: components['schemas']['AccessScope'];
+    }) =>
+      unwrap(
+        await client.DELETE('/api/v1/members/{id}/access/{user_id}/{scope}', {
+          params: { path: { id: input.id, user_id: input.userId, scope: input.scope } },
+        }),
+      ),
+    onSuccess: (_data, input) =>
+      qc.invalidateQueries({ queryKey: householdKeys.memberAccess(input.id) }),
+  });
+}
+
 export function useUsers(params: UserListParams) {
   return useQuery({
     queryKey: householdKeys.users(params),
@@ -546,32 +592,6 @@ export function useMarkMealPlanEaten() {
         await client.POST('/api/v1/meal-plan-entries/{id}/eaten', {
           params: { path: { id: input.id }, header: ifMatch(input.revision) },
           body: input.body,
-        }),
-      ),
-    onSuccess: () => invalidate(),
-  });
-}
-
-export function useMarkMealPlanNotEaten() {
-  const invalidate = useMealPlanInvalidation();
-  return useMutation({
-    mutationFn: async (input: { id: string; revision: number }) =>
-      unwrap(
-        await client.POST('/api/v1/meal-plan-entries/{id}/not-eaten', {
-          params: { path: { id: input.id }, header: ifMatch(input.revision) },
-        }),
-      ),
-    onSuccess: () => invalidate(),
-  });
-}
-
-export function useReopenMealPlanEntry() {
-  const invalidate = useMealPlanInvalidation();
-  return useMutation({
-    mutationFn: async (input: { id: string; revision: number }) =>
-      unwrap(
-        await client.POST('/api/v1/meal-plan-entries/{id}/reopen', {
-          params: { path: { id: input.id }, header: ifMatch(input.revision) },
         }),
       ),
     onSuccess: () => invalidate(),
@@ -829,12 +849,5 @@ export function useSetRecipeArchived() {
       qc.setQueryData(keys.recipe(updated.id), updated);
       void qc.invalidateQueries({ queryKey: ['recipes'] });
     },
-  });
-}
-
-export function useRecipeNutritionPreview() {
-  return useMutation({
-    mutationFn: async (body: components['schemas']['RecipeNutritionPreviewRequest']) =>
-      unwrap(await client.POST('/api/v1/recipes/nutrition-preview', { body })),
   });
 }

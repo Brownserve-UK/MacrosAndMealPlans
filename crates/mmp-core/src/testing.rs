@@ -90,6 +90,7 @@ fn paginate<T: Clone>(
 #[derive(Default, Clone)]
 pub struct InMemoryIngredientRepository {
     rows: Arc<Mutex<HashMap<IngredientId, Ingredient>>>,
+    products: Arc<Mutex<Option<InMemoryProductRepository>>>,
 }
 
 impl InMemoryIngredientRepository {
@@ -103,6 +104,10 @@ impl InMemoryIngredientRepository {
 
     pub fn count(&self) -> usize {
         self.rows.lock().unwrap().len()
+    }
+
+    pub fn link_products(&self, products: &InMemoryProductRepository) {
+        *self.products.lock().unwrap() = Some(products.clone());
     }
 }
 
@@ -133,6 +138,19 @@ impl IngredientRepository for InMemoryIngredientRepository {
     }
 
     async fn list(&self, query: &IngredientQuery) -> Result<Paginated<Ingredient>> {
+        let with_products: Option<std::collections::HashSet<IngredientId>> =
+            query.needs_products.and_then(|_| {
+                let guard = self.products.lock().unwrap();
+                guard.as_ref().map(|products| {
+                    let product_rows = products.rows.lock().unwrap();
+                    product_rows
+                        .values()
+                        .filter(|p| !p.is_archived())
+                        .filter_map(|p| p.mapped_ingredient_id)
+                        .collect()
+                })
+            });
+
         let rows = self.rows.lock().unwrap();
         let items: Vec<Ingredient> = rows
             .values()
@@ -143,6 +161,10 @@ impl IngredientRepository for InMemoryIngredientRepository {
                     .search
                     .as_deref()
                     .is_none_or(|needle| matches(&i.name, needle))
+            })
+            .filter(|i| match (query.needs_products, &with_products) {
+                (Some(needs), Some(mapped)) => mapped.contains(&i.id) != needs,
+                _ => true,
             })
             .cloned()
             .collect();
@@ -241,6 +263,11 @@ impl ProductRepository for InMemoryProductRepository {
                 query
                     .mapped_ingredient_id
                     .is_none_or(|id| p.mapped_ingredient_id == Some(id))
+            })
+            .filter(|p| {
+                query
+                    .unmapped
+                    .is_none_or(|unmapped| p.mapped_ingredient_id.is_none() == unmapped)
             })
             .filter(|p| {
                 query

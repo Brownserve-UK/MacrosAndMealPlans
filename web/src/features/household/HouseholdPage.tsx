@@ -42,8 +42,6 @@ export function HouseholdPage() {
     per_page: PER_PAGE,
   });
 
-  if (query.isError) return <ErrorState error={query.error} onRetry={() => query.refetch()} />;
-
   const items = query.data?.items ?? [];
   const total = query.data?.total ?? 0;
   const pageCount = Math.max(1, Math.ceil(total / PER_PAGE));
@@ -91,7 +89,9 @@ export function HouseholdPage() {
         ))}
       </Stack>
 
-      {query.isLoading ? (
+      {query.isError ? (
+        <ErrorState error={query.error} onRetry={() => query.refetch()} />
+      ) : query.isLoading ? (
         <Loading label="Finding people" />
       ) : items.length === 0 ? (
         <EmptyState
