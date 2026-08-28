@@ -6,8 +6,8 @@ If your changes require modifying the database schema you should write a migrati
 
 ```markdown
 0001_init.sql (current released schema)
-0002_new_schema.sql (next/dev schema) - ✅ Use this one
-0003_another_schema.sql (migration you created) - ❌ Bad
+0002_20261225.sql (next/current dev schema) - ✅ Good
+0003_some_other_schema.sql (migration you created) - ❌ Bad
 ```
 
 ## Writing tests
