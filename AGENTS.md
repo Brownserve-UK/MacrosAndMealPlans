@@ -21,3 +21,4 @@ If the requested change conflicts with them, or they do not settle behaviour the
 - Keep domain and application behaviour in `crates/mmp-core`, PostgreSQL concerns in `crates/mmp-postgres`, HTTP/authentication/OpenAPI concerns in `crates/mmp-server`, and presentation concerns in `web/`.
 - Keep API changes, generated OpenAPI/TypeScript output, migrations, and tests aligned where a change crosses those boundaries.
 - Android and iOS code will live in a separate repository, which does not yet exist. Mobile development is out of scope until not having it would create significant problems/pain for the future.
+- When adding new features and functionality the `sample-data` build should get seeded data that can be used to test the new functionality (where appropriate)
