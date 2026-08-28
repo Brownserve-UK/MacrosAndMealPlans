@@ -10,6 +10,7 @@ use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
 use super::common::iso_date;
+use super::meal_plan::{ItemRefRequest, MealItemRefDto};
 use super::nutrition::NutritionDto;
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, ToSchema)]
@@ -71,7 +72,8 @@ pub enum AmountKindDto {
 pub struct ConsumptionRecordDto {
     pub id: Uuid,
     pub member_id: Uuid,
-    pub product_id: Uuid,
+    #[serde(flatten)]
+    pub item: MealItemRefDto,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub recorded_by: Option<Uuid>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -102,7 +104,7 @@ impl From<ConsumptionRecord> for ConsumptionRecordDto {
         Self {
             id: value.id.as_uuid(),
             member_id: value.member_id.as_uuid(),
-            product_id: value.product_id.as_uuid(),
+            item: value.item.into(),
             recorded_by: value.recorded_by.map(|id| id.as_uuid()),
             meal_plan_entry_id: value.meal_plan_entry_id.map(|id| id.as_uuid()),
             meal_plan_component_id: value.meal_plan_component_id.map(|id| id.as_uuid()),
@@ -122,7 +124,8 @@ impl From<ConsumptionRecord> for ConsumptionRecordDto {
 #[derive(Debug, Clone, Deserialize, ToSchema)]
 pub struct CreateConsumptionRequest {
     pub member_id: Uuid,
-    pub product_id: Uuid,
+    #[serde(flatten)]
+    pub item: ItemRefRequest,
     pub slot: MealSlot,
     pub amount: AmountDto,
     #[serde(with = "iso_date")]
@@ -138,7 +141,7 @@ impl From<CreateConsumptionRequest> for NewConsumptionRecord {
         Self {
             id: None,
             member_id: super::member_id(value.member_id),
-            product_id: value.product_id.into(),
+            item: value.item.into(),
             recorded_by: None,
             meal_plan_entry_id: None,
             meal_plan_component_id: None,

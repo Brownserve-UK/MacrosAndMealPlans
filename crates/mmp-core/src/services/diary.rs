@@ -3,18 +3,20 @@ use std::sync::Arc;
 use time::{Date, Duration};
 
 use crate::domain::{
-    ConsumedAmount, ConsumptionRecord, ConsumptionRecordId, ConsumptionRecordPatch,
-    HouseholdMemberId, NewConsumptionRecord, NutritionFacts, NutritionQuality, Product, ProductId,
-    Revision, nutrition_for, sum_nutrition,
+    ConsumedAmount, ConsumedNutrition, ConsumptionRecord, ConsumptionRecordId,
+    ConsumptionRecordPatch, HouseholdMemberId, MealItemRef, NewConsumptionRecord, NutritionFacts,
+    NutritionQuality, Product, ProductId, Recipe, RecipeId, Revision, nutrition_for,
+    recipe_nutrition, recipe_nutrition_for, sum_nutrition,
 };
 use crate::error::{CoreError, Result, ValidationErrors};
 use crate::ports::{
     Clock, ConsumptionQuery, ConsumptionRecordRepository, PageRequest, ProductRepository,
-    UpdateOutcome,
+    RecipeRepository, UpdateOutcome,
 };
 
 const CONSUMPTION_RECORD: &str = "consumption record";
 const PRODUCT: &str = "product";
+const RECIPE: &str = "recipe";
 
 #[derive(Debug, Clone)]
 pub struct DayTotals {
@@ -42,6 +44,7 @@ pub struct DiaryDay {
 pub struct DiaryService {
     records: Arc<dyn ConsumptionRecordRepository>,
     products: Arc<dyn ProductRepository>,
+    recipes: Arc<dyn RecipeRepository>,
     clock: Arc<dyn Clock>,
 }
 
@@ -49,11 +52,13 @@ impl DiaryService {
     pub fn new(
         records: Arc<dyn ConsumptionRecordRepository>,
         products: Arc<dyn ProductRepository>,
+        recipes: Arc<dyn RecipeRepository>,
         clock: Arc<dyn Clock>,
     ) -> Self {
         Self {
             records,
             products,
+            recipes,
             clock,
         }
     }
@@ -65,16 +70,14 @@ impl DiaryService {
 
     pub async fn record_unchecked(&self, input: NewConsumptionRecord) -> Result<ConsumptionRecord> {
         input.validate()?;
-        let product = self.get_product(input.product_id).await?;
-        ensure_loggable(&product)?;
-        ensure_resolvable(&product, &input.amount)?;
-
-        let scaled = nutrition_for(&product, &input.amount);
+        let scaled = self
+            .resolve_item(input.item, &input.amount, input.recorded_by)
+            .await?;
         let now = self.clock.now();
         let record = ConsumptionRecord {
             id: input.id.unwrap_or_default(),
             member_id: input.member_id,
-            product_id: input.product_id,
+            item: input.item,
             recorded_by: input.recorded_by,
             meal_plan_entry_id: input.meal_plan_entry_id,
             meal_plan_component_id: input.meal_plan_component_id,
@@ -131,9 +134,9 @@ impl DiaryService {
             current.slot = slot;
         }
         if let Some(amount) = patch.amount {
-            let product = self.get_product(current.product_id).await?;
-            ensure_resolvable(&product, &amount)?;
-            let scaled = nutrition_for(&product, &amount);
+            let scaled = self
+                .resolve_item(current.item, &amount, current.recorded_by)
+                .await?;
             current.amount = amount;
             current.nutrition = scaled.facts;
             current.quality = scaled.quality;
@@ -173,10 +176,10 @@ impl DiaryService {
 
         let mut entries = Vec::with_capacity(page.items.len());
         for record in page.items {
-            let product = self.get_product(record.product_id).await?;
+            let product_name = self.item_name(record.item).await?;
             entries.push(DiaryEntry {
                 record,
-                product_name: product.name,
+                product_name,
             });
         }
 
@@ -193,6 +196,83 @@ impl DiaryService {
             .get(id)
             .await?
             .ok_or_else(|| CoreError::not_found(PRODUCT, id))
+    }
+
+    async fn get_recipe(
+        &self,
+        id: RecipeId,
+        actor: Option<crate::domain::UserId>,
+    ) -> Result<Recipe> {
+        self.recipes
+            .get(id)
+            .await?
+            .filter(|recipe| actor.is_none_or(|actor| recipe.owner_id == actor))
+            .ok_or_else(|| CoreError::not_found(RECIPE, id))
+    }
+
+    async fn item_name(&self, item: MealItemRef) -> Result<String> {
+        match item {
+            MealItemRef::Product { product_id } => match self.products.get(product_id).await? {
+                Some(product) => Ok(product.name),
+                None => Ok("Missing product".to_owned()),
+            },
+            MealItemRef::Recipe { recipe_id } => match self.recipes.get(recipe_id).await? {
+                Some(recipe) => Ok(recipe.name),
+                None => Ok("Missing recipe".to_owned()),
+            },
+        }
+    }
+
+    async fn resolve_item(
+        &self,
+        item: MealItemRef,
+        amount: &ConsumedAmount,
+        actor: Option<crate::domain::UserId>,
+    ) -> Result<ConsumedNutrition> {
+        match item {
+            MealItemRef::Product { product_id } => {
+                let product = self.get_product(product_id).await?;
+                ensure_loggable(&product)?;
+                ensure_resolvable(&product, amount)?;
+                Ok(nutrition_for(&product, amount))
+            }
+            MealItemRef::Recipe { recipe_id } => {
+                let recipe = self.get_recipe(recipe_id, actor).await?;
+                if recipe.is_archived() {
+                    let mut errors = ValidationErrors::new();
+                    errors.push("item", "That recipe is archived");
+                    return Err(errors.into());
+                }
+                if !matches!(amount, ConsumedAmount::Servings(_)) {
+                    let mut errors = ValidationErrors::new();
+                    errors.push("amount", "Recipes are measured in servings");
+                    return Err(errors.into());
+                }
+                let recipe_products = self
+                    .products
+                    .get_many(
+                        &recipe
+                            .components
+                            .iter()
+                            .map(|component| component.product_id)
+                            .collect::<Vec<_>>(),
+                    )
+                    .await?
+                    .into_iter()
+                    .map(|product| (product.id, product))
+                    .collect::<std::collections::HashMap<_, _>>();
+                let per_serving = recipe_nutrition(
+                    recipe.components.iter().map(|component| {
+                        (
+                            &component.amount,
+                            recipe_products.get(&component.product_id),
+                        )
+                    }),
+                    recipe.servings,
+                );
+                Ok(recipe_nutrition_for(&per_serving, amount))
+            }
+        }
     }
 
     async fn commit(&self, record: &ConsumptionRecord, expected: Revision) -> Result<()> {

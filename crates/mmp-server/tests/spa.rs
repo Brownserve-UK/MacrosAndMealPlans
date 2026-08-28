@@ -40,8 +40,9 @@ fn app_with_web(dist: &std::path::Path) -> axum::Router {
     let products = InMemoryProductRepository::new();
     let consumption = InMemoryConsumptionRecordRepository::new();
     let targets = InMemoryNutritionTargetRepository::new();
+    let recipes_repo = Arc::new(InMemoryRecipeRepository::new());
     let recipes = RecipeService::new(
-        Arc::new(InMemoryRecipeRepository::new()),
+        recipes_repo.clone(),
         Arc::new(products.clone()),
         Arc::new(SystemClock),
     );
@@ -59,11 +60,13 @@ fn app_with_web(dist: &std::path::Path) -> axum::Router {
         DiaryService::new(
             Arc::new(consumption.clone()),
             Arc::new(products.clone()),
+            recipes_repo.clone(),
             Arc::new(SystemClock),
         ),
         MealPlanService::new(
             Arc::new(InMemoryMealPlanRepository::new(consumption.clone())),
             Arc::new(products),
+            recipes_repo,
             Arc::new(consumption),
             Arc::new(targets.clone()),
             Arc::new(SystemClock),
@@ -170,8 +173,9 @@ async fn without_a_web_build_the_api_still_works() {
     let products = InMemoryProductRepository::new();
     let consumption = InMemoryConsumptionRecordRepository::new();
     let targets = InMemoryNutritionTargetRepository::new();
+    let recipes_repo = Arc::new(InMemoryRecipeRepository::new());
     let recipes = RecipeService::new(
-        Arc::new(InMemoryRecipeRepository::new()),
+        recipes_repo.clone(),
         Arc::new(products.clone()),
         Arc::new(SystemClock),
     );
@@ -189,11 +193,13 @@ async fn without_a_web_build_the_api_still_works() {
         DiaryService::new(
             Arc::new(consumption.clone()),
             Arc::new(products.clone()),
+            recipes_repo.clone(),
             Arc::new(SystemClock),
         ),
         MealPlanService::new(
             Arc::new(InMemoryMealPlanRepository::new(consumption.clone())),
             Arc::new(products),
+            recipes_repo,
             Arc::new(consumption),
             Arc::new(targets.clone()),
             Arc::new(SystemClock),

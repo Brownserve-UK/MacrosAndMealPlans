@@ -44,8 +44,9 @@ async fn app() -> Router {
     let products = InMemoryProductRepository::new();
     let consumption = InMemoryConsumptionRecordRepository::new();
     let targets = InMemoryNutritionTargetRepository::new();
+    let recipes_repo = Arc::new(InMemoryRecipeRepository::new());
     let recipes = RecipeService::new(
-        Arc::new(InMemoryRecipeRepository::new()),
+        recipes_repo.clone(),
         Arc::new(products.clone()),
         clock.clone(),
     );
@@ -63,11 +64,13 @@ async fn app() -> Router {
         DiaryService::new(
             Arc::new(consumption.clone()),
             Arc::new(products.clone()),
+            recipes_repo.clone(),
             clock.clone(),
         ),
         MealPlanService::new(
             Arc::new(InMemoryMealPlanRepository::new(consumption.clone())),
             Arc::new(products),
+            recipes_repo,
             Arc::new(consumption),
             Arc::new(targets.clone()),
             clock.clone(),

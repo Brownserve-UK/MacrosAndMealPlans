@@ -118,10 +118,10 @@ function MealItemRow({
         <IconButton
           aria-label={
             item.status === 'not_eaten'
-              ? `Reopen ${item.product_name}`
+              ? `Reopen ${item.item_name}`
               : item.status === 'planned'
-                ? `Mark ${item.product_name} eaten`
-                : `Mark ${item.product_name} not eaten yet`
+                ? `Mark ${item.item_name} eaten`
+                : `Mark ${item.item_name} not eaten yet`
           }
           onClick={onToggle}
           disabled={toggling}
@@ -160,7 +160,7 @@ function MealItemRow({
       <ButtonBase
         onClick={onOpen ?? undefined}
         disabled={!onOpen}
-        aria-label={`Open ${item.product_name}`}
+        aria-label={`Open ${item.item_name}`}
         sx={{
           display: 'flex',
           flexGrow: 1,
@@ -177,7 +177,7 @@ function MealItemRow({
           '&:focus-visible': { outline: '2px solid', outlineColor: 'primary.main', outlineOffset: -2 },
         }}
       >
-        <InitialsAvatar name={item.product_name} size={44} />
+        <InitialsAvatar name={item.item_name} size={44} />
         <Stack sx={{ minWidth: 0, flexGrow: 1 }} spacing={0.25}>
           <Typography
             variant="subtitle1"
@@ -188,10 +188,13 @@ function MealItemRow({
               textDecoration: item.status === 'not_eaten' ? 'line-through' : 'none',
             }}
           >
-            {item.product_name}
+            {item.item_name}
           </Typography>
           {unplanned ? (
             <Chip size="small" variant="outlined" color="warning" label="Unplanned" sx={{ width: 'fit-content' }} />
+          ) : null}
+          {item.item_kind === 'recipe' ? (
+            <Chip size="small" variant="outlined" label="Recipe" sx={{ width: 'fit-content' }} />
           ) : null}
           {detail ? (
             <Typography variant="caption" color="text.secondary">

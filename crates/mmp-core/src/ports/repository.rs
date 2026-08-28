@@ -258,6 +258,16 @@ pub trait MealPlanRepository: Send + Sync + 'static {
 pub trait RecipeRepository: Send + Sync + 'static {
     async fn get(&self, id: RecipeId) -> Result<Option<Recipe>>;
 
+    async fn get_many(&self, ids: &[RecipeId]) -> Result<Vec<Recipe>> {
+        let mut recipes = Vec::with_capacity(ids.len());
+        for id in ids {
+            if let Some(recipe) = self.get(*id).await? {
+                recipes.push(recipe);
+            }
+        }
+        Ok(recipes)
+    }
+
     async fn list(&self, query: &RecipeQuery) -> Result<Paginated<RecipeSummary>>;
 
     async fn insert(&self, recipe: &Recipe) -> Result<()>;

@@ -586,3 +586,34 @@ CREATE TABLE recipe_photo (
     CONSTRAINT recipe_photo_bytes_present
         CHECK (octet_length(hero_jpeg) > 0 AND octet_length(card_jpeg) > 0)
 );
+
+ALTER TABLE meal_plan_component
+    RENAME COLUMN frozen_product_name TO frozen_item_name;
+
+ALTER TABLE meal_plan_component
+    ADD COLUMN item_kind TEXT NOT NULL DEFAULT 'product',
+    ADD COLUMN recipe_id UUID REFERENCES recipe (id) ON DELETE RESTRICT,
+    ALTER COLUMN product_id DROP NOT NULL,
+    ADD CONSTRAINT meal_plan_component_item_kind_valid
+        CHECK (item_kind IN ('product', 'recipe')),
+    ADD CONSTRAINT meal_plan_component_item_ref_exclusive
+        CHECK (
+            num_nonnulls(product_id, recipe_id) = 1
+            AND (item_kind = 'product') = (product_id IS NOT NULL)
+        );
+
+CREATE INDEX meal_plan_component_recipe ON meal_plan_component (recipe_id);
+
+ALTER TABLE consumption_record
+    ADD COLUMN item_kind TEXT NOT NULL DEFAULT 'product',
+    ADD COLUMN recipe_id UUID REFERENCES recipe (id) ON DELETE RESTRICT,
+    ALTER COLUMN product_id DROP NOT NULL,
+    ADD CONSTRAINT consumption_record_item_kind_valid
+        CHECK (item_kind IN ('product', 'recipe')),
+    ADD CONSTRAINT consumption_record_item_ref_exclusive
+        CHECK (
+            num_nonnulls(product_id, recipe_id) = 1
+            AND (item_kind = 'product') = (product_id IS NOT NULL)
+        );
+
+CREATE INDEX consumption_record_recipe ON consumption_record (recipe_id);

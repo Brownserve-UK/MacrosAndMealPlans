@@ -86,6 +86,7 @@ pub fn diary_service(pool: &PgPool) -> DiaryService {
     DiaryService::new(
         Arc::new(PgConsumptionRecordRepository::new(pool.clone())),
         Arc::new(PgProductRepository::new(pool.clone())),
+        Arc::new(PgRecipeRepository::new(pool.clone())),
         Arc::new(SystemClock),
     )
 }
@@ -93,12 +94,19 @@ pub fn diary_service(pool: &PgPool) -> DiaryService {
 pub fn app_state(config: &Config, pool: &PgPool) -> AppState {
     let household = household_service(pool);
     let products = Arc::new(PgProductRepository::new(pool.clone()));
+    let recipes_repo = Arc::new(PgRecipeRepository::new(pool.clone()));
     let consumption = Arc::new(PgConsumptionRecordRepository::new(pool.clone()));
-    let diary = DiaryService::new(consumption.clone(), products.clone(), Arc::new(SystemClock));
+    let diary = DiaryService::new(
+        consumption.clone(),
+        products.clone(),
+        recipes_repo.clone(),
+        Arc::new(SystemClock),
+    );
     let targets = Arc::new(PgNutritionTargetRepository::new(pool.clone()));
     let meal_plan = MealPlanService::new(
         Arc::new(PgMealPlanRepository::new(pool.clone())),
         products,
+        recipes_repo,
         consumption,
         targets.clone(),
         Arc::new(SystemClock),

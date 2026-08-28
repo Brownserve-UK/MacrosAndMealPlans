@@ -1,5 +1,8 @@
 use super::*;
-use crate::domain::{Provenance, Unit};
+use crate::domain::{
+    MealItemRef, ProductId, Provenance, Recipe, RecipeComponent, RecipeComponentId, RecipeId,
+    RecipeVisibility, Unit, UserId,
+};
 
 fn product_with(
     package_quantity: Option<Quantity>,
@@ -230,4 +233,133 @@ fn a_zero_amount_is_rejected() {
 #[test]
 fn an_empty_patch_is_detected() {
     assert!(ConsumptionRecordPatch::default().is_empty());
+}
+
+fn recipe_with(components: Vec<RecipeComponent>, servings: i32) -> Recipe {
+    let now = OffsetDateTime::now_utc();
+    let owner = UserId::new();
+    Recipe {
+        id: RecipeId::new(),
+        name: "Test recipe".to_owned(),
+        description: None,
+        servings,
+        preparation_minutes: None,
+        cooking_minutes: None,
+        notes: None,
+        components,
+        instructions: Vec::new(),
+        meal_categories: Vec::new(),
+        country_categories: Vec::new(),
+        tags: Vec::new(),
+        photo_version: None,
+        owner_id: owner,
+        visibility: RecipeVisibility::Private,
+        created_by: owner,
+        updated_by: owner,
+        revision: Revision::INITIAL,
+        created_at: now,
+        updated_at: now,
+        archived_at: None,
+    }
+}
+
+#[test]
+fn a_recipe_serving_scales_the_per_serving_figure() {
+    let product = product_with(
+        Some(Quantity::new(Decimal::new(400, 0), Unit::Gram)),
+        None,
+        per_100g(100),
+    );
+    let line = RecipeComponent {
+        id: RecipeComponentId::new(),
+        product_id: product.id,
+        amount: ConsumedAmount::Measure(Quantity::new(Decimal::new(400, 0), Unit::Gram)),
+        position: 0,
+    };
+    let recipe = recipe_with(vec![line], 4);
+    let per_serving = crate::domain::recipe_nutrition(
+        recipe
+            .components
+            .iter()
+            .map(|component| (&component.amount, Some(&product))),
+        recipe.servings,
+    );
+
+    let one = recipe_nutrition_for(&per_serving, &ConsumedAmount::Servings(Decimal::ONE));
+    assert_eq!(one.quality, NutritionQuality::Known);
+    assert_eq!(one.facts.energy_kcal, Some(Decimal::new(100, 0)));
+    assert_eq!(one.facts.basis, None);
+
+    let two = recipe_nutrition_for(&per_serving, &ConsumedAmount::Servings(Decimal::new(2, 0)));
+    assert_eq!(two.facts.energy_kcal, Some(Decimal::new(200, 0)));
+
+    let half = recipe_nutrition_for(&per_serving, &ConsumedAmount::Servings(Decimal::new(5, 1)));
+    assert_eq!(half.facts.energy_kcal, Some(Decimal::new(50, 0)));
+}
+
+#[test]
+fn a_recipe_serving_measured_any_other_way_is_unknown() {
+    let per_serving = ConsumedNutrition {
+        facts: NutritionFacts {
+            energy_kcal: Some(Decimal::new(500, 0)),
+            ..Default::default()
+        },
+        quality: NutritionQuality::Known,
+    };
+    let result = recipe_nutrition_for(
+        &per_serving,
+        &ConsumedAmount::Measure(Quantity::new(Decimal::new(100, 0), Unit::Gram)),
+    );
+    assert_eq!(result.quality, NutritionQuality::Unknown);
+    assert!(result.facts.is_unknown());
+}
+
+#[test]
+fn a_recipe_with_no_nutrition_stays_unknown_rather_than_zero() {
+    let product = product_with(
+        Some(Quantity::new(Decimal::new(400, 0), Unit::Gram)),
+        None,
+        NutritionFacts::default(),
+    );
+    let line = RecipeComponent {
+        id: RecipeComponentId::new(),
+        product_id: product.id,
+        amount: ConsumedAmount::Measure(Quantity::new(Decimal::new(400, 0), Unit::Gram)),
+        position: 0,
+    };
+    let recipe = recipe_with(vec![line], 4);
+    let per_serving = crate::domain::recipe_nutrition(
+        recipe
+            .components
+            .iter()
+            .map(|component| (&component.amount, Some(&product))),
+        recipe.servings,
+    );
+    let result = recipe_nutrition_for(&per_serving, &ConsumedAmount::Servings(Decimal::ONE));
+    assert_eq!(result.quality, NutritionQuality::Unknown);
+    assert_eq!(result.facts.energy_kcal, None);
+}
+
+#[test]
+fn a_recipe_component_rejects_a_non_serving_amount() {
+    let mut errors = ValidationErrors::new();
+    validate_recipe_amount(
+        "amount",
+        MealItemRef::recipe(RecipeId::new()),
+        &ConsumedAmount::Measure(Quantity::new(Decimal::new(100, 0), Unit::Gram)),
+        &mut errors,
+    );
+    assert!(!errors.is_empty());
+}
+
+#[test]
+fn a_product_component_accepts_any_amount() {
+    let mut errors = ValidationErrors::new();
+    validate_recipe_amount(
+        "amount",
+        MealItemRef::product(ProductId::new()),
+        &ConsumedAmount::Measure(Quantity::new(Decimal::new(100, 0), Unit::Gram)),
+        &mut errors,
+    );
+    assert!(errors.is_empty());
 }

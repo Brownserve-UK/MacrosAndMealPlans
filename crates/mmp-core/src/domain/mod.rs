@@ -4,6 +4,7 @@ mod household;
 mod household_settings;
 mod ids;
 mod ingredient;
+mod meal_item;
 mod meal_plan;
 mod nutrition;
 mod nutrition_target;
@@ -16,7 +17,8 @@ mod recipe;
 pub use access::{AccessScope, Permission, Role, UnknownAccessScope, UnknownRole};
 pub use consumption::{
     AmountError, ConsumedAmount, ConsumedNutrition, ConsumptionRecord, ConsumptionRecordPatch,
-    NewConsumptionRecord, NutritionQuality, UnknownNutritionQuality, nutrition_for, sum_nutrition,
+    NewConsumptionRecord, NutritionQuality, UnknownNutritionQuality, nutrition_for,
+    recipe_nutrition_for, sum_nutrition,
 };
 pub use household::{
     HouseholdMember, HouseholdMemberPatch, MAX_USERNAME_LEN, MIN_USERNAME_LEN, MemberAccessGrant,
@@ -31,6 +33,7 @@ pub use ids::{
 pub use ingredient::{
     Ingredient, IngredientPatch, IngredientSummary, MAX_NAME_LEN, NewIngredient, validate_name,
 };
+pub use meal_item::{MealItemRef, UnknownMealItemRef};
 pub use meal_plan::{
     ActualMealPlanComponent, ConfirmMealPlanComponent, ConfirmMealPlanEntry, MealPlanComponent,
     MealPlanComponentSnapshot, MealPlanEntry, MealPlanEntryPatch, MealPlanStatus, MealSlot,

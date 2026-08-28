@@ -7,11 +7,11 @@ use mmp_core::ports::{
 use sqlx::PgPool;
 
 use crate::error::{map_db_error, repository_error};
-use crate::rows::{ConsumptionRecordRow, amount_bindings, nutrition_bindings};
+use crate::rows::{ConsumptionRecordRow, amount_bindings, item_bindings, nutrition_bindings};
 
 macro_rules! columns {
     () => {
-        "c.id, c.member_id, c.product_id, c.recorded_by, mpc.entry_id AS meal_plan_entry_id, c.meal_plan_component_id, c.slot, c.amount_kind, c.amount_value, c.amount_unit, c.consumed_on, c.consumed_at, c.nutrition_basis_amount, c.nutrition_basis_unit, c.energy_kcal, c.protein_g, c.carbohydrate_g, c.sugar_g, c.fat_g, c.saturated_fat_g, c.fibre_g, c.salt_g, c.cholesterol_mg, c.nutrition_extra, c.nutrition_quality, c.revision, c.created_at, c.updated_at"
+        "c.id, c.member_id, c.item_kind, c.product_id, c.recipe_id, c.recorded_by, mpc.entry_id AS meal_plan_entry_id, c.meal_plan_component_id, c.slot, c.amount_kind, c.amount_value, c.amount_unit, c.consumed_on, c.consumed_at, c.nutrition_basis_amount, c.nutrition_basis_unit, c.energy_kcal, c.protein_g, c.carbohydrate_g, c.sugar_g, c.fat_g, c.saturated_fat_g, c.fibre_g, c.salt_g, c.cholesterol_mg, c.nutrition_extra, c.nutrition_quality, c.revision, c.created_at, c.updated_at"
     };
 }
 
@@ -142,6 +142,7 @@ impl ConsumptionRecordRepository for PgConsumptionRecordRepository {
 
     async fn insert(&self, record: &ConsumptionRecord) -> Result<()> {
         let (amount_kind, amount_value, amount_unit) = amount_bindings(&record.amount);
+        let (item_kind, item_product_id, item_recipe_id) = item_bindings(&record.item);
         let n = nutrition_bindings(&record.nutrition);
         sqlx::query(
             "INSERT INTO consumption_record (
@@ -152,7 +153,8 @@ impl ConsumptionRecordRepository for PgConsumptionRecordRepository {
                  energy_kcal, protein_g, carbohydrate_g, sugar_g, fat_g,
                  saturated_fat_g, fibre_g, salt_g, cholesterol_mg, nutrition_extra,
                  nutrition_quality,
-                 revision, created_at, updated_at
+                 revision, created_at, updated_at,
+                 item_kind, recipe_id
              ) VALUES (
                  $1, $2, $3, $4, $5, $6,
                  $7, $8, $9,
@@ -161,12 +163,13 @@ impl ConsumptionRecordRepository for PgConsumptionRecordRepository {
                  $14, $15, $16, $17, $18,
                  $19, $20, $21, $22, $23,
                  $24,
-                 $25, $26, $27
+                 $25, $26, $27,
+                 $28, $29
              )",
         )
         .bind(record.id.as_uuid())
         .bind(record.member_id.as_uuid())
-        .bind(record.product_id.as_uuid())
+        .bind(item_product_id)
         .bind(record.recorded_by.map(|id| id.as_uuid()))
         .bind(record.meal_plan_component_id.map(|id| id.as_uuid()))
         .bind(record.slot.code())
@@ -191,6 +194,8 @@ impl ConsumptionRecordRepository for PgConsumptionRecordRepository {
         .bind(record.revision.get())
         .bind(record.created_at)
         .bind(record.updated_at)
+        .bind(item_kind)
+        .bind(item_recipe_id)
         .execute(&self.pool)
         .await
         .map_err(|e| map_db_error(e, "creating a consumption record"))?;
@@ -203,6 +208,7 @@ impl ConsumptionRecordRepository for PgConsumptionRecordRepository {
         expected: Revision,
     ) -> Result<UpdateOutcome> {
         let (amount_kind, amount_value, amount_unit) = amount_bindings(&record.amount);
+        let (item_kind, item_product_id, item_recipe_id) = item_bindings(&record.item);
         let n = nutrition_bindings(&record.nutrition);
         let affected = sqlx::query(
             "UPDATE consumption_record SET
@@ -214,12 +220,13 @@ impl ConsumptionRecordRepository for PgConsumptionRecordRepository {
                  sugar_g = $16, fat_g = $17, saturated_fat_g = $18, fibre_g = $19,
                  salt_g = $20, cholesterol_mg = $21, nutrition_extra = $22,
                  nutrition_quality = $23,
-                 revision = $24, updated_at = $25
+                 revision = $24, updated_at = $25,
+                 item_kind = $27, recipe_id = $28
              WHERE id = $1 AND revision = $26",
         )
         .bind(record.id.as_uuid())
         .bind(record.member_id.as_uuid())
-        .bind(record.product_id.as_uuid())
+        .bind(item_product_id)
         .bind(record.recorded_by.map(|id| id.as_uuid()))
         .bind(record.slot.code())
         .bind(amount_kind)
@@ -243,6 +250,8 @@ impl ConsumptionRecordRepository for PgConsumptionRecordRepository {
         .bind(record.revision.get())
         .bind(record.updated_at)
         .bind(expected.get())
+        .bind(item_kind)
+        .bind(item_recipe_id)
         .execute(&self.pool)
         .await
         .map_err(|e| map_db_error(e, "updating a consumption record"))?

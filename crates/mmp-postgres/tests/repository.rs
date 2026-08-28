@@ -3,12 +3,12 @@
 use mmp_core::CoreError;
 use mmp_core::domain::{
     AccessScope, CatalogueOrigin, ConsumedAmount, ConsumptionRecord, ConsumptionRecordId,
-    HouseholdMember, HouseholdMemberId, Ingredient, IngredientId, MealCategory, MealPlanComponent,
-    MealPlanComponentId, MealPlanComponentSnapshot, MealPlanEntry, MealPlanEntryId, MealPlanStatus,
-    MealSlot, MemberAccessGrant, NutritionFacts, NutritionGoals, NutritionQuality, NutritionTarget,
-    NutritionTargetId, Product, ProductId, Provenance, Quantity, Recipe, RecipeComponent,
-    RecipeComponentId, RecipeId, RecipeInstruction, RecipeInstructionId, RecipePhoto,
-    RecipePhotoDerivatives, RecipeVisibility, Revision, Role, Unit, User, UserId,
+    HouseholdMember, HouseholdMemberId, Ingredient, IngredientId, MealCategory, MealItemRef,
+    MealPlanComponent, MealPlanComponentId, MealPlanComponentSnapshot, MealPlanEntry,
+    MealPlanEntryId, MealPlanStatus, MealSlot, MemberAccessGrant, NutritionFacts, NutritionGoals,
+    NutritionQuality, NutritionTarget, NutritionTargetId, Product, ProductId, Provenance, Quantity,
+    Recipe, RecipeComponent, RecipeComponentId, RecipeId, RecipeInstruction, RecipeInstructionId,
+    RecipePhoto, RecipePhotoDerivatives, RecipeVisibility, Revision, Role, Unit, User, UserId,
 };
 use mmp_core::ports::{
     AccessGrantRepository, ConsumptionQuery, ConsumptionRecordRepository,
@@ -1007,7 +1007,7 @@ fn consumption_record(member_id: HouseholdMemberId, product_id: ProductId) -> Co
     ConsumptionRecord {
         id: ConsumptionRecordId::new(),
         member_id,
-        product_id,
+        item: MealItemRef::product(product_id),
         recorded_by: None,
         meal_plan_entry_id: None,
         meal_plan_component_id: None,
@@ -1229,7 +1229,7 @@ fn meal_plan_entry(
         status: MealPlanStatus::Planned,
         components: vec![MealPlanComponent {
             id: MealPlanComponentId::new(),
-            product_id,
+            item: MealItemRef::product(product_id),
             amount: ConsumedAmount::Measure(Quantity::new(Decimal::new(150, 0), Unit::Millilitre)),
             position: 0,
             snapshot: None,
@@ -1288,7 +1288,7 @@ async fn resolving_a_meal_freezes_components_and_links_consumption(pool: PgPool)
     resolved.components[0].resolved_at = Some(resolved.updated_at);
     resolved.components[0].revision = resolved.components[0].revision.next();
     resolved.components[0].snapshot = Some(MealPlanComponentSnapshot {
-        product_name: "Whole Milk".to_owned(),
+        item_name: "Whole Milk".to_owned(),
         nutrition: NutritionFacts {
             basis: Some(Quantity::new(Decimal::new(150, 0), Unit::Millilitre)),
             energy_kcal: Some(Decimal::new(96, 0)),
@@ -1330,7 +1330,7 @@ async fn resolving_and_reopening_one_component_preserves_its_sibling(pool: PgPoo
 
     let mut resolved = original.components[0].clone();
     resolved.snapshot = Some(MealPlanComponentSnapshot {
-        product_name: "Whole Milk".to_owned(),
+        item_name: "Whole Milk".to_owned(),
         nutrition: NutritionFacts::default(),
         quality: NutritionQuality::Unknown,
     });
@@ -1389,7 +1389,7 @@ async fn updating_a_meal_plan_entry_replaces_its_components(pool: PgPool) {
     updated.components = vec![
         MealPlanComponent {
             id: MealPlanComponentId::new(),
-            product_id: other_product.id,
+            item: MealItemRef::product(other_product.id),
             amount: ConsumedAmount::Servings(Decimal::new(2, 0)),
             position: 0,
             snapshot: None,
@@ -1401,7 +1401,7 @@ async fn updating_a_meal_plan_entry_replaces_its_components(pool: PgPool) {
         },
         MealPlanComponent {
             id: MealPlanComponentId::new(),
-            product_id,
+            item: MealItemRef::product(product_id),
             amount: ConsumedAmount::Servings(Decimal::new(1, 0)),
             position: 1,
             snapshot: None,
@@ -1526,7 +1526,7 @@ async fn reopening_a_meal_removes_its_consumption_and_clears_the_snapshot(pool: 
     resolved.components[0].resolved_at = Some(resolved.updated_at);
     resolved.components[0].revision = resolved.components[0].revision.next();
     resolved.components[0].snapshot = Some(MealPlanComponentSnapshot {
-        product_name: "Whole Milk".to_owned(),
+        item_name: "Whole Milk".to_owned(),
         nutrition: NutritionFacts {
             basis: Some(Quantity::new(Decimal::new(150, 0), Unit::Millilitre)),
             energy_kcal: Some(Decimal::new(96, 0)),
@@ -1576,7 +1576,7 @@ async fn a_component_cannot_be_confirmed_by_two_consumption_records(pool: PgPool
     resolved.components[0].resolved_at = Some(resolved.updated_at);
     resolved.components[0].revision = resolved.components[0].revision.next();
     resolved.components[0].snapshot = Some(MealPlanComponentSnapshot {
-        product_name: "Whole Milk".to_owned(),
+        item_name: "Whole Milk".to_owned(),
         nutrition: NutritionFacts::default(),
         quality: NutritionQuality::Unknown,
     });
@@ -2061,4 +2061,74 @@ async fn lists_recipes_scoped_to_owner_and_excludes_archived(pool: PgPool) {
         page.total, 2,
         "including archived shows both of the owner's recipes"
     );
+}
+
+#[sqlx::test]
+async fn round_trips_a_meal_plan_entry_with_a_recipe_component(pool: PgPool) {
+    let (member_id, product_id, actor_id) = seed_meal_plan_dependencies(&pool).await;
+    let recipes = PgRecipeRepository::new(pool.clone());
+    let dish = recipe(actor_id, vec![recipe_component(product_id, 0)]);
+    recipes.insert(&dish).await.unwrap();
+
+    let repo = PgMealPlanRepository::new(pool.clone());
+    let mut entry = meal_plan_entry(member_id, product_id, actor_id);
+    entry.components = vec![MealPlanComponent {
+        id: MealPlanComponentId::new(),
+        item: MealItemRef::recipe(dish.id),
+        amount: ConsumedAmount::Servings(Decimal::new(2, 0)),
+        position: 0,
+        snapshot: None,
+        status: MealPlanStatus::Planned,
+        resolved_by: None,
+        resolved_at: None,
+        revision: Revision::INITIAL,
+        display_order: Uuid::now_v7(),
+    }];
+    repo.insert(&entry).await.unwrap();
+
+    let loaded = repo.get(entry.id).await.unwrap().unwrap();
+    assert_eq!(loaded.components.len(), 1);
+    assert_eq!(loaded.components[0].item, MealItemRef::recipe(dish.id));
+    assert_eq!(
+        loaded.components[0].amount,
+        ConsumedAmount::Servings(Decimal::new(2, 0))
+    );
+}
+
+#[sqlx::test]
+async fn a_recipe_component_referencing_a_missing_recipe_is_rejected(pool: PgPool) {
+    let (member_id, product_id, actor_id) = seed_meal_plan_dependencies(&pool).await;
+    let repo = PgMealPlanRepository::new(pool.clone());
+    let mut entry = meal_plan_entry(member_id, product_id, actor_id);
+    entry.components = vec![MealPlanComponent {
+        id: MealPlanComponentId::new(),
+        item: MealItemRef::recipe(RecipeId::new()),
+        amount: ConsumedAmount::Servings(Decimal::ONE),
+        position: 0,
+        snapshot: None,
+        status: MealPlanStatus::Planned,
+        resolved_by: None,
+        resolved_at: None,
+        revision: Revision::INITIAL,
+        display_order: Uuid::now_v7(),
+    }];
+
+    assert!(repo.insert(&entry).await.is_err());
+}
+
+#[sqlx::test]
+async fn logs_and_reloads_a_recipe_consumption_record(pool: PgPool) {
+    let (member_id, product_id, actor_id) = seed_meal_plan_dependencies(&pool).await;
+    let recipes = PgRecipeRepository::new(pool.clone());
+    let dish = recipe(actor_id, vec![recipe_component(product_id, 0)]);
+    recipes.insert(&dish).await.unwrap();
+
+    let repo = PgConsumptionRecordRepository::new(pool.clone());
+    let mut record = consumption_record(member_id, product_id);
+    record.item = MealItemRef::recipe(dish.id);
+    record.amount = ConsumedAmount::Servings(Decimal::ONE);
+    repo.insert(&record).await.unwrap();
+
+    let loaded = repo.get(record.id).await.unwrap().unwrap();
+    assert_eq!(loaded.item, MealItemRef::recipe(dish.id));
 }

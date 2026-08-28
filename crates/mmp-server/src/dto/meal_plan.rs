@@ -1,6 +1,6 @@
 use mmp_core::domain::{
-    ActualMealPlanComponent, ConfirmMealPlanComponent, ConfirmMealPlanEntry, MealPlanEntryPatch,
-    MealPlanStatus, MealSlot, NewMealPlanComponent, NewMealPlanEntry, Patch,
+    ActualMealPlanComponent, ConfirmMealPlanComponent, ConfirmMealPlanEntry, MealItemRef,
+    MealPlanEntryPatch, MealPlanStatus, MealSlot, NewMealPlanComponent, NewMealPlanEntry, Patch,
 };
 use mmp_core::services::{
     MealItem, MealItemSource, MealPlanComponentView, MealPlanDay, MealPlanEntryView, MealPlanWeek,
@@ -31,11 +31,57 @@ impl From<NutritionSummary> for NutritionSummaryDto {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, ToSchema)]
+#[serde(tag = "item_kind", rename_all = "snake_case")]
+pub enum MealItemRefDto {
+    Product { product_id: Uuid },
+    Recipe { recipe_id: Uuid },
+}
+
+impl From<MealItemRef> for MealItemRefDto {
+    fn from(value: MealItemRef) -> Self {
+        match value {
+            MealItemRef::Product { product_id } => Self::Product {
+                product_id: product_id.as_uuid(),
+            },
+            MealItemRef::Recipe { recipe_id } => Self::Recipe {
+                recipe_id: recipe_id.as_uuid(),
+            },
+        }
+    }
+}
+
+impl From<MealItemRefDto> for MealItemRef {
+    fn from(value: MealItemRefDto) -> Self {
+        match value {
+            MealItemRefDto::Product { product_id } => MealItemRef::product(product_id.into()),
+            MealItemRefDto::Recipe { recipe_id } => MealItemRef::recipe(recipe_id.into()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, ToSchema)]
+#[serde(untagged)]
+pub enum ItemRefRequest {
+    Product { product_id: Uuid },
+    Recipe { recipe_id: Uuid },
+}
+
+impl From<ItemRefRequest> for MealItemRef {
+    fn from(value: ItemRefRequest) -> Self {
+        match value {
+            ItemRefRequest::Product { product_id } => MealItemRef::product(product_id.into()),
+            ItemRefRequest::Recipe { recipe_id } => MealItemRef::recipe(recipe_id.into()),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct MealPlanComponentDto {
     pub id: Uuid,
-    pub product_id: Uuid,
-    pub product_name: String,
+    #[serde(flatten)]
+    pub item: MealItemRefDto,
+    pub item_name: String,
     pub amount: AmountDto,
     pub position: i32,
     pub nutrition: NutritionDto,
@@ -50,8 +96,8 @@ impl From<MealPlanComponentView> for MealPlanComponentDto {
     fn from(value: MealPlanComponentView) -> Self {
         Self {
             id: value.component.id.as_uuid(),
-            product_id: value.component.product_id.as_uuid(),
-            product_name: value.product_name,
+            item: value.component.item.into(),
+            item_name: value.item_name,
             amount: value.component.amount.into(),
             position: value.component.position,
             nutrition: value.nutrition.into(),
@@ -154,8 +200,9 @@ pub struct MealItemDto {
     #[serde(rename = "linked_record_id", skip_serializing_if = "Option::is_none")]
     pub record_id: Option<Uuid>,
     pub status: MealPlanStatus,
-    pub product_id: Uuid,
-    pub product_name: String,
+    #[serde(flatten)]
+    pub item: MealItemRefDto,
+    pub item_name: String,
     pub amount: AmountDto,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub planned_amount: Option<AmountDto>,
@@ -182,8 +229,8 @@ impl From<MealItem> for MealItemDto {
             source: value.source.into(),
             record_id: value.record_id.map(|id| id.as_uuid()),
             status: value.status,
-            product_id: value.product_id.as_uuid(),
-            product_name: value.product_name,
+            item: value.item.into(),
+            item_name: value.item_name,
             amount: value.amount.into(),
             planned_amount: value.planned_amount.map(Into::into),
             planned_on: value.planned_on,
@@ -282,7 +329,8 @@ impl From<MealPlanWeek> for MealPlanWeekDto {
 pub struct MealPlanComponentRequest {
     #[serde(default)]
     pub id: Option<Uuid>,
-    pub product_id: Uuid,
+    #[serde(flatten)]
+    pub item: ItemRefRequest,
     pub amount: AmountDto,
 }
 
@@ -290,7 +338,7 @@ impl From<MealPlanComponentRequest> for NewMealPlanComponent {
     fn from(value: MealPlanComponentRequest) -> Self {
         Self {
             id: value.id.map(Into::into),
-            product_id: value.product_id.into(),
+            item: value.item.into(),
             amount: value.amount.into(),
         }
     }

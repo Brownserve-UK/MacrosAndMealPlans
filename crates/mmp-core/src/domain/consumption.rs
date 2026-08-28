@@ -5,8 +5,8 @@ use rust_decimal::Decimal;
 use time::{Date, OffsetDateTime};
 
 use super::{
-    ConsumptionRecordId, HouseholdMemberId, MealPlanComponentId, MealPlanEntryId, MealSlot,
-    NutritionFacts, Product, ProductId, Quantity, Revision, UserId,
+    ConsumptionRecordId, HouseholdMemberId, MealItemRef, MealPlanComponentId, MealPlanEntryId,
+    MealSlot, NutritionFacts, Product, Quantity, Revision, UserId,
 };
 use crate::error::ValidationErrors;
 
@@ -112,7 +112,7 @@ pub struct ConsumedNutrition {
 }
 
 impl ConsumedNutrition {
-    fn unknown() -> Self {
+    pub fn unknown() -> Self {
         Self {
             facts: NutritionFacts::default(),
             quality: NutritionQuality::Unknown,
@@ -135,6 +135,23 @@ pub fn nutrition_for(product: &Product, amount: &ConsumedAmount) -> ConsumedNutr
     let facts = scale_facts(&product.nutrition, factor, converted);
     let quality = quality_of(&facts);
     ConsumedNutrition { facts, quality }
+}
+
+pub fn recipe_nutrition_for(
+    per_serving: &ConsumedNutrition,
+    amount: &ConsumedAmount,
+) -> ConsumedNutrition {
+    let ConsumedAmount::Servings(servings) = amount else {
+        return ConsumedNutrition::unknown();
+    };
+    let facts = NutritionFacts {
+        basis: None,
+        ..per_serving.facts.scale(*servings)
+    };
+    ConsumedNutrition {
+        facts,
+        quality: per_serving.quality,
+    }
 }
 
 pub fn sum_nutrition<'a>(facts: impl IntoIterator<Item = &'a NutritionFacts>) -> NutritionFacts {
@@ -199,7 +216,7 @@ fn quality_of(facts: &NutritionFacts) -> NutritionQuality {
 pub struct ConsumptionRecord {
     pub id: ConsumptionRecordId,
     pub member_id: HouseholdMemberId,
-    pub product_id: ProductId,
+    pub item: MealItemRef,
     pub recorded_by: Option<UserId>,
     pub meal_plan_entry_id: Option<MealPlanEntryId>,
     pub meal_plan_component_id: Option<MealPlanComponentId>,
@@ -218,7 +235,7 @@ pub struct ConsumptionRecord {
 pub struct NewConsumptionRecord {
     pub id: Option<ConsumptionRecordId>,
     pub member_id: HouseholdMemberId,
-    pub product_id: ProductId,
+    pub item: MealItemRef,
     pub recorded_by: Option<UserId>,
     pub meal_plan_entry_id: Option<MealPlanEntryId>,
     pub meal_plan_component_id: Option<MealPlanComponentId>,
@@ -232,6 +249,7 @@ impl NewConsumptionRecord {
     pub fn validate(&self) -> crate::error::Result<()> {
         let mut errors = ValidationErrors::new();
         validate_amount("amount", &self.amount, &mut errors);
+        validate_recipe_amount("amount", self.item, &self.amount, &mut errors);
         errors.into_result()
     }
 }
@@ -264,6 +282,17 @@ impl ConsumptionRecordPatch {
 fn validate_amount(field: &str, amount: &ConsumedAmount, errors: &mut ValidationErrors) {
     if amount.value() <= Decimal::ZERO {
         errors.push(field, "Must be more than zero");
+    }
+}
+
+pub(crate) fn validate_recipe_amount(
+    field: &str,
+    item: MealItemRef,
+    amount: &ConsumedAmount,
+    errors: &mut ValidationErrors,
+) {
+    if item.is_recipe() && !matches!(amount, ConsumedAmount::Servings(_)) {
+        errors.push(field, "Recipes are measured in servings");
     }
 }
 

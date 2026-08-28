@@ -6,11 +6,10 @@ use mmp_core::CoreError;
 use mmp_core::domain::{
     AccessScope, ActualMealPlanComponent, ConfirmMealPlanComponent, ConfirmMealPlanEntry,
     ConsumedAmount, ConsumptionRecordId, HouseholdMember, HouseholdMemberId, IngredientId,
-    MealPlanEntryId, MealPlanStatus, MealSlot, NewConsumptionRecord, NewHouseholdMember,
-    NewMealPlanComponent, NewMealPlanEntry, NewNutritionTarget, NewProduct, NewRecipe,
-    NewRecipeComponent, NewRecipeInstruction, NewUser, NutritionFacts, NutritionGoals, Patch,
-    ProductId, Provenance, Quantity, RecipeId, RecipePatch, Role, Unit, User, UserId,
-    MealCategory,
+    MealCategory, MealItemRef, MealPlanEntryId, MealPlanStatus, MealSlot, NewConsumptionRecord,
+    NewHouseholdMember, NewMealPlanComponent, NewMealPlanEntry, NewNutritionTarget, NewProduct,
+    NewRecipe, NewRecipeComponent, NewRecipeInstruction, NewUser, NutritionFacts, NutritionGoals,
+    Patch, ProductId, Provenance, Quantity, RecipeId, RecipePatch, Role, Unit, User, UserId,
 };
 use mmp_server::state::AppState;
 use rust_decimal::Decimal;
@@ -310,7 +309,11 @@ impl Loader<'_> {
                     || recipe.preparation_minutes != Some(spec.preparation_minutes)
                     || recipe.cooking_minutes != Some(spec.cooking_minutes)
                     || recipe.notes.as_deref() != Some(spec.notes)
-                    || recipe.instructions.iter().map(|step| step.text.as_str()).collect::<Vec<_>>()
+                    || recipe
+                        .instructions
+                        .iter()
+                        .map(|step| step.text.as_str())
+                        .collect::<Vec<_>>()
                         != spec.instructions
                     || recipe.meal_categories != spec.meal_categories
                     || recipe.country_categories != countries
@@ -357,8 +360,7 @@ impl Loader<'_> {
             if spec.photo && recipe.photo_version.is_none() {
                 let derivatives = mmp_server::photo::process(SAMPLE_RECIPE_IMAGE)
                     .map_err(|error| anyhow::anyhow!(error))?;
-                self
-                    .state
+                self.state
                     .recipes
                     .replace_photo(recipe.id, recipe.revision, derivatives, self.actor.id)
                     .await?;
@@ -503,8 +505,18 @@ impl Loader<'_> {
         let wednesday = self.week_start + Duration::days(2);
         self.ensure_meal(wednesday, MealSlot::Breakfast, Outcome::Planned)
             .await?;
+        self.ensure_recipe_meal(wednesday, MealSlot::Lunch, "chicken-and-rice", servings(1))
+            .await?;
         self.ensure_meal(wednesday, MealSlot::Dinner, Outcome::Planned)
             .await?;
+        self.ensure_recipe_diary_entry(
+            tuesday,
+            MealSlot::Lunch,
+            "leftover-porridge",
+            "porridge",
+            servings(1),
+        )
+        .await?;
 
         for day_offset in 3..7 {
             let date = self.week_start + Duration::days(day_offset);
@@ -625,6 +637,78 @@ impl Loader<'_> {
         Ok(())
     }
 
+    async fn ensure_recipe_meal(
+        &mut self,
+        date: Date,
+        slot: MealSlot,
+        recipe_key: &str,
+        amount: ConsumedAmount,
+    ) -> anyhow::Result<()> {
+        let id = meal_id(date, slot);
+        if !matches!(
+            self.state.meal_plan.get(id).await,
+            Err(CoreError::NotFound { .. })
+        ) {
+            return Ok(());
+        }
+        self.report.meals_created += 1;
+        self.state
+            .meal_plan
+            .create_unchecked(NewMealPlanEntry {
+                id: Some(id),
+                member_id: self.member.id,
+                planned_on: date,
+                planned_time: slot_time(slot),
+                slot,
+                components: vec![NewMealPlanComponent {
+                    id: None,
+                    item: MealItemRef::recipe(recipe_id(recipe_key)),
+                    amount,
+                }],
+                actor_id: self.actor.id,
+            })
+            .await?;
+        Ok(())
+    }
+
+    async fn ensure_recipe_diary_entry(
+        &mut self,
+        date: Date,
+        slot: MealSlot,
+        key: &str,
+        recipe_key: &str,
+        amount: ConsumedAmount,
+    ) -> anyhow::Result<()> {
+        let id = ConsumptionRecordId::from_uuid(sample_uuid(
+            "consumption-record",
+            &format!("{date}:{key}"),
+        ));
+        match self.state.diary.get(id).await {
+            Ok(_) => return Ok(()),
+            Err(CoreError::NotFound { .. }) => {}
+            Err(error) => return Err(error.into()),
+        }
+        self.state
+            .diary
+            .record_unchecked(NewConsumptionRecord {
+                id: Some(id),
+                member_id: self.member.id,
+                item: MealItemRef::recipe(recipe_id(recipe_key)),
+                recorded_by: Some(self.actor.id),
+                meal_plan_entry_id: None,
+                meal_plan_component_id: None,
+                slot,
+                amount,
+                consumed_on: date,
+                consumed_at: Some(
+                    PrimitiveDateTime::new(date, Time::from_hms(12, 30, 0).unwrap()).assume_utc(),
+                ),
+            })
+            .await?;
+        self.report.diary_entries_created += 1;
+        Ok(())
+    }
+
     async fn ensure_diary_entry(
         &mut self,
         date: Date,
@@ -647,7 +731,7 @@ impl Loader<'_> {
             .record_unchecked(NewConsumptionRecord {
                 id: Some(id),
                 member_id: self.member.id,
-                product_id: product_id(product_key),
+                item: MealItemRef::product(product_id(product_key)),
                 recorded_by: Some(self.actor.id),
                 meal_plan_entry_id: None,
                 meal_plan_component_id: None,
@@ -809,7 +893,7 @@ fn components_for(slot: MealSlot) -> Vec<NewMealPlanComponent> {
         .into_iter()
         .map(|(key, amount)| NewMealPlanComponent {
             id: None,
-            product_id: product_id(key),
+            item: MealItemRef::product(product_id(key)),
             amount,
         })
         .collect()

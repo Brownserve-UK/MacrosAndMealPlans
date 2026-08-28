@@ -23,8 +23,9 @@ const plannedItem: MealItem = {
   entry_id: 'entry-1',
   component_id: 'component-1',
   status: 'planned',
+  item_kind: 'product',
   product_id: 'product-1',
-  product_name: 'Jumbo Oats',
+  item_name: 'Jumbo Oats',
   at: '08:30',
   amount: { kind: 'measure', value: 80, unit: 'g' },
   nutrition: { energy_kcal: 302 },
@@ -36,8 +37,9 @@ const plannedItem: MealItem = {
 const siblingItem: MealItem = {
   ...plannedItem,
   component_id: 'component-banana',
+  item_kind: 'product',
   product_id: 'product-banana',
-  product_name: 'Sample Bananas',
+  item_name: 'Sample Bananas',
   amount: { kind: 'measure', value: 1, unit: 'item' },
 };
 
@@ -47,8 +49,9 @@ const eatenItem: MealItem = {
   component_id: 'component-2',
   linked_record_id: 'record-2',
   status: 'eaten',
+  item_kind: 'product',
   product_id: 'product-2',
-  product_name: 'Whole Milk',
+  item_name: 'Whole Milk',
   amount: { kind: 'measure', value: 250, unit: 'ml' },
   nutrition: { energy_kcal: 124 },
   quality: 'known',
@@ -61,8 +64,9 @@ const loggedItem: MealItem = {
   record_id: 'record-shake',
   linked_record_id: 'record-shake',
   status: 'eaten',
+  item_kind: 'product',
   product_id: 'product-shake',
-  product_name: 'Protein Shake',
+  item_name: 'Protein Shake',
   amount: { kind: 'measure', value: 300, unit: 'ml' },
   nutrition: { energy_kcal: 180 },
   quality: 'known',
@@ -73,8 +77,9 @@ const loggedItem: MealItem = {
 const latteItem: MealItem = {
   ...plannedItem,
   component_id: 'component-latte',
+  item_kind: 'product',
   product_id: 'product-latte',
-  product_name: 'Latte',
+  item_name: 'Latte',
   amount: { kind: 'measure', value: 250, unit: 'ml' },
 };
 

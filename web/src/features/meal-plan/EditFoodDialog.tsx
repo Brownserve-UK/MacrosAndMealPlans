@@ -39,6 +39,14 @@ function amountToDraft(item: MealItem): AmountDraft {
     : { kind: amount.kind, value: String(amount.value), unit: 'g' };
 }
 
+type ItemRef = { product_id: string } | { recipe_id: string };
+
+function componentItem(component: MealPlanEntry['components'][number]): ItemRef {
+  return component.item_kind === 'recipe'
+    ? { recipe_id: component.recipe_id }
+    : { product_id: component.product_id };
+}
+
 export function EditFoodDialog({
   open,
   onClose,
@@ -58,7 +66,9 @@ export function EditFoodDialog({
   entry?: MealPlanEntry | null;
   workspace?: 'today' | 'planner';
 }) {
-  const product = useProduct(item.product_id);
+  const isRecipe = item.item_kind === 'recipe';
+  const productId = item.item_kind === 'product' ? item.product_id : '';
+  const product = useProduct(productId, { enabled: !isRecipe });
   const updateConsumption = useUpdateConsumption();
   const deleteConsumption = useDeleteConsumption();
   const updateEntry = useUpdateMealPlanEntry();
@@ -73,10 +83,25 @@ export function EditFoodDialog({
   const [draft, setDraft] = useState(() => ({
     product: null as Product | null,
     amount: amountToDraft(item),
+    servings: item.amount.kind === 'servings' ? String(item.amount.value) : '1',
     date,
     time: item.consumed_at ? extractTime(item.consumed_at) : item.at ?? '',
     slot,
   }));
+
+  function recipeAmount(): { kind: 'servings'; value: number } | null {
+    const value = Number(draft.servings);
+    return !draft.servings.trim() || Number.isNaN(value) || value <= 0
+      ? null
+      : { kind: 'servings', value };
+  }
+
+  function validateAmount(): Record<string, string> {
+    if (isRecipe) {
+      return recipeAmount() ? {} : { amount: 'Servings must be more than zero' };
+    }
+    return validateAmountDraft(draft.amount);
+  }
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [failure, setFailure] = useState<string | null>(null);
   const [conflict, setConflict] = useState<ApiError | null>(null);
@@ -120,10 +145,10 @@ export function EditFoodDialog({
     event.preventDefault();
     if (!item.linked_record_id) return;
     setFailure(null);
-    const found = validateAmountDraft(draft.amount);
+    const found = validateAmount();
     setErrors(found);
     if (Object.keys(found).length > 0) return;
-    const amount = draftToAmount(draft.amount);
+    const amount = isRecipe ? recipeAmount() : draftToAmount(draft.amount);
     if (!amount) return;
 
     try {
@@ -148,19 +173,23 @@ export function EditFoodDialog({
     if (item.kind !== 'planned') return;
     setFailure(null);
     const chosenProduct = draft.product ?? product.data ?? null;
-    const found = validateAmountDraft(draft.amount);
-    if (!chosenProduct) found.product_id = 'Pick a product';
+    const found = validateAmount();
+    if (!isRecipe && !chosenProduct) found.item = 'Pick a product';
     setErrors(found);
     if (Object.keys(found).length > 0) return;
-    const amount = draftToAmount(draft.amount);
-    if (!amount || !chosenProduct) return;
+    const amount = isRecipe ? recipeAmount() : draftToAmount(draft.amount);
+    if (!amount || (!isRecipe && !chosenProduct)) return;
+    const editedItem: ItemRef =
+      isRecipe && item.item_kind === 'recipe'
+        ? { recipe_id: item.recipe_id }
+        : { product_id: chosenProduct!.id };
 
     try {
       const components = entry?.components.map((component) =>
         component.id === item.component_id
-          ? { id: component.id, product_id: chosenProduct.id, amount }
-          : { id: component.id, product_id: component.product_id, amount: component.amount },
-      ) ?? [{ product_id: chosenProduct.id, amount }];
+          ? { id: component.id, ...editedItem, amount }
+          : { id: component.id, ...componentItem(component), amount: component.amount },
+      ) ?? [{ ...editedItem, amount }];
       await updateEntry.mutateAsync({
         id: item.entry_id,
         revision: entry?.revision ?? item.revision,
@@ -195,7 +224,7 @@ export function EditFoodDialog({
             body: {
               components: remaining.map((component) => ({
                 id: component.id,
-                product_id: component.product_id,
+                ...componentItem(component),
                 amount: component.amount,
               })),
             },
@@ -239,7 +268,7 @@ export function EditFoodDialog({
   if (item.status === 'not_eaten' && item.kind === 'planned') {
     return (
       <FormDialog open={open} onClose={handleClose} maxWidth="sm" fullWidth>
-        <DialogTitle>{item.product_name}</DialogTitle>
+        <DialogTitle>{item.item_name}</DialogTitle>
         <DialogContent>
           <Typography color="text.secondary">Marked not eaten.</Typography>
         </DialogContent>
@@ -256,7 +285,7 @@ export function EditFoodDialog({
   if (workspace === 'today' && item.status === 'planned' && item.kind === 'planned') {
     return (
       <FormDialog open={open} onClose={handleClose} maxWidth="sm" fullWidth>
-        <DialogTitle>{item.product_name}</DialogTitle>
+        <DialogTitle>{item.item_name}</DialogTitle>
         <DialogContent>
           <Typography color="text.secondary">This item is still planned.</Typography>
         </DialogContent>
@@ -275,35 +304,49 @@ export function EditFoodDialog({
   return (
     <FormDialog open={open} onClose={handleClose} maxWidth="sm" fullWidth>
       <form onSubmit={onSubmit}>
-        <DialogTitle>{item.product_name}</DialogTitle>
+        <DialogTitle>{item.item_name}</DialogTitle>
         <DialogContent>
           <Stack spacing={3} sx={{ pt: 0.5 }}>
             {failure ? <Alert severity="error">{failure}</Alert> : null}
 
-            {isPlanned && !linked ? (
-              product.isLoading ? (
-                <Loading label="Loading product" />
-              ) : (
-                <ProductPicker
-                  value={draft.product ?? product.data ?? null}
-                  onChange={(next) =>
-                    setDraft({ ...draft, product: next, amount: amountDraftFrom(next) })
-                  }
-                  error={Boolean(errors.product_id)}
-                  helperText={errors.product_id}
-                />
-              )
-            ) : null}
-
-            {product.isLoading && !isPlanned ? (
-              <Loading label="Loading product" />
-            ) : (
-              <AmountFields
-                product={draft.product ?? product.data ?? null}
-                draft={draft.amount}
-                errors={errors}
-                onChange={(amount) => setDraft({ ...draft, amount })}
+            {isRecipe ? (
+              <TextField
+                type="number"
+                label="Servings"
+                value={draft.servings}
+                onChange={(event) => setDraft({ ...draft, servings: event.target.value })}
+                error={Boolean(errors.amount)}
+                helperText={errors.amount}
+                slotProps={{ htmlInput: { min: 0, step: 0.5 } }}
               />
+            ) : (
+              <>
+                {isPlanned && !linked ? (
+                  product.isLoading ? (
+                    <Loading label="Loading product" />
+                  ) : (
+                    <ProductPicker
+                      value={draft.product ?? product.data ?? null}
+                      onChange={(next) =>
+                        setDraft({ ...draft, product: next, amount: amountDraftFrom(next) })
+                      }
+                      error={Boolean(errors.item)}
+                      helperText={errors.item}
+                    />
+                  )
+                ) : null}
+
+                {product.isLoading && !isPlanned ? (
+                  <Loading label="Loading product" />
+                ) : (
+                  <AmountFields
+                    product={draft.product ?? product.data ?? null}
+                    draft={draft.amount}
+                    errors={errors}
+                    onChange={(amount) => setDraft({ ...draft, amount })}
+                  />
+                )}
+              </>
             )}
 
             <Stack direction="row" spacing={2}>

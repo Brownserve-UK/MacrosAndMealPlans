@@ -3,10 +3,10 @@ use std::str::FromStr;
 
 use mmp_core::domain::{
     AccessScope, CatalogueOrigin, ConsumedAmount, ConsumptionRecord, ConsumptionRecordId,
-    HouseholdMember, HouseholdMemberId, HouseholdSettings, Ingredient, IngredientId,
+    HouseholdMember, HouseholdMemberId, HouseholdSettings, Ingredient, IngredientId, MealItemRef,
     MealPlanComponentId, MealPlanEntryId, MealSlot, MealTimes, MemberAccessGrant, NutritionFacts,
     NutritionGoals, NutritionQuality, NutritionTarget, NutritionTargetId, Product, ProductId,
-    Provenance, Quantity, Revision, Role, Unit, User, UserId,
+    Provenance, Quantity, RecipeId, Revision, Role, Unit, User, UserId,
 };
 use mmp_core::{CoreError, RepositoryError};
 use rust_decimal::Decimal;
@@ -363,6 +363,14 @@ pub fn amount_bindings(amount: &ConsumedAmount) -> (&'static str, Decimal, Optio
     }
 }
 
+pub fn item_bindings(item: &MealItemRef) -> (&'static str, Option<Uuid>, Option<Uuid>) {
+    (
+        item.kind_code(),
+        item.product_id().map(|id| id.as_uuid()),
+        item.recipe_id().map(|id| id.as_uuid()),
+    )
+}
+
 pub(crate) fn parse_amount(
     kind: &str,
     value: Decimal,
@@ -384,7 +392,9 @@ pub(crate) fn parse_amount(
 pub struct ConsumptionRecordRow {
     pub id: Uuid,
     pub member_id: Uuid,
-    pub product_id: Uuid,
+    pub item_kind: String,
+    pub product_id: Option<Uuid>,
+    pub recipe_id: Option<Uuid>,
     pub recorded_by: Option<Uuid>,
     pub meal_plan_entry_id: Option<Uuid>,
     pub meal_plan_component_id: Option<Uuid>,
@@ -421,7 +431,12 @@ impl TryFrom<ConsumptionRecordRow> for ConsumptionRecord {
         Ok(ConsumptionRecord {
             id: ConsumptionRecordId::from(row.id),
             member_id: HouseholdMemberId::from(row.member_id),
-            product_id: ProductId::from(row.product_id),
+            item: MealItemRef::from_parts(
+                &row.item_kind,
+                row.product_id.map(ProductId::from),
+                row.recipe_id.map(RecipeId::from),
+            )
+            .map_err(|_| bad_value("item_kind", &row.item_kind))?,
             recorded_by: row.recorded_by.map(UserId::from),
             meal_plan_entry_id: row.meal_plan_entry_id.map(MealPlanEntryId::from),
             meal_plan_component_id: row.meal_plan_component_id.map(MealPlanComponentId::from),

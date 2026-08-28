@@ -861,7 +861,7 @@ export interface components {
         AmountKindDto: "measure" | "servings" | "packs";
         /** @enum {string} */
         CatalogueOrigin: "seeded" | "local" | "external";
-        ConsumptionRecordDto: {
+        ConsumptionRecordDto: components["schemas"]["MealItemRefDto"] & {
             amount: components["schemas"]["AmountDto"];
             /** Format: date-time */
             consumed_at?: string | null;
@@ -881,8 +881,6 @@ export interface components {
             /** Format: uuid */
             member_id: string;
             nutrition: components["schemas"]["NutritionDto"];
-            /** Format: uuid */
-            product_id: string;
             quality: components["schemas"]["NutritionQuality"];
             /** Format: uuid */
             recorded_by?: string | null;
@@ -892,7 +890,7 @@ export interface components {
             /** Format: date-time */
             updated_at: string;
         };
-        CreateConsumptionRequest: {
+        CreateConsumptionRequest: components["schemas"]["ItemRefRequest"] & {
             amount: components["schemas"]["AmountDto"];
             /** Format: date-time */
             consumed_at?: string | null;
@@ -903,8 +901,6 @@ export interface components {
             consumed_on: string;
             /** Format: uuid */
             member_id: string;
-            /** Format: uuid */
-            product_id: string;
             slot: components["schemas"]["MealSlot"];
         };
         CreateIngredientRequest: {
@@ -1073,6 +1069,13 @@ export interface components {
         IngredientPage: components["schemas"]["PageMeta"] & {
             items: components["schemas"]["IngredientListItemDto"][];
         };
+        ItemRefRequest: {
+            /** Format: uuid */
+            product_id: string;
+        } | {
+            /** Format: uuid */
+            recipe_id: string;
+        };
         LinkAccountRequest: {
             /** Format: uuid */
             user_id: string;
@@ -1093,12 +1096,13 @@ export interface components {
         };
         /** @enum {string} */
         MealCategory: "breakfast" | "lunch" | "dinner" | "snack";
-        MealItemDto: components["schemas"]["MealItemSourceDto"] & {
+        MealItemDto: components["schemas"]["MealItemSourceDto"] & components["schemas"]["MealItemRefDto"] & {
             amount: components["schemas"]["AmountDto"];
             /** @example 18:30 */
             at?: string | null;
             /** Format: date-time */
             consumed_at?: string | null;
+            item_name: string;
             /** Format: uuid */
             linked_record_id?: string | null;
             needs_attention: boolean;
@@ -1106,15 +1110,23 @@ export interface components {
             planned_amount?: null | components["schemas"]["AmountDto"];
             /** Format: date */
             planned_on?: string | null;
-            /** Format: uuid */
-            product_id: string;
-            product_name: string;
             quality: components["schemas"]["NutritionQuality"];
             /** Format: int64 */
             record_revision?: number | null;
             /** Format: int64 */
             revision: number;
             status: components["schemas"]["MealPlanStatus"];
+        };
+        MealItemRefDto: {
+            /** @enum {string} */
+            item_kind: "product";
+            /** Format: uuid */
+            product_id: string;
+        } | {
+            /** @enum {string} */
+            item_kind: "recipe";
+            /** Format: uuid */
+            recipe_id: string;
         };
         MealItemSourceDto: {
             /** Format: uuid */
@@ -1129,28 +1141,24 @@ export interface components {
             /** Format: uuid */
             record_id: string;
         };
-        MealPlanComponentDto: {
+        MealPlanComponentDto: components["schemas"]["MealItemRefDto"] & {
             amount: components["schemas"]["AmountDto"];
             consumption_record?: null | components["schemas"]["ConsumptionRecordDto"];
             /** Format: uuid */
             id: string;
+            item_name: string;
             nutrition: components["schemas"]["NutritionDto"];
             /** Format: int32 */
             position: number;
-            /** Format: uuid */
-            product_id: string;
-            product_name: string;
             quality: components["schemas"]["NutritionQuality"];
             /** Format: int64 */
             revision: number;
             status: components["schemas"]["MealPlanStatus"];
         };
-        MealPlanComponentRequest: {
+        MealPlanComponentRequest: components["schemas"]["ItemRefRequest"] & {
             amount: components["schemas"]["AmountDto"];
             /** Format: uuid */
             id?: string | null;
-            /** Format: uuid */
-            product_id: string;
         };
         MealPlanDayDto: {
             actual: components["schemas"]["NutritionSummaryDto"];

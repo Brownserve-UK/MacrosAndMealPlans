@@ -5,8 +5,8 @@ use time::{Date, OffsetDateTime, Time};
 use uuid::Uuid;
 
 use super::{
-    ConsumedAmount, HouseholdMemberId, MealPlanComponentId, MealPlanEntryId, NutritionFacts,
-    NutritionQuality, ProductId, Revision, UserId,
+    ConsumedAmount, HouseholdMemberId, MealItemRef, MealPlanComponentId, MealPlanEntryId,
+    NutritionFacts, NutritionQuality, Revision, UserId,
 };
 use crate::error::ValidationErrors;
 
@@ -123,7 +123,7 @@ impl FromStr for MealPlanStatus {
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct MealPlanComponentSnapshot {
-    pub product_name: String,
+    pub item_name: String,
     pub nutrition: NutritionFacts,
     pub quality: NutritionQuality,
 }
@@ -131,7 +131,7 @@ pub struct MealPlanComponentSnapshot {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct MealPlanComponent {
     pub id: MealPlanComponentId,
-    pub product_id: ProductId,
+    pub item: MealItemRef,
     pub amount: ConsumedAmount,
     pub position: i32,
     pub snapshot: Option<MealPlanComponentSnapshot>,
@@ -163,7 +163,7 @@ pub struct MealPlanEntry {
 #[derive(Debug, Clone)]
 pub struct NewMealPlanComponent {
     pub id: Option<MealPlanComponentId>,
-    pub product_id: ProductId,
+    pub item: MealItemRef,
     pub amount: ConsumedAmount,
 }
 
@@ -211,7 +211,7 @@ pub struct ConfirmMealPlanComponent {
 pub fn validate_components(components: &[NewMealPlanComponent]) -> crate::error::Result<()> {
     let mut errors = ValidationErrors::new();
     if components.is_empty() {
-        errors.push("components", "Add at least one product");
+        errors.push("components", "Add at least one item");
     }
     for (index, component) in components.iter().enumerate() {
         if component.amount.value() <= rust_decimal::Decimal::ZERO {
@@ -220,6 +220,12 @@ pub fn validate_components(components: &[NewMealPlanComponent]) -> crate::error:
                 "Must be more than zero",
             );
         }
+        super::consumption::validate_recipe_amount(
+            &format!("components.{index}.amount"),
+            component.item,
+            &component.amount,
+            &mut errors,
+        );
     }
     errors.into_result()
 }

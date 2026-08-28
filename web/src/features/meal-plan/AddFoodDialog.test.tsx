@@ -16,6 +16,11 @@ const mocks = vi.hoisted(() => ({
     package_quantity: { amount: 1000, unit: 'ml' },
     nutrition: { basis: { amount: 100, unit: 'ml' }, energy_kcal: 64 },
   },
+  curry: {
+    id: '30000000-0000-0000-0000-000000000001',
+    name: 'Chicken Curry',
+    servings: 4,
+  },
 }));
 
 const milk = mocks.milk as Product;
@@ -25,6 +30,7 @@ vi.mock('../../api/queries', () => ({
   useCreateMealPlanEntry: () => ({ isPending: false, mutateAsync: mocks.createPlan }),
   useUpdateMealPlanEntry: () => ({ isPending: false, mutateAsync: mocks.updatePlan }),
   useProducts: () => ({ data: { items: [mocks.milk] }, isLoading: false }),
+  useRecipes: () => ({ data: { items: [mocks.curry] }, isLoading: false }),
   useUnits: () => ({
     data: [
       { code: 'g', label: 'gram', dimension: 'mass', convertible: true },
@@ -130,8 +136,9 @@ describe('AddFoodDialog', () => {
       components: [
         {
           id: 'component-1',
+          item_kind: 'product',
           product_id: 'product-existing',
-          product_name: 'Oats',
+          item_name: 'Oats',
           amount: { kind: 'measure', value: 80, unit: 'g' },
           position: 0,
           nutrition: {},
@@ -201,5 +208,32 @@ describe('AddFoodDialog', () => {
     expect(mocks.createConsumption).toHaveBeenCalled();
     expect(mocks.createPlan).not.toHaveBeenCalled();
     expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('plans a recipe serving', async () => {
+    mocks.createPlan.mockResolvedValue({});
+    renderDialog('2999-08-26', 'dinner', 'planned');
+    const user = userEvent.setup();
+
+    await user.click(screen.getByRole('button', { name: 'Recipe' }));
+    await user.click(screen.getByRole('combobox', { name: 'Recipe' }));
+    await user.click(screen.getByRole('option', { name: 'Chicken Curry' }));
+    const servings = screen.getByRole('spinbutton', { name: 'Servings' });
+    await user.clear(servings);
+    await user.type(servings, '2');
+
+    await user.click(screen.getByRole('button', { name: 'Add to meal' }));
+    await user.click(screen.getByRole('button', { name: 'Save meal' }));
+
+    expect(mocks.createPlan).toHaveBeenCalledWith({
+      planned_on: '2999-08-26',
+      slot: 'dinner',
+      components: [
+        {
+          recipe_id: '30000000-0000-0000-0000-000000000001',
+          amount: { kind: 'servings', value: 2 },
+        },
+      ],
+    });
   });
 });

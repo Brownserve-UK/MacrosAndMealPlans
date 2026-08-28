@@ -7,15 +7,16 @@ use time::macros::{date, datetime, time};
 use super::*;
 use crate::domain::{
     ActualMealPlanComponent, ConfirmMealPlanComponent, ConsumedAmount, HouseholdMemberId,
-    MealPlanEntryPatch, MealPlanStatus, MealSlot, NewConsumptionRecord, NewMealPlanComponent,
-    NewMealPlanEntry, NewNutritionTarget, NutritionFacts, NutritionGoals, Product, ProductId,
-    Provenance, Quantity, Revision, Unit, UserId,
+    MealItemRef, MealPlanEntryPatch, MealPlanStatus, MealSlot, NewConsumptionRecord,
+    NewMealPlanComponent, NewMealPlanEntry, NewNutritionTarget, NutritionFacts, NutritionGoals,
+    NutritionQuality, Product, ProductId, Provenance, Quantity, Recipe, RecipeComponent, RecipeId,
+    RecipeVisibility, Revision, Unit, UserId,
 };
 use crate::ports::FixedClock;
 use crate::services::{DiaryService, NutritionTargetService};
 use crate::testing::{
     InMemoryConsumptionRecordRepository, InMemoryMealPlanRepository,
-    InMemoryNutritionTargetRepository, InMemoryProductRepository,
+    InMemoryNutritionTargetRepository, InMemoryProductRepository, InMemoryRecipeRepository,
 };
 
 struct Harness {
@@ -23,6 +24,7 @@ struct Harness {
     diary: DiaryService,
     targets: NutritionTargetService,
     products: InMemoryProductRepository,
+    recipes: InMemoryRecipeRepository,
     records: InMemoryConsumptionRecordRepository,
     member_id: HouseholdMemberId,
     actor_id: UserId,
@@ -30,12 +32,14 @@ struct Harness {
 
 fn harness() -> Harness {
     let products = InMemoryProductRepository::new();
+    let recipes = InMemoryRecipeRepository::new();
     let records = InMemoryConsumptionRecordRepository::new();
     let target_repo = InMemoryNutritionTargetRepository::new();
     let clock = Arc::new(FixedClock::new(datetime!(2026-08-24 09:00 UTC)));
     let service = MealPlanService::new(
         Arc::new(InMemoryMealPlanRepository::new(records.clone())),
         Arc::new(products.clone()),
+        Arc::new(recipes.clone()),
         Arc::new(records.clone()),
         Arc::new(target_repo.clone()),
         clock.clone(),
@@ -43,6 +47,7 @@ fn harness() -> Harness {
     let diary = DiaryService::new(
         Arc::new(records.clone()),
         Arc::new(products.clone()),
+        Arc::new(recipes.clone()),
         clock.clone(),
     );
     let targets = NutritionTargetService::new(Arc::new(target_repo.clone()), clock);
@@ -51,6 +56,7 @@ fn harness() -> Harness {
         diary,
         targets,
         products,
+        recipes,
         records,
         member_id: HouseholdMemberId::new(),
         actor_id: UserId::new(),
@@ -88,8 +94,52 @@ fn product(name: &str, energy_per_100g: i64) -> Product {
 fn measured(product_id: ProductId, grams: i64) -> NewMealPlanComponent {
     NewMealPlanComponent {
         id: None,
+        item: MealItemRef::product(product_id),
+        amount: ConsumedAmount::Measure(Quantity::new(Decimal::new(grams, 0), Unit::Gram)),
+    }
+}
+
+fn recipe(name: &str, owner_id: UserId, servings: i32, components: Vec<RecipeComponent>) -> Recipe {
+    let now = OffsetDateTime::now_utc();
+    Recipe {
+        id: RecipeId::new(),
+        name: name.to_owned(),
+        description: None,
+        servings,
+        preparation_minutes: None,
+        cooking_minutes: None,
+        notes: None,
+        components,
+        instructions: Vec::new(),
+        meal_categories: Vec::new(),
+        country_categories: Vec::new(),
+        tags: Vec::new(),
+        photo_version: None,
+        owner_id,
+        visibility: RecipeVisibility::Private,
+        created_by: owner_id,
+        updated_by: owner_id,
+        revision: Revision::INITIAL,
+        created_at: now,
+        updated_at: now,
+        archived_at: None,
+    }
+}
+
+fn recipe_line(product_id: ProductId, grams: i64) -> RecipeComponent {
+    RecipeComponent {
+        id: crate::domain::RecipeComponentId::new(),
         product_id,
         amount: ConsumedAmount::Measure(Quantity::new(Decimal::new(grams, 0), Unit::Gram)),
+        position: 0,
+    }
+}
+
+fn servings_of(recipe_id: RecipeId, count: i64) -> NewMealPlanComponent {
+    NewMealPlanComponent {
+        id: None,
+        item: MealItemRef::recipe(recipe_id),
+        amount: ConsumedAmount::Servings(Decimal::new(count, 0)),
     }
 }
 
@@ -223,7 +273,7 @@ async fn weekly_actuals_include_food_logged_outside_the_meal_plan() {
         .record(NewConsumptionRecord {
             id: None,
             member_id: h.member_id,
-            product_id: food.id,
+            item: MealItemRef::product(food.id),
             recorded_by: Some(h.actor_id),
             meal_plan_entry_id: None,
             meal_plan_component_id: None,
@@ -404,7 +454,7 @@ async fn editing_one_component_preserves_its_siblings() {
         .enumerate()
         .map(|(index, component)| NewMealPlanComponent {
             id: Some(component.component.id),
-            product_id: component.component.product_id,
+            item: component.component.item,
             amount: if index == 2 {
                 ConsumedAmount::Measure(Quantity::new(Decimal::new(120, 0), Unit::Gram))
             } else {
@@ -460,7 +510,7 @@ async fn later_planned_components_append_after_food_already_logged_in_the_slot()
         .record(NewConsumptionRecord {
             id: None,
             member_id: h.member_id,
-            product_id: shake.id,
+            item: MealItemRef::product(shake.id),
             recorded_by: Some(h.actor_id),
             meal_plan_entry_id: None,
             meal_plan_component_id: None,
@@ -477,7 +527,7 @@ async fn later_planned_components_append_after_food_already_logged_in_the_slot()
         .iter()
         .map(|component| NewMealPlanComponent {
             id: Some(component.component.id),
-            product_id: component.component.product_id,
+            item: component.component.item,
             amount: component.component.amount,
         })
         .collect();
@@ -509,7 +559,7 @@ async fn later_planned_components_append_after_food_already_logged_in_the_slot()
         dinner
             .items
             .iter()
-            .map(|item| item.product_name.as_str())
+            .map(|item| item.item_name.as_str())
             .collect::<Vec<_>>(),
         vec!["Oats", "Milk", "Protein Shake", "Latte"]
     );
@@ -599,7 +649,7 @@ async fn a_resolved_entry_keeps_its_product_snapshot() {
     h.products.seed(changed);
 
     let loaded = h.service.get(resolved.entry.id).await.unwrap();
-    assert_eq!(loaded.components[0].product_name, "Original name");
+    assert_eq!(loaded.components[0].item_name, "Original name");
     assert_eq!(
         loaded.components[0].nutrition.energy_kcal,
         Some(Decimal::new(200, 0))
@@ -1127,7 +1177,7 @@ async fn the_week_projects_a_planned_item_and_moves_it_once_eaten() {
         .unwrap();
     assert_eq!(dinner.items.len(), 1);
     assert_eq!(dinner.items[0].status, MealPlanStatus::Planned);
-    assert_eq!(dinner.items[0].product_name, "Food");
+    assert_eq!(dinner.items[0].item_name, "Food");
 
     h.service
         .mark_eaten(
@@ -1202,7 +1252,7 @@ async fn the_week_projects_directly_logged_food_on_its_own_date() {
         .record(NewConsumptionRecord {
             id: None,
             member_id: h.member_id,
-            product_id: food.id,
+            item: MealItemRef::product(food.id),
             recorded_by: Some(h.actor_id),
             meal_plan_entry_id: None,
             meal_plan_component_id: None,
@@ -1230,9 +1280,243 @@ async fn the_week_projects_directly_logged_food_on_its_own_date() {
         .find(|slot| slot.slot == MealSlot::Snacks)
         .unwrap();
     assert_eq!(snacks.items.len(), 1);
-    assert_eq!(snacks.items[0].product_name, "Food");
+    assert_eq!(snacks.items[0].item_name, "Food");
     assert!(matches!(
         snacks.items[0].source,
         MealItemSource::Logged { .. }
     ));
+}
+
+async fn seed_recipe(
+    h: &Harness,
+    name: &str,
+    servings: i32,
+    lines: Vec<RecipeComponent>,
+) -> Recipe {
+    let recipe = recipe(name, h.actor_id, servings, lines);
+    h.recipes.seed(recipe.clone());
+    recipe
+}
+
+#[tokio::test]
+async fn a_recipe_serving_can_be_planned_and_counts_toward_the_day() {
+    let h = harness();
+    let rice = product("Rice", 100);
+    h.products.seed(rice.clone());
+    let curry = seed_recipe(&h, "Curry", 5, vec![recipe_line(rice.id, 500)]).await;
+
+    let entry = planned(&h, vec![servings_of(curry.id, 1)]).await;
+
+    assert_eq!(entry.components.len(), 1);
+    assert_eq!(entry.components[0].item_name, "Curry");
+    assert_eq!(
+        entry.components[0].component.item,
+        MealItemRef::recipe(curry.id)
+    );
+    assert_eq!(
+        entry.planned.nutrition.energy_kcal,
+        Some(Decimal::new(100, 0))
+    );
+
+    let week = h
+        .service
+        .week(h.member_id, date!(2026 - 08 - 25))
+        .await
+        .unwrap();
+    let day = week
+        .days
+        .iter()
+        .find(|day| day.date == date!(2026 - 08 - 25))
+        .unwrap();
+    let dinner = day
+        .slots
+        .iter()
+        .find(|slot| slot.slot == MealSlot::Dinner)
+        .unwrap();
+    assert_eq!(dinner.items[0].item_name, "Curry");
+    assert_eq!(
+        dinner.nutrition.nutrition.energy_kcal,
+        Some(Decimal::new(100, 0))
+    );
+}
+
+#[tokio::test]
+async fn two_servings_double_the_planned_nutrition() {
+    let h = harness();
+    let rice = product("Rice", 100);
+    h.products.seed(rice.clone());
+    let curry = seed_recipe(&h, "Curry", 5, vec![recipe_line(rice.id, 500)]).await;
+
+    let entry = planned(&h, vec![servings_of(curry.id, 2)]).await;
+
+    assert_eq!(
+        entry.planned.nutrition.energy_kcal,
+        Some(Decimal::new(200, 0))
+    );
+}
+
+#[tokio::test]
+async fn planning_a_recipe_you_do_not_own_is_refused() {
+    let h = harness();
+    let rice = product("Rice", 100);
+    h.products.seed(rice.clone());
+    let someone_else = UserId::new();
+    let curry = recipe("Curry", someone_else, 4, vec![recipe_line(rice.id, 400)]);
+    h.recipes.seed(curry.clone());
+
+    let error = h
+        .service
+        .create(NewMealPlanEntry {
+            id: None,
+            member_id: h.member_id,
+            planned_on: date!(2026 - 08 - 25),
+            planned_time: Some(time!(18:30)),
+            slot: MealSlot::Dinner,
+            components: vec![servings_of(curry.id, 1)],
+            actor_id: h.actor_id,
+        })
+        .await
+        .unwrap_err();
+
+    assert!(matches!(error, CoreError::NotFound { .. }));
+}
+
+#[tokio::test]
+async fn a_recipe_component_rejects_a_measured_amount() {
+    let h = harness();
+    let rice = product("Rice", 100);
+    h.products.seed(rice.clone());
+    let curry = seed_recipe(&h, "Curry", 4, vec![recipe_line(rice.id, 400)]).await;
+
+    let error = h
+        .service
+        .create(NewMealPlanEntry {
+            id: None,
+            member_id: h.member_id,
+            planned_on: date!(2026 - 08 - 25),
+            planned_time: Some(time!(18:30)),
+            slot: MealSlot::Dinner,
+            components: vec![NewMealPlanComponent {
+                id: None,
+                item: MealItemRef::recipe(curry.id),
+                amount: ConsumedAmount::Measure(Quantity::new(Decimal::new(200, 0), Unit::Gram)),
+            }],
+            actor_id: h.actor_id,
+        })
+        .await
+        .unwrap_err();
+
+    assert!(matches!(error, CoreError::Validation { .. }));
+}
+
+#[tokio::test]
+async fn editing_a_recipe_moves_planned_numbers_but_not_eaten_history() {
+    let h = harness();
+    let rice = product("Rice", 100);
+    h.products.seed(rice.clone());
+    let mut curry = seed_recipe(&h, "Curry", 5, vec![recipe_line(rice.id, 500)]).await;
+
+    let entry = planned(&h, vec![servings_of(curry.id, 1)]).await;
+    assert_eq!(
+        entry.planned.nutrition.energy_kcal,
+        Some(Decimal::new(100, 0))
+    );
+
+    curry.components = vec![recipe_line(rice.id, 1000)];
+    h.recipes.seed(curry.clone());
+
+    let reloaded = h.service.get(entry.entry.id).await.unwrap();
+    assert_eq!(
+        reloaded.planned.nutrition.energy_kcal,
+        Some(Decimal::new(200, 0))
+    );
+
+    let component_id = reloaded.components[0].component.id;
+    let eaten = h
+        .service
+        .mark_component_eaten_unchecked(
+            entry.entry.id,
+            component_id,
+            reloaded.components[0].component.revision,
+            ConfirmMealPlanComponent {
+                consumed_on: date!(2026 - 08 - 25),
+                consumed_at: None,
+                amount: ConsumedAmount::Servings(Decimal::ONE),
+                actor_id: h.actor_id,
+            },
+        )
+        .await
+        .unwrap();
+    let eaten_kcal = eaten.components[0]
+        .consumption_record
+        .as_ref()
+        .unwrap()
+        .nutrition
+        .energy_kcal;
+    assert_eq!(eaten_kcal, Some(Decimal::new(200, 0)));
+
+    curry.components = vec![recipe_line(rice.id, 250)];
+    h.recipes.seed(curry.clone());
+
+    let after = h.service.get(entry.entry.id).await.unwrap();
+    assert_eq!(
+        after.components[0]
+            .consumption_record
+            .as_ref()
+            .unwrap()
+            .nutrition
+            .energy_kcal,
+        Some(Decimal::new(200, 0))
+    );
+    assert_eq!(
+        after.components[0].nutrition.energy_kcal,
+        Some(Decimal::new(200, 0))
+    );
+}
+
+#[tokio::test]
+async fn confirming_a_recipe_component_writes_a_recipe_referencing_record() {
+    let h = harness();
+    let rice = product("Rice", 100);
+    h.products.seed(rice.clone());
+    let curry = seed_recipe(&h, "Curry", 4, vec![recipe_line(rice.id, 400)]).await;
+    let entry = planned(&h, vec![servings_of(curry.id, 1)]).await;
+    let component_id = entry.components[0].component.id;
+
+    h.service
+        .mark_component_eaten_unchecked(
+            entry.entry.id,
+            component_id,
+            entry.components[0].component.revision,
+            ConfirmMealPlanComponent {
+                consumed_on: date!(2026 - 08 - 25),
+                consumed_at: None,
+                amount: ConsumedAmount::Servings(Decimal::ONE),
+                actor_id: h.actor_id,
+            },
+        )
+        .await
+        .unwrap();
+
+    let logged = h
+        .records
+        .list_for_meal_plan_entry(entry.entry.id)
+        .await
+        .unwrap();
+    assert_eq!(logged.len(), 1);
+    assert_eq!(logged[0].item, MealItemRef::recipe(curry.id));
+}
+
+#[tokio::test]
+async fn a_recipe_built_from_products_without_nutrition_reports_unknown_not_zero() {
+    let h = harness();
+    let mut blank = product("Mystery", 0);
+    blank.nutrition = NutritionFacts::default();
+    h.products.seed(blank.clone());
+    let curry = seed_recipe(&h, "Curry", 4, vec![recipe_line(blank.id, 400)]).await;
+
+    let entry = planned(&h, vec![servings_of(curry.id, 1)]).await;
+
+    assert_eq!(entry.components[0].quality, NutritionQuality::Unknown);
+    assert_eq!(entry.components[0].nutrition.energy_kcal, None);
 }

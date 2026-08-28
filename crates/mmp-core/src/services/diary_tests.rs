@@ -2,10 +2,13 @@ use std::sync::Arc;
 
 use super::*;
 use crate::domain::{
-    ConsumptionRecordId, HouseholdMemberId, MealSlot, NutritionQuality, Provenance, Quantity, Unit,
+    ConsumptionRecordId, HouseholdMemberId, MealItemRef, MealSlot, NutritionQuality, Provenance,
+    Quantity, Unit,
 };
 use crate::ports::FixedClock;
-use crate::testing::{InMemoryConsumptionRecordRepository, InMemoryProductRepository};
+use crate::testing::{
+    InMemoryConsumptionRecordRepository, InMemoryProductRepository, InMemoryRecipeRepository,
+};
 use rust_decimal::Decimal;
 use time::OffsetDateTime;
 use time::macros::{date, datetime};
@@ -14,6 +17,7 @@ struct Harness {
     service: DiaryService,
     records: InMemoryConsumptionRecordRepository,
     products: InMemoryProductRepository,
+    recipes: InMemoryRecipeRepository,
 }
 
 fn harness() -> Harness {
@@ -23,15 +27,18 @@ fn harness() -> Harness {
 fn harness_at(now: OffsetDateTime) -> Harness {
     let records = InMemoryConsumptionRecordRepository::new();
     let products = InMemoryProductRepository::new();
+    let recipes = InMemoryRecipeRepository::new();
     let service = DiaryService::new(
         Arc::new(records.clone()),
         Arc::new(products.clone()),
+        Arc::new(recipes.clone()),
         Arc::new(FixedClock::new(now)),
     );
     Harness {
         service,
         records,
         products,
+        recipes,
     }
 }
 
@@ -78,7 +85,7 @@ fn measure_150g(product_id: ProductId, member_id: HouseholdMemberId) -> NewConsu
     NewConsumptionRecord {
         id: None,
         member_id,
-        product_id,
+        item: MealItemRef::product(product_id),
         recorded_by: None,
         meal_plan_entry_id: None,
         meal_plan_component_id: None,
@@ -418,4 +425,122 @@ async fn amending_a_record_into_the_future_is_refused() {
         .unwrap_err();
 
     assert!(matches!(err, CoreError::Validation(_)));
+}
+
+fn seed_recipe_from(h: &Harness, owner: crate::domain::UserId) -> crate::domain::Recipe {
+    let now = OffsetDateTime::now_utc();
+    let product = seed_product(h, known_nutrition());
+    let line = crate::domain::RecipeComponent {
+        id: crate::domain::RecipeComponentId::new(),
+        product_id: product.id,
+        amount: ConsumedAmount::Measure(Quantity::new(Decimal::new(200, 0), Unit::Gram)),
+        position: 0,
+    };
+    let recipe = crate::domain::Recipe {
+        id: crate::domain::RecipeId::new(),
+        name: "Porridge".to_owned(),
+        description: None,
+        servings: 2,
+        preparation_minutes: None,
+        cooking_minutes: None,
+        notes: None,
+        components: vec![line],
+        instructions: Vec::new(),
+        meal_categories: Vec::new(),
+        country_categories: Vec::new(),
+        tags: Vec::new(),
+        photo_version: None,
+        owner_id: owner,
+        visibility: crate::domain::RecipeVisibility::Private,
+        created_by: owner,
+        updated_by: owner,
+        revision: Revision::INITIAL,
+        created_at: now,
+        updated_at: now,
+        archived_at: None,
+    };
+    h.recipes.seed(recipe.clone());
+    recipe
+}
+
+#[tokio::test]
+async fn logs_a_recipe_serving_with_derived_nutrition() {
+    let h = harness();
+    let actor = crate::domain::UserId::new();
+    let recipe = seed_recipe_from(&h, actor);
+    let member = HouseholdMemberId::new();
+
+    let recorded = h
+        .service
+        .record(NewConsumptionRecord {
+            id: None,
+            member_id: member,
+            item: MealItemRef::recipe(recipe.id),
+            recorded_by: Some(actor),
+            meal_plan_entry_id: None,
+            meal_plan_component_id: None,
+            slot: MealSlot::Breakfast,
+            amount: ConsumedAmount::Servings(Decimal::ONE),
+            consumed_on: date!(2026 - 08 - 22),
+            consumed_at: None,
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(recorded.item, MealItemRef::recipe(recipe.id));
+    assert_eq!(recorded.nutrition.energy_kcal, Some(Decimal::new(200, 0)));
+
+    let day = h.service.day(member, date!(2026 - 08 - 22)).await.unwrap();
+    assert_eq!(day.entries[0].product_name, "Porridge");
+}
+
+#[tokio::test]
+async fn logging_a_recipe_serving_measured_in_grams_is_refused() {
+    let h = harness();
+    let actor = crate::domain::UserId::new();
+    let recipe = seed_recipe_from(&h, actor);
+
+    let error = h
+        .service
+        .record(NewConsumptionRecord {
+            id: None,
+            member_id: HouseholdMemberId::new(),
+            item: MealItemRef::recipe(recipe.id),
+            recorded_by: Some(actor),
+            meal_plan_entry_id: None,
+            meal_plan_component_id: None,
+            slot: MealSlot::Breakfast,
+            amount: ConsumedAmount::Measure(Quantity::new(Decimal::new(100, 0), Unit::Gram)),
+            consumed_on: date!(2026 - 08 - 22),
+            consumed_at: None,
+        })
+        .await
+        .unwrap_err();
+
+    assert!(matches!(error, CoreError::Validation { .. }));
+}
+
+#[tokio::test]
+async fn logging_a_recipe_owned_by_someone_else_is_refused() {
+    let h = harness();
+    let recipe = seed_recipe_from(&h, crate::domain::UserId::new());
+
+    let error = h
+        .service
+        .record(NewConsumptionRecord {
+            id: None,
+            member_id: HouseholdMemberId::new(),
+            item: MealItemRef::recipe(recipe.id),
+            recorded_by: Some(crate::domain::UserId::new()),
+            meal_plan_entry_id: None,
+            meal_plan_component_id: None,
+            slot: MealSlot::Breakfast,
+            amount: ConsumedAmount::Servings(Decimal::ONE),
+            consumed_on: date!(2026 - 08 - 22),
+            consumed_at: None,
+        })
+        .await
+        .unwrap_err();
+
+    assert!(matches!(error, CoreError::NotFound { .. }));
 }

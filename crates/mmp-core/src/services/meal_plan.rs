@@ -6,20 +6,23 @@ use time::{Date, Duration, Time};
 use rust_decimal::Decimal;
 
 use crate::domain::{
-    ConfirmMealPlanComponent, ConfirmMealPlanEntry, ConsumedAmount, ConsumptionRecord,
-    ConsumptionRecordId, MealPlanComponent, MealPlanComponentId, MealPlanComponentSnapshot,
-    MealPlanEntry, MealPlanEntryId, MealPlanEntryPatch, MealPlanStatus, MealSlot, NUTRIENT_KEYS,
-    NewMealPlanComponent, NewMealPlanEntry, NutritionFacts, NutritionGoals, NutritionQuality,
-    Product, ProductId, Revision, nutrition_for, resolve_on, sum_nutrition, validate_components,
+    ConfirmMealPlanComponent, ConfirmMealPlanEntry, ConsumedAmount, ConsumedNutrition,
+    ConsumptionRecord, ConsumptionRecordId, MealItemRef, MealPlanComponent, MealPlanComponentId,
+    MealPlanComponentSnapshot, MealPlanEntry, MealPlanEntryId, MealPlanEntryPatch, MealPlanStatus,
+    MealSlot, NUTRIENT_KEYS, NewMealPlanComponent, NewMealPlanEntry, NutritionFacts,
+    NutritionGoals, NutritionQuality, Product, ProductId, Recipe, RecipeId, Revision, UserId,
+    nutrition_for, recipe_nutrition, recipe_nutrition_for, resolve_on, sum_nutrition,
+    validate_components,
 };
 use crate::error::{CoreError, Result, ValidationErrors};
 use crate::ports::{
     Clock, ConsumptionRecordRepository, MealPlanQuery, MealPlanRepository,
-    NutritionTargetRepository, ProductRepository, UpdateOutcome,
+    NutritionTargetRepository, ProductRepository, RecipeRepository, UpdateOutcome,
 };
 
 const MEAL_PLAN_ENTRY: &str = "meal plan entry";
 const PRODUCT: &str = "product";
+const RECIPE: &str = "recipe";
 
 #[derive(Debug, Clone, Default)]
 pub struct NutritionSummary {
@@ -31,7 +34,7 @@ pub struct NutritionSummary {
 #[derive(Debug, Clone)]
 pub struct MealPlanComponentView {
     pub component: MealPlanComponent,
-    pub product_name: String,
+    pub item_name: String,
     pub nutrition: NutritionFacts,
     pub quality: NutritionQuality,
     pub consumption_record: Option<ConsumptionRecord>,
@@ -62,8 +65,8 @@ pub struct MealItem {
     pub source: MealItemSource,
     pub record_id: Option<ConsumptionRecordId>,
     pub status: MealPlanStatus,
-    pub product_id: ProductId,
-    pub product_name: String,
+    pub item: MealItemRef,
+    pub item_name: String,
     pub amount: ConsumedAmount,
     pub planned_amount: Option<ConsumedAmount>,
     pub planned_on: Option<Date>,
@@ -109,10 +112,89 @@ pub struct MealPlanWeek {
     pub insufficient_target_coverage: Vec<String>,
 }
 
+struct RecipeCard {
+    name: String,
+    per_serving: ConsumedNutrition,
+    archived: bool,
+}
+
+struct ResolvedItem {
+    name: String,
+    nutrition: ConsumedNutrition,
+    resolvable: bool,
+}
+
+struct ItemCatalogue {
+    products: HashMap<ProductId, Product>,
+    recipes: HashMap<RecipeId, RecipeCard>,
+}
+
+impl ItemCatalogue {
+    fn name_of(&self, item: MealItemRef) -> String {
+        match item {
+            MealItemRef::Product { product_id } => self
+                .products
+                .get(&product_id)
+                .map(|product| product.name.clone())
+                .unwrap_or_else(|| "Missing product".to_owned()),
+            MealItemRef::Recipe { recipe_id } => self
+                .recipes
+                .get(&recipe_id)
+                .map(|card| card.name.clone())
+                .unwrap_or_else(|| "Missing recipe".to_owned()),
+        }
+    }
+
+    fn resolve(&self, item: MealItemRef, amount: &ConsumedAmount) -> ResolvedItem {
+        match item {
+            MealItemRef::Product { product_id } => match self.products.get(&product_id) {
+                Some(product) => ResolvedItem {
+                    name: product.name.clone(),
+                    nutrition: nutrition_for(product, amount),
+                    resolvable: amount.resolve(product).is_ok(),
+                },
+                None => ResolvedItem {
+                    name: "Missing product".to_owned(),
+                    nutrition: ConsumedNutrition::unknown(),
+                    resolvable: false,
+                },
+            },
+            MealItemRef::Recipe { recipe_id } => match self.recipes.get(&recipe_id) {
+                Some(card) => ResolvedItem {
+                    name: card.name.clone(),
+                    nutrition: recipe_nutrition_for(&card.per_serving, amount),
+                    resolvable: matches!(amount, ConsumedAmount::Servings(_)) && !card.archived,
+                },
+                None => ResolvedItem {
+                    name: "Missing recipe".to_owned(),
+                    nutrition: ConsumedNutrition::unknown(),
+                    resolvable: false,
+                },
+            },
+        }
+    }
+}
+
+fn recipe_card(recipe: &Recipe, products: &HashMap<ProductId, Product>) -> RecipeCard {
+    let per_serving = recipe_nutrition(
+        recipe
+            .components
+            .iter()
+            .map(|component| (&component.amount, products.get(&component.product_id))),
+        recipe.servings,
+    );
+    RecipeCard {
+        name: recipe.name.clone(),
+        per_serving,
+        archived: recipe.is_archived(),
+    }
+}
+
 #[derive(Clone)]
 pub struct MealPlanService {
     plans: Arc<dyn MealPlanRepository>,
     products: Arc<dyn ProductRepository>,
+    recipes: Arc<dyn RecipeRepository>,
     consumption: Arc<dyn ConsumptionRecordRepository>,
     targets: Arc<dyn NutritionTargetRepository>,
     clock: Arc<dyn Clock>,
@@ -122,6 +204,7 @@ impl MealPlanService {
     pub fn new(
         plans: Arc<dyn MealPlanRepository>,
         products: Arc<dyn ProductRepository>,
+        recipes: Arc<dyn RecipeRepository>,
         consumption: Arc<dyn ConsumptionRecordRepository>,
         targets: Arc<dyn NutritionTargetRepository>,
         clock: Arc<dyn Clock>,
@@ -129,6 +212,7 @@ impl MealPlanService {
         Self {
             plans,
             products,
+            recipes,
             consumption,
             targets,
             clock,
@@ -155,7 +239,7 @@ impl MealPlanService {
                 "That meal slot already exists. Add food to the existing meal instead.",
             ));
         }
-        self.validate_products(&input.components, &HashSet::new())
+        self.validate_component_items(&input.components, &HashSet::new(), input.actor_id)
             .await?;
         let now = self.clock.now();
         let entry = MealPlanEntry {
@@ -202,12 +286,12 @@ impl MealPlanService {
         let now = self.clock.now();
         if let Some(components) = patch.components {
             validate_components(&components)?;
-            let existing_products = entry
+            let existing_items = entry
                 .components
                 .iter()
-                .map(|component| component.product_id)
+                .map(|component| component.item)
                 .collect();
-            self.validate_products(&components, &existing_products)
+            self.validate_component_items(&components, &existing_items, actor_id)
                 .await?;
             entry.components = merge_components(&entry.components, components)?;
         }
@@ -261,34 +345,43 @@ impl MealPlanService {
         let mut entry = self.get_entry(id).await?;
         let component = entry
             .components
-            .iter_mut()
+            .iter()
             .find(|component| component.id == component_id)
             .ok_or_else(|| CoreError::not_found("meal plan component", component_id))?;
         require_component_revision(component_id, expected, component.revision)?;
         require_component_planned(component)?;
-        let product = self
-            .products
-            .get(component.product_id)
-            .await?
-            .ok_or_else(|| CoreError::not_found(PRODUCT, component.product_id))?;
-        ensure_resolvable(&product, &input.amount, "amount")?;
-        let planned = nutrition_for(&product, &component.amount);
+        let component_item = component.item;
+        let planned_amount = component.amount;
+
+        let catalogue = self.catalogue_for([component_item]).await?;
+        let planned = catalogue.resolve(component_item, &planned_amount);
+        let actual = catalogue.resolve(component_item, &input.amount);
+        if !actual.resolvable {
+            let mut errors = ValidationErrors::new();
+            errors.push("amount", "We cannot work out this item's nutrition");
+            return Err(errors.into());
+        }
+
+        let component = entry
+            .components
+            .iter_mut()
+            .find(|component| component.id == component_id)
+            .expect("component was found moments ago");
         component.snapshot = Some(MealPlanComponentSnapshot {
-            product_name: product.name.clone(),
-            nutrition: planned.facts,
-            quality: planned.quality,
+            item_name: planned.name,
+            nutrition: planned.nutrition.facts,
+            quality: planned.nutrition.quality,
         });
         component.status = MealPlanStatus::Eaten;
         component.resolved_by = Some(input.actor_id);
         component.resolved_at = Some(self.clock.now());
         component.revision = component.revision.next();
 
-        let actual = nutrition_for(&product, &input.amount);
         let now = self.clock.now();
         let record = ConsumptionRecord {
             id: Default::default(),
             member_id: entry.member_id,
-            product_id: component.product_id,
+            item: component_item,
             recorded_by: Some(input.actor_id),
             meal_plan_entry_id: Some(entry.id),
             meal_plan_component_id: Some(component.id),
@@ -296,8 +389,8 @@ impl MealPlanService {
             amount: input.amount,
             consumed_on: input.consumed_on,
             consumed_at: input.consumed_at,
-            nutrition: actual.facts,
-            quality: actual.quality,
+            nutrition: actual.nutrition.facts,
+            quality: actual.nutrition.quality,
             revision: Revision::INITIAL,
             created_at: now,
             updated_at: now,
@@ -337,21 +430,26 @@ impl MealPlanService {
         let mut entry = self.get_entry(id).await?;
         let component = entry
             .components
-            .iter_mut()
+            .iter()
             .find(|component| component.id == component_id)
             .ok_or_else(|| CoreError::not_found("meal plan component", component_id))?;
         require_component_revision(component_id, expected, component.revision)?;
         require_component_planned(component)?;
-        let product = self
-            .products
-            .get(component.product_id)
-            .await?
-            .ok_or_else(|| CoreError::not_found(PRODUCT, component.product_id))?;
-        let planned = nutrition_for(&product, &component.amount);
+        let component_item = component.item;
+        let planned_amount = component.amount;
+
+        let catalogue = self.catalogue_for([component_item]).await?;
+        let planned = catalogue.resolve(component_item, &planned_amount);
+
+        let component = entry
+            .components
+            .iter_mut()
+            .find(|component| component.id == component_id)
+            .expect("component was found moments ago");
         component.snapshot = Some(MealPlanComponentSnapshot {
-            product_name: product.name,
-            nutrition: planned.facts,
-            quality: planned.quality,
+            item_name: planned.name,
+            nutrition: planned.nutrition.facts,
+            quality: planned.nutrition.quality,
         });
         let now = self.clock.now();
         component.status = MealPlanStatus::NotEaten;
@@ -462,7 +560,9 @@ impl MealPlanService {
         validate_actual_components(&entry, &input)?;
         self.freeze(&mut entry).await?;
 
-        let products = self.products_for_entry(&entry).await?;
+        let catalogue = self
+            .catalogue_for(entry.components.iter().map(|component| component.item))
+            .await?;
         let actual_by_component: HashMap<_, _> = input
             .components
             .iter()
@@ -475,20 +575,20 @@ impl MealPlanService {
             .iter()
             .filter(|component| component.status == MealPlanStatus::Planned)
         {
-            let product = products
-                .get(&component.product_id)
-                .ok_or_else(|| CoreError::not_found(PRODUCT, component.product_id))?;
             let amount = actual_by_component[&component.id];
-            ensure_resolvable(
-                product,
-                &amount,
-                &format!("components.{}.amount", component.id),
-            )?;
-            let scaled = nutrition_for(product, &amount);
+            let scaled = catalogue.resolve(component.item, &amount);
+            if !scaled.resolvable {
+                let mut errors = ValidationErrors::new();
+                errors.push(
+                    format!("components.{}.amount", component.id),
+                    "We cannot work out this item's nutrition",
+                );
+                return Err(errors.into());
+            }
             records.push(ConsumptionRecord {
                 id: Default::default(),
                 member_id: entry.member_id,
-                product_id: component.product_id,
+                item: component.item,
                 recorded_by: Some(input.actor_id),
                 meal_plan_entry_id: Some(entry.id),
                 meal_plan_component_id: Some(component.id),
@@ -496,8 +596,8 @@ impl MealPlanService {
                 amount,
                 consumed_on: input.consumed_on,
                 consumed_at: input.consumed_at,
-                nutrition: scaled.facts,
-                quality: scaled.quality,
+                nutrition: scaled.nutrition.facts,
+                quality: scaled.nutrition.quality,
                 revision: Revision::INITIAL,
                 created_at: now,
                 updated_at: now,
@@ -593,31 +693,24 @@ impl MealPlanService {
             }
             presented_by_date.entry(date).or_default().push(view);
         }
-        let logged_product_ids: Vec<_> = records
-            .iter()
-            .filter(|record| record.meal_plan_component_id.is_none())
-            .map(|record| record.product_id)
-            .collect();
-        let logged_products: HashMap<ProductId, Product> = self
-            .products
-            .get_many(&logged_product_ids)
-            .await?
-            .into_iter()
-            .map(|product| (product.id, product))
-            .collect();
+        let logged_catalogue = self
+            .catalogue_for(
+                records
+                    .iter()
+                    .filter(|record| record.meal_plan_component_id.is_none())
+                    .map(|record| record.item),
+            )
+            .await?;
         for record in &records {
             if record.meal_plan_component_id.is_some() {
                 continue;
             }
-            let product_name = logged_products
-                .get(&record.product_id)
-                .map(|product| product.name.clone())
-                .unwrap_or_else(|| "Missing product".to_owned());
+            let item_name = logged_catalogue.name_of(record.item);
             let bucket = (record.consumed_on, record.slot);
             items_by_slot
                 .entry(bucket)
                 .or_default()
-                .push((record.id.as_uuid(), logged_item(record, product_name)));
+                .push((record.id.as_uuid(), logged_item(record, item_name)));
         }
 
         let mut days = Vec::with_capacity(7);
@@ -686,26 +779,45 @@ impl MealPlanService {
             .ok_or_else(|| CoreError::not_found(MEAL_PLAN_ENTRY, id))
     }
 
-    async fn validate_products(
+    async fn validate_component_items(
         &self,
         components: &[NewMealPlanComponent],
-        archived_allowed: &HashSet<ProductId>,
+        archived_allowed: &HashSet<MealItemRef>,
+        actor_id: UserId,
     ) -> Result<()> {
         for (index, component) in components.iter().enumerate() {
-            let product = self
-                .products
-                .get(component.product_id)
-                .await?
-                .ok_or_else(|| CoreError::not_found(PRODUCT, component.product_id))?;
             let mut errors = ValidationErrors::new();
-            if product.is_archived() && !archived_allowed.contains(&product.id) {
-                errors.push(
-                    format!("components.{index}.product_id"),
-                    "That product is archived",
-                );
-            }
-            if let Err(error) = component.amount.resolve(&product) {
-                errors.push(format!("components.{index}.amount"), error.to_string());
+            match component.item {
+                MealItemRef::Product { product_id } => {
+                    let product = self
+                        .products
+                        .get(product_id)
+                        .await?
+                        .ok_or_else(|| CoreError::not_found(PRODUCT, product_id))?;
+                    if product.is_archived() && !archived_allowed.contains(&component.item) {
+                        errors.push(
+                            format!("components.{index}.item"),
+                            "That product is archived",
+                        );
+                    }
+                    if let Err(error) = component.amount.resolve(&product) {
+                        errors.push(format!("components.{index}.amount"), error.to_string());
+                    }
+                }
+                MealItemRef::Recipe { recipe_id } => {
+                    let recipe = self
+                        .recipes
+                        .get(recipe_id)
+                        .await?
+                        .filter(|recipe| recipe.owner_id == actor_id)
+                        .ok_or_else(|| CoreError::not_found(RECIPE, recipe_id))?;
+                    if recipe.is_archived() && !archived_allowed.contains(&component.item) {
+                        errors.push(
+                            format!("components.{index}.item"),
+                            "That recipe is archived",
+                        );
+                    }
+                }
             }
             errors.into_result()?;
         }
@@ -713,38 +825,61 @@ impl MealPlanService {
     }
 
     async fn freeze(&self, entry: &mut MealPlanEntry) -> Result<()> {
-        let products = self.products_for_entry(entry).await?;
+        let catalogue = self
+            .catalogue_for(entry.components.iter().map(|component| component.item))
+            .await?;
         for component in &mut entry.components {
-            let product = products
-                .get(&component.product_id)
-                .ok_or_else(|| CoreError::not_found(PRODUCT, component.product_id))?;
-            ensure_resolvable(product, &component.amount, "components.amount")?;
-            let scaled = nutrition_for(product, &component.amount);
+            let resolved = catalogue.resolve(component.item, &component.amount);
+            if !resolved.resolvable {
+                let mut errors = ValidationErrors::new();
+                errors.push(
+                    "components.amount",
+                    "We cannot work out this item's nutrition",
+                );
+                return errors.into_result();
+            }
             component.snapshot = Some(MealPlanComponentSnapshot {
-                product_name: product.name.clone(),
-                nutrition: scaled.facts,
-                quality: scaled.quality,
+                item_name: resolved.name,
+                nutrition: resolved.nutrition.facts,
+                quality: resolved.nutrition.quality,
             });
         }
         Ok(())
     }
 
-    async fn products_for_entry(
+    async fn catalogue_for(
         &self,
-        entry: &MealPlanEntry,
-    ) -> Result<HashMap<ProductId, Product>> {
-        let ids: Vec<_> = entry
-            .components
-            .iter()
-            .map(|component| component.product_id)
-            .collect();
-        Ok(self
+        items: impl IntoIterator<Item = MealItemRef>,
+    ) -> Result<ItemCatalogue> {
+        let mut product_ids: Vec<ProductId> = Vec::new();
+        let mut recipe_ids: Vec<RecipeId> = Vec::new();
+        for item in items {
+            match item {
+                MealItemRef::Product { product_id } => product_ids.push(product_id),
+                MealItemRef::Recipe { recipe_id } => recipe_ids.push(recipe_id),
+            }
+        }
+
+        let recipes = self.recipes.get_many(&recipe_ids).await?;
+        for recipe in &recipes {
+            for component in &recipe.components {
+                product_ids.push(component.product_id);
+            }
+        }
+
+        let products: HashMap<ProductId, Product> = self
             .products
-            .get_many(&ids)
+            .get_many(&product_ids)
             .await?
             .into_iter()
             .map(|product| (product.id, product))
-            .collect())
+            .collect();
+        let recipes: HashMap<RecipeId, RecipeCard> = recipes
+            .into_iter()
+            .map(|recipe| (recipe.id, recipe_card(&recipe, &products)))
+            .collect();
+
+        Ok(ItemCatalogue { products, recipes })
     }
 
     async fn present(
@@ -752,7 +887,9 @@ impl MealPlanService {
         entry: MealPlanEntry,
         records: &[ConsumptionRecord],
     ) -> Result<MealPlanEntryView> {
-        let products = self.products_for_entry(&entry).await?;
+        let catalogue = self
+            .catalogue_for(entry.components.iter().map(|component| component.item))
+            .await?;
         let records_by_component: HashMap<_, _> = records
             .iter()
             .filter_map(|record| record.meal_plan_component_id.map(|id| (id, record.clone())))
@@ -760,33 +897,27 @@ impl MealPlanService {
         let mut needs_attention = false;
         let mut components = Vec::with_capacity(entry.components.len());
         for component in &entry.components {
-            let (product_name, nutrition, quality) = match &component.snapshot {
+            let (item_name, nutrition, quality) = match &component.snapshot {
                 Some(snapshot) => (
-                    snapshot.product_name.clone(),
+                    snapshot.item_name.clone(),
                     snapshot.nutrition.clone(),
                     snapshot.quality,
                 ),
-                None => match products.get(&component.product_id) {
-                    Some(product) => {
-                        let scaled = nutrition_for(product, &component.amount);
-                        if component.amount.resolve(product).is_err() {
-                            needs_attention = true;
-                        }
-                        (product.name.clone(), scaled.facts, scaled.quality)
-                    }
-                    None => {
+                None => {
+                    let resolved = catalogue.resolve(component.item, &component.amount);
+                    if !resolved.resolvable {
                         needs_attention = true;
-                        (
-                            "Missing product".to_owned(),
-                            NutritionFacts::default(),
-                            NutritionQuality::Unknown,
-                        )
                     }
-                },
+                    (
+                        resolved.name,
+                        resolved.nutrition.facts,
+                        resolved.nutrition.quality,
+                    )
+                }
             };
             components.push(MealPlanComponentView {
                 component: component.clone(),
-                product_name,
+                item_name,
                 nutrition,
                 quality,
                 consumption_record: records_by_component.get(&component.id).cloned(),
@@ -818,7 +949,7 @@ fn make_components(input: Vec<NewMealPlanComponent>) -> Vec<MealPlanComponent> {
         .enumerate()
         .map(|(position, component)| MealPlanComponent {
             id: component.id.unwrap_or_default(),
-            product_id: component.product_id,
+            item: component.item,
             amount: component.amount,
             position: i32::try_from(position).unwrap_or(i32::MAX),
             snapshot: None,
@@ -844,7 +975,7 @@ fn merge_components(
             let Some(id) = component.id else {
                 return MealPlanComponent {
                     id: Default::default(),
-                    product_id: component.product_id,
+                    item: component.item,
                     amount: component.amount,
                     position: i32::try_from(position).unwrap_or(i32::MAX),
                     snapshot: None,
@@ -868,7 +999,7 @@ fn merge_components(
                 );
                 return MealPlanComponent {
                     id,
-                    product_id: component.product_id,
+                    item: component.item,
                     amount: component.amount,
                     position: i32::try_from(position).unwrap_or(i32::MAX),
                     snapshot: None,
@@ -880,12 +1011,12 @@ fn merge_components(
                 };
             };
             let position = i32::try_from(position).unwrap_or(i32::MAX);
-            let changed = previous.product_id != component.product_id
+            let changed = previous.item != component.item
                 || previous.amount != component.amount
                 || previous.position != position;
             MealPlanComponent {
                 id,
-                product_id: component.product_id,
+                item: component.item,
                 amount: component.amount,
                 position,
                 snapshot: previous.snapshot.clone(),
@@ -1086,15 +1217,6 @@ fn commit_outcome(outcome: UpdateOutcome, id: MealPlanEntryId, expected: Revisio
     }
 }
 
-fn ensure_resolvable(product: &Product, amount: &ConsumedAmount, field: &str) -> Result<()> {
-    if let Err(error) = amount.resolve(product) {
-        let mut errors = ValidationErrors::new();
-        errors.push(field, error.to_string());
-        return errors.into_result();
-    }
-    Ok(())
-}
-
 fn items_for_entry(view: &MealPlanEntryView) -> Vec<(Date, MealItemOrder, MealItem)> {
     view.components
         .iter()
@@ -1112,8 +1234,8 @@ fn items_for_entry(view: &MealPlanEntryView) -> Vec<(Date, MealItemOrder, MealIt
                         source,
                         record_id: Some(record.id),
                         status: MealPlanStatus::Eaten,
-                        product_id: component.component.product_id,
-                        product_name: component.product_name.clone(),
+                        item: component.component.item,
+                        item_name: component.item_name.clone(),
                         amount: record.amount,
                         planned_amount: (record.amount != component.component.amount)
                             .then_some(component.component.amount),
@@ -1135,8 +1257,8 @@ fn items_for_entry(view: &MealPlanEntryView) -> Vec<(Date, MealItemOrder, MealIt
                         source,
                         record_id: None,
                         status: component.component.status,
-                        product_id: component.component.product_id,
-                        product_name: component.product_name.clone(),
+                        item: component.component.item,
+                        item_name: component.item_name.clone(),
                         amount: component.component.amount,
                         planned_amount: None,
                         planned_on: None,
@@ -1154,15 +1276,15 @@ fn items_for_entry(view: &MealPlanEntryView) -> Vec<(Date, MealItemOrder, MealIt
         .collect()
 }
 
-fn logged_item(record: &ConsumptionRecord, product_name: String) -> MealItem {
+fn logged_item(record: &ConsumptionRecord, item_name: String) -> MealItem {
     MealItem {
         source: MealItemSource::Logged {
             record_id: record.id,
         },
         record_id: Some(record.id),
         status: MealPlanStatus::Eaten,
-        product_id: record.product_id,
-        product_name,
+        item: record.item,
+        item_name,
         amount: record.amount,
         planned_amount: None,
         planned_on: None,
