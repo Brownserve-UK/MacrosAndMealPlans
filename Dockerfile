@@ -5,6 +5,7 @@
 # is the one compose builds.
 
 FROM rust:1-slim-bookworm AS dev
+RUN rustup component add rustfmt clippy
 RUN cargo install cargo-watch --locked
 WORKDIR /workspace
 ENV MMP_BIND_ADDRESS=0.0.0.0:7979 \
