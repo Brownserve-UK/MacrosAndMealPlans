@@ -51,6 +51,7 @@ export function RecipePage({ id }: { id: string }) {
     ...recipe.meal_categories.map((category) => ({ key: `meal-${category}`, label: labelMealCategory(category) })),
     ...recipe.country_categories.map((country) => ({ key: `country-${country}`, label: countryLabel(country) })),
   ];
+  const hasTime = recipe.preparation_minutes != null || recipe.cooking_minutes != null;
 
   return (
     <>
@@ -81,7 +82,8 @@ export function RecipePage({ id }: { id: string }) {
       <Stack spacing={3.5}>
         <Stack spacing={1.5}>
           <Stack direction="row" spacing={{ xs: 1.5, sm: 2.5 }} useFlexGap sx={{ flexWrap: 'wrap', alignItems: 'center' }}>
-            <Fact icon={<PeopleIcon />} label={`Serves ${recipe.servings}`} />
+            <ServingFact servings={recipe.servings} />
+            {hasTime ? <Divider orientation="vertical" flexItem sx={{ display: { xs: 'none', sm: 'block' } }} /> : null}
             <TimeFacts recipe={recipe} />
           </Stack>
           {categoryChips.length > 0 || recipe.tags.length > 0 ? (
@@ -179,11 +181,20 @@ export function RecipePage({ id }: { id: string }) {
   );
 }
 
-function Fact({ icon, label }: { icon: ReactNode; label: string }) {
+function ServingFact({ servings }: { servings: number }) {
   return (
-    <Stack direction="row" spacing={0.75} sx={{ alignItems: 'center', color: 'text.secondary' }}>
-      {icon}
-      <Typography variant="body2">{label}</Typography>
+    <Stack direction="row" spacing={0.75} sx={{ alignItems: 'center' }}>
+      <Box sx={{ color: 'warning.main', display: 'grid', placeItems: 'center' }}>
+        <PeopleIcon />
+      </Box>
+      <Stack spacing={0}>
+        <Typography variant="caption" sx={{ color: 'text.secondary', fontWeight: 650, lineHeight: 1.2 }}>
+          Serves
+        </Typography>
+        <Typography variant="body2" className="numeral" sx={{ color: 'text.primary', lineHeight: 1.35 }}>
+          {servings}
+        </Typography>
+      </Stack>
     </Stack>
   );
 }

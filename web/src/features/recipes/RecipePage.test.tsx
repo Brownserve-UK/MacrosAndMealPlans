@@ -50,6 +50,8 @@ describe('RecipePage', () => {
     expect(screen.getByRole('heading', { name: 'Warm Milk' })).toBeInTheDocument();
     expect(screen.getByText('Whole Milk')).toBeInTheDocument();
     expect(screen.getByText('Warm the milk gently.')).toBeInTheDocument();
+    expect(screen.getByText('Serves')).toBeInTheDocument();
+    expect(screen.getByText('2')).toBeInTheDocument();
     expect(screen.getByText('Prep Time')).toBeInTheDocument();
     expect(screen.getByText('Cook Time')).toBeInTheDocument();
     expect(screen.getByText('Total Time')).toBeInTheDocument();
