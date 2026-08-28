@@ -1,8 +1,6 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { authenticatedFetch, client, ifMatch, unwrap, unwrapFetchJson } from './client';
 import type {
-  Amount,
-  ConsumptionRecord,
   Ingredient,
   Member,
   Product,
@@ -425,81 +423,12 @@ export function useSetUserArchived() {
   });
 }
 
-export const diaryKeys = {
-  day: (memberId: string, date: string) => ['diaryDay', memberId, date] as const,
-};
-
-export function useDiaryDay(memberId: string, date: string) {
-  return useQuery({
-    queryKey: diaryKeys.day(memberId, date),
-    enabled: Boolean(memberId) && Boolean(date),
-    queryFn: async () =>
-      unwrap(
-        await client.GET('/api/v1/diary/{member_id}/{date}', {
-          params: { path: { member_id: memberId, date } },
-        }),
-      ),
-  });
-}
-
-export type MealNutritionInput = { productId: string; amount: Amount | null };
-export type MealNutritionTotals = {
-  energy_kcal?: number;
-  protein_g?: number;
-  carbohydrate_g?: number;
-  fat_g?: number;
-};
-
-const MEAL_NUTRITION_KEYS = ['energy_kcal', 'protein_g', 'carbohydrate_g', 'fat_g'] as const;
-
-export function useMealNutrition(items: MealNutritionInput[]) {
-  const active = items.filter(
-    (item): item is { productId: string; amount: Amount } =>
-      Boolean(item.productId) && item.amount !== null,
-  );
-
-  const query = useQuery({
-    queryKey: ['mealNutrition', active] as const,
-    enabled: active.length > 0,
-    placeholderData: keepPreviousData,
-    queryFn: async () => {
-      const parts = await Promise.all(
-        active.map(async ({ productId, amount }) =>
-          unwrap(
-            await client.GET('/api/v1/products/{id}/nutrition', {
-              params: {
-                path: { id: productId },
-                query:
-                  amount.kind === 'measure'
-                    ? { kind: amount.kind, value: amount.value, unit: amount.unit }
-                    : { kind: amount.kind, value: amount.value },
-              },
-            }),
-          ),
-        ),
-      );
-
-      const total: MealNutritionTotals = {};
-      for (const key of MEAL_NUTRITION_KEYS) {
-        const values = parts
-          .map((part) => part.nutrition[key])
-          .filter((value): value is number => value != null);
-        if (values.length > 0) total[key] = values.reduce((sum, value) => sum + value, 0);
-      }
-      return total;
-    },
-  });
-
-  return { total: active.length > 0 ? query.data ?? null : null };
-}
-
 export function useCreateConsumption() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (body: components['schemas']['CreateConsumptionRequest']) =>
       unwrap(await client.POST('/api/v1/consumption', { body })),
-    onSuccess: (created: ConsumptionRecord) => {
-      void qc.invalidateQueries({ queryKey: ['diaryDay', created.member_id] });
+    onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['mealPlanWeek'] });
     },
   });
@@ -519,8 +448,7 @@ export function useUpdateConsumption() {
           body: input.body,
         }),
       ),
-    onSuccess: (updated: ConsumptionRecord) => {
-      void qc.invalidateQueries({ queryKey: ['diaryDay', updated.member_id] });
+    onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['mealPlanWeek'] });
     },
   });
@@ -535,8 +463,7 @@ export function useDeleteConsumption() {
           params: { path: { id: input.id }, header: ifMatch(input.revision) },
         }),
       ),
-    onSuccess: (_data, variables) => {
-      void qc.invalidateQueries({ queryKey: ['diaryDay', variables.memberId] });
+    onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['mealPlanWeek'] });
     },
   });
@@ -562,9 +489,8 @@ export function useMealPlanWeek(weekStart: string) {
 
 function useMealPlanInvalidation() {
   const qc = useQueryClient();
-  return (memberId?: string) => {
+  return () => {
     void qc.invalidateQueries({ queryKey: ['mealPlanWeek'] });
-    if (memberId) void qc.invalidateQueries({ queryKey: ['diaryDay', memberId] });
   };
 }
 
@@ -573,7 +499,7 @@ export function useCreateMealPlanEntry() {
   return useMutation({
     mutationFn: async (body: components['schemas']['CreateMealPlanEntryRequest']) =>
       unwrap(await client.POST('/api/v1/meal-plan-entries', { body })),
-    onSuccess: (entry) => invalidate(entry.member_id),
+    onSuccess: () => invalidate(),
   });
 }
 
@@ -591,7 +517,7 @@ export function useUpdateMealPlanEntry() {
           body: input.body,
         }),
       ),
-    onSuccess: (entry) => invalidate(entry.member_id),
+    onSuccess: () => invalidate(),
   });
 }
 
@@ -622,7 +548,7 @@ export function useMarkMealPlanEaten() {
           body: input.body,
         }),
       ),
-    onSuccess: (entry) => invalidate(entry.member_id),
+    onSuccess: () => invalidate(),
   });
 }
 
@@ -635,7 +561,7 @@ export function useMarkMealPlanNotEaten() {
           params: { path: { id: input.id }, header: ifMatch(input.revision) },
         }),
       ),
-    onSuccess: (entry) => invalidate(entry.member_id),
+    onSuccess: () => invalidate(),
   });
 }
 
@@ -648,7 +574,7 @@ export function useReopenMealPlanEntry() {
           params: { path: { id: input.id }, header: ifMatch(input.revision) },
         }),
       ),
-    onSuccess: (entry) => invalidate(entry.member_id),
+    onSuccess: () => invalidate(),
   });
 }
 
@@ -670,7 +596,7 @@ export function useMarkMealPlanComponentEaten() {
           body: input.body,
         }),
       ),
-    onSuccess: (entry) => invalidate(entry.member_id),
+    onSuccess: () => invalidate(),
   });
 }
 
@@ -686,7 +612,7 @@ export function useMarkMealPlanComponentNotEaten() {
           },
         }),
       ),
-    onSuccess: (entry) => invalidate(entry.member_id),
+    onSuccess: () => invalidate(),
   });
 }
 
@@ -702,7 +628,7 @@ export function useReopenMealPlanComponent() {
           },
         }),
       ),
-    onSuccess: (entry) => invalidate(entry.member_id),
+    onSuccess: () => invalidate(),
   });
 }
 

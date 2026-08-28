@@ -1617,24 +1617,6 @@ async fn the_product_nutrition_preview_scales_the_amount() {
 }
 
 #[tokio::test]
-async fn diary_members_lists_only_who_the_caller_may_see() {
-    let app = app().await;
-    create_member(&app, "Ann").await;
-    create_user(&app, "joe", &["basic_user"]).await;
-
-    let (status, body, _) = send(
-        &app,
-        Call::new("GET", "/api/v1/diary/members").signed_in_as("joe"),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "{body}");
-    assert!(
-        body.as_array().unwrap().is_empty(),
-        "a basic user with no linked member sees nobody's diary"
-    );
-}
-
-#[tokio::test]
 async fn a_meal_plan_entry_round_trips_through_the_week() {
     let app = app().await;
     let me = send(&app, Call::new("GET", "/api/v1/auth/me")).await.1;

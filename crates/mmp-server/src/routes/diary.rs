@@ -1,7 +1,6 @@
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
-use mmp_core::ports::PageRequest;
 use time::Date;
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
@@ -11,8 +10,8 @@ use super::require_member_access;
 use crate::auth::Principal;
 use crate::dto::common::iso_date;
 use crate::dto::{
-    ConsumptionRecordDto, CreateConsumptionRequest, DiaryDayDto, HouseholdMemberDto,
-    UpdateConsumptionRequest, consumption_id, member_id,
+    ConsumptionRecordDto, CreateConsumptionRequest, DiaryDayDto, UpdateConsumptionRequest,
+    consumption_id, member_id,
 };
 use crate::error::{ApiError, ApiResult};
 use crate::http::{Created, IfMatch, Tagged};
@@ -23,7 +22,6 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(create))
         .routes(routes!(get_one, update, delete))
         .routes(routes!(get_day))
-        .routes(routes!(list_members))
 }
 
 fn parse_path_date(raw: &str) -> ApiResult<Date> {
@@ -180,39 +178,4 @@ async fn get_day(
     let date = parse_path_date(&date)?;
     let day = state.diary.day(target, date).await?;
     Ok(Json(day.into()))
-}
-
-#[utoipa::path(
-    get,
-    path = "/api/v1/diary/members",
-    operation_id = "listDiaryMembers",
-    responses((status = 200, description = "The members whose diaries you may see",
-               body = Vec<HouseholdMemberDto>)),
-    tag = "diary",
-    security(("basic" = []))
-)]
-async fn list_members(
-    State(state): State<AppState>,
-    principal: Principal,
-) -> ApiResult<Json<Vec<HouseholdMemberDto>>> {
-    let user = state.household.get_user(principal.user_id).await?;
-    let all = state
-        .household
-        .list_members(&mmp_core::ports::MemberQuery {
-            page: PageRequest::new(1, PageRequest::MAX_PER_PAGE),
-            ..Default::default()
-        })
-        .await?;
-
-    let mut visible = Vec::new();
-    for candidate in all.items {
-        if state
-            .household
-            .can_view_member_health_data(&user, candidate.id)
-            .await?
-        {
-            visible.push(candidate.into());
-        }
-    }
-    Ok(Json(visible))
 }

@@ -116,15 +116,6 @@ CREATE INDEX product_name_trgm ON product USING GIN (name gin_trgm_ops);
 CREATE INDEX product_mapped_ingredient ON product (mapped_ingredient_id)
     WHERE mapped_ingredient_id IS NOT NULL;
 
-CREATE TABLE idempotency_key (
-    key                  TEXT PRIMARY KEY,
-    principal            TEXT NOT NULL,
-    request_fingerprint  TEXT NOT NULL,
-    response_status      INTEGER NOT NULL,
-    response_body        JSONB,
-    created_at           TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
 CREATE TABLE app_user (
     id            UUID PRIMARY KEY,
     username      TEXT NOT NULL,

@@ -68,22 +68,6 @@ export interface paths {
         patch: operations["updateConsumptionRecord"];
         trace?: never;
     };
-    "/api/v1/diary/members": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get: operations["listDiaryMembers"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/v1/diary/{member_id}/{date}": {
         parameters: {
             query?: never;
@@ -1951,26 +1935,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Problem"];
-                };
-            };
-        };
-    };
-    listDiaryMembers: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description The members whose diaries you may see */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HouseholdMemberDto"][];
                 };
             };
         };

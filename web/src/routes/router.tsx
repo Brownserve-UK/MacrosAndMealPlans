@@ -80,78 +80,6 @@ const plannerDayRoute = createRoute({
   },
 });
 
-const legacyMealPlanRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: '/meal-plan',
-  beforeLoad: () => {
-    throw redirect({ to: '/food-log', replace: true });
-  },
-});
-
-const legacyMealPlanWeekRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: '/meal-plan/$weekStart',
-  beforeLoad: ({ params }) => {
-    throw redirect({
-      to: '/food-log/$weekStart',
-      params: { weekStart: params.weekStart },
-      replace: true,
-    });
-  },
-});
-
-const legacyMealPlanDayRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: '/meal-plan/$weekStart/$day',
-  beforeLoad: ({ params }) => {
-    throw redirect({
-      to: '/food-log/$weekStart/$day',
-      params,
-      replace: true,
-    });
-  },
-});
-
-const legacyDiaryRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: '/diary',
-  beforeLoad: () => {
-    throw redirect({ to: '/food-log', replace: true });
-  },
-});
-
-const legacyTodayRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: '/today',
-  beforeLoad: () => {
-    throw redirect({ to: '/food-log', replace: true });
-  },
-});
-
-const legacyTodayWeekRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: '/today/$weekStart',
-  beforeLoad: ({ params }) => {
-    throw redirect({
-      to: '/food-log/$weekStart',
-      params: { weekStart: params.weekStart },
-      replace: true,
-    });
-  },
-});
-
-const legacyTodayDayRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: '/today/$weekStart/$day',
-  beforeLoad: ({ params }) => {
-    throw redirect({
-      to: '/food-log/$weekStart/$day',
-      params,
-      replace: true,
-    });
-  },
-});
-
 const ingredientsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/ingredients',
@@ -259,13 +187,6 @@ const routeTree = rootRoute.addChildren([
   plannerIndexRoute,
   plannerWeekRoute,
   plannerDayRoute,
-  legacyMealPlanRoute,
-  legacyMealPlanWeekRoute,
-  legacyMealPlanDayRoute,
-  legacyDiaryRoute,
-  legacyTodayRoute,
-  legacyTodayWeekRoute,
-  legacyTodayDayRoute,
   ingredientsRoute,
   ingredientRoute,
   productsRoute,
