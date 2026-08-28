@@ -153,6 +153,8 @@ async fn delete(
 
 #[utoipa::path(
     get,
+    // 2026-08-28 - SB: This is currently only used in regression tests and not exposed to users
+    // (just in case you wonder why it doesn't seem to get used anywhere 😛)
     path = "/api/v1/diary/{member_id}/{date}",
     operation_id = "getDiaryDay",
     params(
