@@ -1,5 +1,6 @@
 import AccessTimeIcon from '@mui/icons-material/AccessTimeOutlined';
 import EditIcon from '@mui/icons-material/EditOutlined';
+import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import PeopleIcon from '@mui/icons-material/PeopleOutlineOutlined';
 import RestaurantIcon from '@mui/icons-material/RestaurantOutlined';
 import SoupKitchenIcon from '@mui/icons-material/SoupKitchenOutlined';
@@ -9,8 +10,10 @@ import Button from '@mui/material/Button';
 import Chip from '@mui/material/Chip';
 import Divider from '@mui/material/Divider';
 import Grid from '@mui/material/Grid';
+import IconButton from '@mui/material/IconButton';
 import Paper from '@mui/material/Paper';
 import Stack from '@mui/material/Stack';
+import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 import { Link } from '@tanstack/react-router';
 import { useState, type ReactNode } from 'react';
@@ -132,28 +135,22 @@ export function RecipePage({ id }: { id: string }) {
                           {formatAmount(component.amount)}
                         </Typography>
                       </Stack>
-                      <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
-                        {component.requirement.kind === 'unresolved' ? (
-                          <>
-                            <Chip size="small" color="warning" variant="outlined" label="Not matched" />
-                            <Button
-                              size="small"
-                              onClick={() =>
-                                setResolving({
-                                  componentId: component.id,
-                                  text: component.name,
-                                })
-                              }
-                            >
-                              Match
-                            </Button>
-                          </>
-                        ) : component.nutrition_source === 'estimated' ? (
-                          <Chip size="small" color="info" variant="outlined" label="Estimated" />
-                        ) : component.nutrition_source === 'none' ? (
-                          <Chip size="small" color="warning" variant="outlined" label="No nutrition" />
-                        ) : null}
-                      </Stack>
+                      {component.requirement.kind === 'unresolved' ? (
+                        <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
+                          <Chip size="small" color="warning" variant="outlined" label="Not matched" />
+                          <Button
+                            size="small"
+                            onClick={() =>
+                              setResolving({
+                                componentId: component.id,
+                                text: component.name,
+                              })
+                            }
+                          >
+                            Match
+                          </Button>
+                        </Stack>
+                      ) : null}
                     </Stack>
                   ))}
                 </Stack>
@@ -283,12 +280,37 @@ function TimeFact({ icon, label, minutes }: { icon: ReactNode; label: string; mi
 
 function NutritionPanel({ recipeId }: { recipeId: string }) {
   const query = useRecipeNutrition(recipeId);
+  const quality = query.data?.quality;
+  const estimated = quality === 'estimated' || quality === 'partial';
   return (
     <Paper sx={{ p: 3 }}>
-      <Typography variant="h2">Nutrition</Typography>
-      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>Per serving</Typography>
+      <Stack direction="row" spacing={0.5} sx={{ alignItems: 'center' }}>
+        <Typography variant="h2">Nutrition</Typography>
+        {quality != null && quality !== 'known' ? <QualityHint quality={quality} /> : null}
+      </Stack>
+      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+        {estimated ? 'Per serving (estimated)' : 'Per serving'}
+      </Typography>
       {query.data ? <NutritionRows data={query.data} /> : <Loading label="Working it out" />}
     </Paper>
+  );
+}
+
+const QUALITY_HINT: Record<Exclude<RecipeNutrition['quality'], 'known'>, string> = {
+  estimated:
+    'Estimated from typical products for each ingredient. Actual values depend on the products you use.',
+  partial:
+    'Estimated from typical products for each ingredient. Actual values depend on the products you use. Some ingredients have no nutrition data yet.',
+  unknown: 'No nutrition data for these ingredients yet.',
+};
+
+function QualityHint({ quality }: { quality: Exclude<RecipeNutrition['quality'], 'known'> }) {
+  return (
+    <Tooltip title={QUALITY_HINT[quality]}>
+      <IconButton size="small" aria-label="About this nutrition" sx={{ color: 'text.secondary' }}>
+        <InfoOutlinedIcon fontSize="small" />
+      </IconButton>
+    </Tooltip>
   );
 }
 
@@ -307,24 +329,16 @@ function NutritionRows({ data }: { data: RecipeNutrition }) {
         return (
           <Stack key={row.key} direction="row" sx={{ justifyContent: 'space-between' }}>
             <Typography variant="body2" color="text.secondary">{row.label}</Typography>
-            <Typography variant="body2" className="numeral">
+            <Typography
+              variant="body2"
+              className="numeral"
+              sx={value == null ? { color: 'warning.main' } : undefined}
+            >
               {value == null ? 'Unknown' : `${Math.round(value * 10) / 10} ${row.unit}`}
             </Typography>
           </Stack>
         );
       })}
-      <QualityNote quality={data.quality} />
     </Stack>
   );
-}
-
-function QualityNote({ quality }: { quality: RecipeNutrition['quality'] }) {
-  if (quality === 'known') return null;
-  if (quality === 'estimated') {
-    return (
-      <Alert severity="info">Estimated based on the product data available.</Alert>
-    );
-  }
-  if (quality === 'partial') return <Alert severity="warning">One or more ingredients lacks complete nutrition information.</Alert>;
-  return <Alert severity="warning">No nutrition information is available for the selected ingredients.</Alert>;
 }
