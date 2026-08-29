@@ -115,7 +115,7 @@ describe('RecipePage', () => {
     expect(screen.getByText("Some ingredients aren't matched yet.")).toBeInTheDocument();
     expect(screen.getByText('Not matched')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Match' })).toBeInTheDocument();
-    expect(screen.getByText('Per serving · estimated')).toBeInTheDocument();
+    expect(screen.getByText('Per serving (estimated)')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'About this nutrition' })).toBeInTheDocument();
   });
 });
