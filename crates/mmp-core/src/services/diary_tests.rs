@@ -432,7 +432,10 @@ fn seed_recipe_from(h: &Harness, owner: crate::domain::UserId) -> crate::domain:
     let product = seed_product(h, known_nutrition());
     let line = crate::domain::RecipeComponent {
         id: crate::domain::RecipeComponentId::new(),
-        product_id: product.id,
+        requirement: crate::domain::RecipeRequirement::Product {
+            product_id: product.id,
+        },
+        source_text: None,
         amount: ConsumedAmount::Measure(Quantity::new(Decimal::new(200, 0), Unit::Gram)),
         position: 0,
     };

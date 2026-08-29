@@ -99,17 +99,19 @@ export function useIngredients(params: IngredientListParams) {
   });
 }
 
-export function useIngredient(id: string) {
+export function useIngredient(id: string, options?: { enabled?: boolean }) {
   return useQuery({
     queryKey: keys.ingredient(id),
+    enabled: options?.enabled ?? true,
     queryFn: async () =>
       unwrap(await client.GET('/api/v1/ingredients/{id}', { params: { path: { id } } })),
   });
 }
 
-export function useIngredientProducts(id: string) {
+export function useIngredientProducts(id: string, options?: { enabled?: boolean }) {
   return useQuery({
     queryKey: keys.ingredientProducts(id),
+    enabled: options?.enabled ?? true,
     queryFn: async () =>
       unwrap(
         await client.GET('/api/v1/ingredients/{id}/products', { params: { path: { id } } }),
@@ -828,6 +830,32 @@ export function useDeleteRecipePhoto() {
     onSuccess: (updated: Recipe) => {
       qc.setQueryData(keys.recipe(updated.id), updated);
       void qc.invalidateQueries({ queryKey: ['recipes'] });
+    },
+  });
+}
+
+export function useResolveRecipeComponent() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: {
+      id: string;
+      componentId: string;
+      revision: number;
+      body: components['schemas']['ResolveComponentRequest'];
+    }) =>
+      unwrap(
+        await client.POST('/api/v1/recipes/{id}/components/{component_id}/resolve', {
+          params: {
+            path: { id: input.id, component_id: input.componentId },
+            header: ifMatch(input.revision),
+          },
+          body: input.body,
+        }),
+      ),
+    onSuccess: (updated: Recipe) => {
+      qc.setQueryData(keys.recipe(updated.id), updated);
+      void qc.invalidateQueries({ queryKey: ['recipes'] });
+      void qc.invalidateQueries({ queryKey: keys.recipeNutrition(updated.id) });
     },
   });
 }

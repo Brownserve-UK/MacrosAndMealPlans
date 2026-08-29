@@ -660,6 +660,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/recipes/{id}/components/{component_id}/resolve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["resolveRecipeComponent"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/recipes/{id}/nutrition": {
         parameters: {
             query?: never;
@@ -861,6 +877,8 @@ export interface components {
         AmountKindDto: "measure" | "servings" | "packs";
         /** @enum {string} */
         CatalogueOrigin: "seeded" | "local" | "external";
+        /** @enum {string} */
+        ComponentNutritionSource: "known" | "estimated" | "none";
         ConsumptionRecordDto: components["schemas"]["MealItemRefDto"] & {
             amount: components["schemas"]["AmountDto"];
             /** Format: date-time */
@@ -1303,7 +1321,7 @@ export interface components {
             sugar_g?: number | null;
         };
         /** @enum {string} */
-        NutritionQuality: "known" | "partial" | "unknown";
+        NutritionQuality: "known" | "estimated" | "partial" | "unknown";
         NutritionSummaryDto: {
             nutrition: components["schemas"]["NutritionDto"];
             /** Format: int64 */
@@ -1442,20 +1460,22 @@ export interface components {
         };
         RecipeComponentDto: {
             amount: components["schemas"]["AmountDto"];
+            /** Format: int64 */
+            candidate_product_count?: number | null;
             /** Format: uuid */
             id: string;
+            name: string;
+            nutrition_source: components["schemas"]["ComponentNutritionSource"];
             /** Format: int32 */
             position: number;
-            /** Format: uuid */
-            product_id: string;
-            product_name: string;
+            requirement: components["schemas"]["RecipeRequirementDto"];
+            source_text?: string | null;
         };
         RecipeComponentRequest: {
             amount: components["schemas"]["AmountDto"];
             /** Format: uuid */
             id?: string | null;
-            /** Format: uuid */
-            product_id: string;
+            requirement: components["schemas"]["RecipeRequirementDto"];
         };
         RecipeDto: {
             /** Format: date-time */
@@ -1523,6 +1543,21 @@ export interface components {
         RecipePage: components["schemas"]["PageMeta"] & {
             items: components["schemas"]["RecipeSummaryDto"][];
         };
+        RecipeRequirementDto: {
+            /** Format: uuid */
+            ingredient_id: string;
+            /** @enum {string} */
+            kind: "ingredient";
+        } | {
+            /** @enum {string} */
+            kind: "product";
+            /** Format: uuid */
+            product_id: string;
+        } | {
+            /** @enum {string} */
+            kind: "unresolved";
+            text: string;
+        };
         RecipeSummaryDto: {
             /** Format: date-time */
             archived_at?: string | null;
@@ -1545,11 +1580,24 @@ export interface components {
             /** Format: int32 */
             servings: number;
             tags: string[];
+            /** Format: int64 */
+            unresolved_count: number;
             /** Format: date-time */
             updated_at: string;
         };
         /** @enum {string} */
         RecipeVisibility: "private" | "shared";
+        ResolveComponentRequest: {
+            /** Format: uuid */
+            ingredient_id: string;
+            /** @enum {string} */
+            kind: "ingredient";
+        } | {
+            /** @enum {string} */
+            kind: "product";
+            /** Format: uuid */
+            product_id: string;
+        };
         /** @enum {string} */
         Role: "admin" | "household_manager" | "nutritionist" | "basic_user";
         SetMappingRequest: {
@@ -3738,6 +3786,38 @@ export interface operations {
         requestBody?: never;
         responses: {
             /** @description Archived */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecipeDto"];
+                };
+            };
+        };
+    };
+    resolveRecipeComponent: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The revision you loaded */
+                "If-Match": string;
+            };
+            path: {
+                /** @description Recipe id */
+                id: string;
+                /** @description Component id */
+                component_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResolveComponentRequest"];
+            };
+        };
+        responses: {
+            /** @description Resolved */
             200: {
                 headers: {
                     [name: string]: unknown;

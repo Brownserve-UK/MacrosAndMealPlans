@@ -157,6 +157,13 @@ function RecipeCard({ recipe }: { recipe: RecipeSummary }) {
           )}
           {recipe.archived_at ? (
             <Chip label="Archived" size="small" sx={{ position: 'absolute', top: 12, right: 12 }} />
+          ) : recipe.unresolved_count > 0 ? (
+            <Chip
+              label="Needs matching"
+              color="warning"
+              size="small"
+              sx={{ position: 'absolute', top: 12, right: 12 }}
+            />
           ) : null}
         </Box>
         <Stack spacing={1.5} sx={{ p: 2.5 }}>

@@ -296,6 +296,24 @@ impl ProductRepository for InMemoryProductRepository {
         Ok(counts)
     }
 
+    async fn list_by_ingredient(
+        &self,
+        ingredient_ids: &[IngredientId],
+    ) -> Result<std::collections::HashMap<IngredientId, Vec<Product>>> {
+        let rows = self.rows.lock().unwrap();
+        let mut grouped = std::collections::HashMap::new();
+        for id in ingredient_ids {
+            let mut products: Vec<Product> = rows
+                .values()
+                .filter(|p| !p.is_archived() && p.mapped_ingredient_id == Some(*id))
+                .cloned()
+                .collect();
+            products.sort_by_key(|product| product.name.to_lowercase());
+            grouped.insert(*id, products);
+        }
+        Ok(grouped)
+    }
+
     async fn insert(&self, product: &Product) -> Result<()> {
         self.rows
             .lock()
@@ -1180,6 +1198,11 @@ impl RecipeRepository for InMemoryRecipeRepository {
                 preparation_minutes: recipe.preparation_minutes,
                 cooking_minutes: recipe.cooking_minutes,
                 component_count: recipe.components.len() as i64,
+                unresolved_count: recipe
+                    .components
+                    .iter()
+                    .filter(|component| component.requirement.is_unresolved())
+                    .count() as i64,
                 meal_categories: recipe.meal_categories.clone(),
                 country_categories: recipe.country_categories.clone(),
                 tags: recipe.tags.clone(),

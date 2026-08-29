@@ -14,6 +14,8 @@ use crate::ports::{
     RecipeRepository, UpdateOutcome,
 };
 
+use super::fulfilment::RecipeFulfilments;
+
 const CONSUMPTION_RECORD: &str = "consumption record";
 const PRODUCT: &str = "product";
 const RECIPE: &str = "recipe";
@@ -248,25 +250,15 @@ impl DiaryService {
                     errors.push("amount", "Recipes are measured in servings");
                     return Err(errors.into());
                 }
-                let recipe_products = self
-                    .products
-                    .get_many(
-                        &recipe
-                            .components
-                            .iter()
-                            .map(|component| component.product_id)
-                            .collect::<Vec<_>>(),
-                    )
-                    .await?
-                    .into_iter()
-                    .map(|product| (product.id, product))
-                    .collect::<std::collections::HashMap<_, _>>();
+                let requirements: Vec<&crate::domain::RecipeRequirement> = recipe
+                    .components
+                    .iter()
+                    .map(|component| &component.requirement)
+                    .collect();
+                let fulfilments = RecipeFulfilments::load(&*self.products, &requirements).await?;
                 let per_serving = recipe_nutrition(
                     recipe.components.iter().map(|component| {
-                        (
-                            &component.amount,
-                            recipe_products.get(&component.product_id),
-                        )
+                        (&component.amount, fulfilments.get(&component.requirement))
                     }),
                     recipe.servings,
                 );

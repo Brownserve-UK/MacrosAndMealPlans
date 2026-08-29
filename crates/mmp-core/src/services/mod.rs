@@ -1,5 +1,6 @@
 mod catalogue;
 mod diary;
+mod fulfilment;
 mod household;
 mod household_settings;
 mod meal_plan;
@@ -16,5 +17,5 @@ pub use meal_plan::{
     MealPlanService, MealPlanWeek, MealSlotView, NutritionSummary,
 };
 pub use nutrition_target::NutritionTargetService;
-pub use recipe::RecipeService;
+pub use recipe::{RecipeNames, RecipeService, ResolveRequirement};
 pub use seed::{SeedIngredient, SeedReport};

@@ -42,17 +42,19 @@ async fn app() -> Router {
         .expect("the bootstrap admin should be created");
 
     let products = InMemoryProductRepository::new();
+    let ingredients = Arc::new(InMemoryIngredientRepository::new());
     let consumption = InMemoryConsumptionRecordRepository::new();
     let targets = InMemoryNutritionTargetRepository::new();
     let recipes_repo = Arc::new(InMemoryRecipeRepository::new());
     let recipes = RecipeService::new(
         recipes_repo.clone(),
         Arc::new(products.clone()),
+        ingredients.clone(),
         clock.clone(),
     );
     let state = AppState::new(
         CatalogueService::new(
-            Arc::new(InMemoryIngredientRepository::new()),
+            ingredients.clone(),
             Arc::new(products.clone()),
             clock.clone(),
         ),
@@ -2434,7 +2436,7 @@ async fn creates_a_recipe_and_derives_its_nutrition() {
             "country_categories": ["GB"],
             "tags": ["Quick", "quick"],
             "components": [
-                {"product_id": product_id, "amount": measured_amount(100.0)}
+                {"requirement": {"kind": "product", "product_id": product_id}, "amount": measured_amount(100.0)}
             ]
         })),
     )
@@ -2449,11 +2451,13 @@ async fn creates_a_recipe_and_derives_its_nutrition() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{fetched}");
-    assert_eq!(fetched["components"][0]["product_id"], product_id);
     assert_eq!(
-        fetched["components"][0]["product_name"],
-        "Tesco Whole Milk 1L"
+        fetched["components"][0]["requirement"]["product_id"],
+        product_id
     );
+    assert_eq!(fetched["components"][0]["requirement"]["kind"], "product");
+    assert_eq!(fetched["components"][0]["name"], "Tesco Whole Milk 1L");
+    assert_eq!(fetched["components"][0]["nutrition_source"], "known");
     assert_eq!(fetched["instructions"][0]["text"], "Warm gently");
     assert_eq!(fetched["tags"], json!(["Quick"]));
     assert!(!etag(&headers).is_empty());
@@ -2477,7 +2481,7 @@ async fn uploads_caches_and_deletes_a_recipe_photo() {
         Call::new("POST", "/api/v1/recipes").body(json!({
             "name": "Photo recipe",
             "servings": 1,
-            "components": [{"product_id": product["id"], "amount": measured_amount(100.0)}]
+            "components": [{"requirement": {"kind": "product", "product_id": product["id"]}, "amount": measured_amount(100.0)}]
         })),
     )
     .await;
@@ -2621,7 +2625,7 @@ async fn create_recipe(app: &Router, name: &str, product_id: &Value) -> Value {
         Call::new("POST", "/api/v1/recipes").body(json!({
             "name": name,
             "servings": 1,
-            "components": [{"product_id": product_id, "amount": measured_amount(100.0)}]
+            "components": [{"requirement": {"kind": "product", "product_id": product_id}, "amount": measured_amount(100.0)}]
         })),
     )
     .await;
@@ -2720,4 +2724,89 @@ async fn lists_recipes_with_search_and_pagination() {
     let (_, body, _) = send(&app, Call::new("GET", "/api/v1/recipes?q=lemon")).await;
     assert_eq!(body["total"], 1);
     assert_eq!(body["items"][0]["name"], "Lemon Drizzle");
+}
+
+#[tokio::test]
+async fn a_recipe_estimates_nutrition_for_a_generic_ingredient() {
+    let app = app().await;
+    let product = create_milk_product(&app).await;
+    let ingredient = create_ingredient(&app, "Whole Milk").await;
+    let ingredient_id = ingredient["id"].as_str().unwrap();
+
+    // Map the product to the ingredient so there is a nutrition source.
+    let (status, _, _) = send(
+        &app,
+        Call::new(
+            "PUT",
+            format!(
+                "/api/v1/products/{}/ingredient",
+                product["id"].as_str().unwrap()
+            ),
+        )
+        .if_match(product["revision"].as_i64().unwrap())
+        .body(json!({ "ingredient_id": ingredient_id })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, recipe, _) = send(
+        &app,
+        Call::new("POST", "/api/v1/recipes").body(json!({
+            "name": "Milk drink",
+            "servings": 1,
+            "components": [
+                {"requirement": {"kind": "ingredient", "ingredient_id": ingredient_id}, "amount": measured_amount(100.0)},
+                {"requirement": {"kind": "unresolved", "text": "Nutmeg"}, "amount": measured_amount(1.0)}
+            ]
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{recipe}");
+    let recipe_id = recipe["id"].as_str().unwrap().to_owned();
+    assert_eq!(recipe["components"][0]["nutrition_source"], "estimated");
+
+    let (_, fetched, _) = send(
+        &app,
+        Call::new("GET", format!("/api/v1/recipes/{recipe_id}")),
+    )
+    .await;
+    let unresolved_id = fetched["components"][1]["id"].as_str().unwrap().to_owned();
+
+    let (status, nutrition, _) = send(
+        &app,
+        Call::new("GET", format!("/api/v1/recipes/{recipe_id}/nutrition")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{nutrition}");
+    // One resolved estimate plus one unresolved line => incomplete overall.
+    assert_eq!(nutrition["quality"], "partial");
+
+    // Resolving without If-Match is refused.
+    let (status, _, _) = send(
+        &app,
+        Call::new(
+            "POST",
+            format!("/api/v1/recipes/{recipe_id}/components/{unresolved_id}/resolve"),
+        )
+        .body(json!({ "kind": "ingredient", "ingredient_id": ingredient_id })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::PRECONDITION_REQUIRED);
+
+    let (status, resolved, _) = send(
+        &app,
+        Call::new(
+            "POST",
+            format!("/api/v1/recipes/{recipe_id}/components/{unresolved_id}/resolve"),
+        )
+        .if_match(fetched["revision"].as_i64().unwrap())
+        .body(json!({ "kind": "ingredient", "ingredient_id": ingredient_id })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{resolved}");
+    assert_eq!(
+        resolved["components"][1]["requirement"]["kind"],
+        "ingredient"
+    );
+    assert_eq!(resolved["components"][1]["source_text"], "Nutmeg");
 }

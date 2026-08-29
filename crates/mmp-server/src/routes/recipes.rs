@@ -4,7 +4,7 @@ use axum::extract::{DefaultBodyLimit, Path, Query, State};
 use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE, ETAG, IF_NONE_MATCH, VARY};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
-use mmp_core::domain::{RecipeId, UserId};
+use mmp_core::domain::{RecipeComponentId, RecipeId, UserId};
 use mmp_core::ports::{PageRequest, RecipeQuery};
 use mmp_core::{CoreError, ValidationErrors};
 use utoipa_axum::router::OpenApiRouter;
@@ -14,7 +14,7 @@ use uuid::Uuid;
 use crate::auth::{Permission, Principal};
 use crate::dto::{
     CreateRecipeRequest, RecipeDto, RecipeListQuery, RecipeNutritionDto,
-    RecipeNutritionPreviewRequest, RecipePage, UpdateRecipeRequest,
+    RecipeNutritionPreviewRequest, RecipePage, ResolveComponentRequest, UpdateRecipeRequest,
 };
 use crate::error::ApiResult;
 use crate::http::{Created, IfMatch, Tagged};
@@ -29,6 +29,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(get_one, update))
         .routes(routes!(archive))
         .routes(routes!(unarchive))
+        .routes(routes!(resolve_component))
         .routes(routes!(nutrition))
         .routes(routes!(nutrition_preview))
         .routes(routes!(get_photo, delete_photo))
@@ -95,10 +96,10 @@ async fn create(
         .recipes
         .create_recipe(body.into_domain(principal.user_id))
         .await?;
-    let products = state.recipes.products_for(&created).await?;
+    let names = state.recipes.names_for(&created).await?;
     Ok(Created(
         created.revision,
-        RecipeDto::from_domain(created, &products),
+        RecipeDto::from_domain(created, &names),
     ))
 }
 
@@ -125,10 +126,10 @@ async fn get_one(
         .recipes
         .get_recipe(RecipeId::from(id), principal.user_id)
         .await?;
-    let products = state.recipes.products_for(&recipe).await?;
+    let names = state.recipes.names_for(&recipe).await?;
     Ok(Tagged(
         recipe.revision,
-        RecipeDto::from_domain(recipe, &products),
+        RecipeDto::from_domain(recipe, &names),
     ))
 }
 
@@ -161,10 +162,10 @@ async fn update(
         .recipes
         .update_recipe(RecipeId::from(id), revision, body.into(), principal.user_id)
         .await?;
-    let products = state.recipes.products_for(&updated).await?;
+    let names = state.recipes.names_for(&updated).await?;
     Ok(Tagged(
         updated.revision,
-        RecipeDto::from_domain(updated, &products),
+        RecipeDto::from_domain(updated, &names),
     ))
 }
 
@@ -210,6 +211,45 @@ async fn unarchive(
     set_archived(state, principal, id, revision, false).await
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/v1/recipes/{id}/components/{component_id}/resolve",
+    operation_id = "resolveRecipeComponent",
+    params(
+        ("id" = Uuid, Path, description = "Recipe id"),
+        ("component_id" = Uuid, Path, description = "Component id"),
+        ("If-Match" = String, Header, description = "The revision you loaded"),
+    ),
+    request_body = ResolveComponentRequest,
+    responses((status = 200, description = "Resolved", body = RecipeDto)),
+    tag = "recipes",
+    security(("basic" = []))
+)]
+async fn resolve_component(
+    State(state): State<AppState>,
+    principal: Principal,
+    Path((id, component_id)): Path<(Uuid, Uuid)>,
+    IfMatch(revision): IfMatch,
+    Json(body): Json<ResolveComponentRequest>,
+) -> ApiResult<Tagged<RecipeDto>> {
+    principal.require(Permission::CatalogueWrite)?;
+    let updated = state
+        .recipes
+        .resolve_component(
+            RecipeId::from(id),
+            revision,
+            RecipeComponentId::from(component_id),
+            body.into(),
+            principal.user_id,
+        )
+        .await?;
+    let names = state.recipes.names_for(&updated).await?;
+    Ok(Tagged(
+        updated.revision,
+        RecipeDto::from_domain(updated, &names),
+    ))
+}
+
 async fn set_archived(
     state: AppState,
     principal: Principal,
@@ -222,10 +262,10 @@ async fn set_archived(
         .recipes
         .set_recipe_archived(RecipeId::from(id), revision, archived, principal.user_id)
         .await?;
-    let products = state.recipes.products_for(&updated).await?;
+    let names = state.recipes.names_for(&updated).await?;
     Ok(Tagged(
         updated.revision,
-        RecipeDto::from_domain(updated, &products),
+        RecipeDto::from_domain(updated, &names),
     ))
 }
 
@@ -349,10 +389,10 @@ async fn put_photo(
         .recipes
         .replace_photo(RecipeId::from(id), revision, derivatives, principal.user_id)
         .await?;
-    let products = state.recipes.products_for(&updated).await?;
+    let names = state.recipes.names_for(&updated).await?;
     Ok(Tagged(
         updated.revision,
-        RecipeDto::from_domain(updated, &products),
+        RecipeDto::from_domain(updated, &names),
     ))
 }
 
@@ -438,10 +478,10 @@ async fn delete_photo(
         .recipes
         .delete_photo(RecipeId::from(id), revision, principal.user_id)
         .await?;
-    let products = state.recipes.products_for(&updated).await?;
+    let names = state.recipes.names_for(&updated).await?;
     Ok(Tagged(
         updated.revision,
-        RecipeDto::from_domain(updated, &products),
+        RecipeDto::from_domain(updated, &names),
     ))
 }
 

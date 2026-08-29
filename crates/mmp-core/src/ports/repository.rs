@@ -149,6 +149,16 @@ pub trait AccessGrantRepository: Send + Sync + 'static {
 pub trait IngredientRepository: Send + Sync + 'static {
     async fn get(&self, id: IngredientId) -> Result<Option<Ingredient>>;
 
+    async fn get_many(&self, ids: &[IngredientId]) -> Result<Vec<Ingredient>> {
+        let mut ingredients = Vec::with_capacity(ids.len());
+        for id in ids {
+            if let Some(ingredient) = self.get(*id).await? {
+                ingredients.push(ingredient);
+            }
+        }
+        Ok(ingredients)
+    }
+
     async fn find_by_name(&self, name: &str) -> Result<Option<Ingredient>>;
 
     async fn find_by_seed_key(&self, seed_key: &str) -> Result<Option<Ingredient>>;
@@ -184,6 +194,11 @@ pub trait ProductRepository: Send + Sync + 'static {
         &self,
         ingredient_ids: &[IngredientId],
     ) -> Result<HashMap<IngredientId, i64>>;
+
+    async fn list_by_ingredient(
+        &self,
+        ingredient_ids: &[IngredientId],
+    ) -> Result<HashMap<IngredientId, Vec<Product>>>;
 
     async fn insert(&self, product: &Product) -> Result<()>;
 

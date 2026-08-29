@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::fmt;
 use std::str::FromStr;
 
@@ -65,13 +66,15 @@ pub enum AmountError {
 #[serde(rename_all = "snake_case")]
 pub enum NutritionQuality {
     Known,
+    Estimated,
     Partial,
     Unknown,
 }
 
 impl NutritionQuality {
-    pub const ALL: [NutritionQuality; 3] = [
+    pub const ALL: [NutritionQuality; 4] = [
         NutritionQuality::Known,
+        NutritionQuality::Estimated,
         NutritionQuality::Partial,
         NutritionQuality::Unknown,
     ];
@@ -79,6 +82,7 @@ impl NutritionQuality {
     pub const fn code(&self) -> &'static str {
         match self {
             NutritionQuality::Known => "known",
+            NutritionQuality::Estimated => "estimated",
             NutritionQuality::Partial => "partial",
             NutritionQuality::Unknown => "unknown",
         }
@@ -179,6 +183,41 @@ fn add_optional(a: Option<Decimal>, b: Option<Decimal>) -> Option<Decimal> {
         (Some(x), None) => Some(x),
         (None, Some(y)) => Some(y),
         (Some(x), Some(y)) => Some(x + y),
+    }
+}
+
+pub fn mean_nutrition<'a>(facts: impl IntoIterator<Item = &'a NutritionFacts>) -> NutritionFacts {
+    let facts: Vec<&NutritionFacts> = facts.into_iter().collect();
+
+    fn mean(values: impl Iterator<Item = Option<Decimal>>) -> Option<Decimal> {
+        let present: Vec<Decimal> = values.flatten().collect();
+        (!present.is_empty())
+            .then(|| present.iter().copied().sum::<Decimal>() / Decimal::from(present.len()))
+    }
+
+    let mut extra_keys: BTreeSet<&String> = BTreeSet::new();
+    for f in &facts {
+        extra_keys.extend(f.extra.keys());
+    }
+    let extra = extra_keys
+        .into_iter()
+        .filter_map(|key| {
+            mean(facts.iter().map(|f| f.extra.get(key).copied())).map(|value| (key.clone(), value))
+        })
+        .collect();
+
+    NutritionFacts {
+        basis: None,
+        energy_kcal: mean(facts.iter().map(|f| f.energy_kcal)),
+        protein_g: mean(facts.iter().map(|f| f.protein_g)),
+        carbohydrate_g: mean(facts.iter().map(|f| f.carbohydrate_g)),
+        sugar_g: mean(facts.iter().map(|f| f.sugar_g)),
+        fat_g: mean(facts.iter().map(|f| f.fat_g)),
+        saturated_fat_g: mean(facts.iter().map(|f| f.saturated_fat_g)),
+        fibre_g: mean(facts.iter().map(|f| f.fibre_g)),
+        salt_g: mean(facts.iter().map(|f| f.salt_g)),
+        cholesterol_mg: mean(facts.iter().map(|f| f.cholesterol_mg)),
+        extra,
     }
 }
 

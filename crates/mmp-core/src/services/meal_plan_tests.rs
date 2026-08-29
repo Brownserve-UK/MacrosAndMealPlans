@@ -129,7 +129,8 @@ fn recipe(name: &str, owner_id: UserId, servings: i32, components: Vec<RecipeCom
 fn recipe_line(product_id: ProductId, grams: i64) -> RecipeComponent {
     RecipeComponent {
         id: crate::domain::RecipeComponentId::new(),
-        product_id,
+        requirement: crate::domain::RecipeRequirement::Product { product_id },
+        source_text: None,
         amount: ConsumedAmount::Measure(Quantity::new(Decimal::new(grams, 0), Unit::Gram)),
         position: 0,
     }

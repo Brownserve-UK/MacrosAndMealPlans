@@ -96,6 +96,7 @@ pub fn stub_state() -> AppState {
         mmp_core::services::RecipeService::new(
             Arc::new(NoopRecipes),
             Arc::new(NoopProducts),
+            Arc::new(NoopIngredients),
             Arc::new(SystemClock),
         ),
         Arc::new(crate::auth::DevBasicAuthProvider::new(household, "")),
@@ -253,6 +254,14 @@ impl mmp_core::ports::ProductRepository for NoopProducts {
         &self,
         _: &[mmp_core::domain::IngredientId],
     ) -> mmp_core::Result<std::collections::HashMap<mmp_core::domain::IngredientId, i64>> {
+        Ok(Default::default())
+    }
+    async fn list_by_ingredient(
+        &self,
+        _: &[mmp_core::domain::IngredientId],
+    ) -> mmp_core::Result<
+        std::collections::HashMap<mmp_core::domain::IngredientId, Vec<mmp_core::domain::Product>>,
+    > {
         Ok(Default::default())
     }
     async fn get(

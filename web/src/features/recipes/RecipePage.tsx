@@ -24,11 +24,13 @@ import { ErrorState, Loading } from '../../components/States';
 import { formatAmount } from '../meal-plan/format';
 import { countryLabel, labelMealCategory } from './RecipesPage';
 import { RecipeImage } from './RecipeImage';
+import { ResolveComponentDialog } from './ResolveComponentDialog';
 
 export function RecipePage({ id }: { id: string }) {
   const query = useRecipe(id);
   const archive = useSetRecipeArchived();
   const [conflict, setConflict] = useState<ApiError | null>(null);
+  const [resolving, setResolving] = useState<{ componentId: string; text: string } | null>(null);
 
   if (query.isLoading) return <Loading label="Loading recipe" />;
   if (query.isError) return <ErrorState error={query.error} onRetry={() => query.refetch()} />;
@@ -52,6 +54,9 @@ export function RecipePage({ id }: { id: string }) {
     ...recipe.country_categories.map((country) => ({ key: `country-${country}`, label: countryLabel(country) })),
   ];
   const hasTime = recipe.preparation_minutes != null || recipe.cooking_minutes != null;
+  const hasUnmatched = recipe.components.some(
+    (component) => component.requirement.kind === 'unresolved',
+  );
 
   return (
     <>
@@ -78,6 +83,11 @@ export function RecipePage({ id }: { id: string }) {
       />
 
       {recipe.archived_at ? <Alert severity="info" sx={{ mb: 3 }}>Archived.</Alert> : null}
+      {hasUnmatched ? (
+        <Alert severity="warning" sx={{ mb: 3 }}>
+          Some ingredients aren't matched yet.
+        </Alert>
+      ) : null}
 
       <Stack spacing={3.5}>
         <Stack spacing={1.5}>
@@ -112,14 +122,38 @@ export function RecipePage({ id }: { id: string }) {
           <Grid size={{ xs: 12, md: 4 }}>
             <Stack spacing={3}>
               <Paper sx={{ p: { xs: 2.5, md: 3 } }}>
-                <Typography variant="h2" sx={{ mb: 2 }}>Products</Typography>
+                <Typography variant="h2" sx={{ mb: 2 }}>Ingredients</Typography>
                 <Stack spacing={1.5} divider={<Divider flexItem />}>
                   {recipe.components.map((component) => (
-                    <Stack key={component.id} direction="row" sx={{ justifyContent: 'space-between', gap: 2 }}>
-                      <Typography>{component.product_name}</Typography>
-                      <Typography color="text.secondary" sx={{ whiteSpace: 'nowrap' }}>
-                        {formatAmount(component.amount)}
-                      </Typography>
+                    <Stack key={component.id} spacing={0.75}>
+                      <Stack direction="row" sx={{ justifyContent: 'space-between', gap: 2 }}>
+                        <Typography>{component.name}</Typography>
+                        <Typography color="text.secondary" sx={{ whiteSpace: 'nowrap' }}>
+                          {formatAmount(component.amount)}
+                        </Typography>
+                      </Stack>
+                      <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
+                        {component.requirement.kind === 'unresolved' ? (
+                          <>
+                            <Chip size="small" color="warning" variant="outlined" label="Not matched" />
+                            <Button
+                              size="small"
+                              onClick={() =>
+                                setResolving({
+                                  componentId: component.id,
+                                  text: component.name,
+                                })
+                              }
+                            >
+                              Match
+                            </Button>
+                          </>
+                        ) : component.nutrition_source === 'estimated' ? (
+                          <Chip size="small" color="info" variant="outlined" label="Estimated" />
+                        ) : component.nutrition_source === 'none' ? (
+                          <Chip size="small" color="warning" variant="outlined" label="No nutrition" />
+                        ) : null}
+                      </Stack>
                     </Stack>
                   ))}
                 </Stack>
@@ -177,6 +211,16 @@ export function RecipePage({ id }: { id: string }) {
           void query.refetch();
         }}
       />
+      {resolving ? (
+        <ResolveComponentDialog
+          recipeId={recipe.id}
+          revision={recipe.revision}
+          componentId={resolving.componentId}
+          text={resolving.text}
+          onClose={() => setResolving(null)}
+          onConflict={setConflict}
+        />
+      ) : null}
     </>
   );
 }
@@ -269,7 +313,18 @@ function NutritionRows({ data }: { data: RecipeNutrition }) {
           </Stack>
         );
       })}
-      {data.quality !== 'known' ? <Alert severity="warning">Nutrition is incomplete.</Alert> : null}
+      <QualityNote quality={data.quality} />
     </Stack>
   );
+}
+
+function QualityNote({ quality }: { quality: RecipeNutrition['quality'] }) {
+  if (quality === 'known') return null;
+  if (quality === 'estimated') {
+    return (
+      <Alert severity="info">Estimated based on the product data available.</Alert>
+    );
+  }
+  if (quality === 'partial') return <Alert severity="warning">One or more ingredients lacks complete nutrition information.</Alert>;
+  return <Alert severity="warning">No nutrition information is available for the selected ingredients.</Alert>;
 }

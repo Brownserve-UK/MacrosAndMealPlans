@@ -9,10 +9,14 @@ export function IngredientPicker({
   value,
   onChange,
   disabled,
+  label = 'Ingredient',
+  helperText = 'Optional.',
 }: {
   value: Ingredient | null;
   onChange: (next: Ingredient | null) => void;
   disabled?: boolean;
+  label?: string;
+  helperText?: string;
 }) {
   const [input, setInput] = useState('');
   const debounced = useDebounced(input, 300);
@@ -30,12 +34,7 @@ export function IngredientPicker({
       loading={query.isLoading}
       disabled={disabled}
       renderInput={(params) => (
-        <TextField
-          {...params}
-          label="Ingredient"
-          placeholder="Search"
-          helperText="Optional."
-        />
+        <TextField {...params} label={label} placeholder="Search" helperText={helperText} />
       )}
     />
   );

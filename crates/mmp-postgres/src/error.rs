@@ -42,8 +42,9 @@ pub fn map_db_error(error: sqlx::Error, context: &str) -> CoreError {
     }
 }
 
-const TABLES: [(&str, &str); 9] = [
+const TABLES: [(&str, &str); 13] = [
     ("household_member_", "household member"),
+    ("household_settings_", "household settings"),
     ("member_access_grant_", "access grant"),
     ("ingredient_", "ingredient"),
     ("app_user_", "user"),
@@ -52,6 +53,9 @@ const TABLES: [(&str, &str); 9] = [
     ("meal_plan_entry_", "meal plan entry"),
     ("meal_plan_component_", "meal plan component"),
     ("nutrition_target_", "nutrition target"),
+    ("recipe_component_", "recipe component"),
+    ("recipe_instruction_", "recipe instruction"),
+    ("recipe_", "recipe"),
 ];
 
 const UNIQUE_CONSTRAINTS: [(&str, &str, &str); 17] = [
@@ -108,11 +112,17 @@ fn unique_violation(constraint: &str) -> Option<(&'static str, &'static str)> {
 }
 
 fn foreign_key_target(constraint: &str) -> &'static str {
+    if constraint.contains("recipe_id") {
+        return "recipe";
+    }
     if constraint.contains("ingredient_id") {
         return "ingredient";
     }
     if constraint.contains("product_id") {
         return "product";
+    }
+    if constraint.contains("recipe_component_id") {
+        return "recipe component";
     }
     if constraint.contains("meal_plan_component_id") {
         return "meal plan component";
@@ -123,7 +133,7 @@ fn foreign_key_target(constraint: &str) -> &'static str {
     if constraint.contains("member_id") {
         return "household member";
     }
-    "ingredient"
+    "referenced record"
 }
 
 fn constraint_field(constraint: &str) -> String {

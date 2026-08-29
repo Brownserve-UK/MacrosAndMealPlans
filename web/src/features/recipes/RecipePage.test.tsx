@@ -12,7 +12,38 @@ const recipe: Recipe = {
   preparation_minutes: 5,
   cooking_minutes: 10,
   notes: 'Best served straight away.',
-  components: [{ id: 'c1', product_id: 'p1', product_name: 'Whole Milk', amount: { kind: 'measure', value: 100, unit: 'g' }, position: 0 }],
+  components: [
+    {
+      id: 'c1',
+      requirement: { kind: 'product', product_id: 'p1' },
+      name: 'Whole Milk',
+      source_text: null,
+      nutrition_source: 'known',
+      candidate_product_count: null,
+      amount: { kind: 'measure', value: 100, unit: 'g' },
+      position: 0,
+    },
+    {
+      id: 'c2',
+      requirement: { kind: 'ingredient', ingredient_id: 'i1' },
+      name: 'Honey',
+      source_text: null,
+      nutrition_source: 'estimated',
+      candidate_product_count: 2,
+      amount: { kind: 'measure', value: 10, unit: 'g' },
+      position: 1,
+    },
+    {
+      id: 'c3',
+      requirement: { kind: 'unresolved', text: 'Nutmeg' },
+      name: 'Nutmeg',
+      source_text: null,
+      nutrition_source: 'none',
+      candidate_product_count: null,
+      amount: { kind: 'measure', value: 1, unit: 'g' },
+      position: 2,
+    },
+  ],
   instructions: [{ id: 's1', text: 'Warm the milk gently.', position: 0 }],
   meal_categories: ['snack'],
   country_categories: ['GB'],
@@ -32,8 +63,12 @@ vi.mock('@tanstack/react-router', () => ({
 
 vi.mock('../../api/queries', () => ({
   useRecipe: () => ({ data: recipe, isLoading: false, isError: false, refetch: vi.fn() }),
-  useRecipeNutrition: () => ({ data: { nutrition: { energy_kcal: 32, protein_g: 3.2 }, quality: 'known' } }),
+  useRecipeNutrition: () => ({ data: { nutrition: { energy_kcal: 32, protein_g: 3.2 }, quality: 'estimated' } }),
   useSetRecipeArchived: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  useResolveRecipeComponent: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  useCreateIngredient: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  useIngredients: () => ({ data: { items: [] }, isLoading: false }),
+  useProducts: () => ({ data: { items: [] }, isLoading: false }),
 }));
 
 function renderPage() {
@@ -73,5 +108,16 @@ describe('RecipePage', () => {
     renderPage();
     expect(screen.getByText('Best served straight away.')).toBeInTheDocument();
     expect(screen.getByText('Cosy')).toBeInTheDocument();
+  });
+
+  it('flags unmatched lines and estimated nutrition', () => {
+    renderPage();
+    expect(screen.getByText("Some ingredients aren't matched yet.")).toBeInTheDocument();
+    expect(screen.getByText('Not matched')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Match' })).toBeInTheDocument();
+    expect(screen.getByText('Estimated')).toBeInTheDocument();
+    expect(
+      screen.getByText('Estimated based on the product data available.'),
+    ).toBeInTheDocument();
   });
 });

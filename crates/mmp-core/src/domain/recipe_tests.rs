@@ -2,8 +2,9 @@ use rust_decimal::Decimal;
 use time::macros::datetime;
 
 use crate::domain::{
-    ConsumedAmount, NewRecipe, NewRecipeComponent, NutritionFacts, NutritionQuality, Product,
-    ProductId, Provenance, Quantity, Revision, Unit, UserId, recipe_nutrition,
+    ConsumedAmount, Fulfilment, NewRecipe, NewRecipeComponent, NutritionFacts, NutritionQuality,
+    Product, ProductId, Provenance, Quantity, RecipeRequirement, Revision, Unit, UserId,
+    recipe_nutrition,
 };
 
 fn d(value: i64) -> Decimal {
@@ -67,7 +68,7 @@ fn new_recipe(servings: i32, components: Vec<NewRecipeComponent>) -> NewRecipe {
 fn component(product_id: ProductId, amount: ConsumedAmount) -> NewRecipeComponent {
     NewRecipeComponent {
         id: None,
-        product_id,
+        requirement: RecipeRequirement::Product { product_id },
         amount,
     }
 }
@@ -79,7 +80,13 @@ fn aggregates_and_divides_by_servings() {
 
     // 200g of A => 400 kcal / 20 protein; 100g of B => 100 kcal / 5 protein.
     // Total 500 kcal / 25 protein across 4 servings => 125 kcal / 6.25 protein per serving.
-    let nutrition = recipe_nutrition([(&grams(200), Some(&a)), (&grams(100), Some(&b))], 4);
+    let nutrition = recipe_nutrition(
+        [
+            (&grams(200), Fulfilment::Pinned(&a)),
+            (&grams(100), Fulfilment::Pinned(&b)),
+        ],
+        4,
+    );
 
     assert_eq!(nutrition.facts.energy_kcal, Some(d(125)));
     assert_eq!(nutrition.facts.protein_g, Some(Decimal::new(625, 2)));
@@ -90,7 +97,13 @@ fn aggregates_and_divides_by_servings() {
 fn unresolved_line_drags_quality_to_partial() {
     let a = product_per_100g(200, 10);
 
-    let nutrition = recipe_nutrition([(&grams(100), Some(&a)), (&grams(50), None)], 1);
+    let nutrition = recipe_nutrition(
+        [
+            (&grams(100), Fulfilment::Pinned(&a)),
+            (&grams(50), Fulfilment::None),
+        ],
+        1,
+    );
 
     // The resolved line still contributes; the unresolved one is not guessed.
     assert_eq!(nutrition.facts.energy_kcal, Some(d(200)));
@@ -99,7 +112,7 @@ fn unresolved_line_drags_quality_to_partial() {
 
 #[test]
 fn all_unresolved_is_unknown() {
-    let nutrition = recipe_nutrition([(&grams(100), None)], 2);
+    let nutrition = recipe_nutrition([(&grams(100), Fulfilment::None)], 2);
     assert_eq!(nutrition.quality, NutritionQuality::Unknown);
     assert_eq!(nutrition.facts.energy_kcal, None);
 }
@@ -129,4 +142,26 @@ fn rejects_no_components() {
 fn rejects_a_non_positive_amount() {
     let recipe = new_recipe(2, vec![component(ProductId::new(), grams(0))]);
     assert!(recipe.validate().is_err());
+}
+
+#[test]
+fn quality_rolls_up_by_worst_case_precedence() {
+    use NutritionQuality::{Estimated, Known, Partial, Unknown};
+
+    let cases = [
+        (vec![], Unknown),
+        (vec![Unknown, Unknown], Unknown),
+        (vec![Known, Known], Known),
+        (vec![Known, Estimated], Estimated),
+        (vec![Estimated, Estimated], Estimated),
+        (vec![Known, Partial], Partial),
+        (vec![Estimated, Partial], Partial),
+        (vec![Estimated, Unknown], Partial),
+        (vec![Known, Unknown], Partial),
+        (vec![Known, Estimated, Partial], Partial),
+    ];
+
+    for (input, expected) in cases {
+        assert_eq!(super::rollup_quality(input.clone()), expected, "{input:?}");
+    }
 }

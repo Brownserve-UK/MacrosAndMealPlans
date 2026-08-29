@@ -9,7 +9,8 @@ use mmp_core::domain::{
     MealCategory, MealItemRef, MealPlanEntryId, MealPlanStatus, MealSlot, NewConsumptionRecord,
     NewHouseholdMember, NewMealPlanComponent, NewMealPlanEntry, NewNutritionTarget, NewProduct,
     NewRecipe, NewRecipeComponent, NewRecipeInstruction, NewUser, NutritionFacts, NutritionGoals,
-    Patch, ProductId, Provenance, Quantity, RecipeId, RecipePatch, Role, Unit, User, UserId,
+    Patch, ProductId, Provenance, Quantity, RecipeId, RecipePatch, RecipeRequirement, Role, Unit,
+    User, UserId,
 };
 use mmp_server::state::AppState;
 use rust_decimal::Decimal;
@@ -341,9 +342,9 @@ impl Loader<'_> {
                         components: spec
                             .components
                             .iter()
-                            .map(|(product_key, amount)| NewRecipeComponent {
+                            .map(|(line, amount)| NewRecipeComponent {
                                 id: None,
-                                product_id: product_id(product_key),
+                                requirement: line.requirement(),
                                 amount: *amount,
                             })
                             .collect(),
@@ -769,6 +770,15 @@ fn product_specs() -> Vec<ProductSpec> {
             nutrition: nutrition(100, Unit::Millilitre, [64, 3, 5, 5, 4, 2, 0, 0, 10]),
         },
         ProductSpec {
+            key: "whole-milk-value",
+            name: "Sample Value Whole Milk",
+            brand: Some("Sample Basics"),
+            ingredient_key: Some("whole-milk"),
+            package_quantity: Some(quantity(1000, Unit::Millilitre)),
+            servings_per_pack: Some(4),
+            nutrition: nutrition(100, Unit::Millilitre, [61, 3, 5, 5, 3, 2, 0, 0, 11]),
+        },
+        ProductSpec {
             key: "banana",
             name: "Sample Bananas",
             brand: None,
@@ -926,6 +936,28 @@ fn recipe_id(key: &str) -> RecipeId {
     RecipeId::from_uuid(sample_uuid("recipe", key))
 }
 
+enum RecipeLineSpec {
+    Ingredient(&'static str),
+    Product(&'static str),
+    Unresolved(&'static str),
+}
+
+impl RecipeLineSpec {
+    fn requirement(&self) -> RecipeRequirement {
+        match self {
+            RecipeLineSpec::Ingredient(key) => RecipeRequirement::Ingredient {
+                ingredient_id: IngredientId::seeded(key),
+            },
+            RecipeLineSpec::Product(key) => RecipeRequirement::Product {
+                product_id: product_id(key),
+            },
+            RecipeLineSpec::Unresolved(text) => RecipeRequirement::Unresolved {
+                text: (*text).to_owned(),
+            },
+        }
+    }
+}
+
 struct RecipeSpec {
     key: &'static str,
     name: &'static str,
@@ -934,7 +966,7 @@ struct RecipeSpec {
     preparation_minutes: i32,
     cooking_minutes: i32,
     notes: &'static str,
-    components: Vec<(&'static str, ConsumedAmount)>,
+    components: Vec<(RecipeLineSpec, ConsumedAmount)>,
     instructions: Vec<&'static str>,
     meal_categories: Vec<MealCategory>,
     country_categories: Vec<&'static str>,
@@ -954,14 +986,17 @@ fn recipe_specs() -> Vec<RecipeSpec> {
             notes: "Add the banana just before serving.",
             components: vec![
                 (
-                    "rolled-oats",
+                    RecipeLineSpec::Ingredient("rolled-oats"),
                     ConsumedAmount::Measure(quantity(100, Unit::Gram)),
                 ),
                 (
-                    "whole-milk",
+                    RecipeLineSpec::Ingredient("whole-milk"),
                     ConsumedAmount::Measure(quantity(400, Unit::Millilitre)),
                 ),
-                ("banana", ConsumedAmount::Measure(quantity(1, Unit::Item))),
+                (
+                    RecipeLineSpec::Ingredient("banana"),
+                    ConsumedAmount::Measure(quantity(1, Unit::Item)),
+                ),
             ],
             instructions: vec![
                 "Add the oats and milk to a saucepan.",
@@ -983,11 +1018,11 @@ fn recipe_specs() -> Vec<RecipeSpec> {
             notes: "Rest the chicken for five minutes before serving.",
             components: vec![
                 (
-                    "chicken-breast",
+                    RecipeLineSpec::Product("chicken-breast"),
                     ConsumedAmount::Measure(quantity(600, Unit::Gram)),
                 ),
                 (
-                    "basmati-rice",
+                    RecipeLineSpec::Ingredient("basmati-rice"),
                     ConsumedAmount::Measure(quantity(300, Unit::Gram)),
                 ),
             ],
@@ -1001,6 +1036,33 @@ fn recipe_specs() -> Vec<RecipeSpec> {
             country_categories: vec!["IN"],
             tags: vec!["Family favourite", "High protein"],
             photo: true,
+        },
+        RecipeSpec {
+            key: "imported-rice-bowl",
+            name: "Imported Rice Bowl",
+            servings: 2,
+            description: "A quick bowl imported from a friend's collection, still being tidied up.",
+            preparation_minutes: 5,
+            cooking_minutes: 15,
+            notes: "Match the imported ingredient to your catalogue when you get a moment.",
+            components: vec![
+                (
+                    RecipeLineSpec::Ingredient("basmati-rice"),
+                    ConsumedAmount::Measure(quantity(200, Unit::Gram)),
+                ),
+                (
+                    RecipeLineSpec::Unresolved("Jasmin Rice"),
+                    ConsumedAmount::Measure(quantity(50, Unit::Gram)),
+                ),
+            ],
+            instructions: vec![
+                "Rinse the rice until the water runs clear.",
+                "Simmer until tender, then fluff and serve.",
+            ],
+            meal_categories: vec![MealCategory::Lunch],
+            country_categories: vec!["TH"],
+            tags: vec!["Quick"],
+            photo: false,
         },
     ]
 }

@@ -8,7 +8,8 @@ use mmp_core::domain::{
     MealPlanEntryId, MealPlanStatus, MealSlot, MemberAccessGrant, NutritionFacts, NutritionGoals,
     NutritionQuality, NutritionTarget, NutritionTargetId, Product, ProductId, Provenance, Quantity,
     Recipe, RecipeComponent, RecipeComponentId, RecipeId, RecipeInstruction, RecipeInstructionId,
-    RecipePhoto, RecipePhotoDerivatives, RecipeVisibility, Revision, Role, Unit, User, UserId,
+    RecipePhoto, RecipePhotoDerivatives, RecipeRequirement, RecipeVisibility, Revision, Role, Unit,
+    User, UserId,
 };
 use mmp_core::ports::{
     AccessGrantRepository, ConsumptionQuery, ConsumptionRecordRepository,
@@ -1840,7 +1841,30 @@ async fn seed_recipe_dependencies(pool: &PgPool) -> (UserId, ProductId, ProductI
 fn recipe_component(product_id: ProductId, position: i32) -> RecipeComponent {
     RecipeComponent {
         id: RecipeComponentId::new(),
-        product_id,
+        requirement: RecipeRequirement::Product { product_id },
+        source_text: None,
+        amount: ConsumedAmount::Measure(Quantity::new(Decimal::new(100, 0), Unit::Gram)),
+        position,
+    }
+}
+
+fn recipe_ingredient_component(ingredient_id: IngredientId, position: i32) -> RecipeComponent {
+    RecipeComponent {
+        id: RecipeComponentId::new(),
+        requirement: RecipeRequirement::Ingredient { ingredient_id },
+        source_text: None,
+        amount: ConsumedAmount::Measure(Quantity::new(Decimal::new(100, 0), Unit::Gram)),
+        position,
+    }
+}
+
+fn recipe_unresolved_component(text: &str, position: i32) -> RecipeComponent {
+    RecipeComponent {
+        id: RecipeComponentId::new(),
+        requirement: RecipeRequirement::Unresolved {
+            text: text.to_owned(),
+        },
+        source_text: None,
         amount: ConsumedAmount::Measure(Quantity::new(Decimal::new(100, 0), Unit::Gram)),
         position,
     }
@@ -1908,8 +1932,14 @@ async fn round_trips_a_recipe_with_ordered_components(pool: PgPool) {
     assert_eq!(loaded.visibility, RecipeVisibility::Private);
     assert_eq!(loaded.components.len(), 2);
     assert_eq!(loaded.components[0].position, 0);
-    assert_eq!(loaded.components[0].product_id, first);
-    assert_eq!(loaded.components[1].product_id, second);
+    assert_eq!(
+        loaded.components[0].requirement,
+        RecipeRequirement::Product { product_id: first }
+    );
+    assert_eq!(
+        loaded.components[1].requirement,
+        RecipeRequirement::Product { product_id: second }
+    );
     assert_eq!(loaded.description, original.description);
     assert_eq!(loaded.instructions, original.instructions);
     assert_eq!(loaded.meal_categories, vec![MealCategory::Dinner]);
@@ -2016,7 +2046,147 @@ async fn a_stale_recipe_update_is_rejected_and_keeps_components(pool: PgPool) {
     // The rollback must leave the original single component untouched.
     let loaded = repo.get(original.id).await.unwrap().unwrap();
     assert_eq!(loaded.components.len(), 1);
-    assert_eq!(loaded.components[0].product_id, first);
+    assert_eq!(
+        loaded.components[0].requirement,
+        RecipeRequirement::Product { product_id: first }
+    );
+}
+
+#[sqlx::test]
+async fn a_recipe_round_trips_every_requirement_kind(pool: PgPool) {
+    let (owner, product_id, _second) = seed_recipe_dependencies(&pool).await;
+    let ingredients = PgIngredientRepository::new(pool.clone());
+    let oats = ingredient("Rolled Oats");
+    ingredients.insert(&oats).await.unwrap();
+
+    let repo = PgRecipeRepository::new(pool.clone());
+    let mut dish = recipe(
+        owner,
+        vec![
+            recipe_component(product_id, 0),
+            recipe_ingredient_component(oats.id, 1),
+            recipe_unresolved_component("Jasmin Rice", 2),
+        ],
+    );
+    dish.components[1].source_text = Some("imported: Rolld Oats".to_owned());
+    repo.insert(&dish).await.unwrap();
+
+    let loaded = repo.get(dish.id).await.unwrap().unwrap();
+    assert_eq!(
+        loaded.components[0].requirement,
+        RecipeRequirement::Product { product_id }
+    );
+    assert_eq!(
+        loaded.components[1].requirement,
+        RecipeRequirement::Ingredient {
+            ingredient_id: oats.id
+        }
+    );
+    assert_eq!(
+        loaded.components[2].requirement,
+        RecipeRequirement::Unresolved {
+            text: "Jasmin Rice".to_owned()
+        }
+    );
+    assert_eq!(
+        loaded.components[1].source_text.as_deref(),
+        Some("imported: Rolld Oats")
+    );
+    assert_eq!(loaded.components[2].source_text, None);
+
+    let summaries = repo
+        .list(&RecipeQuery {
+            owner_id: owner,
+            include_archived: false,
+            search: None,
+            sort: SortDirection::Ascending,
+            page: PageRequest::default(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(summaries.items[0].unresolved_count, 1);
+}
+
+#[sqlx::test]
+async fn a_recipe_component_needs_exactly_one_requirement(pool: PgPool) {
+    let (owner, product_id, _second) = seed_recipe_dependencies(&pool).await;
+    let repo = PgRecipeRepository::new(pool.clone());
+    let dish = recipe(owner, vec![recipe_component(product_id, 0)]);
+    repo.insert(&dish).await.unwrap();
+
+    let none_set = sqlx::query(
+        "INSERT INTO recipe_component (id, recipe_id, position, amount_kind, amount_value, amount_unit) \
+         VALUES ($1, $2, 1, 'measure', 100, 'g')",
+    )
+    .bind(Uuid::now_v7())
+    .bind(dish.id.as_uuid())
+    .execute(&pool)
+    .await;
+    assert!(none_set.is_err());
+
+    let two_set = sqlx::query(
+        "INSERT INTO recipe_component (id, recipe_id, position, ingredient_id, unresolved_text, amount_kind, amount_value, amount_unit) \
+         VALUES ($1, $2, 1, $3, 'text', 'measure', 100, 'g')",
+    )
+    .bind(Uuid::now_v7())
+    .bind(dish.id.as_uuid())
+    .bind(product_id.as_uuid())
+    .execute(&pool)
+    .await;
+    assert!(two_set.is_err());
+}
+
+#[sqlx::test]
+async fn a_recipe_component_referencing_a_missing_ingredient_names_the_ingredient(pool: PgPool) {
+    let (owner, _first, _second) = seed_recipe_dependencies(&pool).await;
+    let repo = PgRecipeRepository::new(pool.clone());
+    let dish = recipe(
+        owner,
+        vec![recipe_ingredient_component(IngredientId::new(), 0)],
+    );
+
+    let error = repo.insert(&dish).await.unwrap_err();
+    assert!(
+        matches!(
+            error,
+            CoreError::NotFound {
+                resource: "ingredient",
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+}
+
+#[sqlx::test]
+async fn products_are_listed_by_the_ingredient_they_fulfil(pool: PgPool) {
+    let ingredients = PgIngredientRepository::new(pool.clone());
+    let products = PgProductRepository::new(pool.clone());
+    let oats = ingredient("Rolled Oats");
+    let rice = ingredient("Basmati Rice");
+    ingredients.insert(&oats).await.unwrap();
+    ingredients.insert(&rice).await.unwrap();
+
+    let mut branded = product("Sainsbury Oats");
+    branded.mapped_ingredient_id = Some(oats.id);
+    let mut own_brand = product("Tesco Oats");
+    own_brand.mapped_ingredient_id = Some(oats.id);
+    let mut archived = product("Discontinued Oats");
+    archived.mapped_ingredient_id = Some(oats.id);
+    archived.archived_at = Some(OffsetDateTime::now_utc());
+    for item in [&branded, &own_brand, &archived] {
+        products.insert(item).await.unwrap();
+    }
+
+    let grouped = products
+        .list_by_ingredient(&[oats.id, rice.id])
+        .await
+        .unwrap();
+    let oats_products = grouped.get(&oats.id).unwrap();
+    assert_eq!(oats_products.len(), 2);
+    assert_eq!(oats_products[0].name, "Sainsbury Oats");
+    assert_eq!(oats_products[1].name, "Tesco Oats");
+    assert!(grouped.get(&rice.id).is_none_or(Vec::is_empty));
 }
 
 #[sqlx::test]
@@ -2113,7 +2283,17 @@ async fn a_recipe_component_referencing_a_missing_recipe_is_rejected(pool: PgPoo
         display_order: Uuid::now_v7(),
     }];
 
-    assert!(repo.insert(&entry).await.is_err());
+    let error = repo.insert(&entry).await.unwrap_err();
+    assert!(
+        matches!(
+            error,
+            CoreError::NotFound {
+                resource: "recipe",
+                ..
+            }
+        ),
+        "{error:?}"
+    );
 }
 
 #[sqlx::test]

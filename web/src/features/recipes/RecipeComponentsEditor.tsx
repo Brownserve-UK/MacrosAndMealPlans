@@ -1,12 +1,26 @@
 import DeleteIcon from '@mui/icons-material/DeleteOutlineOutlined';
 import AddIcon from '@mui/icons-material/AddOutlined';
+import Autocomplete, { createFilterOptions } from '@mui/material/Autocomplete';
 import Button from '@mui/material/Button';
+import Chip from '@mui/material/Chip';
 import Divider from '@mui/material/Divider';
+import FormControlLabel from '@mui/material/FormControlLabel';
 import IconButton from '@mui/material/IconButton';
 import Stack from '@mui/material/Stack';
-import type { Amount, Product, RecipeComponent } from '../../api/client';
-import { useProduct } from '../../api/queries';
+import Switch from '@mui/material/Switch';
+import TextField from '@mui/material/TextField';
+import Typography from '@mui/material/Typography';
+import { useState } from 'react';
+import type { Amount, Ingredient, Product, RecipeComponent } from '../../api/client';
+import {
+  useCreateIngredient,
+  useIngredient,
+  useIngredientProducts,
+  useIngredients,
+  useProduct,
+} from '../../api/queries';
 import { Loading } from '../../components/States';
+import { useDebounced } from '../../hooks/useDebounced';
 import {
   AmountFields,
   amountDraftFrom,
@@ -14,27 +28,47 @@ import {
   validateAmountDraft,
   type AmountDraft,
 } from '../meal-plan/AmountFields';
-import { ProductPicker } from '../meal-plan/ProductPicker';
+
+type Requirement =
+  | {
+      kind: 'ingredient';
+      ingredientId: string | null;
+      ingredient: Ingredient | null;
+      pinned: boolean;
+      productId: string | null;
+      product: Product | null;
+    }
+  | { kind: 'unresolved'; text: string };
 
 export type ComponentLine = {
   key: string;
   id?: string;
-  productId: string | null;
-  product: Product | null;
+  requirement: Requirement;
   amount: AmountDraft;
 };
 
+type RequirementRequest =
+  | { kind: 'ingredient'; ingredient_id: string }
+  | { kind: 'product'; product_id: string }
+  | { kind: 'unresolved'; text: string };
+
 type ComponentRequest = {
   id?: string;
-  product_id: string;
+  requirement: RequirementRequest;
   amount: Amount;
 };
 
 export function newLine(): ComponentLine {
   return {
     key: crypto.randomUUID(),
-    productId: null,
-    product: null,
+    requirement: {
+      kind: 'ingredient',
+      ingredientId: null,
+      ingredient: null,
+      pinned: false,
+      productId: null,
+      product: null,
+    },
     amount: amountDraftFrom(null),
   };
 }
@@ -49,28 +83,74 @@ export function linesFromComponents(components: RecipeComponent[]): ComponentLin
   return components.map((component) => ({
     key: component.id,
     id: component.id,
-    productId: component.product_id,
-    product: null,
+    requirement: requirementFrom(component),
     amount: amountToDraft(component.amount),
   }));
 }
 
+function requirementFrom(component: RecipeComponent): Requirement {
+  const requirement = component.requirement;
+  if (requirement.kind === 'unresolved') {
+    return { kind: 'unresolved', text: requirement.text };
+  }
+  if (requirement.kind === 'product') {
+    return {
+      kind: 'ingredient',
+      ingredientId: null,
+      ingredient: null,
+      pinned: true,
+      productId: requirement.product_id,
+      product: null,
+    };
+  }
+  return {
+    kind: 'ingredient',
+    ingredientId: requirement.ingredient_id,
+    ingredient: null,
+    pinned: false,
+    productId: null,
+    product: null,
+  };
+}
+
+function lineIsValid(line: ComponentLine): boolean {
+  if (Object.keys(validateAmountDraft(line.amount)).length > 0) return false;
+  if (line.requirement.kind === 'unresolved') return line.requirement.text.trim().length > 0;
+  if (line.requirement.pinned) return line.requirement.productId != null;
+  return line.requirement.ingredientId != null;
+}
+
 export function linesAreValid(lines: ComponentLine[]): boolean {
   if (lines.length === 0) return false;
-  return lines.every(
-    (line) =>
-      line.productId != null && Object.keys(validateAmountDraft(line.amount)).length === 0,
-  );
+  return lines.every(lineIsValid);
 }
 
 export function linesToComponents(lines: ComponentLine[]): ComponentRequest[] | null {
   const out: ComponentRequest[] = [];
   for (const line of lines) {
     const amount = draftToAmount(line.amount);
-    if (!line.productId || !amount) return null;
-    out.push({ ...(line.id ? { id: line.id } : {}), product_id: line.productId, amount });
+    if (!amount) return null;
+    let requirement: RequirementRequest;
+    if (line.requirement.kind === 'unresolved') {
+      const text = line.requirement.text.trim();
+      if (!text) return null;
+      requirement = { kind: 'unresolved', text };
+    } else if (line.requirement.pinned) {
+      if (!line.requirement.productId) return null;
+      requirement = { kind: 'product', product_id: line.requirement.productId };
+    } else {
+      if (!line.requirement.ingredientId) return null;
+      requirement = { kind: 'ingredient', ingredient_id: line.requirement.ingredientId };
+    }
+    out.push({ ...(line.id ? { id: line.id } : {}), requirement, amount });
   }
   return out;
+}
+
+function chosenIngredientIds(lines: ComponentLine[]): string[] {
+  return lines
+    .map((line) => (line.requirement.kind === 'ingredient' ? line.requirement.ingredientId : null))
+    .filter((id): id is string => Boolean(id));
 }
 
 function ComponentLineEditor({
@@ -84,54 +164,243 @@ function ComponentLineEditor({
   onRemove: () => void;
   excludeIds: string[];
 }) {
-  const loaded = useProduct(line.productId ?? '', { enabled: Boolean(line.productId) && !line.product });
-  const product = line.product ?? loaded.data ?? null;
+  if (line.requirement.kind === 'unresolved') {
+    return (
+      <Stack direction="row" spacing={1.5} sx={{ alignItems: 'flex-start' }}>
+        <Stack spacing={1.5} sx={{ flexGrow: 1 }}>
+          <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
+            <Typography>{line.requirement.text}</Typography>
+            <Chip size="small" color="warning" variant="outlined" label="Not matched" />
+          </Stack>
+          <Typography variant="caption" color="text.secondary">
+            Match this from the recipe page.
+          </Typography>
+          <AmountFields
+            product={null}
+            draft={line.amount}
+            errors={{}}
+            onChange={(amount) => onChange({ ...line, amount })}
+            allowWithoutProduct
+          />
+        </Stack>
+        <IconButton aria-label="Remove line" onClick={onRemove} sx={{ mt: 1 }}>
+          <DeleteIcon fontSize="small" />
+        </IconButton>
+      </Stack>
+    );
+  }
+
+  const requirement = line.requirement;
 
   return (
     <Stack direction="row" spacing={1.5} sx={{ alignItems: 'flex-start' }}>
       <Stack spacing={2} sx={{ flexGrow: 1 }}>
-        <ProductPickerLoader
-          value={product}
-          loading={loaded.isLoading}
+        <IngredientField
+          ingredientId={requirement.ingredientId}
+          ingredient={requirement.ingredient}
           excludeIds={excludeIds}
-          onChange={(next) =>
+          onPick={(next) =>
             onChange({
               ...line,
-              product: next,
-              productId: next?.id ?? null,
-              amount: amountDraftFrom(next),
+              requirement: {
+                ...requirement,
+                ingredientId: next?.id ?? null,
+                ingredient: next,
+                // A different ingredient invalidates any pinned product.
+                productId: next?.id === requirement.ingredientId ? requirement.productId : null,
+                product: next?.id === requirement.ingredientId ? requirement.product : null,
+              },
+              amount:
+                next && !requirement.pinned
+                  ? { kind: 'measure', value: line.amount.value, unit: next.default_unit }
+                  : line.amount,
             })
           }
         />
-        {product ? (
-          <AmountFields
-            product={product}
-            draft={line.amount}
-            errors={{}}
-            onChange={(amount) => onChange({ ...line, amount })}
+
+        {requirement.ingredientId ? (
+          <FormControlLabel
+            control={
+              <Switch
+                size="small"
+                checked={requirement.pinned}
+                onChange={(event) =>
+                  onChange({
+                    ...line,
+                    requirement: {
+                      ...requirement,
+                      pinned: event.target.checked,
+                      productId: event.target.checked ? requirement.productId : null,
+                      product: event.target.checked ? requirement.product : null,
+                    },
+                  })
+                }
+              />
+            }
+            label={<Typography variant="body2">Use a specific product</Typography>}
           />
         ) : null}
+
+        {requirement.pinned && requirement.ingredientId ? (
+          <PinnedProductField
+            ingredientId={requirement.ingredientId}
+            productId={requirement.productId}
+            product={requirement.product}
+            onPick={(next) =>
+              onChange({
+                ...line,
+                requirement: { ...requirement, productId: next?.id ?? null, product: next },
+                amount: next ? amountDraftFrom(next) : line.amount,
+              })
+            }
+          />
+        ) : null}
+
+        <AmountFields
+          product={requirement.pinned ? requirement.product : null}
+          draft={line.amount}
+          errors={{}}
+          onChange={(amount) => onChange({ ...line, amount })}
+          allowWithoutProduct
+        />
       </Stack>
-      <IconButton aria-label="Remove product" onClick={onRemove} sx={{ mt: 1 }}>
+      <IconButton aria-label="Remove line" onClick={onRemove} sx={{ mt: 1 }}>
         <DeleteIcon fontSize="small" />
       </IconButton>
     </Stack>
   );
 }
 
-function ProductPickerLoader({
-  value,
-  loading,
+type IngredientOption = Ingredient | { create: true; inputValue: string; name: string };
+
+const filterIngredients = createFilterOptions<IngredientOption>();
+
+function IngredientField({
+  ingredientId,
+  ingredient,
   excludeIds,
-  onChange,
+  onPick,
 }: {
-  value: Product | null;
-  loading: boolean;
+  ingredientId: string | null;
+  ingredient: Ingredient | null;
   excludeIds: string[];
-  onChange: (next: Product | null) => void;
+  onPick: (next: Ingredient | null) => void;
 }) {
-  if (loading && !value) return <Loading label="Loading product" />;
-  return <ProductPicker value={value} onChange={onChange} excludeIds={excludeIds} />;
+  const [input, setInput] = useState('');
+  const debounced = useDebounced(input, 300);
+  const list = useIngredients({ q: debounced || undefined, per_page: 20 });
+  const createIngredient = useCreateIngredient();
+  const loaded = useIngredient(ingredientId ?? '', {
+    enabled: Boolean(ingredientId) && !ingredient,
+  });
+  const current = ingredient ?? loaded.data ?? null;
+
+  if (loaded.isLoading && !current) return <Loading label="Loading ingredient" />;
+
+  const excluded = new Set(excludeIds);
+  const options: IngredientOption[] = (list.data?.items ?? []).filter(
+    (item) => item.id === current?.id || !excluded.has(item.id),
+  );
+
+  async function choose(option: IngredientOption | null) {
+    if (option && 'create' in option) {
+      const created = await createIngredient.mutateAsync({
+        name: option.inputValue.trim(),
+        default_unit: 'g',
+      });
+      onPick(created);
+      return;
+    }
+    onPick(option);
+  }
+
+  return (
+    <Autocomplete<IngredientOption>
+      value={current}
+      onChange={(_, next) => void choose(next)}
+      inputValue={input}
+      onInputChange={(_, next) => setInput(next)}
+      options={options}
+      filterOptions={(opts, params) => {
+        const filtered = filterIngredients(opts, params);
+        const typed = params.inputValue.trim();
+        const exists = opts.some(
+          (opt) => 'name' in opt && opt.name.toLowerCase() === typed.toLowerCase(),
+        );
+        if (typed && !exists) {
+          filtered.push({ create: true, inputValue: typed, name: `Add "${typed}"` });
+        }
+        return filtered;
+      }}
+      getOptionLabel={(option) =>
+        'create' in option ? option.inputValue : option.name
+      }
+      renderOption={(props, option) => (
+        <li {...props} key={'create' in option ? '__create' : option.id}>
+          {option.name}
+        </li>
+      )}
+      isOptionEqualToValue={(a, b) =>
+        'create' in a || 'create' in b ? false : a.id === b.id
+      }
+      loading={list.isLoading || createIngredient.isPending}
+      renderInput={(params) => (
+        <TextField
+          {...params}
+          label="Ingredient"
+          placeholder="Search"
+          helperText="The generic food this recipe needs."
+        />
+      )}
+    />
+  );
+}
+
+function PinnedProductField({
+  ingredientId,
+  productId,
+  product,
+  onPick,
+}: {
+  ingredientId: string;
+  productId: string | null;
+  product: Product | null;
+  onPick: (next: Product | null) => void;
+}) {
+  const listed = useIngredientProducts(ingredientId);
+  const loaded = useProduct(productId ?? '', {
+    enabled: Boolean(productId) && !product,
+  });
+  const current = product ?? loaded.data ?? null;
+  const options = listed.data?.items ?? [];
+
+  if (listed.isLoading) return <Loading label="Loading products" />;
+
+  if (options.length === 0) {
+    return (
+      <Typography variant="body2" color="text.secondary">
+        No products are mapped to this ingredient yet.
+      </Typography>
+    );
+  }
+
+  return (
+    <Autocomplete<Product>
+      value={current}
+      onChange={(_, next) => onPick(next)}
+      options={options}
+      getOptionLabel={(option) => option.name}
+      isOptionEqualToValue={(a, b) => a.id === b.id}
+      renderInput={(params) => (
+        <TextField
+          {...params}
+          label="Product"
+          placeholder="Choose"
+          helperText="Only products that fulfil this ingredient."
+        />
+      )}
+    />
+  );
 }
 
 export function RecipeComponentsEditor({
@@ -141,25 +410,29 @@ export function RecipeComponentsEditor({
   lines: ComponentLine[];
   onChange: (next: ComponentLine[]) => void;
 }) {
-  const chosenIds = lines.map((line) => line.productId).filter((id): id is string => Boolean(id));
+  const chosen = chosenIngredientIds(lines);
 
   return (
     <Stack spacing={2.5} divider={<Divider />}>
-      {lines.map((line) => (
-        <ComponentLineEditor
-          key={line.key}
-          line={line}
-          excludeIds={chosenIds.filter((id) => id !== line.productId)}
-          onChange={(next) => onChange(lines.map((l) => (l.key === line.key ? next : l)))}
-          onRemove={() => onChange(lines.filter((l) => l.key !== line.key))}
-        />
-      ))}
+      {lines.map((line) => {
+        const own =
+          line.requirement.kind === 'ingredient' ? line.requirement.ingredientId : null;
+        return (
+          <ComponentLineEditor
+            key={line.key}
+            line={line}
+            excludeIds={chosen.filter((id) => id !== own)}
+            onChange={(next) => onChange(lines.map((l) => (l.key === line.key ? next : l)))}
+            onRemove={() => onChange(lines.filter((l) => l.key !== line.key))}
+          />
+        );
+      })}
       <Button
         startIcon={<AddIcon />}
         onClick={() => onChange([...lines, newLine()])}
         sx={{ alignSelf: 'flex-start' }}
       >
-        Add product
+        Add ingredient
       </Button>
     </Stack>
   );

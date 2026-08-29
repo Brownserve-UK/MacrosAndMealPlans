@@ -6,9 +6,9 @@ use rust_decimal::Decimal;
 use time::OffsetDateTime;
 
 use super::{
-    ConsumedAmount, ConsumedNutrition, NutritionFacts, NutritionQuality, Patch, Product, ProductId,
-    RecipeComponentId, RecipeId, RecipeInstructionId, Revision, UserId, nutrition_for,
-    sum_nutrition, validate_name,
+    ConsumedAmount, ConsumedNutrition, IngredientId, NutritionFacts, NutritionQuality, Patch,
+    Product, ProductId, RecipeComponentId, RecipeId, RecipeInstructionId, Revision, UserId,
+    mean_nutrition, nutrition_for, sum_nutrition, validate_name,
 };
 use crate::error::ValidationErrors;
 
@@ -16,6 +16,7 @@ pub const MAX_SERVINGS: i32 = 10_000;
 pub const MAX_RECIPE_MINUTES: i32 = 10_080;
 pub const MAX_INSTRUCTIONS: usize = 100;
 pub const MAX_TAGS: usize = 50;
+pub const MAX_REQUIREMENT_TEXT_LEN: usize = 200;
 
 const ISO_COUNTRY_CODES: &str = "AD AE AF AG AI AL AM AO AQ AR AS AT AU AW AX AZ BA BB BD BE BF BG BH BI BJ BL BM BN BO BQ BR BS BT BV BW BY BZ CA CC CD CF CG CH CI CK CL CM CN CO CR CU CV CW CX CY CZ DE DJ DK DM DO DZ EC EE EG EH ER ES ET FI FJ FK FM FO FR GA GB GD GE GF GG GH GI GL GM GN GP GQ GR GS GT GU GW GY HK HM HN HR HT HU ID IE IL IM IN IO IQ IR IS IT JE JM JO JP KE KG KH KI KM KN KP KR KW KY KZ LA LB LC LI LK LR LS LT LU LV LY MA MC MD ME MF MG MH MK ML MM MN MO MP MQ MR MS MT MU MV MW MX MY MZ NA NC NE NF NG NI NL NO NP NR NU NZ OM PA PE PF PG PH PK PL PM PN PR PS PT PW PY QA RE RO RS RU RW SA SB SC SD SE SG SH SI SJ SK SL SM SN SO SR SS ST SV SX SY SZ TC TD TF TG TH TJ TK TL TM TN TO TR TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW";
 
@@ -109,9 +110,54 @@ impl FromStr for MealCategory {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum RecipeRequirement {
+    Ingredient { ingredient_id: IngredientId },
+    Product { product_id: ProductId },
+    Unresolved { text: String },
+}
+
+impl RecipeRequirement {
+    pub const fn kind_code(&self) -> &'static str {
+        match self {
+            RecipeRequirement::Ingredient { .. } => "ingredient",
+            RecipeRequirement::Product { .. } => "product",
+            RecipeRequirement::Unresolved { .. } => "unresolved",
+        }
+    }
+
+    pub fn ingredient_id(&self) -> Option<IngredientId> {
+        match self {
+            RecipeRequirement::Ingredient { ingredient_id } => Some(*ingredient_id),
+            _ => None,
+        }
+    }
+
+    pub fn product_id(&self) -> Option<ProductId> {
+        match self {
+            RecipeRequirement::Product { product_id } => Some(*product_id),
+            _ => None,
+        }
+    }
+
+    pub fn is_unresolved(&self) -> bool {
+        matches!(self, RecipeRequirement::Unresolved { .. })
+    }
+
+    pub fn dedupe_key(&self) -> Option<String> {
+        match self {
+            RecipeRequirement::Ingredient { ingredient_id } => Some(format!("i:{ingredient_id}")),
+            RecipeRequirement::Product { product_id } => Some(format!("p:{product_id}")),
+            RecipeRequirement::Unresolved { .. } => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct RecipeComponent {
     pub id: RecipeComponentId,
-    pub product_id: ProductId,
+    pub requirement: RecipeRequirement,
+    pub source_text: Option<String>,
     pub amount: ConsumedAmount,
     pub position: i32,
 }
@@ -175,6 +221,7 @@ pub struct RecipeSummary {
     pub preparation_minutes: Option<i32>,
     pub cooking_minutes: Option<i32>,
     pub component_count: i64,
+    pub unresolved_count: i64,
     pub meal_categories: Vec<MealCategory>,
     pub country_categories: Vec<String>,
     pub tags: Vec<String>,
@@ -193,7 +240,7 @@ impl Recipe {
 #[derive(Debug, Clone)]
 pub struct NewRecipeComponent {
     pub id: Option<RecipeComponentId>,
-    pub product_id: ProductId,
+    pub requirement: RecipeRequirement,
     pub amount: ConsumedAmount,
 }
 
@@ -262,13 +309,40 @@ pub fn validate_servings(field: &str, servings: i32, errors: &mut ValidationErro
 pub fn validate_components(components: &[NewRecipeComponent]) -> crate::error::Result<()> {
     let mut errors = ValidationErrors::new();
     if components.is_empty() {
-        errors.push("components", "Add at least one product");
+        errors.push("components", "Add at least one ingredient");
     }
+    let mut seen = HashSet::new();
     for (index, component) in components.iter().enumerate() {
         if component.amount.value() <= Decimal::ZERO {
             errors.push(
                 format!("components.{index}.amount"),
                 "Must be more than zero",
+            );
+        }
+
+        match &component.requirement {
+            RecipeRequirement::Unresolved { text } => {
+                if text.trim().is_empty() {
+                    errors.push(format!("components.{index}.requirement.text"), "Required");
+                } else if text.chars().count() > MAX_REQUIREMENT_TEXT_LEN {
+                    errors.push(format!("components.{index}.requirement.text"), "Too long");
+                }
+            }
+            RecipeRequirement::Ingredient { .. } | RecipeRequirement::Product { .. } => {
+                if let Some(key) = component.requirement.dedupe_key()
+                    && !seen.insert(key)
+                {
+                    errors.push(format!("components.{index}.requirement"), "Already added");
+                }
+            }
+        }
+
+        if component.requirement.product_id().is_none()
+            && !matches!(component.amount, ConsumedAmount::Measure(_))
+        {
+            errors.push(
+                format!("components.{index}.amount"),
+                "Measure this in units",
             );
         }
     }
@@ -451,24 +525,24 @@ impl RecipePatch {
     }
 }
 
-/// Derives a recipe's per-serving nutrition from the Products fulfilling its components.
-///
-/// Each line is paired with the Product that fulfils it, or `None` when that Product is
-/// unresolved. Unresolved lines contribute nothing and drag the overall quality down: we
-/// never guess nutrition for a line we cannot resolve (RCP-016D).
+/// What fulfils one recipe line when its nutrition is calculated.
+pub enum Fulfilment<'a> {
+    /// The line pins this Product, so its nutrition is authoritative.
+    Pinned(&'a Product),
+    /// A generic Ingredient line: nutrition is estimated from the Products mapped to it.
+    Candidates(&'a [Product]),
+    /// Unresolved text, or a resolved object we could not load. Contributes nothing (RCP-016D).
+    None,
+}
+
+/// Derives a recipe's per-serving nutrition from whatever fulfils each of its components.
 pub fn recipe_nutrition<'a>(
-    lines: impl IntoIterator<Item = (&'a ConsumedAmount, Option<&'a Product>)>,
+    lines: impl IntoIterator<Item = (&'a ConsumedAmount, Fulfilment<'a>)>,
     servings: i32,
 ) -> ConsumedNutrition {
     let per_line: Vec<ConsumedNutrition> = lines
         .into_iter()
-        .map(|(amount, product)| match product {
-            Some(product) => nutrition_for(product, amount),
-            None => ConsumedNutrition {
-                facts: NutritionFacts::default(),
-                quality: NutritionQuality::Unknown,
-            },
-        })
+        .map(|(amount, fulfilment)| line_nutrition(amount, fulfilment))
         .collect();
 
     let total = sum_nutrition(per_line.iter().map(|line| &line.facts));
@@ -479,28 +553,71 @@ pub fn recipe_nutrition<'a>(
     ConsumedNutrition { facts, quality }
 }
 
-fn rollup_quality(qualities: impl IntoIterator<Item = NutritionQuality>) -> NutritionQuality {
-    let mut any = false;
-    let mut all_known = true;
-    let mut all_unknown = true;
-    for quality in qualities {
-        any = true;
-        match quality {
-            NutritionQuality::Known => all_unknown = false,
-            NutritionQuality::Unknown => all_known = false,
-            NutritionQuality::Partial => {
-                all_known = false;
-                all_unknown = false;
+fn line_nutrition(amount: &ConsumedAmount, fulfilment: Fulfilment<'_>) -> ConsumedNutrition {
+    match fulfilment {
+        Fulfilment::Pinned(product) => nutrition_for(product, amount),
+        Fulfilment::None => ConsumedNutrition {
+            facts: NutritionFacts::default(),
+            quality: NutritionQuality::Unknown,
+        },
+        Fulfilment::Candidates(products) => {
+            let contributing: Vec<ConsumedNutrition> = products
+                .iter()
+                .map(|product| nutrition_for(product, amount))
+                .filter(|line| line.quality != NutritionQuality::Unknown)
+                .collect();
+
+            if contributing.is_empty() {
+                return ConsumedNutrition {
+                    facts: NutritionFacts::default(),
+                    quality: NutritionQuality::Unknown,
+                };
             }
+
+            let facts = mean_nutrition(contributing.iter().map(|line| &line.facts));
+            let quality = estimate_quality(&facts);
+            ConsumedNutrition { facts, quality }
+        }
+    }
+}
+
+fn estimate_quality(facts: &NutritionFacts) -> NutritionQuality {
+    if facts.is_unknown() {
+        NutritionQuality::Unknown
+    } else if facts.named_values().all(|(_, value)| value.is_some()) {
+        NutritionQuality::Estimated
+    } else {
+        NutritionQuality::Partial
+    }
+}
+
+fn rollup_quality(qualities: impl IntoIterator<Item = NutritionQuality>) -> NutritionQuality {
+    let mut any_contributing = false;
+    let mut any_gap = false;
+    let mut any_estimate = false;
+    for quality in qualities {
+        match quality {
+            NutritionQuality::Known => any_contributing = true,
+            NutritionQuality::Estimated => {
+                any_contributing = true;
+                any_estimate = true;
+            }
+            NutritionQuality::Partial => {
+                any_contributing = true;
+                any_gap = true;
+            }
+            NutritionQuality::Unknown => any_gap = true,
         }
     }
 
-    if !any || all_unknown {
+    if !any_contributing {
         NutritionQuality::Unknown
-    } else if all_known {
-        NutritionQuality::Known
-    } else {
+    } else if any_gap {
         NutritionQuality::Partial
+    } else if any_estimate {
+        NutritionQuality::Estimated
+    } else {
+        NutritionQuality::Known
     }
 }
 

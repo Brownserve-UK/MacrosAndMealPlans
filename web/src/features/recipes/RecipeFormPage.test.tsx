@@ -35,7 +35,18 @@ function recipe(): Recipe {
     id: 'r1',
     name: 'Warm Milk',
     servings: 2,
-    components: [{ id: 'c1', product_id: 'p1', product_name: 'Whole Milk', amount: { kind: 'measure', value: 100, unit: 'ml' }, position: 0 }],
+    components: [
+      {
+        id: 'c1',
+        requirement: { kind: 'product', product_id: 'p1' },
+        name: 'Whole Milk',
+        source_text: null,
+        nutrition_source: 'known',
+        candidate_product_count: null,
+        amount: { kind: 'measure', value: 100, unit: 'ml' },
+        position: 0,
+      },
+    ],
     instructions: [
       { id: 's1', text: 'First step', position: 0 },
       { id: 's2', text: 'Second step', position: 1 },
@@ -69,6 +80,10 @@ vi.mock('../../api/queries', () => ({
   useRecipePhoto: () => ({ data: undefined }),
   useProduct: () => ({ data: product, isLoading: false }),
   useProducts: () => ({ data: { items: [product] }, isLoading: false }),
+  useIngredient: () => ({ data: undefined, isLoading: false }),
+  useIngredients: () => ({ data: { items: [] }, isLoading: false }),
+  useIngredientProducts: () => ({ data: { items: [product] }, isLoading: false }),
+  useCreateIngredient: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useUnits: () => ({ data: units }),
 }));
 

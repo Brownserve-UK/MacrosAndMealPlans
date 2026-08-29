@@ -85,6 +85,50 @@ fn foreign_keys_name_the_thing_that_is_missing() {
 }
 
 #[test]
+fn a_missing_recipe_reads_as_a_missing_recipe_not_a_missing_ingredient() {
+    assert_eq!(
+        foreign_key_target("meal_plan_component_recipe_id_fkey"),
+        "recipe"
+    );
+    assert_eq!(
+        foreign_key_target("consumption_record_recipe_id_fkey"),
+        "recipe"
+    );
+    assert_eq!(
+        foreign_key_target("recipe_component_ingredient_id_fkey"),
+        "ingredient"
+    );
+    assert_eq!(
+        foreign_key_target("recipe_component_product_id_fkey"),
+        "product"
+    );
+}
+
+#[test]
+fn an_unmapped_foreign_key_does_not_pretend_to_know_the_target() {
+    assert_eq!(
+        foreign_key_target("some_future_table_other_id_fkey"),
+        "referenced record"
+    );
+}
+
+#[test]
+fn recipe_child_constraints_reduce_to_a_field() {
+    assert_eq!(
+        constraint_field("recipe_component_amount_kind_valid"),
+        "amount_kind_valid"
+    );
+    assert_eq!(
+        constraint_field("recipe_instruction_not_blank"),
+        "not_blank"
+    );
+    assert_eq!(
+        constraint_field("recipe_servings_positive"),
+        "servings_positive"
+    );
+}
+
+#[test]
 fn a_non_database_error_becomes_a_repository_error() {
     let mapped = map_db_error(sqlx::Error::PoolClosed, "listing ingredients");
     assert!(matches!(mapped, CoreError::Repository(_)));

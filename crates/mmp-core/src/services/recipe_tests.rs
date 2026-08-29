@@ -6,17 +6,20 @@ use time::macros::datetime;
 
 use crate::CoreError;
 use crate::domain::{
-    ConsumedAmount, MealCategory, NewRecipe, NewRecipeComponent, NewRecipeInstruction,
-    NutritionFacts, NutritionQuality, Product, ProductId, Provenance, Quantity, RecipePatch,
-    RecipePhotoDerivatives, Revision, Unit, UserId,
+    ConsumedAmount, Ingredient, IngredientId, MealCategory, NewRecipe, NewRecipeComponent,
+    NewRecipeInstruction, NutritionFacts, NutritionQuality, Product, ProductId, Provenance,
+    Quantity, RecipePatch, RecipePhotoDerivatives, RecipeRequirement, Revision, Unit, UserId,
 };
 use crate::ports::{FixedClock, PageRequest, RecipeQuery, SortDirection};
-use crate::services::RecipeService;
-use crate::testing::{InMemoryProductRepository, InMemoryRecipeRepository};
+use crate::services::{RecipeService, ResolveRequirement};
+use crate::testing::{
+    InMemoryIngredientRepository, InMemoryProductRepository, InMemoryRecipeRepository,
+};
 
 struct Harness {
     service: RecipeService,
     products: InMemoryProductRepository,
+    ingredients: InMemoryIngredientRepository,
     recipes: InMemoryRecipeRepository,
 }
 
@@ -26,24 +29,58 @@ fn harness() -> Harness {
 
 fn harness_at(now: OffsetDateTime) -> Harness {
     let products = InMemoryProductRepository::new();
+    let ingredients = InMemoryIngredientRepository::new();
     let recipes = InMemoryRecipeRepository::new();
     let service = RecipeService::new(
         Arc::new(recipes.clone()),
         Arc::new(products.clone()),
+        Arc::new(ingredients.clone()),
         Arc::new(FixedClock::new(now)),
     );
     Harness {
         service,
         products,
+        ingredients,
         recipes,
     }
+}
+
+fn seed_ingredient(ingredients: &InMemoryIngredientRepository) -> IngredientId {
+    let id = IngredientId::new();
+    ingredients.seed(Ingredient {
+        id,
+        name: "Rolled Oats".to_owned(),
+        default_unit: Unit::Gram,
+        provenance: Provenance::local(),
+        revision: Revision::INITIAL,
+        created_at: datetime!(2026-08-22 09:00 UTC),
+        updated_at: datetime!(2026-08-22 09:00 UTC),
+        archived_at: None,
+    });
+    id
 }
 
 fn d(value: i64) -> Decimal {
     Decimal::from(value)
 }
 
+fn seed_product_mapped(
+    products: &InMemoryProductRepository,
+    energy: i64,
+    ingredient_id: IngredientId,
+) -> ProductId {
+    seed_product_with(products, energy, Some(ingredient_id))
+}
+
 fn seed_product(products: &InMemoryProductRepository, energy: i64) -> ProductId {
+    seed_product_with(products, energy, None)
+}
+
+fn seed_product_with(
+    products: &InMemoryProductRepository,
+    energy: i64,
+    mapped_ingredient_id: Option<IngredientId>,
+) -> ProductId {
     let id = ProductId::new();
     products.seed(Product {
         id,
@@ -54,7 +91,7 @@ fn seed_product(products: &InMemoryProductRepository, energy: i64) -> ProductId 
         shopping_section: None,
         package_quantity: None,
         servings_per_pack: None,
-        mapped_ingredient_id: None,
+        mapped_ingredient_id,
         nutrition: NutritionFacts {
             basis: Some(Quantity::new(d(100), Unit::Gram)),
             energy_kcal: Some(d(energy)),
@@ -84,7 +121,7 @@ fn grams(value: i64) -> ConsumedAmount {
 fn component(product_id: ProductId) -> NewRecipeComponent {
     NewRecipeComponent {
         id: None,
-        product_id,
+        requirement: RecipeRequirement::Product { product_id },
         amount: grams(100),
     }
 }
@@ -310,12 +347,12 @@ async fn reordering_preserves_component_ids() {
         components: Some(vec![
             NewRecipeComponent {
                 id: Some(second_id),
-                product_id: second,
+                requirement: RecipeRequirement::Product { product_id: second },
                 amount: grams(100),
             },
             NewRecipeComponent {
                 id: Some(first_id),
-                product_id: first,
+                requirement: RecipeRequirement::Product { product_id: first },
                 amount: grams(100),
             },
         ]),
@@ -347,7 +384,9 @@ async fn rejects_a_component_id_from_another_recipe() {
     let patch = RecipePatch {
         components: Some(vec![NewRecipeComponent {
             id: Some(crate::domain::RecipeComponentId::new()),
-            product_id: product,
+            requirement: RecipeRequirement::Product {
+                product_id: product,
+            },
             amount: grams(100),
         }]),
         ..RecipePatch::default()
@@ -401,4 +440,234 @@ async fn derives_per_serving_nutrition() {
     let nutrition = h.service.nutrition_for(recipe.id, actor).await.unwrap();
     assert_eq!(nutrition.facts.energy_kcal, Some(d(100)));
     assert_eq!(nutrition.quality, NutritionQuality::Known);
+}
+
+fn ingredient_component(ingredient_id: IngredientId) -> NewRecipeComponent {
+    NewRecipeComponent {
+        id: None,
+        requirement: RecipeRequirement::Ingredient { ingredient_id },
+        amount: grams(100),
+    }
+}
+
+fn unresolved_component(text: &str) -> NewRecipeComponent {
+    NewRecipeComponent {
+        id: None,
+        requirement: RecipeRequirement::Unresolved {
+            text: text.to_owned(),
+        },
+        amount: grams(100),
+    }
+}
+
+#[tokio::test]
+async fn a_generic_ingredient_line_yields_estimated_nutrition() {
+    let h = harness();
+    let actor = UserId::new();
+    let oats = seed_ingredient(&h.ingredients);
+    seed_product_mapped(&h.products, 200, oats);
+    seed_product_mapped(&h.products, 400, oats);
+
+    let recipe = h
+        .service
+        .create_recipe(new_recipe(actor, vec![ingredient_component(oats)]))
+        .await
+        .unwrap();
+
+    let nutrition = h.service.nutrition_for(recipe.id, actor).await.unwrap();
+    // Mean of 200 and 400 kcal/100g over 100g => 300 kcal, across 2 servings => 150 each.
+    assert_eq!(nutrition.facts.energy_kcal, Some(d(150)));
+    assert_eq!(nutrition.quality, NutritionQuality::Estimated);
+}
+
+#[tokio::test]
+async fn a_generic_ingredient_with_no_products_is_unknown() {
+    let h = harness();
+    let actor = UserId::new();
+    let oats = seed_ingredient(&h.ingredients);
+
+    let recipe = h
+        .service
+        .create_recipe(new_recipe(actor, vec![ingredient_component(oats)]))
+        .await
+        .unwrap();
+
+    let nutrition = h.service.nutrition_for(recipe.id, actor).await.unwrap();
+    assert_eq!(nutrition.facts.energy_kcal, None);
+    assert_eq!(nutrition.quality, NutritionQuality::Unknown);
+}
+
+#[tokio::test]
+async fn a_recipe_saves_with_an_unresolved_line() {
+    let h = harness();
+    let actor = UserId::new();
+
+    let recipe = h
+        .service
+        .create_recipe(new_recipe(actor, vec![unresolved_component("Jasmin Rice")]))
+        .await
+        .unwrap();
+
+    assert!(recipe.components[0].requirement.is_unresolved());
+    let nutrition = h.service.nutrition_for(recipe.id, actor).await.unwrap();
+    assert_eq!(nutrition.quality, NutritionQuality::Unknown);
+}
+
+#[tokio::test]
+async fn an_unknown_ingredient_is_rejected() {
+    let h = harness();
+    let actor = UserId::new();
+
+    let err = h
+        .service
+        .create_recipe(new_recipe(
+            actor,
+            vec![ingredient_component(IngredientId::new())],
+        ))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, CoreError::Validation(_)));
+}
+
+#[tokio::test]
+async fn a_generic_line_cannot_be_measured_in_servings() {
+    let h = harness();
+    let actor = UserId::new();
+    let oats = seed_ingredient(&h.ingredients);
+
+    let mut component = ingredient_component(oats);
+    component.amount = ConsumedAmount::Servings(d(1));
+    let err = h
+        .service
+        .create_recipe(new_recipe(actor, vec![component]))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, CoreError::Validation(_)));
+}
+
+#[tokio::test]
+async fn resolving_an_unresolved_line_records_the_original_text() {
+    let h = harness();
+    let actor = UserId::new();
+    let oats = seed_ingredient(&h.ingredients);
+    let recipe = h
+        .service
+        .create_recipe(new_recipe(actor, vec![unresolved_component("Rolld Oats")]))
+        .await
+        .unwrap();
+    let component_id = recipe.components[0].id;
+
+    let resolved = h
+        .service
+        .resolve_component(
+            recipe.id,
+            recipe.revision,
+            component_id,
+            ResolveRequirement::Ingredient {
+                ingredient_id: oats,
+            },
+            actor,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        resolved.components[0].requirement,
+        RecipeRequirement::Ingredient {
+            ingredient_id: oats
+        }
+    );
+    assert_eq!(
+        resolved.components[0].source_text.as_deref(),
+        Some("Rolld Oats")
+    );
+    assert_eq!(resolved.revision, recipe.revision.next());
+}
+
+#[tokio::test]
+async fn resolving_an_already_resolved_line_is_rejected() {
+    let h = harness();
+    let actor = UserId::new();
+    let product = seed_product(&h.products, 200);
+    let oats = seed_ingredient(&h.ingredients);
+    let recipe = h
+        .service
+        .create_recipe(new_recipe(actor, vec![component(product)]))
+        .await
+        .unwrap();
+
+    let err = h
+        .service
+        .resolve_component(
+            recipe.id,
+            recipe.revision,
+            recipe.components[0].id,
+            ResolveRequirement::Ingredient {
+                ingredient_id: oats,
+            },
+            actor,
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, CoreError::Validation(_)));
+}
+
+#[tokio::test]
+async fn resolving_with_a_stale_revision_conflicts() {
+    let h = harness();
+    let actor = UserId::new();
+    let oats = seed_ingredient(&h.ingredients);
+    let recipe = h
+        .service
+        .create_recipe(new_recipe(actor, vec![unresolved_component("Rolld Oats")]))
+        .await
+        .unwrap();
+
+    let err = h
+        .service
+        .resolve_component(
+            recipe.id,
+            Revision::new(99),
+            recipe.components[0].id,
+            ResolveRequirement::Ingredient {
+                ingredient_id: oats,
+            },
+            actor,
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, CoreError::RevisionMismatch { .. }));
+}
+
+#[tokio::test]
+async fn resolving_one_recipe_does_not_touch_another_with_the_same_text() {
+    let h = harness();
+    let actor = UserId::new();
+    let oats = seed_ingredient(&h.ingredients);
+    let first = h
+        .service
+        .create_recipe(new_recipe(actor, vec![unresolved_component("Rolld Oats")]))
+        .await
+        .unwrap();
+    let second = h
+        .service
+        .create_recipe(new_recipe(actor, vec![unresolved_component("Rolld Oats")]))
+        .await
+        .unwrap();
+
+    h.service
+        .resolve_component(
+            first.id,
+            first.revision,
+            first.components[0].id,
+            ResolveRequirement::Ingredient {
+                ingredient_id: oats,
+            },
+            actor,
+        )
+        .await
+        .unwrap();
+
+    let reloaded = h.service.get_recipe(second.id, actor).await.unwrap();
+    assert!(reloaded.components[0].requirement.is_unresolved());
 }

@@ -224,7 +224,7 @@ function RecipeFormPage({ recipe }: { recipe?: Recipe }) {
             <Autocomplete multiple freeSolo options={[]} value={draft.tags} onChange={(_, tags) => setDraft({ ...draft, tags })} renderInput={(params) => <TextField {...params} label="Tags" helperText="Type a tag and press Enter." error={Boolean(errors.tags)} />} />
           </Section>
 
-          <Section title="Products">
+          <Section title="Ingredients">
             <RecipeComponentsEditor lines={lines} onChange={setLines} />
             {errors.components ? <Alert severity="error">{errors.components}</Alert> : null}
           </Section>
@@ -266,7 +266,18 @@ function draftFrom(recipe?: Recipe): Draft {
 }
 
 function serialiseLines(lines: ComponentLine[]) {
-  return lines.map(({ id, productId, amount }) => ({ id, productId, amount }));
+  return lines.map(({ id, requirement, amount }) => {
+    if (requirement.kind === 'unresolved') {
+      return { id, kind: 'unresolved', text: requirement.text, amount };
+    }
+    return {
+      id,
+      kind: requirement.pinned ? 'product' : 'ingredient',
+      ingredientId: requirement.ingredientId,
+      productId: requirement.pinned ? requirement.productId : null,
+      amount,
+    };
+  });
 }
 
 function validate(draft: Draft, lines: ComponentLine[], steps: StepDraft[]) {
@@ -278,7 +289,7 @@ function validate(draft: Draft, lines: ComponentLine[], steps: StepDraft[]) {
   for (const [field, value] of [['preparation_minutes', draft.preparationMinutes], ['cooking_minutes', draft.cookingMinutes]] as const) {
     if (value && (!Number.isInteger(Number(value)) || Number(value) <= 0)) errors[field] = 'Enter whole minutes above zero';
   }
-  if (!linesAreValid(lines)) errors.components = 'Add at least one product, each with an amount.';
+  if (!linesAreValid(lines)) errors.components = 'Add at least one ingredient, each with an amount.';
   steps.forEach((step, index) => { if (!step.text.trim()) errors[`instructions.${index}.text`] = 'Add the instruction'; });
   if (draft.notes.length > 20000) errors.notes = 'Keep this under 20,000 characters';
   if (draft.tags.some((tag) => !tag.trim())) errors.tags = 'Remove empty tags';

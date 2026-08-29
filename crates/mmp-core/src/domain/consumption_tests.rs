@@ -1,7 +1,7 @@
 use super::*;
 use crate::domain::{
-    MealItemRef, ProductId, Provenance, Recipe, RecipeComponent, RecipeComponentId, RecipeId,
-    RecipeVisibility, Unit, UserId,
+    Fulfilment, MealItemRef, ProductId, Provenance, Recipe, RecipeComponent, RecipeComponentId,
+    RecipeId, RecipeRequirement, RecipeVisibility, Unit, UserId,
 };
 
 fn product_with(
@@ -220,6 +220,66 @@ fn quality_codes_round_trip() {
 }
 
 #[test]
+fn the_mean_averages_each_present_nutrient() {
+    let a = NutritionFacts {
+        energy_kcal: Some(Decimal::new(100, 0)),
+        protein_g: Some(Decimal::new(8, 0)),
+        ..Default::default()
+    };
+    let b = NutritionFacts {
+        energy_kcal: Some(Decimal::new(200, 0)),
+        protein_g: Some(Decimal::new(12, 0)),
+        ..Default::default()
+    };
+    let mean = mean_nutrition([&a, &b]);
+    assert_eq!(mean.energy_kcal, Some(Decimal::new(150, 0)));
+    assert_eq!(mean.protein_g, Some(Decimal::new(10, 0)));
+}
+
+#[test]
+fn the_mean_of_a_nutrient_only_counts_the_facts_that_supply_it() {
+    let has_it = NutritionFacts {
+        fibre_g: Some(Decimal::new(6, 0)),
+        ..Default::default()
+    };
+    let missing_it = NutritionFacts::default();
+    let mean = mean_nutrition([&has_it, &missing_it]);
+    assert_eq!(mean.fibre_g, Some(Decimal::new(6, 0)));
+}
+
+#[test]
+fn the_mean_leaves_a_wholly_absent_nutrient_unknown() {
+    let a = NutritionFacts {
+        energy_kcal: Some(Decimal::new(100, 0)),
+        ..Default::default()
+    };
+    let b = NutritionFacts {
+        energy_kcal: Some(Decimal::new(100, 0)),
+        ..Default::default()
+    };
+    let mean = mean_nutrition([&a, &b]);
+    assert_eq!(mean.cholesterol_mg, None);
+}
+
+#[test]
+fn the_mean_of_nothing_is_unknown() {
+    let mean = mean_nutrition(std::iter::empty());
+    assert!(mean.is_unknown());
+}
+
+#[test]
+fn the_mean_averages_extra_nutrients_over_their_contributors() {
+    let mut a = NutritionFacts::default();
+    a.extra.insert("omega_3_g".to_owned(), Decimal::new(2, 0));
+    let mut b = NutritionFacts::default();
+    b.extra.insert("omega_3_g".to_owned(), Decimal::new(4, 0));
+    let plain = NutritionFacts::default();
+
+    let mean = mean_nutrition([&a, &b, &plain]);
+    assert_eq!(mean.extra.get("omega_3_g"), Some(&Decimal::new(3, 0)));
+}
+
+#[test]
 fn a_zero_amount_is_rejected() {
     let mut errors = ValidationErrors::new();
     validate_amount(
@@ -272,7 +332,10 @@ fn a_recipe_serving_scales_the_per_serving_figure() {
     );
     let line = RecipeComponent {
         id: RecipeComponentId::new(),
-        product_id: product.id,
+        requirement: RecipeRequirement::Product {
+            product_id: product.id,
+        },
+        source_text: None,
         amount: ConsumedAmount::Measure(Quantity::new(Decimal::new(400, 0), Unit::Gram)),
         position: 0,
     };
@@ -281,7 +344,7 @@ fn a_recipe_serving_scales_the_per_serving_figure() {
         recipe
             .components
             .iter()
-            .map(|component| (&component.amount, Some(&product))),
+            .map(|component| (&component.amount, Fulfilment::Pinned(&product))),
         recipe.servings,
     );
 
@@ -323,7 +386,10 @@ fn a_recipe_with_no_nutrition_stays_unknown_rather_than_zero() {
     );
     let line = RecipeComponent {
         id: RecipeComponentId::new(),
-        product_id: product.id,
+        requirement: RecipeRequirement::Product {
+            product_id: product.id,
+        },
+        source_text: None,
         amount: ConsumedAmount::Measure(Quantity::new(Decimal::new(400, 0), Unit::Gram)),
         position: 0,
     };
@@ -332,7 +398,7 @@ fn a_recipe_with_no_nutrition_stays_unknown_rather_than_zero() {
         recipe
             .components
             .iter()
-            .map(|component| (&component.amount, Some(&product))),
+            .map(|component| (&component.amount, Fulfilment::Pinned(&product))),
         recipe.servings,
     );
     let result = recipe_nutrition_for(&per_serving, &ConsumedAmount::Servings(Decimal::ONE));

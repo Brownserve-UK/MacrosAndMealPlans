@@ -1,9 +1,10 @@
 use mmp_core::domain::{
     ConsumedNutrition, MealCategory, NewRecipe, NewRecipeComponent, NewRecipeInstruction,
-    NutritionQuality, Patch, Product, Recipe, RecipeComponent, RecipeId, RecipeInstruction,
-    RecipePatch, RecipeSummary, RecipeVisibility, UserId,
+    NutritionQuality, Patch, Recipe, RecipeComponent, RecipeId, RecipeInstruction, RecipePatch,
+    RecipeRequirement, RecipeSummary, RecipeVisibility, UserId,
 };
 use mmp_core::ports::Paginated;
+use mmp_core::services::{RecipeNames, ResolveRequirement};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use utoipa::{IntoParams, ToSchema};
@@ -13,26 +14,106 @@ use super::common::{PageMeta, SortDirectionDto};
 use super::consumption::AmountDto;
 use super::nutrition::NutritionDto;
 
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum RecipeRequirementDto {
+    Ingredient { ingredient_id: Uuid },
+    Product { product_id: Uuid },
+    Unresolved { text: String },
+}
+
+impl From<RecipeRequirementDto> for RecipeRequirement {
+    fn from(value: RecipeRequirementDto) -> Self {
+        match value {
+            RecipeRequirementDto::Ingredient { ingredient_id } => RecipeRequirement::Ingredient {
+                ingredient_id: ingredient_id.into(),
+            },
+            RecipeRequirementDto::Product { product_id } => RecipeRequirement::Product {
+                product_id: product_id.into(),
+            },
+            RecipeRequirementDto::Unresolved { text } => RecipeRequirement::Unresolved { text },
+        }
+    }
+}
+
+impl From<RecipeRequirement> for RecipeRequirementDto {
+    fn from(value: RecipeRequirement) -> Self {
+        match value {
+            RecipeRequirement::Ingredient { ingredient_id } => RecipeRequirementDto::Ingredient {
+                ingredient_id: ingredient_id.as_uuid(),
+            },
+            RecipeRequirement::Product { product_id } => RecipeRequirementDto::Product {
+                product_id: product_id.as_uuid(),
+            },
+            RecipeRequirement::Unresolved { text } => RecipeRequirementDto::Unresolved { text },
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ComponentNutritionSource {
+    Known,
+    Estimated,
+    None,
+}
+
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct RecipeComponentDto {
     pub id: Uuid,
-    pub product_id: Uuid,
-    pub product_name: String,
+    pub requirement: RecipeRequirementDto,
+    pub name: String,
+    pub source_text: Option<String>,
+    pub nutrition_source: ComponentNutritionSource,
+    pub candidate_product_count: Option<i64>,
     pub amount: AmountDto,
     pub position: i32,
 }
 
 impl RecipeComponentDto {
-    fn from_domain(value: RecipeComponent, products: &[Product]) -> Self {
-        let product_name = products
-            .iter()
-            .find(|product| product.id == value.product_id)
-            .map(|product| product.name.clone())
-            .unwrap_or_else(|| "Unknown product".to_owned());
+    fn from_domain(value: RecipeComponent, names: &RecipeNames) -> Self {
+        let (name, nutrition_source, candidate_product_count) = match &value.requirement {
+            RecipeRequirement::Product { product_id } => (
+                names
+                    .products
+                    .get(product_id)
+                    .cloned()
+                    .unwrap_or_else(|| "Unknown product".to_owned()),
+                ComponentNutritionSource::Known,
+                None,
+            ),
+            RecipeRequirement::Ingredient { ingredient_id } => {
+                let count = names
+                    .candidate_counts
+                    .get(ingredient_id)
+                    .copied()
+                    .unwrap_or(0);
+                let source = if count > 0 {
+                    ComponentNutritionSource::Estimated
+                } else {
+                    ComponentNutritionSource::None
+                };
+                (
+                    names
+                        .ingredients
+                        .get(ingredient_id)
+                        .cloned()
+                        .unwrap_or_else(|| "Unknown ingredient".to_owned()),
+                    source,
+                    Some(count),
+                )
+            }
+            RecipeRequirement::Unresolved { text } => {
+                (text.clone(), ComponentNutritionSource::None, None)
+            }
+        };
         Self {
             id: value.id.as_uuid(),
-            product_id: value.product_id.as_uuid(),
-            product_name,
+            requirement: value.requirement.into(),
+            name,
+            source_text: value.source_text,
+            nutrition_source,
+            candidate_product_count,
             amount: value.amount.into(),
             position: value.position,
         }
@@ -93,7 +174,7 @@ pub struct RecipeDto {
 }
 
 impl RecipeDto {
-    pub fn from_domain(value: Recipe, products: &[Product]) -> Self {
+    pub fn from_domain(value: Recipe, names: &RecipeNames) -> Self {
         Self {
             id: value.id.as_uuid(),
             name: value.name,
@@ -105,7 +186,7 @@ impl RecipeDto {
             components: value
                 .components
                 .into_iter()
-                .map(|component| RecipeComponentDto::from_domain(component, products))
+                .map(|component| RecipeComponentDto::from_domain(component, names))
                 .collect(),
             instructions: value.instructions.into_iter().map(Into::into).collect(),
             meal_categories: value.meal_categories,
@@ -133,6 +214,7 @@ pub struct RecipeSummaryDto {
     pub preparation_minutes: Option<i32>,
     pub cooking_minutes: Option<i32>,
     pub component_count: i64,
+    pub unresolved_count: i64,
     pub meal_categories: Vec<MealCategory>,
     pub country_categories: Vec<String>,
     pub tags: Vec<String>,
@@ -159,6 +241,7 @@ impl From<RecipeSummary> for RecipeSummaryDto {
             preparation_minutes: value.preparation_minutes,
             cooking_minutes: value.cooking_minutes,
             component_count: value.component_count,
+            unresolved_count: value.unresolved_count,
             meal_categories: value.meal_categories,
             country_categories: value.country_categories,
             tags: value.tags,
@@ -174,7 +257,7 @@ impl From<RecipeSummary> for RecipeSummaryDto {
 pub struct RecipeComponentRequest {
     #[serde(default)]
     pub id: Option<Uuid>,
-    pub product_id: Uuid,
+    pub requirement: RecipeRequirementDto,
     pub amount: AmountDto,
 }
 
@@ -198,7 +281,7 @@ impl From<RecipeComponentRequest> for NewRecipeComponent {
     fn from(value: RecipeComponentRequest) -> Self {
         Self {
             id: value.id.map(Into::into),
-            product_id: value.product_id.into(),
+            requirement: value.requirement.into(),
             amount: value.amount.into(),
         }
     }
@@ -314,6 +397,28 @@ impl From<ConsumedNutrition> for RecipeNutritionDto {
         Self {
             nutrition: value.facts.into(),
             quality: value.quality,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ResolveComponentRequest {
+    Ingredient { ingredient_id: Uuid },
+    Product { product_id: Uuid },
+}
+
+impl From<ResolveComponentRequest> for ResolveRequirement {
+    fn from(value: ResolveComponentRequest) -> Self {
+        match value {
+            ResolveComponentRequest::Ingredient { ingredient_id } => {
+                ResolveRequirement::Ingredient {
+                    ingredient_id: ingredient_id.into(),
+                }
+            }
+            ResolveComponentRequest::Product { product_id } => ResolveRequirement::Product {
+                product_id: product_id.into(),
+            },
         }
     }
 }

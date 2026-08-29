@@ -10,15 +10,17 @@ use crate::domain::{
     ConsumptionRecord, ConsumptionRecordId, MealItemRef, MealPlanComponent, MealPlanComponentId,
     MealPlanComponentSnapshot, MealPlanEntry, MealPlanEntryId, MealPlanEntryPatch, MealPlanStatus,
     MealSlot, NUTRIENT_KEYS, NewMealPlanComponent, NewMealPlanEntry, NutritionFacts,
-    NutritionGoals, NutritionQuality, Product, ProductId, Recipe, RecipeId, Revision, UserId,
-    nutrition_for, recipe_nutrition, recipe_nutrition_for, resolve_on, sum_nutrition,
-    validate_components,
+    NutritionGoals, NutritionQuality, Product, ProductId, Recipe, RecipeId, RecipeRequirement,
+    Revision, UserId, nutrition_for, recipe_nutrition, recipe_nutrition_for, resolve_on,
+    sum_nutrition, validate_components,
 };
 use crate::error::{CoreError, Result, ValidationErrors};
 use crate::ports::{
     Clock, ConsumptionRecordRepository, MealPlanQuery, MealPlanRepository,
     NutritionTargetRepository, ProductRepository, RecipeRepository, UpdateOutcome,
 };
+
+use super::fulfilment::RecipeFulfilments;
 
 const MEAL_PLAN_ENTRY: &str = "meal plan entry";
 const PRODUCT: &str = "product";
@@ -175,12 +177,12 @@ impl ItemCatalogue {
     }
 }
 
-fn recipe_card(recipe: &Recipe, products: &HashMap<ProductId, Product>) -> RecipeCard {
+fn recipe_card(recipe: &Recipe, fulfilments: &RecipeFulfilments) -> RecipeCard {
     let per_serving = recipe_nutrition(
         recipe
             .components
             .iter()
-            .map(|component| (&component.amount, products.get(&component.product_id))),
+            .map(|component| (&component.amount, fulfilments.get(&component.requirement))),
         recipe.servings,
     );
     RecipeCard {
@@ -861,11 +863,16 @@ impl MealPlanService {
         }
 
         let recipes = self.recipes.get_many(&recipe_ids).await?;
-        for recipe in &recipes {
-            for component in &recipe.components {
-                product_ids.push(component.product_id);
-            }
-        }
+        let requirements: Vec<&RecipeRequirement> = recipes
+            .iter()
+            .flat_map(|recipe| {
+                recipe
+                    .components
+                    .iter()
+                    .map(|component| &component.requirement)
+            })
+            .collect();
+        let fulfilments = RecipeFulfilments::load(&*self.products, &requirements).await?;
 
         let products: HashMap<ProductId, Product> = self
             .products
@@ -876,7 +883,7 @@ impl MealPlanService {
             .collect();
         let recipes: HashMap<RecipeId, RecipeCard> = recipes
             .into_iter()
-            .map(|recipe| (recipe.id, recipe_card(&recipe, &products)))
+            .map(|recipe| (recipe.id, recipe_card(&recipe, &fulfilments)))
             .collect();
 
         Ok(ItemCatalogue { products, recipes })

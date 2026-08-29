@@ -119,6 +119,7 @@ pub fn app_state(config: &Config, pool: &PgPool) -> AppState {
     let recipes = RecipeService::new(
         Arc::new(PgRecipeRepository::new(pool.clone())),
         Arc::new(PgProductRepository::new(pool.clone())),
+        Arc::new(PgIngredientRepository::new(pool.clone())),
         Arc::new(SystemClock),
     );
     AppState::new(

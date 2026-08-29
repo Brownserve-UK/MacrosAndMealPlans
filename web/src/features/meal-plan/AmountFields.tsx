@@ -130,18 +130,20 @@ export function AmountFields({
   draft,
   errors,
   onChange,
+  allowWithoutProduct = false,
 }: {
   product: AmountProductInfo | null;
   draft: AmountDraft;
   errors: Record<string, string>;
   onChange: (next: AmountDraft) => void;
+  allowWithoutProduct?: boolean;
 }) {
   const units = useUnits();
   const available = units.data;
   const unitsReady = available !== undefined;
   const options = useMemo(() => amountOptionsFor(product, available ?? []), [product, available]);
   const hint = unitHint(product, draft);
-  const disabled = product === null || !unitsReady;
+  const disabled = (product === null && !allowWithoutProduct) || !unitsReady;
 
   const selectedKey = optionKeyFor(draft);
   const offered = options.some((option) => option.key === selectedKey);

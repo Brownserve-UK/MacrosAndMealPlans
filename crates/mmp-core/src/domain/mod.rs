@@ -17,7 +17,7 @@ mod recipe;
 pub use access::{AccessScope, Permission, Role, UnknownAccessScope, UnknownRole};
 pub use consumption::{
     AmountError, ConsumedAmount, ConsumedNutrition, ConsumptionRecord, ConsumptionRecordPatch,
-    NewConsumptionRecord, NutritionQuality, UnknownNutritionQuality, nutrition_for,
+    NewConsumptionRecord, NutritionQuality, UnknownNutritionQuality, mean_nutrition, nutrition_for,
     recipe_nutrition_for, sum_nutrition,
 };
 pub use household::{
@@ -52,9 +52,9 @@ pub use product::{
 pub use provenance::{CatalogueOrigin, Provenance, UnknownOrigin};
 pub use quantity::{ConversionError, Dimension, Quantity, Unit, UnknownUnit};
 pub use recipe::{
-    MAX_SERVINGS, MealCategory, NewRecipe, NewRecipeComponent, NewRecipeInstruction, Recipe,
-    RecipeComponent, RecipeInstruction, RecipePatch, RecipePhoto, RecipePhotoDerivatives,
-    RecipeSummary, RecipeVisibility, UnknownMealCategory, UnknownRecipeVisibility,
-    normalise_countries, normalise_optional_text, normalise_tags, normalise_unique,
-    recipe_nutrition,
+    Fulfilment, MAX_REQUIREMENT_TEXT_LEN, MAX_SERVINGS, MealCategory, NewRecipe,
+    NewRecipeComponent, NewRecipeInstruction, Recipe, RecipeComponent, RecipeInstruction,
+    RecipePatch, RecipePhoto, RecipePhotoDerivatives, RecipeRequirement, RecipeSummary,
+    RecipeVisibility, UnknownMealCategory, UnknownRecipeVisibility, normalise_countries,
+    normalise_optional_text, normalise_tags, normalise_unique, recipe_nutrition,
 };

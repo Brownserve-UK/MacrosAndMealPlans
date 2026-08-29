@@ -231,9 +231,10 @@ function MealItemRow({
             }}
           >
             {item.quality === 'unknown' ? (
-              <Chip size="small" variant="outlined" label="No nutrition" />
+              <Chip size="small" color="warning" variant="outlined" label="No nutrition" />
             ) : (
               <Typography className="numeral" variant="body2" sx={{ fontWeight: 600, textAlign: 'right' }}>
+                {item.quality === 'estimated' ? '~' : null}
                 <MaybeNumber value={item.nutrition.energy_kcal} fractionDigits={0} />{' '}
                 <Box component="span" sx={{ color: 'text.secondary', fontSize: '0.75rem' }}>
                   kcal

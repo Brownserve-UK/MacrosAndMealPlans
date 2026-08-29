@@ -44,6 +44,7 @@ fn app_with_web(dist: &std::path::Path) -> axum::Router {
     let recipes = RecipeService::new(
         recipes_repo.clone(),
         Arc::new(products.clone()),
+        Arc::new(InMemoryIngredientRepository::new()),
         Arc::new(SystemClock),
     );
     let state = AppState::new(
@@ -177,6 +178,7 @@ async fn without_a_web_build_the_api_still_works() {
     let recipes = RecipeService::new(
         recipes_repo.clone(),
         Arc::new(products.clone()),
+        Arc::new(InMemoryIngredientRepository::new()),
         Arc::new(SystemClock),
     );
     let state = AppState::new(

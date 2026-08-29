@@ -5,8 +5,8 @@ use async_trait::async_trait;
 use mmp_core::Result;
 use mmp_core::domain::{
     MealCategory, Recipe, RecipeComponent, RecipeComponentId, RecipeId, RecipeInstruction,
-    RecipeInstructionId, RecipePhoto, RecipePhotoDerivatives, RecipeSummary, RecipeVisibility,
-    Revision, UserId,
+    RecipeInstructionId, RecipePhoto, RecipePhotoDerivatives, RecipeRequirement, RecipeSummary,
+    RecipeVisibility, Revision, UserId,
 };
 use mmp_core::ports::{Paginated, RecipeQuery, RecipeRepository, SortDirection, UpdateOutcome};
 use rust_decimal::Decimal;
@@ -60,6 +60,7 @@ struct RecipeSummaryRow {
     preparation_minutes: Option<i32>,
     cooking_minutes: Option<i32>,
     component_count: i64,
+    unresolved_count: i64,
     meal_categories: Vec<String>,
     country_categories: Vec<String>,
     tags: Vec<String>,
@@ -87,7 +88,10 @@ struct ComponentRow {
     id: Uuid,
     recipe_id: Uuid,
     position: i32,
-    product_id: Uuid,
+    ingredient_id: Option<Uuid>,
+    product_id: Option<Uuid>,
+    unresolved_text: Option<String>,
+    source_text: Option<String>,
     amount_kind: String,
     amount_value: Decimal,
     amount_unit: Option<String>,
@@ -95,9 +99,20 @@ struct ComponentRow {
 
 impl ComponentRow {
     fn into_domain(self) -> Result<RecipeComponent> {
+        let requirement = match (self.ingredient_id, self.product_id, self.unresolved_text) {
+            (Some(ingredient_id), None, None) => RecipeRequirement::Ingredient {
+                ingredient_id: ingredient_id.into(),
+            },
+            (None, Some(product_id), None) => RecipeRequirement::Product {
+                product_id: product_id.into(),
+            },
+            (None, None, Some(text)) => RecipeRequirement::Unresolved { text },
+            _ => return Err(bad_value("requirement", "recipe component")),
+        };
         Ok(RecipeComponent {
             id: RecipeComponentId::from(self.id),
-            product_id: self.product_id.into(),
+            requirement,
+            source_text: self.source_text,
             amount: parse_amount(&self.amount_kind, self.amount_value, self.amount_unit)?,
             position: self.position,
         })
@@ -151,7 +166,7 @@ const GET_BY_ID: &str = concat!("SELECT ", columns!(), " FROM recipe WHERE id = 
 const COUNT: &str = "SELECT count(*) FROM recipe WHERE owner_id = $1 AND ($2 OR archived_at IS NULL) AND ($3::text IS NULL OR name ILIKE '%' || $3 || '%')";
 macro_rules! summary_columns {
     () => {
-        "id, name, description, servings, preparation_minutes, cooking_minutes, (SELECT count(*) FROM recipe_component rc WHERE rc.recipe_id = recipe.id) AS component_count, COALESCE((SELECT array_agg(category ORDER BY position) FROM recipe_meal_category rmc WHERE rmc.recipe_id = recipe.id), ARRAY[]::text[]) AS meal_categories, COALESCE((SELECT array_agg(country_code ORDER BY position) FROM recipe_country_category rcc WHERE rcc.recipe_id = recipe.id), ARRAY[]::text[]) AS country_categories, COALESCE((SELECT array_agg(tag ORDER BY position) FROM recipe_tag rt WHERE rt.recipe_id = recipe.id), ARRAY[]::text[]) AS tags, photo_version, revision, updated_at, archived_at"
+        "id, name, description, servings, preparation_minutes, cooking_minutes, (SELECT count(*) FROM recipe_component rc WHERE rc.recipe_id = recipe.id) AS component_count, (SELECT count(*) FROM recipe_component rc WHERE rc.recipe_id = recipe.id AND rc.unresolved_text IS NOT NULL) AS unresolved_count, COALESCE((SELECT array_agg(category ORDER BY position) FROM recipe_meal_category rmc WHERE rmc.recipe_id = recipe.id), ARRAY[]::text[]) AS meal_categories, COALESCE((SELECT array_agg(country_code ORDER BY position) FROM recipe_country_category rcc WHERE rcc.recipe_id = recipe.id), ARRAY[]::text[]) AS country_categories, COALESCE((SELECT array_agg(tag ORDER BY position) FROM recipe_tag rt WHERE rt.recipe_id = recipe.id), ARRAY[]::text[]) AS tags, photo_version, revision, updated_at, archived_at"
     };
 }
 const LIST_ASC: &str = concat!(
@@ -168,7 +183,7 @@ const LIST_DESC: &str = concat!(
     " WHERE owner_id = $1 AND ($2 OR archived_at IS NULL) AND ($3::text IS NULL OR name ILIKE '%' || $3 || '%')",
     " ORDER BY CASE WHEN $3::text IS NULL THEN 0 ELSE similarity(name, $3) END DESC, lower(name) DESC LIMIT $4 OFFSET $5"
 );
-const LIST_COMPONENTS: &str = "SELECT id, recipe_id, position, product_id, amount_kind, amount_value, amount_unit FROM recipe_component WHERE recipe_id = ANY($1) ORDER BY recipe_id, position";
+const LIST_COMPONENTS: &str = "SELECT id, recipe_id, position, ingredient_id, product_id, unresolved_text, source_text, amount_kind, amount_value, amount_unit FROM recipe_component WHERE recipe_id = ANY($1) ORDER BY recipe_id, position";
 const LIST_INSTRUCTIONS: &str = "SELECT id, recipe_id, position, instruction FROM recipe_instruction WHERE recipe_id = ANY($1) ORDER BY recipe_id, position";
 const LIST_MEAL_CATEGORIES: &str = "SELECT recipe_id, category AS value FROM recipe_meal_category WHERE recipe_id = ANY($1) ORDER BY recipe_id, position";
 const LIST_COUNTRY_CATEGORIES: &str = "SELECT recipe_id, country_code AS value FROM recipe_country_category WHERE recipe_id = ANY($1) ORDER BY recipe_id, position";
@@ -328,6 +343,7 @@ impl RecipeRepository for PgRecipeRepository {
                     preparation_minutes: row.preparation_minutes,
                     cooking_minutes: row.cooking_minutes,
                     component_count: row.component_count,
+                    unresolved_count: row.unresolved_count,
                     meal_categories: row
                         .meal_categories
                         .into_iter()
@@ -532,11 +548,20 @@ async fn update_recipe(
 async fn insert_components(tx: &mut Transaction<'_, Postgres>, recipe: &Recipe) -> Result<()> {
     for component in &recipe.components {
         let (kind, value, unit) = amount_bindings(&component.amount);
-        sqlx::query("INSERT INTO recipe_component (id, recipe_id, position, product_id, amount_kind, amount_value, amount_unit) VALUES ($1, $2, $3, $4, $5, $6, $7)")
+        let ingredient_id = component.requirement.ingredient_id().map(|id| id.as_uuid());
+        let product_id = component.requirement.product_id().map(|id| id.as_uuid());
+        let unresolved_text = match &component.requirement {
+            RecipeRequirement::Unresolved { text } => Some(text.as_str()),
+            _ => None,
+        };
+        sqlx::query("INSERT INTO recipe_component (id, recipe_id, position, ingredient_id, product_id, unresolved_text, source_text, amount_kind, amount_value, amount_unit) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)")
             .bind(component.id.as_uuid())
             .bind(recipe.id.as_uuid())
             .bind(component.position)
-            .bind(component.product_id.as_uuid())
+            .bind(ingredient_id)
+            .bind(product_id)
+            .bind(unresolved_text)
+            .bind(component.source_text.as_deref())
             .bind(kind)
             .bind(value)
             .bind(unit)

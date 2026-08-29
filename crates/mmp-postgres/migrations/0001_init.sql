@@ -252,7 +252,7 @@ CREATE TABLE consumption_record (
     CONSTRAINT consumption_record_cholesterol_mg_non_negative
         CHECK (cholesterol_mg IS NULL OR cholesterol_mg >= 0),
     CONSTRAINT consumption_record_quality_valid
-        CHECK (nutrition_quality IN ('known', 'partial', 'unknown')),
+        CHECK (nutrition_quality IN ('known', 'estimated', 'partial', 'unknown')),
     CONSTRAINT consumption_record_slot_valid
         CHECK (slot IN ('breakfast', 'lunch', 'dinner', 'snacks'))
 );
@@ -347,7 +347,7 @@ CREATE TABLE meal_plan_component (
     CONSTRAINT meal_plan_component_extra_is_object
         CHECK (nutrition_extra IS NULL OR jsonb_typeof(nutrition_extra) = 'object'),
     CONSTRAINT meal_plan_component_quality_valid
-        CHECK (nutrition_quality IS NULL OR nutrition_quality IN ('known', 'partial', 'unknown')),
+        CHECK (nutrition_quality IS NULL OR nutrition_quality IN ('known', 'estimated', 'partial', 'unknown')),
     CONSTRAINT meal_plan_component_energy_non_negative
         CHECK (energy_kcal IS NULL OR energy_kcal >= 0),
     CONSTRAINT meal_plan_component_protein_non_negative
@@ -487,18 +487,31 @@ CREATE INDEX recipe_owner ON recipe (owner_id, archived_at);
 CREATE INDEX recipe_name_trgm ON recipe USING gin (name gin_trgm_ops);
 
 CREATE TABLE recipe_component (
-    id            UUID PRIMARY KEY,
-    recipe_id     UUID NOT NULL REFERENCES recipe (id) ON DELETE CASCADE,
-    position      INTEGER NOT NULL,
-    product_id    UUID NOT NULL REFERENCES product (id) ON DELETE RESTRICT,
-    amount_kind   TEXT NOT NULL,
-    amount_value  NUMERIC(16, 4) NOT NULL,
-    amount_unit   TEXT,
+    id               UUID PRIMARY KEY,
+    recipe_id        UUID NOT NULL REFERENCES recipe (id) ON DELETE CASCADE,
+    position         INTEGER NOT NULL,
+    ingredient_id    UUID REFERENCES ingredient (id) ON DELETE RESTRICT,
+    product_id       UUID REFERENCES product (id) ON DELETE RESTRICT,
+    unresolved_text  TEXT,
+    source_text      TEXT,
+    amount_kind      TEXT NOT NULL,
+    amount_value     NUMERIC(16, 4) NOT NULL,
+    amount_unit      TEXT,
 
     CONSTRAINT recipe_component_position_non_negative
         CHECK (position >= 0),
+    CONSTRAINT recipe_component_requirement_exclusive
+        CHECK (num_nonnulls(ingredient_id, product_id, unresolved_text) = 1),
+    CONSTRAINT recipe_component_unresolved_text_not_blank
+        CHECK (unresolved_text IS NULL OR btrim(unresolved_text) <> ''),
+    CONSTRAINT recipe_component_source_text_not_blank
+        CHECK (source_text IS NULL OR btrim(source_text) <> ''),
+    CONSTRAINT recipe_component_source_text_not_unresolved
+        CHECK (source_text IS NULL OR unresolved_text IS NULL),
     CONSTRAINT recipe_component_amount_kind_valid
         CHECK (amount_kind IN ('measure', 'servings', 'packs')),
+    CONSTRAINT recipe_component_relative_amount_needs_product
+        CHECK (amount_kind = 'measure' OR product_id IS NOT NULL),
     CONSTRAINT recipe_component_amount_value_positive
         CHECK (amount_value > 0),
     CONSTRAINT recipe_component_amount_unit_present
@@ -509,7 +522,8 @@ CREATE TABLE recipe_component (
 );
 
 CREATE INDEX recipe_component_recipe ON recipe_component (recipe_id, position);
-CREATE INDEX recipe_component_product ON recipe_component (product_id);
+CREATE INDEX recipe_component_product ON recipe_component (product_id) WHERE product_id IS NOT NULL;
+CREATE INDEX recipe_component_ingredient ON recipe_component (ingredient_id) WHERE ingredient_id IS NOT NULL;
 
 CREATE TABLE recipe_instruction (
     id            UUID PRIMARY KEY,

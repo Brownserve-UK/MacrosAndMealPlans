@@ -43,6 +43,12 @@ const CURRENT_REVISION: &str = "SELECT revision FROM product WHERE id = $1";
 const COUNT_BY_INGREDIENT: &str = "SELECT mapped_ingredient_id, count(*) FROM product \
      WHERE mapped_ingredient_id = ANY($1) AND archived_at IS NULL \
      GROUP BY mapped_ingredient_id";
+const LIST_BY_INGREDIENT: &str = concat!(
+    "SELECT ",
+    columns!(),
+    " FROM product WHERE mapped_ingredient_id = ANY($1) AND archived_at IS NULL \
+     ORDER BY mapped_ingredient_id, lower(name)"
+);
 
 pub struct PgProductRepository {
     pool: PgPool,
@@ -146,6 +152,31 @@ impl ProductRepository for PgProductRepository {
             counts.insert(IngredientId::from(id), count);
         }
         Ok(counts)
+    }
+
+    async fn list_by_ingredient(
+        &self,
+        ingredient_ids: &[IngredientId],
+    ) -> Result<HashMap<IngredientId, Vec<Product>>> {
+        if ingredient_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        let uuids: Vec<uuid::Uuid> = ingredient_ids.iter().map(|id| id.as_uuid()).collect();
+        let rows: Vec<ProductRow> = sqlx::query_as(LIST_BY_INGREDIENT)
+            .bind(&uuids)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| repository_error("listing products by ingredient", e))?;
+
+        let mut grouped: HashMap<IngredientId, Vec<Product>> = HashMap::new();
+        for row in rows {
+            let product: Product = row.try_into()?;
+            if let Some(ingredient_id) = product.mapped_ingredient_id {
+                grouped.entry(ingredient_id).or_default().push(product);
+            }
+        }
+        Ok(grouped)
     }
 
     async fn insert(&self, product: &Product) -> Result<()> {
