@@ -2733,7 +2733,6 @@ async fn a_recipe_estimates_nutrition_for_a_generic_ingredient() {
     let ingredient = create_ingredient(&app, "Whole Milk").await;
     let ingredient_id = ingredient["id"].as_str().unwrap();
 
-    // Map the product to the ingredient so there is a nutrition source.
     let (status, _, _) = send(
         &app,
         Call::new(
@@ -2780,8 +2779,13 @@ async fn a_recipe_estimates_nutrition_for_a_generic_ingredient() {
     assert_eq!(status, StatusCode::OK, "{nutrition}");
     // One resolved estimate plus one unresolved line => incomplete overall.
     assert_eq!(nutrition["quality"], "partial");
+    assert_eq!(nutrition["gaps"].as_array().unwrap().len(), 2);
+    assert_eq!(nutrition["gaps"][0]["name"], "Whole Milk");
+    assert_eq!(nutrition["gaps"][0]["reason"], "incomplete");
+    assert_eq!(nutrition["gaps"][1]["name"], "Nutmeg");
+    assert_eq!(nutrition["gaps"][1]["reason"], "unmatched");
+    assert_eq!(nutrition["gaps"][1]["component_id"], unresolved_id);
 
-    // Resolving without If-Match is refused.
     let (status, _, _) = send(
         &app,
         Call::new(

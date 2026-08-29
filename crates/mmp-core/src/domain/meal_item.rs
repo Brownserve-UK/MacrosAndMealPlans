@@ -41,8 +41,6 @@ impl MealItemRef {
         matches!(self, MealItemRef::Recipe { .. })
     }
 
-    /// Rebuild a reference from the discriminator column and the two nullable ids
-    /// as they come back from the database.
     pub fn from_parts(
         kind: &str,
         product_id: Option<ProductId>,

@@ -525,21 +525,28 @@ impl RecipePatch {
     }
 }
 
-/// What fulfils one recipe line when its nutrition is calculated.
 pub enum Fulfilment<'a> {
-    /// The line pins this Product, so its nutrition is authoritative.
     Pinned(&'a Product),
-    /// A generic Ingredient line: nutrition is estimated from the Products mapped to it.
     Candidates(&'a [Product]),
-    /// Unresolved text, or a resolved object we could not load. Contributes nothing (RCP-016D).
     None,
 }
 
-/// Derives a recipe's per-serving nutrition from whatever fulfils each of its components.
+pub struct DerivedNutrition {
+    pub consumed: ConsumedNutrition,
+    pub line_qualities: Vec<NutritionQuality>,
+}
+
 pub fn recipe_nutrition<'a>(
     lines: impl IntoIterator<Item = (&'a ConsumedAmount, Fulfilment<'a>)>,
     servings: i32,
 ) -> ConsumedNutrition {
+    recipe_nutrition_detailed(lines, servings).consumed
+}
+
+pub fn recipe_nutrition_detailed<'a>(
+    lines: impl IntoIterator<Item = (&'a ConsumedAmount, Fulfilment<'a>)>,
+    servings: i32,
+) -> DerivedNutrition {
     let per_line: Vec<ConsumedNutrition> = lines
         .into_iter()
         .map(|(amount, fulfilment)| line_nutrition(amount, fulfilment))
@@ -549,8 +556,12 @@ pub fn recipe_nutrition<'a>(
     let divisor = Decimal::from(servings.max(1));
     let facts = total.scale(Decimal::ONE / divisor);
     let quality = rollup_quality(per_line.iter().map(|line| line.quality));
+    let line_qualities = per_line.iter().map(|line| line.quality).collect();
 
-    ConsumedNutrition { facts, quality }
+    DerivedNutrition {
+        consumed: ConsumedNutrition { facts, quality },
+        line_qualities,
+    }
 }
 
 fn line_nutrition(amount: &ConsumedAmount, fulfilment: Fulfilment<'_>) -> ConsumedNutrition {

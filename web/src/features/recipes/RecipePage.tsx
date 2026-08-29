@@ -1,6 +1,5 @@
 import AccessTimeIcon from '@mui/icons-material/AccessTimeOutlined';
 import EditIcon from '@mui/icons-material/EditOutlined';
-import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import PeopleIcon from '@mui/icons-material/PeopleOutlineOutlined';
 import RestaurantIcon from '@mui/icons-material/RestaurantOutlined';
 import SoupKitchenIcon from '@mui/icons-material/SoupKitchenOutlined';
@@ -10,10 +9,8 @@ import Button from '@mui/material/Button';
 import Chip from '@mui/material/Chip';
 import Divider from '@mui/material/Divider';
 import Grid from '@mui/material/Grid';
-import IconButton from '@mui/material/IconButton';
 import Paper from '@mui/material/Paper';
 import Stack from '@mui/material/Stack';
-import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 import { Link } from '@tanstack/react-router';
 import { useState, type ReactNode } from 'react';
@@ -26,6 +23,7 @@ import { RecordMenu } from '../../components/RecordMenu';
 import { ErrorState, Loading } from '../../components/States';
 import { formatAmount } from '../meal-plan/format';
 import { countryLabel, labelMealCategory } from './RecipesPage';
+import { NutritionDetailsDialog } from './NutritionDetailsDialog';
 import { RecipeImage } from './RecipeImage';
 import { ResolveComponentDialog } from './ResolveComponentDialog';
 
@@ -155,7 +153,10 @@ export function RecipePage({ id }: { id: string }) {
                   ))}
                 </Stack>
               </Paper>
-              <NutritionPanel recipeId={recipe.id} />
+              <NutritionPanel
+                recipeId={recipe.id}
+                onResolve={(componentId, text) => setResolving({ componentId, text })}
+              />
             </Stack>
           </Grid>
           <Grid size={{ xs: 12, md: 8 }}>
@@ -278,39 +279,44 @@ function TimeFact({ icon, label, minutes }: { icon: ReactNode; label: string; mi
   );
 }
 
-function NutritionPanel({ recipeId }: { recipeId: string }) {
+function NutritionPanel({
+  recipeId,
+  onResolve,
+}: {
+  recipeId: string;
+  onResolve: (componentId: string, text: string) => void;
+}) {
   const query = useRecipeNutrition(recipeId);
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const quality = query.data?.quality;
   const estimated = quality === 'estimated' || quality === 'partial';
   return (
     <Paper sx={{ p: 3 }}>
-      <Stack direction="row" spacing={0.5} sx={{ alignItems: 'center' }}>
-        <Typography variant="h2">Nutrition</Typography>
-        {quality != null && quality !== 'known' ? <QualityHint quality={quality} /> : null}
-      </Stack>
+      <Typography variant="h2">Nutrition</Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
         {estimated ? 'Per serving (estimated)' : 'Per serving'}
       </Typography>
-      {query.data ? <NutritionRows data={query.data} /> : <Loading label="Working it out" />}
+      {query.data ? (
+        <>
+          <NutritionRows data={query.data} />
+          <Button size="small" onClick={() => setDetailsOpen(true)} sx={{ mt: 2, px: 0 }}>
+            Full breakdown
+          </Button>
+        </>
+      ) : (
+        <Loading label="Working it out" />
+      )}
+      {detailsOpen && query.data ? (
+        <NutritionDetailsDialog
+          data={query.data}
+          onClose={() => setDetailsOpen(false)}
+          onResolve={(componentId, text) => {
+            setDetailsOpen(false);
+            onResolve(componentId, text);
+          }}
+        />
+      ) : null}
     </Paper>
-  );
-}
-
-const QUALITY_HINT: Record<Exclude<RecipeNutrition['quality'], 'known'>, string> = {
-  estimated:
-    'Estimated from typical products for each ingredient. Actual values depend on the products you use.',
-  partial:
-    'Estimated from typical products for each ingredient. Actual values depend on the products you use. Some ingredients have no nutrition data yet.',
-  unknown: 'No nutrition data for these ingredients yet.',
-};
-
-function QualityHint({ quality }: { quality: Exclude<RecipeNutrition['quality'], 'known'> }) {
-  return (
-    <Tooltip title={QUALITY_HINT[quality]}>
-      <IconButton size="small" aria-label="About this nutrition" sx={{ color: 'text.secondary' }}>
-        <InfoOutlinedIcon fontSize="small" />
-      </IconButton>
-    </Tooltip>
   );
 }
 

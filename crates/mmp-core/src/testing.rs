@@ -20,7 +20,7 @@ use crate::ports::{
     UserQuery, UserRepository,
 };
 
-// This _should_ reflect the indexs that a real database would enforce
+// This _should_ reflect the indexes that a real database would enforce
 // So hopefully this should catch any issues in the same way a real database would
 fn enforce_ingredient_uniqueness(
     rows: &HashMap<IngredientId, Ingredient>,

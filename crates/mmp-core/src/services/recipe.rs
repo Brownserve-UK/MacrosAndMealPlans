@@ -3,10 +3,11 @@ use std::sync::Arc;
 
 use crate::domain::{
     ConsumedAmount, ConsumedNutrition, IngredientId, NewRecipe, NewRecipeComponent,
-    NewRecipeInstruction, ProductId, Recipe, RecipeComponent, RecipeComponentId, RecipeId,
-    RecipeInstruction, RecipeInstructionId, RecipePatch, RecipePhoto, RecipePhotoDerivatives,
-    RecipeRequirement, RecipeSummary, RecipeVisibility, Revision, UserId, normalise_countries,
-    normalise_optional_text, normalise_tags, normalise_unique, recipe_nutrition,
+    NewRecipeInstruction, NutritionQuality, ProductId, Recipe, RecipeComponent, RecipeComponentId,
+    RecipeId, RecipeInstruction, RecipeInstructionId, RecipePatch, RecipePhoto,
+    RecipePhotoDerivatives, RecipeRequirement, RecipeSummary, RecipeVisibility, Revision, UserId,
+    normalise_countries, normalise_optional_text, normalise_tags, normalise_unique,
+    recipe_nutrition_detailed,
 };
 use crate::error::{CoreError, Result, ValidationErrors};
 use crate::ports::{
@@ -29,6 +30,26 @@ pub struct RecipeNames {
     pub products: HashMap<ProductId, String>,
     pub ingredients: HashMap<IngredientId, String>,
     pub candidate_counts: HashMap<IngredientId, i64>,
+}
+
+#[derive(Debug, Clone)]
+pub struct RecipeNutrition {
+    pub consumed: ConsumedNutrition,
+    pub gaps: Vec<RecipeNutritionGap>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecipeNutritionGap {
+    pub component_id: Option<RecipeComponentId>,
+    pub name: String,
+    pub reason: NutritionGapReason,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NutritionGapReason {
+    Unmatched,
+    NoData,
+    Incomplete,
 }
 
 #[derive(Clone)]
@@ -104,15 +125,25 @@ impl RecipeService {
     }
 
     pub async fn names_for(&self, recipe: &Recipe) -> Result<RecipeNames> {
-        let product_ids: Vec<ProductId> = recipe
+        let requirements: Vec<&RecipeRequirement> = recipe
             .components
             .iter()
-            .filter_map(|component| component.requirement.product_id())
+            .map(|component| &component.requirement)
             .collect();
-        let ingredient_ids: Vec<IngredientId> = recipe
-            .components
+        self.names_for_requirements(&requirements).await
+    }
+
+    async fn names_for_requirements(
+        &self,
+        requirements: &[&RecipeRequirement],
+    ) -> Result<RecipeNames> {
+        let product_ids: Vec<ProductId> = requirements
             .iter()
-            .filter_map(|component| component.requirement.ingredient_id())
+            .filter_map(|requirement| requirement.product_id())
+            .collect();
+        let ingredient_ids: Vec<IngredientId> = requirements
+            .iter()
+            .filter_map(|requirement| requirement.ingredient_id())
             .collect();
 
         let products = self
@@ -267,10 +298,20 @@ impl RecipeService {
         Ok(current)
     }
 
-    pub async fn nutrition_for(&self, id: RecipeId, actor: UserId) -> Result<ConsumedNutrition> {
+    pub async fn nutrition_for(&self, id: RecipeId, actor: UserId) -> Result<RecipeNutrition> {
         let recipe = self.get_recipe(id, actor).await?;
-        self.derive_nutrition(&recipe.components, recipe.servings)
-            .await
+        let lines: Vec<(Option<RecipeComponentId>, RecipeRequirement, ConsumedAmount)> = recipe
+            .components
+            .iter()
+            .map(|component| {
+                (
+                    Some(component.id),
+                    component.requirement.clone(),
+                    component.amount,
+                )
+            })
+            .collect();
+        self.derive_from_lines(&lines, recipe.servings).await
     }
 
     pub async fn get_photo(&self, id: RecipeId, actor: UserId) -> Result<RecipePhoto> {
@@ -329,40 +370,48 @@ impl RecipeService {
         &self,
         servings: i32,
         components: &[NewRecipeComponent],
-    ) -> Result<ConsumedNutrition> {
-        let lines: Vec<(RecipeRequirement, ConsumedAmount)> = components
+    ) -> Result<RecipeNutrition> {
+        let lines: Vec<(Option<RecipeComponentId>, RecipeRequirement, ConsumedAmount)> = components
             .iter()
-            .map(|component| (component.requirement.clone(), component.amount))
-            .collect();
-        self.derive_from_lines(&lines, servings).await
-    }
-
-    async fn derive_nutrition(
-        &self,
-        components: &[RecipeComponent],
-        servings: i32,
-    ) -> Result<ConsumedNutrition> {
-        let lines: Vec<(RecipeRequirement, ConsumedAmount)> = components
-            .iter()
-            .map(|component| (component.requirement.clone(), component.amount))
+            .map(|component| {
+                (
+                    component.id,
+                    component.requirement.clone(),
+                    component.amount,
+                )
+            })
             .collect();
         self.derive_from_lines(&lines, servings).await
     }
 
     async fn derive_from_lines(
         &self,
-        lines: &[(RecipeRequirement, ConsumedAmount)],
+        lines: &[(Option<RecipeComponentId>, RecipeRequirement, ConsumedAmount)],
         servings: i32,
-    ) -> Result<ConsumedNutrition> {
-        let requirements: Vec<&RecipeRequirement> =
-            lines.iter().map(|(requirement, _)| requirement).collect();
+    ) -> Result<RecipeNutrition> {
+        let requirements: Vec<&RecipeRequirement> = lines
+            .iter()
+            .map(|(_, requirement, _)| requirement)
+            .collect();
+        let names = self.names_for_requirements(&requirements).await?;
         let fulfilments = RecipeFulfilments::load(&*self.products, &requirements).await?;
-        Ok(recipe_nutrition(
+        let derived = recipe_nutrition_detailed(
             lines
                 .iter()
-                .map(|(requirement, amount)| (amount, fulfilments.get(requirement))),
+                .map(|(_, requirement, amount)| (amount, fulfilments.get(requirement))),
             servings,
-        ))
+        );
+        let gaps = lines
+            .iter()
+            .zip(derived.line_qualities)
+            .filter_map(|((component_id, requirement, _), quality)| {
+                gap_for(*component_id, requirement, quality, &names)
+            })
+            .collect();
+        Ok(RecipeNutrition {
+            consumed: derived.consumed,
+            gaps,
+        })
     }
 
     async fn assemble_components(
@@ -537,6 +586,46 @@ fn require_revision(id: RecipeId, expected: Revision, actual: Revision) -> Resul
             expected,
             actual,
         })
+    }
+}
+
+fn gap_for(
+    component_id: Option<RecipeComponentId>,
+    requirement: &RecipeRequirement,
+    quality: NutritionQuality,
+    names: &RecipeNames,
+) -> Option<RecipeNutritionGap> {
+    let (name, reason) = match requirement {
+        RecipeRequirement::Unresolved { text } => (text.clone(), NutritionGapReason::Unmatched),
+        RecipeRequirement::Ingredient { ingredient_id } => (
+            names
+                .ingredients
+                .get(ingredient_id)
+                .cloned()
+                .unwrap_or_else(|| "Unknown ingredient".to_owned()),
+            gap_reason(quality)?,
+        ),
+        RecipeRequirement::Product { product_id } => (
+            names
+                .products
+                .get(product_id)
+                .cloned()
+                .unwrap_or_else(|| "Unknown product".to_owned()),
+            gap_reason(quality)?,
+        ),
+    };
+    Some(RecipeNutritionGap {
+        component_id,
+        name,
+        reason,
+    })
+}
+
+fn gap_reason(quality: NutritionQuality) -> Option<NutritionGapReason> {
+    match quality {
+        NutritionQuality::Unknown => Some(NutritionGapReason::NoData),
+        NutritionQuality::Partial => Some(NutritionGapReason::Incomplete),
+        NutritionQuality::Known | NutritionQuality::Estimated => None,
     }
 }
 

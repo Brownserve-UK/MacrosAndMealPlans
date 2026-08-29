@@ -997,11 +997,15 @@ fn recipe_specs() -> Vec<RecipeSpec> {
                     RecipeLineSpec::Ingredient("banana"),
                     ConsumedAmount::Measure(quantity(1, Unit::Item)),
                 ),
+                (
+                    RecipeLineSpec::Ingredient("cinnamon"),
+                    ConsumedAmount::Measure(quantity(1, Unit::Teaspoon)),
+                ),
             ],
             instructions: vec![
                 "Add the oats and milk to a saucepan.",
                 "Cook gently until creamy, stirring often.",
-                "Slice the banana over the porridge and serve.",
+                "Slice the banana over the porridge, dust with cinnamon and serve.",
             ],
             meal_categories: vec![MealCategory::Breakfast],
             country_categories: vec!["GB"],

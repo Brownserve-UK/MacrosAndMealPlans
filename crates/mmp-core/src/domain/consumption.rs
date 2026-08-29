@@ -110,6 +110,7 @@ impl FromStr for NutritionQuality {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct ConsumedNutrition {
     pub facts: NutritionFacts,
     pub quality: NutritionQuality,

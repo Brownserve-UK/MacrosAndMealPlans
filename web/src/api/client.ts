@@ -34,6 +34,7 @@ export type Recipe = components['schemas']['RecipeDto'];
 export type RecipeSummary = components['schemas']['RecipeSummaryDto'];
 export type RecipeComponent = components['schemas']['RecipeComponentDto'];
 export type RecipeNutrition = components['schemas']['RecipeNutritionDto'];
+export type RecipeNutritionGap = components['schemas']['RecipeNutritionGapDto'];
 export type NutritionTarget = components['schemas']['NutritionTargetDto'];
 export type NutritionGoals = components['schemas']['NutritionGoalsDto'];
 export type TargetDirection = components['schemas']['TargetDirectionDto'];

@@ -1300,6 +1300,8 @@ export interface components {
             /** Format: double */
             sugar_g?: number | null;
         };
+        /** @enum {string} */
+        NutritionGapReasonDto: "unmatched" | "no_data" | "incomplete";
         NutritionGoalsDto: {
             /** Format: double */
             carbohydrate_g?: number | null;
@@ -1529,8 +1531,15 @@ export interface components {
             text: string;
         };
         RecipeNutritionDto: {
+            gaps: components["schemas"]["RecipeNutritionGapDto"][];
             nutrition: components["schemas"]["NutritionDto"];
             quality: components["schemas"]["NutritionQuality"];
+        };
+        RecipeNutritionGapDto: {
+            /** Format: uuid */
+            component_id?: string | null;
+            name: string;
+            reason: components["schemas"]["NutritionGapReasonDto"];
         };
         RecipeNutritionPreviewRequest: {
             components: components["schemas"]["RecipeComponentRequest"][];

@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import type { Recipe } from '../../api/client';
 import { RecipePage } from './RecipePage';
@@ -63,7 +64,16 @@ vi.mock('@tanstack/react-router', () => ({
 
 vi.mock('../../api/queries', () => ({
   useRecipe: () => ({ data: recipe, isLoading: false, isError: false, refetch: vi.fn() }),
-  useRecipeNutrition: () => ({ data: { nutrition: { energy_kcal: 32, protein_g: 3.2 }, quality: 'estimated' } }),
+  useRecipeNutrition: () => ({
+    data: {
+      nutrition: { energy_kcal: 32, protein_g: 3.2, sugar_g: 4 },
+      quality: 'partial',
+      gaps: [
+        { component_id: 'c3', name: 'Nutmeg', reason: 'unmatched' },
+        { component_id: 'c2', name: 'Honey', reason: 'no_data' },
+      ],
+    },
+  }),
   useSetRecipeArchived: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useResolveRecipeComponent: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useCreateIngredient: () => ({ mutateAsync: vi.fn(), isPending: false }),
@@ -116,6 +126,18 @@ describe('RecipePage', () => {
     expect(screen.getByText('Not matched')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Match' })).toBeInTheDocument();
     expect(screen.getByText('Per serving (estimated)')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'About this nutrition' })).toBeInTheDocument();
+  });
+
+  it('opens a full nutrition breakdown with the data gaps', async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(screen.getByRole('button', { name: 'Full breakdown' }));
+
+    expect(screen.getByRole('heading', { name: 'Nutrition details' })).toBeInTheDocument();
+    expect(screen.getByText('of which sugars')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Missing data' })).toBeInTheDocument();
+    expect(screen.getByText('No nutrition data')).toBeInTheDocument();
+    expect(screen.getByText('Not matched to an ingredient')).toBeInTheDocument();
   });
 });

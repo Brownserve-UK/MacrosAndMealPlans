@@ -52,9 +52,10 @@ pub use product::{
 pub use provenance::{CatalogueOrigin, Provenance, UnknownOrigin};
 pub use quantity::{ConversionError, Dimension, Quantity, Unit, UnknownUnit};
 pub use recipe::{
-    Fulfilment, MAX_REQUIREMENT_TEXT_LEN, MAX_SERVINGS, MealCategory, NewRecipe,
+    DerivedNutrition, Fulfilment, MAX_REQUIREMENT_TEXT_LEN, MAX_SERVINGS, MealCategory, NewRecipe,
     NewRecipeComponent, NewRecipeInstruction, Recipe, RecipeComponent, RecipeInstruction,
     RecipePatch, RecipePhoto, RecipePhotoDerivatives, RecipeRequirement, RecipeSummary,
     RecipeVisibility, UnknownMealCategory, UnknownRecipeVisibility, normalise_countries,
     normalise_optional_text, normalise_tags, normalise_unique, recipe_nutrition,
+    recipe_nutrition_detailed,
 };

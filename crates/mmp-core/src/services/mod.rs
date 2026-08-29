@@ -17,5 +17,8 @@ pub use meal_plan::{
     MealPlanService, MealPlanWeek, MealSlotView, NutritionSummary,
 };
 pub use nutrition_target::NutritionTargetService;
-pub use recipe::{RecipeNames, RecipeService, ResolveRequirement};
+pub use recipe::{
+    NutritionGapReason, RecipeNames, RecipeNutrition, RecipeNutritionGap, RecipeService,
+    ResolveRequirement,
+};
 pub use seed::{SeedIngredient, SeedReport};

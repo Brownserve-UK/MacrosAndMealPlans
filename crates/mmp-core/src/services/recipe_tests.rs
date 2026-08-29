@@ -11,7 +11,7 @@ use crate::domain::{
     Quantity, RecipePatch, RecipePhotoDerivatives, RecipeRequirement, Revision, Unit, UserId,
 };
 use crate::ports::{FixedClock, PageRequest, RecipeQuery, SortDirection};
-use crate::services::{RecipeService, ResolveRequirement};
+use crate::services::{NutritionGapReason, RecipeService, ResolveRequirement};
 use crate::testing::{
     InMemoryIngredientRepository, InMemoryProductRepository, InMemoryRecipeRepository,
 };
@@ -438,8 +438,9 @@ async fn derives_per_serving_nutrition() {
         .unwrap();
 
     let nutrition = h.service.nutrition_for(recipe.id, actor).await.unwrap();
-    assert_eq!(nutrition.facts.energy_kcal, Some(d(100)));
-    assert_eq!(nutrition.quality, NutritionQuality::Known);
+    assert_eq!(nutrition.consumed.facts.energy_kcal, Some(d(100)));
+    assert_eq!(nutrition.consumed.quality, NutritionQuality::Known);
+    assert!(nutrition.gaps.is_empty());
 }
 
 fn ingredient_component(ingredient_id: IngredientId) -> NewRecipeComponent {
@@ -476,8 +477,9 @@ async fn a_generic_ingredient_line_yields_estimated_nutrition() {
 
     let nutrition = h.service.nutrition_for(recipe.id, actor).await.unwrap();
     // Mean of 200 and 400 kcal/100g over 100g => 300 kcal, across 2 servings => 150 each.
-    assert_eq!(nutrition.facts.energy_kcal, Some(d(150)));
-    assert_eq!(nutrition.quality, NutritionQuality::Estimated);
+    assert_eq!(nutrition.consumed.facts.energy_kcal, Some(d(150)));
+    assert_eq!(nutrition.consumed.quality, NutritionQuality::Estimated);
+    assert!(nutrition.gaps.is_empty());
 }
 
 #[tokio::test]
@@ -493,8 +495,14 @@ async fn a_generic_ingredient_with_no_products_is_unknown() {
         .unwrap();
 
     let nutrition = h.service.nutrition_for(recipe.id, actor).await.unwrap();
-    assert_eq!(nutrition.facts.energy_kcal, None);
-    assert_eq!(nutrition.quality, NutritionQuality::Unknown);
+    assert_eq!(nutrition.consumed.facts.energy_kcal, None);
+    assert_eq!(nutrition.consumed.quality, NutritionQuality::Unknown);
+    assert_eq!(nutrition.gaps.len(), 1);
+    assert_eq!(
+        nutrition.gaps[0].component_id,
+        Some(recipe.components[0].id)
+    );
+    assert_eq!(nutrition.gaps[0].reason, NutritionGapReason::NoData);
 }
 
 #[tokio::test]
@@ -510,7 +518,10 @@ async fn a_recipe_saves_with_an_unresolved_line() {
 
     assert!(recipe.components[0].requirement.is_unresolved());
     let nutrition = h.service.nutrition_for(recipe.id, actor).await.unwrap();
-    assert_eq!(nutrition.quality, NutritionQuality::Unknown);
+    assert_eq!(nutrition.consumed.quality, NutritionQuality::Unknown);
+    assert_eq!(nutrition.gaps.len(), 1);
+    assert_eq!(nutrition.gaps[0].reason, NutritionGapReason::Unmatched);
+    assert_eq!(nutrition.gaps[0].name, "Jasmin Rice");
 }
 
 #[tokio::test]

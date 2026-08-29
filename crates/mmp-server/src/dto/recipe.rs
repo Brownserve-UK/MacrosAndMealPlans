@@ -1,10 +1,12 @@
 use mmp_core::domain::{
-    ConsumedNutrition, MealCategory, NewRecipe, NewRecipeComponent, NewRecipeInstruction,
-    NutritionQuality, Patch, Recipe, RecipeComponent, RecipeId, RecipeInstruction, RecipePatch,
-    RecipeRequirement, RecipeSummary, RecipeVisibility, UserId,
+    MealCategory, NewRecipe, NewRecipeComponent, NewRecipeInstruction, NutritionQuality, Patch,
+    Recipe, RecipeComponent, RecipeId, RecipeInstruction, RecipePatch, RecipeRequirement,
+    RecipeSummary, RecipeVisibility, UserId,
 };
 use mmp_core::ports::Paginated;
-use mmp_core::services::{RecipeNames, ResolveRequirement};
+use mmp_core::services::{
+    NutritionGapReason, RecipeNames, RecipeNutrition, RecipeNutritionGap, ResolveRequirement,
+};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use utoipa::{IntoParams, ToSchema};
@@ -390,13 +392,54 @@ impl From<UpdateRecipeRequest> for RecipePatch {
 pub struct RecipeNutritionDto {
     pub nutrition: NutritionDto,
     pub quality: NutritionQuality,
+    pub gaps: Vec<RecipeNutritionGapDto>,
 }
 
-impl From<ConsumedNutrition> for RecipeNutritionDto {
-    fn from(value: ConsumedNutrition) -> Self {
+impl From<RecipeNutrition> for RecipeNutritionDto {
+    fn from(value: RecipeNutrition) -> Self {
         Self {
-            nutrition: value.facts.into(),
-            quality: value.quality,
+            nutrition: value.consumed.facts.into(),
+            quality: value.consumed.quality,
+            gaps: value
+                .gaps
+                .into_iter()
+                .map(RecipeNutritionGapDto::from)
+                .collect(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct RecipeNutritionGapDto {
+    pub component_id: Option<Uuid>,
+    pub name: String,
+    pub reason: NutritionGapReasonDto,
+}
+
+impl From<RecipeNutritionGap> for RecipeNutritionGapDto {
+    fn from(value: RecipeNutritionGap) -> Self {
+        Self {
+            component_id: value.component_id.map(|id| id.as_uuid()),
+            name: value.name,
+            reason: value.reason.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum NutritionGapReasonDto {
+    Unmatched,
+    NoData,
+    Incomplete,
+}
+
+impl From<NutritionGapReason> for NutritionGapReasonDto {
+    fn from(value: NutritionGapReason) -> Self {
+        match value {
+            NutritionGapReason::Unmatched => NutritionGapReasonDto::Unmatched,
+            NutritionGapReason::NoData => NutritionGapReasonDto::NoData,
+            NutritionGapReason::Incomplete => NutritionGapReasonDto::Incomplete,
         }
     }
 }
