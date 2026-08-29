@@ -740,6 +740,86 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/stock": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listStock"];
+        put?: never;
+        post: operations["createStockItem"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/stock/availability": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getStockAvailability"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/stock/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getStockItem"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch: operations["updateStockItem"];
+        trace?: never;
+    };
+    "/api/v1/stock/{id}/archive": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["archiveStockItem"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/stock/{id}/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listStockEvents"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/units": {
         parameters: {
             query?: never;
@@ -875,10 +955,29 @@ export interface components {
         };
         /** @enum {string} */
         AmountKindDto: "measure" | "servings" | "packs";
+        AvailabilityDto: {
+            confidence: components["schemas"]["ConfidenceDto"];
+            on_hand: components["schemas"]["QuantityDto"];
+            planned_demand: components["schemas"]["QuantityDto"];
+            /** @enum {string} */
+            state: "quantified";
+            unallocated: components["schemas"]["QuantityDto"];
+        } | {
+            /** @enum {string} */
+            state: "assumed_available";
+        } | {
+            /** @enum {string} */
+            state: "unknown";
+        } | {
+            /** @enum {string} */
+            state: "absent";
+        };
         /** @enum {string} */
         CatalogueOrigin: "seeded" | "local" | "external";
         /** @enum {string} */
         ComponentNutritionSource: "known" | "estimated" | "none";
+        /** @enum {string} */
+        ConfidenceDto: "exact" | "estimated";
         ConsumptionRecordDto: components["schemas"]["MealItemRefDto"] & {
             amount: components["schemas"]["AmountDto"];
             /** Format: date-time */
@@ -989,6 +1088,17 @@ export interface components {
             servings: number;
             tags?: string[];
         };
+        CreateStockItemRequest: {
+            level: components["schemas"]["StockLevelDto"];
+            note?: string | null;
+            /** Format: uuid */
+            product_id: string;
+            source_date?: null | components["schemas"]["SourceDateDto"];
+            storage_location: components["schemas"]["StorageLocationDto"];
+            /** Format: uuid */
+            subject_member_id?: string | null;
+            usability_deadline?: null | components["schemas"]["UsabilityDeadlineDto"];
+        };
         CreateUserRequest: {
             display_name?: string | null;
             roles: components["schemas"]["Role"][];
@@ -1053,6 +1163,7 @@ export interface components {
         HouseholdSettingsDto: components["schemas"]["MealTimesDto"] & {
             /** Format: date-time */
             created_at: string;
+            missing_stock_interpretation: components["schemas"]["MissingStockInterpretationDto"];
             /** Format: int64 */
             revision: number;
             /** Format: date-time */
@@ -1276,6 +1387,8 @@ export interface components {
             server_version: string;
             supported_client_protocol_versions: components["schemas"]["ProtocolRange"];
         };
+        /** @enum {string} */
+        MissingStockInterpretationDto: "absent" | "unknown";
         NutritionDto: {
             basis?: null | components["schemas"]["QuantityDto"];
             /** Format: double */
@@ -1396,6 +1509,12 @@ export interface components {
             title: string;
             /** @example https://macrosandmealplans.dev/problems/validation-failed */
             type: string;
+        };
+        ProductAvailabilityDto: {
+            availability: components["schemas"]["AvailabilityDto"];
+            demand_incomplete: boolean;
+            /** Format: uuid */
+            product_id: string;
         };
         ProductDto: {
             /** Format: date-time */
@@ -1618,8 +1737,77 @@ export interface components {
         };
         /** @enum {string} */
         SortDirectionDto: "asc" | "desc";
+        SourceDateDto: {
+            /**
+             * Format: date
+             * @example 2026-08-25
+             */
+            date: string;
+            kind: components["schemas"]["SourceDateKindDto"];
+        };
+        /** @enum {string} */
+        SourceDateKindDto: "use_by" | "best_before";
+        StockEventDto: {
+            /** Format: uuid */
+            actor_user_id?: string | null;
+            /** Format: uuid */
+            id: string;
+            kind: string;
+            note?: string | null;
+            /** Format: date-time */
+            occurred_at: string;
+            quantity_delta?: null | components["schemas"]["QuantityDto"];
+            /** Format: uuid */
+            stock_item_id: string;
+            /** Format: uuid */
+            subject_member_id?: string | null;
+        };
+        StockItemDto: {
+            /** Format: date-time */
+            archived_at?: string | null;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: uuid */
+            id: string;
+            level: components["schemas"]["StockLevelDto"];
+            note?: string | null;
+            /** Format: uuid */
+            product_id: string;
+            /** Format: int64 */
+            revision: number;
+            source_date?: null | components["schemas"]["SourceDateDto"];
+            storage_location: components["schemas"]["StorageLocationDto"];
+            tracking_mode: components["schemas"]["TrackingModeDto"];
+            /** Format: date-time */
+            updated_at: string;
+            usability_deadline?: null | components["schemas"]["UsabilityDeadlineDto"];
+        };
+        StockLevelDto: {
+            /** @enum {string} */
+            mode: "exact";
+            quantity: components["schemas"]["QuantityDto"];
+        } | {
+            /** Format: double */
+            high: number;
+            /** Format: double */
+            low: number;
+            /** @enum {string} */
+            mode: "estimated";
+            unit: components["schemas"]["Unit"];
+        } | {
+            /** @enum {string} */
+            mode: "not_tracked";
+        };
+        StockPage: {
+            items: components["schemas"]["StockItemDto"][];
+            page: components["schemas"]["PageMeta"];
+        };
+        /** @enum {string} */
+        StorageLocationDto: "ambient" | "chilled" | "frozen";
         /** @enum {string} */
         TargetDirectionDto: "at_least" | "at_most" | "around";
+        /** @enum {string} */
+        TrackingModeDto: "exact" | "estimated" | "not_tracked";
         /** @enum {string} */
         Unit: "mg" | "g" | "kg" | "oz" | "lb" | "ml" | "l" | "tsp" | "tbsp" | "fl_oz" | "cup" | "item" | "piece" | "slice" | "clove" | "can" | "pack" | "bunch";
         UnitDto: {
@@ -1658,6 +1846,7 @@ export interface components {
             dinner?: string | null;
             /** @example 12:30 */
             lunch?: string | null;
+            missing_stock_interpretation?: null | components["schemas"]["MissingStockInterpretationDto"];
         };
         UpdateMemberRequest: {
             display_name?: string | null;
@@ -1711,9 +1900,26 @@ export interface components {
             servings?: number | null;
             tags?: string[] | null;
         };
+        UpdateStockItemRequest: {
+            level?: null | components["schemas"]["StockLevelDto"];
+            note?: string | null;
+            source_date?: null | components["schemas"]["SourceDateDto"];
+            storage_location?: null | components["schemas"]["StorageLocationDto"];
+            /** Format: uuid */
+            subject_member_id?: string | null;
+            usability_deadline?: null | components["schemas"]["UsabilityDeadlineDto"];
+        };
         UpdateUserRequest: {
             display_name?: string | null;
             username?: string | null;
+        };
+        UsabilityDeadlineDto: {
+            basis?: string | null;
+            /**
+             * Format: date
+             * @example 2026-08-30
+             */
+            date: string;
         };
         UserDto: {
             /** Format: date-time */
@@ -4024,6 +4230,258 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RecipeDto"];
+                };
+            };
+        };
+    };
+    listStock: {
+        parameters: {
+            query?: {
+                product_id?: string;
+                include_archived?: boolean;
+                page?: number;
+                per_page?: number;
+                sort?: components["schemas"]["SortDirectionDto"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of stock items */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StockPage"];
+                };
+            };
+        };
+    };
+    createStockItem: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateStockItemRequest"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StockItemDto"];
+                };
+            };
+            /** @description The product does not exist */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The product is archived */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    getStockAvailability: {
+        parameters: {
+            query?: {
+                product_id?: string;
+                /** @example 2026-08-25 */
+                from?: string;
+                /** @example 2026-09-08 */
+                to?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Availability per product, netting off planned demand */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProductAvailabilityDto"][];
+                };
+            };
+        };
+    };
+    getStockItem: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Stock item id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The stock item */
+            200: {
+                headers: {
+                    /** @description The revision to send back as If-Match */
+                    ETag?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StockItemDto"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    updateStockItem: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The revision you loaded */
+                "If-Match": string;
+            };
+            path: {
+                /** @description Stock item id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateStockItemRequest"];
+            };
+        };
+        responses: {
+            /** @description Updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StockItemDto"];
+                };
+            };
+            /** @description Someone else changed it first */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description If-Match is required */
+            428: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    archiveStockItem: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The revision you loaded */
+                "If-Match": string;
+            };
+            path: {
+                /** @description Stock item id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Archived */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StockItemDto"];
+                };
+            };
+        };
+    };
+    listStockEvents: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Stock item id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The stock item's audit history, newest first */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StockEventDto"][];
+                };
+            };
+            /** @description Not permitted */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
         };

@@ -48,6 +48,17 @@ export const keys = {
     ['recipe', id, 'photo', size, version] as const,
   nutritionTargets: (memberId: string) => ['nutritionTargets', memberId] as const,
   mealTimes: ['mealTimes'] as const,
+  stock: (params: StockListParams) => ['stock', params] as const,
+  stockItem: (id: string) => ['stock', id] as const,
+  stockEvents: (id: string) => ['stock', id, 'events'] as const,
+  stockAvailability: ['stock', 'availability'] as const,
+};
+
+export type StockListParams = {
+  product_id?: string;
+  include_archived?: boolean;
+  page?: number;
+  per_page?: number;
 };
 
 export function useUnits() {
@@ -876,6 +887,86 @@ export function useSetRecipeArchived() {
     onSuccess: (updated: Recipe) => {
       qc.setQueryData(keys.recipe(updated.id), updated);
       void qc.invalidateQueries({ queryKey: ['recipes'] });
+    },
+  });
+}
+
+export function useStock(params: StockListParams) {
+  return useQuery({
+    queryKey: keys.stock(params),
+    queryFn: async () => unwrap(await client.GET('/api/v1/stock', { params: { query: params } })),
+    placeholderData: keepPreviousData,
+  });
+}
+
+export function useStockItem(id: string, options?: { enabled?: boolean }) {
+  return useQuery({
+    queryKey: keys.stockItem(id),
+    enabled: options?.enabled ?? true,
+    queryFn: async () =>
+      unwrap(await client.GET('/api/v1/stock/{id}', { params: { path: { id } } })),
+  });
+}
+
+export function useStockEvents(id: string, options?: { enabled?: boolean }) {
+  return useQuery({
+    queryKey: keys.stockEvents(id),
+    enabled: options?.enabled ?? true,
+    queryFn: async () =>
+      unwrap(await client.GET('/api/v1/stock/{id}/events', { params: { path: { id } } })),
+  });
+}
+
+export function useStockAvailability() {
+  return useQuery({
+    queryKey: keys.stockAvailability,
+    queryFn: async () => unwrap(await client.GET('/api/v1/stock/availability', { params: {} })),
+  });
+}
+
+export function useCreateStockItem() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (body: components['schemas']['CreateStockItemRequest']) =>
+      unwrap(await client.POST('/api/v1/stock', { body })),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['stock'] });
+    },
+  });
+}
+
+export function useUpdateStockItem() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: {
+      id: string;
+      revision: number;
+      body: components['schemas']['UpdateStockItemRequest'];
+    }) =>
+      unwrap(
+        await client.PATCH('/api/v1/stock/{id}', {
+          params: { path: { id: input.id }, header: ifMatch(input.revision) },
+          body: input.body,
+        }),
+      ),
+    onSuccess: (updated) => {
+      qc.setQueryData(keys.stockItem((updated as { id: string }).id), updated);
+      void qc.invalidateQueries({ queryKey: ['stock'] });
+    },
+  });
+}
+
+export function useArchiveStockItem() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: { id: string; revision: number }) =>
+      unwrap(
+        await client.POST('/api/v1/stock/{id}/archive', {
+          params: { path: { id: input.id }, header: ifMatch(input.revision) },
+        }),
+      ),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['stock'] });
     },
   });
 }

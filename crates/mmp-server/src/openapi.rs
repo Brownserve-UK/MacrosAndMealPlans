@@ -19,6 +19,7 @@ use utoipa::{Modify, OpenApi};
         (name = "meal-plan", description = "What the signed-in household member intends to eat"),
         (name = "nutrition-targets", description = "Per-member calorie, macro and dietary targets"),
         (name = "recipes", description = "Reusable multi-component recipes with derived nutrition"),
+        (name = "stock", description = "Physical household stock and its availability against plans"),
     ),
     components(schemas(crate::dto::SortDirectionDto, crate::dto::AmountKindDto)),
     modifiers(&SecurityAddon)

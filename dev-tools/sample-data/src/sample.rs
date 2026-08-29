@@ -8,9 +8,10 @@ use mmp_core::domain::{
     ConsumedAmount, ConsumptionRecordId, HouseholdMember, HouseholdMemberId, IngredientId,
     MealCategory, MealItemRef, MealPlanEntryId, MealPlanStatus, MealSlot, NewConsumptionRecord,
     NewHouseholdMember, NewMealPlanComponent, NewMealPlanEntry, NewNutritionTarget, NewProduct,
-    NewRecipe, NewRecipeComponent, NewRecipeInstruction, NewUser, NutritionFacts, NutritionGoals,
-    Patch, ProductId, Provenance, Quantity, RecipeId, RecipePatch, RecipeRequirement, Role, Unit,
-    User, UserId,
+    NewRecipe, NewRecipeComponent, NewRecipeInstruction, NewStockItem, NewUser, NutritionFacts,
+    NutritionGoals, Patch, ProductId, Provenance, Quantity, RecipeId, RecipePatch,
+    RecipeRequirement, Role, SourceDate, SourceDateKind, StockLevel, StorageLocation, Unit, User,
+    UserId,
 };
 use mmp_server::state::AppState;
 use rust_decimal::Decimal;
@@ -54,6 +55,7 @@ pub struct Report {
     pub products_created: usize,
     pub recipes_created: usize,
     pub targets_created: usize,
+    pub stock_items_created: usize,
     pub meals_created: usize,
     pub meals_resolved: usize,
     pub diary_entries_created: usize,
@@ -73,6 +75,14 @@ enum Outcome {
     PartiallyEaten { component_index: usize },
     Eaten { varied: bool },
     NotEaten,
+}
+
+struct StockSpec {
+    product_key: &'static str,
+    level: StockLevel,
+    storage_location: StorageLocation,
+    source_date: Option<SourceDate>,
+    note: Option<&'static str>,
 }
 
 struct ProductSpec {
@@ -113,6 +123,7 @@ pub async fn load(
     loader.load_products().await?;
     loader.load_recipes().await?;
     loader.load_targets().await?;
+    loader.load_stock().await?;
 
     match scenario {
         Scenario::Minimal => loader.load_minimal().await?,
@@ -407,6 +418,114 @@ impl Loader<'_> {
         Ok(())
     }
 
+    async fn load_stock(&mut self) -> anyhow::Result<()> {
+        let use_by = SourceDate {
+            date: self.week_start + Duration::days(2),
+            kind: SourceDateKind::UseBy,
+        };
+        let specs: Vec<StockSpec> = vec![
+            StockSpec {
+                product_key: "chicken-breast",
+                level: StockLevel::Exact {
+                    quantity: quantity(400, Unit::Gram),
+                },
+                storage_location: StorageLocation::Chilled,
+                source_date: Some(use_by),
+                note: Some("back left of the fridge"),
+            },
+            StockSpec {
+                product_key: "chicken-breast",
+                level: StockLevel::Exact {
+                    quantity: quantity(650, Unit::Gram),
+                },
+                storage_location: StorageLocation::Frozen,
+                source_date: None,
+                note: Some("frozen flat, bought in bulk"),
+            },
+            StockSpec {
+                product_key: "rolled-oats",
+                level: StockLevel::Exact {
+                    quantity: quantity(500, Unit::Gram),
+                },
+                storage_location: StorageLocation::Ambient,
+                source_date: None,
+                note: None,
+            },
+            StockSpec {
+                product_key: "whole-milk",
+                level: StockLevel::Estimated {
+                    low: Decimal::new(300, 0),
+                    high: Decimal::new(1500, 0),
+                    unit: Unit::Millilitre,
+                },
+                storage_location: StorageLocation::Chilled,
+                source_date: None,
+                note: Some("guessing from the weight of the bottle"),
+            },
+            StockSpec {
+                product_key: "broccoli",
+                level: StockLevel::Exact {
+                    quantity: quantity(120, Unit::Gram),
+                },
+                storage_location: StorageLocation::Chilled,
+                source_date: None,
+                note: None,
+            },
+            StockSpec {
+                product_key: "basmati-rice",
+                level: StockLevel::NotTracked,
+                storage_location: StorageLocation::Ambient,
+                source_date: None,
+                note: None,
+            },
+        ];
+
+        let mut expected_per_product: std::collections::HashMap<&str, i64> =
+            std::collections::HashMap::new();
+        for spec in &specs {
+            *expected_per_product.entry(spec.product_key).or_default() += 1;
+        }
+
+        for StockSpec {
+            product_key,
+            level,
+            storage_location,
+            source_date,
+            note,
+        } in specs
+        {
+            let product = product_id(product_key);
+            let existing = self
+                .state
+                .stock
+                .list(&mmp_core::ports::StockQuery {
+                    product_id: Some(product),
+                    ..Default::default()
+                })
+                .await?;
+            if existing.total >= expected_per_product[product_key] {
+                continue;
+            }
+            self.state
+                .stock
+                .create(
+                    NewStockItem {
+                        product_id: product,
+                        level,
+                        storage_location,
+                        source_date,
+                        usability_deadline: None,
+                        note: note.map(str::to_owned),
+                    },
+                    self.actor.id,
+                    Some(self.member.id),
+                )
+                .await?;
+            self.report.stock_items_created += 1;
+        }
+        Ok(())
+    }
+
     async fn load_minimal(&mut self) -> anyhow::Result<()> {
         for slot in MealSlot::ALL {
             self.ensure_meal(self.week_start, slot, Outcome::Planned)
@@ -525,6 +644,13 @@ impl Loader<'_> {
                 self.ensure_meal(date, slot, Outcome::Planned).await?;
             }
         }
+
+        self.ensure_meal(
+            self.week_start + Duration::days(4),
+            MealSlot::Lunch,
+            Outcome::Planned,
+        )
+        .await?;
         Ok(())
     }
 

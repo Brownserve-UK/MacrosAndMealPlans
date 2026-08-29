@@ -5,23 +5,24 @@ use mmp_core::domain::{
     AccessScope, CatalogueOrigin, ConsumedAmount, ConsumptionRecord, ConsumptionRecordId,
     HouseholdMember, HouseholdMemberId, Ingredient, IngredientId, MealCategory, MealItemRef,
     MealPlanComponent, MealPlanComponentId, MealPlanComponentSnapshot, MealPlanEntry,
-    MealPlanEntryId, MealPlanStatus, MealSlot, MemberAccessGrant, NutritionFacts, NutritionGoals,
-    NutritionQuality, NutritionTarget, NutritionTargetId, Product, ProductId, Provenance, Quantity,
-    Recipe, RecipeComponent, RecipeComponentId, RecipeId, RecipeInstruction, RecipeInstructionId,
-    RecipePhoto, RecipePhotoDerivatives, RecipeRequirement, RecipeVisibility, Revision, Role, Unit,
-    User, UserId,
+    MealPlanEntryId, MealPlanStatus, MealSlot, MemberAccessGrant, NewStockEvent, NutritionFacts,
+    NutritionGoals, NutritionQuality, NutritionTarget, NutritionTargetId, Product, ProductId,
+    Provenance, Quantity, Recipe, RecipeComponent, RecipeComponentId, RecipeId, RecipeInstruction,
+    RecipeInstructionId, RecipePhoto, RecipePhotoDerivatives, RecipeRequirement, RecipeVisibility,
+    Revision, Role, StockEventKind, StockItemId, StockLevel, StorageLocation, Unit, User, UserId,
 };
 use mmp_core::ports::{
     AccessGrantRepository, ConsumptionQuery, ConsumptionRecordRepository,
     HouseholdMemberRepository, HouseholdSettingsRepository, IngredientQuery, IngredientRepository,
     MealPlanQuery, MealPlanRepository, MemberQuery, NutritionTargetRepository, PageRequest,
-    ProductQuery, ProductRepository, RecipeQuery, RecipeRepository, SortDirection, UpdateOutcome,
-    UserRepository,
+    ProductQuery, ProductRepository, RecipeQuery, RecipeRepository, SortDirection, StockQuery,
+    StockRepository, UpdateOutcome, UserRepository,
 };
 use mmp_postgres::{
     PgAccessGrantRepository, PgConsumptionRecordRepository, PgHouseholdMemberRepository,
     PgHouseholdSettingsRepository, PgIngredientRepository, PgMealPlanRepository,
-    PgNutritionTargetRepository, PgProductRepository, PgRecipeRepository, PgUserRepository,
+    PgNutritionTargetRepository, PgProductRepository, PgRecipeRepository, PgStockRepository,
+    PgUserRepository,
 };
 use rust_decimal::Decimal;
 use sqlx::PgPool;
@@ -2311,4 +2312,142 @@ async fn logs_and_reloads_a_recipe_consumption_record(pool: PgPool) {
 
     let loaded = repo.get(record.id).await.unwrap().unwrap();
     assert_eq!(loaded.item, MealItemRef::recipe(dish.id));
+}
+
+fn added_event(actor: UserId, subject: HouseholdMemberId) -> NewStockEvent {
+    NewStockEvent {
+        kind: StockEventKind::Added,
+        quantity_delta: None,
+        actor_user_id: Some(actor),
+        subject_member_id: Some(subject),
+        note: None,
+    }
+}
+
+#[sqlx::test]
+async fn round_trips_a_stock_item_and_writes_an_event(pool: PgPool) {
+    let users = PgUserRepository::new(pool.clone());
+    let actor = user("stockkeeper", vec![Role::Admin]);
+    users.insert(&actor).await.unwrap();
+    let (member_id, product_id) = seed_member_and_product(&pool).await;
+
+    let repo = PgStockRepository::new(pool.clone());
+    let item = mmp_core::domain::StockItem {
+        id: StockItemId::new(),
+        product_id,
+        level: StockLevel::Exact {
+            quantity: Quantity::new(Decimal::new(400, 0), Unit::Gram),
+        },
+        storage_location: StorageLocation::Chilled,
+        source_date: None,
+        usability_deadline: None,
+        note: Some("back left".to_owned()),
+        revision: Revision::INITIAL,
+        created_at: OffsetDateTime::now_utc(),
+        updated_at: OffsetDateTime::now_utc(),
+        archived_at: None,
+    };
+    repo.insert(&item, &added_event(actor.id, member_id))
+        .await
+        .unwrap();
+
+    let loaded = repo.get(item.id).await.unwrap().expect("should exist");
+    assert_eq!(
+        loaded.level,
+        StockLevel::Exact {
+            quantity: Quantity::new(Decimal::new(400, 0), Unit::Gram)
+        }
+    );
+    assert_eq!(loaded.storage_location, StorageLocation::Chilled);
+
+    let events = repo.list_events(item.id).await.unwrap();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].kind, StockEventKind::Added);
+    assert_eq!(events[0].actor_user_id, Some(actor.id));
+    assert_eq!(events[0].subject_member_id, Some(member_id));
+}
+
+#[sqlx::test]
+async fn several_stock_rows_may_share_a_product(pool: PgPool) {
+    let users = PgUserRepository::new(pool.clone());
+    let actor = user("stockkeeper", vec![Role::Admin]);
+    users.insert(&actor).await.unwrap();
+    let (member_id, product_id) = seed_member_and_product(&pool).await;
+    let repo = PgStockRepository::new(pool.clone());
+
+    for grams in [400, 650] {
+        let now = OffsetDateTime::now_utc();
+        let item = mmp_core::domain::StockItem {
+            id: StockItemId::new(),
+            product_id,
+            level: StockLevel::Exact {
+                quantity: Quantity::new(Decimal::new(grams, 0), Unit::Gram),
+            },
+            storage_location: StorageLocation::Frozen,
+            source_date: None,
+            usability_deadline: None,
+            note: None,
+            revision: Revision::INITIAL,
+            created_at: now,
+            updated_at: now,
+            archived_at: None,
+        };
+        repo.insert(&item, &added_event(actor.id, member_id))
+            .await
+            .unwrap();
+    }
+
+    let rows = repo.list_for_products(&[product_id]).await.unwrap();
+    assert_eq!(rows.len(), 2);
+    let page = repo
+        .list(&StockQuery {
+            product_id: Some(product_id),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(page.total, 2);
+}
+
+#[sqlx::test]
+async fn a_stale_stock_update_is_refused(pool: PgPool) {
+    let users = PgUserRepository::new(pool.clone());
+    let actor = user("stockkeeper", vec![Role::Admin]);
+    users.insert(&actor).await.unwrap();
+    let (member_id, product_id) = seed_member_and_product(&pool).await;
+    let repo = PgStockRepository::new(pool.clone());
+
+    let now = OffsetDateTime::now_utc();
+    let mut item = mmp_core::domain::StockItem {
+        id: StockItemId::new(),
+        product_id,
+        level: StockLevel::Exact {
+            quantity: Quantity::new(Decimal::new(400, 0), Unit::Gram),
+        },
+        storage_location: StorageLocation::Chilled,
+        source_date: None,
+        usability_deadline: None,
+        note: None,
+        revision: Revision::INITIAL,
+        created_at: now,
+        updated_at: now,
+        archived_at: None,
+    };
+    repo.insert(&item, &added_event(actor.id, member_id))
+        .await
+        .unwrap();
+
+    item.level = StockLevel::Exact {
+        quantity: Quantity::new(Decimal::new(150, 0), Unit::Gram),
+    };
+    item.revision = Revision::INITIAL.next();
+    let stale = Revision::new(99);
+    let outcome = repo
+        .update(&item, stale, &added_event(actor.id, member_id))
+        .await
+        .unwrap();
+    assert!(matches!(outcome, UpdateOutcome::RevisionMismatch { .. }));
+
+    let events = repo.list_events(item.id).await.unwrap();
+    assert_eq!(events.len(), 1, "a refused update must not write an event");
 }

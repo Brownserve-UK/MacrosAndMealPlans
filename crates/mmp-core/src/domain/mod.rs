@@ -13,6 +13,7 @@ mod product;
 mod provenance;
 mod quantity;
 mod recipe;
+mod stock;
 
 pub use access::{AccessScope, Permission, Role, UnknownAccessScope, UnknownRole};
 pub use consumption::{
@@ -24,11 +25,14 @@ pub use household::{
     HouseholdMember, HouseholdMemberPatch, MAX_USERNAME_LEN, MIN_USERNAME_LEN, MemberAccessGrant,
     NewHouseholdMember, NewUser, User, UserPatch,
 };
-pub use household_settings::{HouseholdSettings, HouseholdSettingsPatch, MealTimes};
+pub use household_settings::{
+    HouseholdSettings, HouseholdSettingsPatch, MealTimes, MissingStockInterpretation,
+    UnknownMissingStockInterpretation,
+};
 pub use ids::{ConsumptionRecordId, HouseholdMemberId, IngredientId, ProductId, Revision, UserId};
 pub use ids::{
     MealPlanComponentId, MealPlanEntryId, NutritionTargetId, RecipeComponentId, RecipeId,
-    RecipeInstructionId,
+    RecipeInstructionId, StockEventId, StockItemId,
 };
 pub use ingredient::{
     Ingredient, IngredientPatch, IngredientSummary, MAX_NAME_LEN, NewIngredient, validate_name,
@@ -58,4 +62,10 @@ pub use recipe::{
     RecipeVisibility, UnknownMealCategory, UnknownRecipeVisibility, normalise_countries,
     normalise_optional_text, normalise_tags, normalise_unique, recipe_nutrition,
     recipe_nutrition_detailed,
+};
+pub use stock::{
+    Availability, Confidence, NewStockEvent, NewStockItem, ProductAvailability, SourceDate,
+    SourceDateKind, StockEvent, StockEventKind, StockItem, StockItemPatch, StockLevel,
+    StorageLocation, TrackingMode, UnknownSourceDateKind, UnknownStockEventKind,
+    UnknownStorageLocation, UnknownTrackingMode, UsabilityDeadline,
 };

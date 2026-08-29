@@ -6,13 +6,14 @@ use http_body_util::BodyExt;
 use mmp_core::ports::SystemClock;
 use mmp_core::services::{
     CatalogueService, DiaryService, HouseholdService, HouseholdSettingsService, MealPlanService,
-    NutritionTargetService, RecipeService,
+    NutritionTargetService, RecipeService, StockService,
 };
 use mmp_core::testing::{
     InMemoryAccessGrantRepository, InMemoryConsumptionRecordRepository,
     InMemoryHouseholdMemberRepository, InMemoryHouseholdSettingsRepository,
     InMemoryIngredientRepository, InMemoryMealPlanRepository, InMemoryNutritionTargetRepository,
-    InMemoryProductRepository, InMemoryRecipeRepository, InMemoryUserRepository,
+    InMemoryProductRepository, InMemoryRecipeRepository, InMemoryStockRepository,
+    InMemoryUserRepository,
 };
 use mmp_server::auth::DevBasicAuthProvider;
 use mmp_server::{AppState, app};
@@ -74,6 +75,14 @@ fn app_with_web(dist: &std::path::Path) -> axum::Router {
         ),
         NutritionTargetService::new(Arc::new(targets), Arc::new(SystemClock)),
         recipes,
+        StockService::new(
+            Arc::new(InMemoryStockRepository::new()),
+            Arc::new(InMemoryProductRepository::new()),
+            Arc::new(InMemoryMealPlanRepository::default()),
+            Arc::new(InMemoryHouseholdMemberRepository::new()),
+            Arc::new(InMemoryHouseholdSettingsRepository::new()),
+            Arc::new(SystemClock),
+        ),
         Arc::new(DevBasicAuthProvider::new(household, "changeme")),
     );
     let (router, _) = app::build(state);
@@ -208,6 +217,14 @@ async fn without_a_web_build_the_api_still_works() {
         ),
         NutritionTargetService::new(Arc::new(targets), Arc::new(SystemClock)),
         recipes,
+        StockService::new(
+            Arc::new(InMemoryStockRepository::new()),
+            Arc::new(InMemoryProductRepository::new()),
+            Arc::new(InMemoryMealPlanRepository::default()),
+            Arc::new(InMemoryHouseholdMemberRepository::new()),
+            Arc::new(InMemoryHouseholdSettingsRepository::new()),
+            Arc::new(SystemClock),
+        ),
         Arc::new(DevBasicAuthProvider::new(household, "changeme")),
     );
     let (router, _) = app::build(state);

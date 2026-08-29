@@ -7,8 +7,8 @@ use sqlx::PgPool;
 use crate::error::{map_db_error, repository_error};
 use crate::rows::HouseholdSettingsRow;
 
-const GET: &str = "SELECT breakfast_time, lunch_time, dinner_time, revision, created_at, updated_at \
-     FROM household_settings WHERE singleton";
+const GET: &str = "SELECT breakfast_time, lunch_time, dinner_time, missing_stock_interpretation, \
+     revision, created_at, updated_at FROM household_settings WHERE singleton";
 const CURRENT_REVISION: &str = "SELECT revision FROM household_settings WHERE singleton";
 
 pub struct PgHouseholdSettingsRepository {
@@ -28,8 +28,13 @@ impl HouseholdSettingsRepository for PgHouseholdSettingsRepository {
             .fetch_optional(&self.pool)
             .await
             .map_err(|e| repository_error("loading household settings", e))?;
-        row.map(Into::into)
-            .ok_or_else(|| repository_error("loading household settings", sqlx::Error::RowNotFound))
+        match row {
+            Some(row) => row.try_into(),
+            None => Err(repository_error(
+                "loading household settings",
+                sqlx::Error::RowNotFound,
+            )),
+        }
     }
 
     async fn update(
@@ -41,12 +46,14 @@ impl HouseholdSettingsRepository for PgHouseholdSettingsRepository {
         let affected = sqlx::query(
             "UPDATE household_settings SET
                  breakfast_time = $1, lunch_time = $2, dinner_time = $3,
-                 revision = $4, updated_at = $5
-             WHERE singleton AND revision = $6",
+                 missing_stock_interpretation = $4,
+                 revision = $5, updated_at = $6
+             WHERE singleton AND revision = $7",
         )
         .bind(times.breakfast)
         .bind(times.lunch)
         .bind(times.dinner)
+        .bind(settings.missing_stock_interpretation.code())
         .bind(settings.revision.get())
         .bind(settings.updated_at)
         .bind(expected.get())

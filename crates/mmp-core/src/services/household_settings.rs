@@ -35,6 +35,9 @@ impl HouseholdSettingsService {
         }
 
         current.meal_times = patch.apply(current.meal_times);
+        if let Some(interpretation) = patch.missing_stock_interpretation {
+            current.missing_stock_interpretation = interpretation;
+        }
         current.revision = current.revision.next();
         current.updated_at = self.clock.now();
         commit_outcome(self.settings.update(&current, expected).await?, expected)?;

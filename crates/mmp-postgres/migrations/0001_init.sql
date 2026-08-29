@@ -631,3 +631,86 @@ ALTER TABLE consumption_record
         );
 
 CREATE INDEX consumption_record_recipe ON consumption_record (recipe_id);
+
+ALTER TABLE household_settings
+    ADD COLUMN missing_stock_interpretation TEXT NOT NULL DEFAULT 'unknown',
+    ADD CONSTRAINT household_settings_missing_stock_interpretation_valid
+        CHECK (missing_stock_interpretation IN ('absent', 'unknown'));
+
+CREATE TABLE stock_item (
+    id                UUID PRIMARY KEY,
+    product_id        UUID NOT NULL REFERENCES product (id) ON DELETE RESTRICT,
+
+    tracking_mode     TEXT NOT NULL,
+    quantity_value    NUMERIC(16, 4),
+    quantity_unit     TEXT,
+    estimated_low     NUMERIC(16, 4),
+    estimated_high    NUMERIC(16, 4),
+
+    storage_location  TEXT NOT NULL,
+
+    source_date       DATE,
+    source_date_kind  TEXT,
+    usability_deadline DATE,
+    usability_deadline_basis TEXT,
+
+    note              TEXT,
+
+    revision          BIGINT NOT NULL DEFAULT 1,
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    archived_at       TIMESTAMPTZ,
+
+    CONSTRAINT stock_item_tracking_mode_valid
+        CHECK (tracking_mode IN ('exact', 'estimated', 'not_tracked')),
+    CONSTRAINT stock_item_storage_location_valid
+        CHECK (storage_location IN ('ambient', 'chilled', 'frozen')),
+    CONSTRAINT stock_item_quantity_unit_valid
+        CHECK (quantity_unit IS NULL OR quantity_unit IN ('mg', 'g', 'kg', 'oz', 'lb', 'ml', 'l', 'tsp', 'tbsp', 'fl_oz', 'cup', 'item', 'piece', 'slice', 'clove', 'can', 'pack', 'bunch')),
+    CONSTRAINT stock_item_exact_has_quantity
+        CHECK (tracking_mode <> 'exact'
+            OR (quantity_value IS NOT NULL AND quantity_unit IS NOT NULL
+                AND estimated_low IS NULL AND estimated_high IS NULL)),
+    CONSTRAINT stock_item_estimated_has_band
+        CHECK (tracking_mode <> 'estimated'
+            OR (quantity_unit IS NOT NULL AND estimated_low IS NOT NULL AND estimated_high IS NOT NULL
+                AND quantity_value IS NULL)),
+    CONSTRAINT stock_item_not_tracked_has_nothing
+        CHECK (tracking_mode <> 'not_tracked'
+            OR (quantity_value IS NULL AND estimated_low IS NULL AND estimated_high IS NULL)),
+    CONSTRAINT stock_item_estimated_band_ordered
+        CHECK (estimated_low IS NULL OR estimated_high IS NULL OR estimated_low <= estimated_high),
+    CONSTRAINT stock_item_quantities_non_negative
+        CHECK ((quantity_value IS NULL OR quantity_value >= 0)
+            AND (estimated_low IS NULL OR estimated_low >= 0)
+            AND (estimated_high IS NULL OR estimated_high >= 0)),
+    CONSTRAINT stock_item_source_date_kind_valid
+        CHECK (source_date_kind IS NULL OR source_date_kind IN ('use_by', 'best_before'))
+);
+
+CREATE INDEX stock_item_product ON stock_item (product_id);
+CREATE INDEX stock_item_usability_deadline ON stock_item (usability_deadline)
+    WHERE usability_deadline IS NOT NULL AND archived_at IS NULL;
+
+CREATE TABLE stock_event (
+    id                UUID PRIMARY KEY,
+    stock_item_id     UUID NOT NULL REFERENCES stock_item (id) ON DELETE RESTRICT,
+
+    event_kind        TEXT NOT NULL,
+    quantity_delta    NUMERIC(16, 4),
+    quantity_unit     TEXT,
+
+    actor_user_id     UUID REFERENCES app_user (id) ON DELETE SET NULL,
+    subject_member_id UUID REFERENCES household_member (id) ON DELETE SET NULL,
+
+    note              TEXT,
+    occurred_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    CONSTRAINT stock_event_kind_valid
+        CHECK (event_kind IN ('added', 'consumed', 'discarded', 'corrected', 'observed',
+                              'moved', 'mode_changed', 'archived')),
+    CONSTRAINT stock_event_unit_valid
+        CHECK (quantity_unit IS NULL OR quantity_unit IN ('mg', 'g', 'kg', 'oz', 'lb', 'ml', 'l', 'tsp', 'tbsp', 'fl_oz', 'cup', 'item', 'piece', 'slice', 'clove', 'can', 'pack', 'bunch'))
+);
+
+CREATE INDEX stock_event_item ON stock_event (stock_item_id, occurred_at DESC);

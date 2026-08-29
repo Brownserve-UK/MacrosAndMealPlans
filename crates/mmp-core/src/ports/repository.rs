@@ -7,9 +7,9 @@ use super::{PageRequest, Paginated};
 use crate::domain::{
     AccessScope, CatalogueOrigin, ConsumptionRecord, ConsumptionRecordId, HouseholdMember,
     HouseholdMemberId, HouseholdSettings, Ingredient, IngredientId, MealPlanComponent,
-    MealPlanComponentId, MealPlanEntry, MealPlanEntryId, MemberAccessGrant, NutritionTarget,
-    NutritionTargetId, Product, ProductId, Recipe, RecipeId, RecipePhoto, RecipeSummary, Revision,
-    Role, User, UserId,
+    MealPlanComponentId, MealPlanEntry, MealPlanEntryId, MemberAccessGrant, NewStockEvent,
+    NutritionTarget, NutritionTargetId, Product, ProductId, Recipe, RecipeId, RecipePhoto,
+    RecipeSummary, Revision, Role, StockEvent, StockItem, StockItemId, User, UserId,
 };
 use crate::error::Result;
 
@@ -82,6 +82,14 @@ pub struct MealPlanQuery {
     pub member_id: HouseholdMemberId,
     pub from: Date,
     pub to: Date,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct StockQuery {
+    pub product_id: Option<ProductId>,
+    pub include_archived: bool,
+    pub page: PageRequest,
+    pub sort: SortDirection,
 }
 
 #[derive(Debug, Clone)]
@@ -297,6 +305,26 @@ pub trait RecipeRepository: Send + Sync + 'static {
         expected: Revision,
         photo: Option<&RecipePhoto>,
     ) -> Result<UpdateOutcome>;
+}
+
+#[async_trait]
+pub trait StockRepository: Send + Sync + 'static {
+    async fn get(&self, id: StockItemId) -> Result<Option<StockItem>>;
+
+    async fn list(&self, query: &StockQuery) -> Result<Paginated<StockItem>>;
+
+    async fn list_for_products(&self, product_ids: &[ProductId]) -> Result<Vec<StockItem>>;
+
+    async fn insert(&self, item: &StockItem, event: &NewStockEvent) -> Result<()>;
+
+    async fn update(
+        &self,
+        item: &StockItem,
+        expected: Revision,
+        event: &NewStockEvent,
+    ) -> Result<UpdateOutcome>;
+
+    async fn list_events(&self, id: StockItemId) -> Result<Vec<StockEvent>>;
 }
 
 #[async_trait]

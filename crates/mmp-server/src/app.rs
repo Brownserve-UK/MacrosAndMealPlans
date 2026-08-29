@@ -24,6 +24,7 @@ pub fn build(state: AppState) -> (Router, utoipa::openapi::OpenApi) {
         .merge(routes::nutrition_target::router())
         .merge(routes::recipes::router())
         .merge(routes::settings::router())
+        .merge(routes::stock::router())
         .split_for_parts();
 
     let router = router
@@ -99,8 +100,61 @@ pub fn stub_state() -> AppState {
             Arc::new(NoopIngredients),
             Arc::new(SystemClock),
         ),
+        mmp_core::services::StockService::new(
+            Arc::new(NoopStock),
+            Arc::new(NoopProducts),
+            Arc::new(NoopMealPlans),
+            Arc::new(NoopMembers),
+            Arc::new(NoopHouseholdSettings),
+            Arc::new(SystemClock),
+        ),
         Arc::new(crate::auth::DevBasicAuthProvider::new(household, "")),
     )
+}
+
+struct NoopStock;
+
+#[async_trait::async_trait]
+impl mmp_core::ports::StockRepository for NoopStock {
+    async fn get(
+        &self,
+        _: mmp_core::domain::StockItemId,
+    ) -> mmp_core::Result<Option<mmp_core::domain::StockItem>> {
+        Ok(None)
+    }
+    async fn list(
+        &self,
+        q: &mmp_core::ports::StockQuery,
+    ) -> mmp_core::Result<mmp_core::ports::Paginated<mmp_core::domain::StockItem>> {
+        Ok(mmp_core::ports::Paginated::new(vec![], 0, q.page))
+    }
+    async fn list_for_products(
+        &self,
+        _: &[mmp_core::domain::ProductId],
+    ) -> mmp_core::Result<Vec<mmp_core::domain::StockItem>> {
+        Ok(vec![])
+    }
+    async fn insert(
+        &self,
+        _: &mmp_core::domain::StockItem,
+        _: &mmp_core::domain::NewStockEvent,
+    ) -> mmp_core::Result<()> {
+        Ok(())
+    }
+    async fn update(
+        &self,
+        _: &mmp_core::domain::StockItem,
+        _: mmp_core::domain::Revision,
+        _: &mmp_core::domain::NewStockEvent,
+    ) -> mmp_core::Result<mmp_core::ports::UpdateOutcome> {
+        Ok(mmp_core::ports::UpdateOutcome::NotFound)
+    }
+    async fn list_events(
+        &self,
+        _: mmp_core::domain::StockItemId,
+    ) -> mmp_core::Result<Vec<mmp_core::domain::StockEvent>> {
+        Ok(vec![])
+    }
 }
 
 #[async_trait::async_trait]
@@ -156,6 +210,7 @@ impl mmp_core::ports::HouseholdSettingsRepository for NoopHouseholdSettings {
                 lunch: time::macros::time!(12:30),
                 dinner: time::macros::time!(18:00),
             },
+            missing_stock_interpretation: mmp_core::domain::MissingStockInterpretation::Unknown,
             revision: mmp_core::domain::Revision::INITIAL,
             created_at: time::OffsetDateTime::UNIX_EPOCH,
             updated_at: time::OffsetDateTime::UNIX_EPOCH,

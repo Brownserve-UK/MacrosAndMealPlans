@@ -8,16 +8,17 @@ use async_trait::async_trait;
 use crate::domain::{
     AccessScope, ConsumptionRecord, ConsumptionRecordId, HouseholdMember, HouseholdMemberId,
     HouseholdSettings, Ingredient, IngredientId, MealPlanEntry, MealPlanEntryId, MealTimes,
-    MemberAccessGrant, NutritionTarget, NutritionTargetId, Product, ProductId, Recipe, RecipeId,
-    RecipePhoto, RecipeSummary, Revision, Role, User, UserId,
+    MemberAccessGrant, MissingStockInterpretation, NewStockEvent, NutritionTarget,
+    NutritionTargetId, Product, ProductId, Recipe, RecipeId, RecipePhoto, RecipeSummary, Revision,
+    Role, StockEvent, StockEventId, StockItem, StockItemId, User, UserId,
 };
 use crate::error::{CoreError, Result};
 use crate::ports::{
     AccessGrantRepository, ConsumptionQuery, ConsumptionRecordRepository,
     HouseholdMemberRepository, HouseholdSettingsRepository, IngredientQuery, IngredientRepository,
     MealPlanQuery, MealPlanRepository, MemberQuery, NutritionTargetRepository, Paginated,
-    ProductQuery, ProductRepository, RecipeQuery, RecipeRepository, SortDirection, UpdateOutcome,
-    UserQuery, UserRepository,
+    ProductQuery, ProductRepository, RecipeQuery, RecipeRepository, SortDirection, StockQuery,
+    StockRepository, UpdateOutcome, UserQuery, UserRepository,
 };
 
 // This _should_ reflect the indexes that a real database would enforce
@@ -1116,6 +1117,7 @@ impl InMemoryHouseholdSettingsRepository {
                     lunch: time::macros::time!(12:30),
                     dinner: time::macros::time!(18:00),
                 },
+                missing_stock_interpretation: MissingStockInterpretation::Unknown,
                 revision: Revision::INITIAL,
                 created_at: time::OffsetDateTime::UNIX_EPOCH,
                 updated_at: time::OffsetDateTime::UNIX_EPOCH,
@@ -1259,5 +1261,111 @@ impl RecipeRepository for InMemoryRecipeRepository {
             }
         }
         Ok(outcome)
+    }
+}
+
+#[derive(Default, Clone)]
+pub struct InMemoryStockRepository {
+    rows: Arc<Mutex<HashMap<StockItemId, StockItem>>>,
+    events: Arc<Mutex<Vec<StockEvent>>>,
+}
+
+impl InMemoryStockRepository {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn seed(&self, item: StockItem) {
+        self.rows.lock().unwrap().insert(item.id, item);
+    }
+
+    pub fn count(&self) -> usize {
+        self.rows.lock().unwrap().len()
+    }
+
+    pub fn event_count(&self) -> usize {
+        self.events.lock().unwrap().len()
+    }
+
+    fn record(&self, item_id: StockItemId, event: &NewStockEvent) {
+        self.events.lock().unwrap().push(StockEvent {
+            id: StockEventId::new(),
+            stock_item_id: item_id,
+            kind: event.kind,
+            quantity_delta: event.quantity_delta,
+            actor_user_id: event.actor_user_id,
+            subject_member_id: event.subject_member_id,
+            note: event.note.clone(),
+            occurred_at: time::OffsetDateTime::UNIX_EPOCH,
+        });
+    }
+}
+
+#[async_trait]
+impl StockRepository for InMemoryStockRepository {
+    async fn get(&self, id: StockItemId) -> Result<Option<StockItem>> {
+        Ok(self.rows.lock().unwrap().get(&id).cloned())
+    }
+
+    async fn list(&self, query: &StockQuery) -> Result<Paginated<StockItem>> {
+        let rows = self.rows.lock().unwrap();
+        let items: Vec<StockItem> = rows
+            .values()
+            .filter(|item| query.include_archived || !item.is_archived())
+            .filter(|item| query.product_id.is_none_or(|id| item.product_id == id))
+            .cloned()
+            .collect();
+        Ok(paginate(items, query.page, query.sort, |item| {
+            item.id.to_string()
+        }))
+    }
+
+    async fn list_for_products(&self, product_ids: &[ProductId]) -> Result<Vec<StockItem>> {
+        let rows = self.rows.lock().unwrap();
+        Ok(rows
+            .values()
+            .filter(|item| product_ids.contains(&item.product_id))
+            .cloned()
+            .collect())
+    }
+
+    async fn insert(&self, item: &StockItem, event: &NewStockEvent) -> Result<()> {
+        self.rows.lock().unwrap().insert(item.id, item.clone());
+        self.record(item.id, event);
+        Ok(())
+    }
+
+    async fn update(
+        &self,
+        item: &StockItem,
+        expected: Revision,
+        event: &NewStockEvent,
+    ) -> Result<UpdateOutcome> {
+        let mut rows = self.rows.lock().unwrap();
+        match rows.get(&item.id) {
+            None => Ok(UpdateOutcome::NotFound),
+            Some(existing) if existing.revision != expected => {
+                Ok(UpdateOutcome::RevisionMismatch {
+                    actual: existing.revision,
+                })
+            }
+            Some(_) => {
+                rows.insert(item.id, item.clone());
+                drop(rows);
+                self.record(item.id, event);
+                Ok(UpdateOutcome::Updated)
+            }
+        }
+    }
+
+    async fn list_events(&self, id: StockItemId) -> Result<Vec<StockEvent>> {
+        Ok(self
+            .events
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|event| event.stock_item_id == id)
+            .cloned()
+            .collect())
     }
 }

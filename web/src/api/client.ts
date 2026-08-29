@@ -38,6 +38,13 @@ export type RecipeNutritionGap = components['schemas']['RecipeNutritionGapDto'];
 export type NutritionTarget = components['schemas']['NutritionTargetDto'];
 export type NutritionGoals = components['schemas']['NutritionGoalsDto'];
 export type TargetDirection = components['schemas']['TargetDirectionDto'];
+export type StockItem = components['schemas']['StockItemDto'];
+export type StockLevel = components['schemas']['StockLevelDto'];
+export type StockEvent = components['schemas']['StockEventDto'];
+export type StorageLocation = components['schemas']['StorageLocationDto'];
+export type TrackingMode = components['schemas']['TrackingModeDto'];
+export type ProductAvailability = components['schemas']['ProductAvailabilityDto'];
+export type Availability = components['schemas']['AvailabilityDto'];
 
 const CREDENTIAL_KEY = 'mmp.credential';
 

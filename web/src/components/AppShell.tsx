@@ -3,6 +3,7 @@ import DarkModeIcon from '@mui/icons-material/DarkModeOutlined';
 import CalendarMonthIcon from '@mui/icons-material/CalendarMonthOutlined';
 import MenuBookIcon from '@mui/icons-material/MenuBookOutlined';
 import InventoryIcon from '@mui/icons-material/Inventory2Outlined';
+import KitchenIcon from '@mui/icons-material/KitchenOutlined';
 import LightModeIcon from '@mui/icons-material/LightModeOutlined';
 import LogoutIcon from '@mui/icons-material/LogoutOutlined';
 import PeopleIcon from '@mui/icons-material/PeopleOutlined';
@@ -38,6 +39,7 @@ const NAV = [
   { to: '/ingredients', label: 'Ingredients', icon: <RestaurantIcon fontSize="small" />, needs: 'catalogue:read' },
   { to: '/products', label: 'Products', icon: <InventoryIcon fontSize="small" />, needs: 'catalogue:read' },
   { to: '/recipes', label: 'Recipes', icon: <RestaurantMenuIcon fontSize="small" />, needs: 'catalogue:read' },
+  { to: '/stock', label: 'Stock', icon: <KitchenIcon fontSize="small" />, needs: 'stock:read' },
   { to: '/household', label: 'Household', icon: <PeopleIcon fontSize="small" />, needs: 'household:read' },
 ] as const;
 

@@ -9,6 +9,9 @@ pub enum Permission {
     HouseholdWrite,
     AccountAdmin,
     MemberHealthData,
+    StockRead,
+    StockWrite,
+    StockHistory,
 }
 
 impl Permission {
@@ -20,6 +23,9 @@ impl Permission {
             Permission::HouseholdWrite => "household:write",
             Permission::AccountAdmin => "account:admin",
             Permission::MemberHealthData => "member:health_data",
+            Permission::StockRead => "stock:read",
+            Permission::StockWrite => "stock:write",
+            Permission::StockHistory => "stock:history",
         }
     }
 }
@@ -59,19 +65,31 @@ impl Role {
                 Permission::HouseholdWrite,
                 Permission::AccountAdmin,
                 Permission::MemberHealthData,
+                Permission::StockRead,
+                Permission::StockWrite,
+                Permission::StockHistory,
             ],
             Role::HouseholdManager => &[
                 Permission::CatalogueRead,
                 Permission::CatalogueWrite,
                 Permission::HouseholdRead,
                 Permission::HouseholdWrite,
+                Permission::StockRead,
+                Permission::StockWrite,
+                Permission::StockHistory,
             ],
             Role::BasicUser => &[
                 Permission::CatalogueRead,
                 Permission::CatalogueWrite,
                 Permission::HouseholdRead,
+                Permission::StockRead,
+                Permission::StockWrite,
             ],
-            Role::Nutritionist => &[Permission::CatalogueRead, Permission::HouseholdRead],
+            Role::Nutritionist => &[
+                Permission::CatalogueRead,
+                Permission::HouseholdRead,
+                Permission::StockRead,
+            ],
         }
     }
 

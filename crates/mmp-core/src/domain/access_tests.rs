@@ -74,5 +74,5 @@ fn permission_codes_are_unique() {
         .collect();
     codes.sort_unstable();
     codes.dedup();
-    assert_eq!(codes.len(), 6);
+    assert_eq!(codes.len(), 9);
 }

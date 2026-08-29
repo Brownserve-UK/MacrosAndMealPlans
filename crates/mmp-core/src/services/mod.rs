@@ -7,6 +7,7 @@ mod meal_plan;
 mod nutrition_target;
 mod recipe;
 mod seed;
+mod stock;
 
 pub use catalogue::CatalogueService;
 pub use diary::{DayTotals, DiaryDay, DiaryEntry, DiaryService};
@@ -22,3 +23,4 @@ pub use recipe::{
     ResolveRequirement,
 };
 pub use seed::{SeedIngredient, SeedReport};
+pub use stock::StockService;

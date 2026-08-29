@@ -7,6 +7,7 @@ pub mod nutrition;
 pub mod nutrition_target;
 pub mod recipe;
 pub mod settings;
+pub mod stock;
 
 pub use catalogue::*;
 pub use common::*;
@@ -17,3 +18,4 @@ pub use nutrition::*;
 pub use nutrition_target::*;
 pub use recipe::*;
 pub use settings::*;
+pub use stock::*;

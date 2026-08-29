@@ -4,9 +4,11 @@ use std::str::FromStr;
 use mmp_core::domain::{
     AccessScope, CatalogueOrigin, ConsumedAmount, ConsumptionRecord, ConsumptionRecordId,
     HouseholdMember, HouseholdMemberId, HouseholdSettings, Ingredient, IngredientId, MealItemRef,
-    MealPlanComponentId, MealPlanEntryId, MealSlot, MealTimes, MemberAccessGrant, NutritionFacts,
-    NutritionGoals, NutritionQuality, NutritionTarget, NutritionTargetId, Product, ProductId,
-    Provenance, Quantity, RecipeId, Revision, Role, Unit, User, UserId,
+    MealPlanComponentId, MealPlanEntryId, MealSlot, MealTimes, MemberAccessGrant,
+    MissingStockInterpretation, NutritionFacts, NutritionGoals, NutritionQuality, NutritionTarget,
+    NutritionTargetId, Product, ProductId, Provenance, Quantity, RecipeId, Revision, Role,
+    SourceDate, SourceDateKind, StockEvent, StockEventId, StockEventKind, StockItem, StockItemId,
+    StockLevel, StorageLocation, TrackingMode, Unit, UsabilityDeadline, User, UserId,
 };
 use mmp_core::{CoreError, RepositoryError};
 use rust_decimal::Decimal;
@@ -330,23 +332,154 @@ pub struct HouseholdSettingsRow {
     pub breakfast_time: Time,
     pub lunch_time: Time,
     pub dinner_time: Time,
+    pub missing_stock_interpretation: String,
     pub revision: i64,
     pub created_at: OffsetDateTime,
     pub updated_at: OffsetDateTime,
 }
 
-impl From<HouseholdSettingsRow> for HouseholdSettings {
-    fn from(row: HouseholdSettingsRow) -> Self {
-        HouseholdSettings {
+impl TryFrom<HouseholdSettingsRow> for HouseholdSettings {
+    type Error = CoreError;
+
+    fn try_from(row: HouseholdSettingsRow) -> Result<Self, Self::Error> {
+        Ok(HouseholdSettings {
             meal_times: MealTimes {
                 breakfast: row.breakfast_time,
                 lunch: row.lunch_time,
                 dinner: row.dinner_time,
             },
+            missing_stock_interpretation: MissingStockInterpretation::from_str(
+                &row.missing_stock_interpretation,
+            )
+            .map_err(|_| {
+                bad_value(
+                    "missing_stock_interpretation",
+                    &row.missing_stock_interpretation,
+                )
+            })?,
             revision: Revision::new(row.revision),
             created_at: row.created_at,
             updated_at: row.updated_at,
-        }
+        })
+    }
+}
+
+#[derive(Debug, sqlx::FromRow)]
+pub struct StockItemRow {
+    pub id: Uuid,
+    pub product_id: Uuid,
+    pub tracking_mode: String,
+    pub quantity_value: Option<Decimal>,
+    pub quantity_unit: Option<String>,
+    pub estimated_low: Option<Decimal>,
+    pub estimated_high: Option<Decimal>,
+    pub storage_location: String,
+    pub source_date: Option<Date>,
+    pub source_date_kind: Option<String>,
+    pub usability_deadline: Option<Date>,
+    pub usability_deadline_basis: Option<String>,
+    pub note: Option<String>,
+    pub revision: i64,
+    pub created_at: OffsetDateTime,
+    pub updated_at: OffsetDateTime,
+    pub archived_at: Option<OffsetDateTime>,
+}
+
+impl TryFrom<StockItemRow> for StockItem {
+    type Error = CoreError;
+
+    fn try_from(row: StockItemRow) -> Result<Self, Self::Error> {
+        let mode = TrackingMode::from_str(&row.tracking_mode)
+            .map_err(|_| bad_value("tracking_mode", &row.tracking_mode))?;
+        let unit = match &row.quantity_unit {
+            Some(code) => Some(Unit::from_str(code).map_err(|_| bad_value("quantity_unit", code))?),
+            None => None,
+        };
+        let level = match mode {
+            TrackingMode::Exact => StockLevel::Exact {
+                quantity: Quantity::new(
+                    row.quantity_value
+                        .ok_or_else(|| bad_value("quantity_value", "null"))?,
+                    unit.ok_or_else(|| bad_value("quantity_unit", "null"))?,
+                ),
+            },
+            TrackingMode::Estimated => StockLevel::Estimated {
+                low: row
+                    .estimated_low
+                    .ok_or_else(|| bad_value("estimated_low", "null"))?,
+                high: row
+                    .estimated_high
+                    .ok_or_else(|| bad_value("estimated_high", "null"))?,
+                unit: unit.ok_or_else(|| bad_value("quantity_unit", "null"))?,
+            },
+            TrackingMode::NotTracked => StockLevel::NotTracked,
+        };
+
+        let source_date = match (row.source_date, row.source_date_kind) {
+            (Some(date), Some(kind)) => Some(SourceDate {
+                date,
+                kind: SourceDateKind::from_str(&kind)
+                    .map_err(|_| bad_value("source_date_kind", &kind))?,
+            }),
+            _ => None,
+        };
+        let usability_deadline = row.usability_deadline.map(|date| UsabilityDeadline {
+            date,
+            basis: row.usability_deadline_basis,
+        });
+
+        Ok(StockItem {
+            id: StockItemId::from(row.id),
+            product_id: ProductId::from(row.product_id),
+            level,
+            storage_location: StorageLocation::from_str(&row.storage_location)
+                .map_err(|_| bad_value("storage_location", &row.storage_location))?,
+            source_date,
+            usability_deadline,
+            note: row.note,
+            revision: Revision::new(row.revision),
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+            archived_at: row.archived_at,
+        })
+    }
+}
+
+#[derive(Debug, sqlx::FromRow)]
+pub struct StockEventRow {
+    pub id: Uuid,
+    pub stock_item_id: Uuid,
+    pub event_kind: String,
+    pub quantity_delta: Option<Decimal>,
+    pub quantity_unit: Option<String>,
+    pub actor_user_id: Option<Uuid>,
+    pub subject_member_id: Option<Uuid>,
+    pub note: Option<String>,
+    pub occurred_at: OffsetDateTime,
+}
+
+impl TryFrom<StockEventRow> for StockEvent {
+    type Error = CoreError;
+
+    fn try_from(row: StockEventRow) -> Result<Self, Self::Error> {
+        let quantity_delta = match (row.quantity_delta, row.quantity_unit) {
+            (Some(amount), Some(unit)) => Some(Quantity::new(
+                amount,
+                Unit::from_str(&unit).map_err(|_| bad_value("quantity_unit", &unit))?,
+            )),
+            _ => None,
+        };
+        Ok(StockEvent {
+            id: StockEventId::from(row.id),
+            stock_item_id: StockItemId::from(row.stock_item_id),
+            kind: StockEventKind::from_str(&row.event_kind)
+                .map_err(|_| bad_value("event_kind", &row.event_kind))?,
+            quantity_delta,
+            actor_user_id: row.actor_user_id.map(UserId::from),
+            subject_member_id: row.subject_member_id.map(HouseholdMemberId::from),
+            note: row.note,
+            occurred_at: row.occurred_at,
+        })
     }
 }
 

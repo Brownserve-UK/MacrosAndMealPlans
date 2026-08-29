@@ -16,6 +16,8 @@ import { RecipePage } from '../features/recipes/RecipePage';
 import { EditRecipePage, NewRecipePage } from '../features/recipes/RecipeFormPage';
 import { RecipesPage } from '../features/recipes/RecipesPage';
 import { ProfilePage } from '../features/profile/ProfilePage';
+import { StockPage } from '../features/stock/StockPage';
+import { StockItemPage } from '../features/stock/StockItemPage';
 
 const rootRoute = createRootRoute({ component: AppShell });
 
@@ -141,6 +143,21 @@ const recipeRoute = createRoute({
   },
 });
 
+const stockRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/stock',
+  component: StockPage,
+});
+
+const stockItemRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/stock/$id',
+  component: function ViewStockItem() {
+    const { id } = stockItemRoute.useParams();
+    return <StockItemPage id={id} />;
+  },
+});
+
 const householdRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/household',
@@ -196,6 +213,8 @@ const routeTree = rootRoute.addChildren([
   newRecipeRoute,
   recipeRoute,
   editRecipeRoute,
+  stockRoute,
+  stockItemRoute,
   householdRoute,
   memberRoute,
   administrationRoute,

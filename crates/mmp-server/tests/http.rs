@@ -11,13 +11,14 @@ use image::{DynamicImage, ImageFormat, RgbImage};
 use mmp_core::ports::FixedClock;
 use mmp_core::services::{
     CatalogueService, DiaryService, HouseholdService, HouseholdSettingsService, MealPlanService,
-    NutritionTargetService, RecipeService,
+    NutritionTargetService, RecipeService, StockService,
 };
 use mmp_core::testing::{
     InMemoryAccessGrantRepository, InMemoryConsumptionRecordRepository,
     InMemoryHouseholdMemberRepository, InMemoryHouseholdSettingsRepository,
     InMemoryIngredientRepository, InMemoryMealPlanRepository, InMemoryNutritionTargetRepository,
-    InMemoryProductRepository, InMemoryRecipeRepository, InMemoryUserRepository,
+    InMemoryProductRepository, InMemoryRecipeRepository, InMemoryStockRepository,
+    InMemoryUserRepository,
 };
 use mmp_server::AppState;
 use mmp_server::auth::DevBasicAuthProvider;
@@ -30,8 +31,10 @@ const PASSWORD: &str = "changeme";
 
 async fn app() -> Router {
     let clock = Arc::new(FixedClock::new(datetime!(2026-08-26 12:00 UTC)));
+    let members = InMemoryHouseholdMemberRepository::new();
+    let settings_repo = InMemoryHouseholdSettingsRepository::new();
     let household = Arc::new(HouseholdService::new(
-        Arc::new(InMemoryHouseholdMemberRepository::new()),
+        Arc::new(members.clone()),
         Arc::new(InMemoryUserRepository::new()),
         Arc::new(InMemoryAccessGrantRepository::new()),
         clock.clone(),
@@ -45,7 +48,17 @@ async fn app() -> Router {
     let ingredients = Arc::new(InMemoryIngredientRepository::new());
     let consumption = InMemoryConsumptionRecordRepository::new();
     let targets = InMemoryNutritionTargetRepository::new();
+    let stock_repo = InMemoryStockRepository::new();
+    let meal_plans = InMemoryMealPlanRepository::new(consumption.clone());
     let recipes_repo = Arc::new(InMemoryRecipeRepository::new());
+    let stock = StockService::new(
+        Arc::new(stock_repo.clone()),
+        Arc::new(products.clone()),
+        Arc::new(meal_plans.clone()),
+        Arc::new(members.clone()),
+        Arc::new(settings_repo.clone()),
+        clock.clone(),
+    );
     let recipes = RecipeService::new(
         recipes_repo.clone(),
         Arc::new(products.clone()),
@@ -59,10 +72,7 @@ async fn app() -> Router {
             clock.clone(),
         ),
         household.clone(),
-        HouseholdSettingsService::new(
-            Arc::new(InMemoryHouseholdSettingsRepository::new()),
-            clock.clone(),
-        ),
+        HouseholdSettingsService::new(Arc::new(settings_repo), clock.clone()),
         DiaryService::new(
             Arc::new(consumption.clone()),
             Arc::new(products.clone()),
@@ -70,7 +80,7 @@ async fn app() -> Router {
             clock.clone(),
         ),
         MealPlanService::new(
-            Arc::new(InMemoryMealPlanRepository::new(consumption.clone())),
+            Arc::new(meal_plans),
             Arc::new(products),
             recipes_repo,
             Arc::new(consumption),
@@ -79,6 +89,7 @@ async fn app() -> Router {
         ),
         NutritionTargetService::new(Arc::new(targets), clock),
         recipes,
+        stock,
         Arc::new(DevBasicAuthProvider::new(household, PASSWORD)),
     );
     mmp_server::app::build(state).0
@@ -2813,4 +2824,134 @@ async fn a_recipe_estimates_nutrition_for_a_generic_ingredient() {
         "ingredient"
     );
     assert_eq!(resolved["components"][1]["source_text"], "Nutmeg");
+}
+
+async fn create_product(app: &Router, name: &str) -> String {
+    let (status, body, _) = send(
+        app,
+        Call::new("POST", "/api/v1/products").body(json!({
+            "name": name,
+            "package_quantity": {"amount": 1000.0, "unit": "g"},
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    body["id"].as_str().unwrap().to_owned()
+}
+
+#[tokio::test]
+async fn stock_round_trips_through_the_api_and_records_history() {
+    let app = app().await;
+    let product_id = create_product(&app, "Chicken breast").await;
+
+    let (status, created, headers) = send(
+        &app,
+        Call::new("POST", "/api/v1/stock").body(json!({
+            "product_id": product_id,
+            "level": {"mode": "exact", "quantity": {"amount": 400.0, "unit": "g"}},
+            "storage_location": "chilled",
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    assert_eq!(etag(&headers), "1");
+    assert_eq!(created["tracking_mode"], "exact");
+    let id = created["id"].as_str().unwrap().to_owned();
+
+    let (status, events, _) =
+        send(&app, Call::new("GET", format!("/api/v1/stock/{id}/events"))).await;
+    assert_eq!(status, StatusCode::OK, "{events}");
+    assert_eq!(events.as_array().unwrap().len(), 1);
+    assert_eq!(events[0]["kind"], "added");
+
+    let (status, updated, _) = send(
+        &app,
+        Call::new("PATCH", format!("/api/v1/stock/{id}"))
+            .if_match(1)
+            .body(json!({"level": {"mode": "exact", "quantity": {"amount": 150.0, "unit": "g"}}})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{updated}");
+    assert_eq!(updated["revision"], 2);
+
+    let (_, events, _) = send(&app, Call::new("GET", format!("/api/v1/stock/{id}/events"))).await;
+    assert_eq!(events.as_array().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn stock_availability_nets_off_planned_demand() {
+    let app = app().await;
+    let product_id = create_product(&app, "Chicken breast").await;
+
+    send(
+        &app,
+        Call::new("POST", "/api/v1/stock").body(json!({
+            "product_id": product_id,
+            "level": {"mode": "exact", "quantity": {"amount": 1000.0, "unit": "g"}},
+            "storage_location": "chilled",
+        })),
+    )
+    .await;
+
+    let (status, plan, _) = send(
+        &app,
+        Call::new("POST", "/api/v1/meal-plan-entries").body(json!({
+            "planned_on": "2026-08-27",
+            "slot": "dinner",
+            "components": [{
+                "product_id": product_id,
+                "amount": {"kind": "measure", "value": 250.0, "unit": "g"}
+            }]
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{plan}");
+
+    let (status, rows, _) = send(
+        &app,
+        Call::new(
+            "GET",
+            format!(
+                "/api/v1/stock/availability?product_id={product_id}&from=2026-08-20&to=2026-09-03"
+            ),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{rows}");
+    let row = &rows[0]["availability"];
+    assert_eq!(row["state"], "quantified");
+    assert_eq!(row["on_hand"]["amount"], json!(1000.0));
+    assert_eq!(row["planned_demand"]["amount"], json!(250.0));
+    assert_eq!(row["unallocated"]["amount"], json!(750.0));
+}
+
+#[tokio::test]
+async fn a_basic_user_cannot_read_stock_history() {
+    let app = app().await;
+    create_user(&app, "joe", &["basic_user"]).await;
+    let product_id = create_product(&app, "Chicken breast").await;
+    let (_, created, _) = send(
+        &app,
+        Call::new("POST", "/api/v1/stock").body(json!({
+            "product_id": product_id,
+            "level": {"mode": "not_tracked"},
+            "storage_location": "ambient",
+        })),
+    )
+    .await;
+    let id = created["id"].as_str().unwrap();
+
+    let (status, _, _) = send(
+        &app,
+        Call::new("GET", format!("/api/v1/stock/{id}/events")).signed_in_as("joe"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    let (status, _, _) = send(&app, Call::new("GET", "/api/v1/stock").signed_in_as("joe")).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "a basic user may still see the inventory"
+    );
 }
