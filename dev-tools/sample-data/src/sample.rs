@@ -6,12 +6,13 @@ use mmp_core::CoreError;
 use mmp_core::domain::{
     AccessScope, ActualMealPlanComponent, ConfirmMealPlanComponent, ConfirmMealPlanEntry,
     ConsumedAmount, ConsumptionRecordId, HouseholdMember, HouseholdMemberId, IngredientId,
-    MealCategory, MealItemRef, MealPlanEntryId, MealPlanStatus, MealSlot, NewConsumptionRecord,
-    NewHouseholdMember, NewMealPlanComponent, NewMealPlanEntry, NewNutritionTarget, NewProduct,
-    NewRecipe, NewRecipeComponent, NewRecipeInstruction, NewStockItem, NewUser, NutritionFacts,
-    NutritionGoals, Patch, ProductId, Provenance, Quantity, RecipeId, RecipePatch,
-    RecipeRequirement, Role, SourceDate, SourceDateKind, StockLevel, StorageLocation, Unit, User,
-    UserId,
+    MealCategory, MealItemRef, MealPlanEntryId, MealPlanScope, MealPlanStatus, MealSlot,
+    NewConsumptionRecord, NewHouseholdMember, NewMealParticipant, NewMealParticipantAllocation,
+    NewMealPlanComponent, NewMealPlanEntry, NewNutritionTarget, NewProduct, NewRecipe,
+    NewRecipeComponent, NewRecipeInstruction, NewStockItem, NewUser, NutritionFacts,
+    NutritionGoals, OutcomeActor, Patch, ProductId, Provenance, Quantity, RecipeId, RecipePatch,
+    RecipeRequirement, Role, SetMealParticipants, SourceDate, SourceDateKind, StockLevel,
+    StorageLocation, Unit, User, UserId,
 };
 use mmp_server::state::AppState;
 use rust_decimal::Decimal;
@@ -58,6 +59,7 @@ pub struct Report {
     pub stock_items_created: usize,
     pub meals_created: usize,
     pub meals_resolved: usize,
+    pub household_participants_created: usize,
     pub diary_entries_created: usize,
 }
 
@@ -547,7 +549,96 @@ impl Loader<'_> {
         }
 
         self.load_previous_partial_week().await?;
-        self.load_current_partial_week().await
+        self.load_current_partial_week().await?;
+        self.load_household_meals().await
+    }
+
+    async fn load_household_meals(&mut self) -> anyhow::Result<()> {
+        let manager = HouseholdMemberId::from_uuid(sample_uuid("household-member", "manager"));
+        let basic = HouseholdMemberId::from_uuid(sample_uuid("household-member", "basic-user"));
+        let owner = self.member.id;
+
+        let saturday = self.week_start + Duration::days(5);
+        self.ensure_household_meal(
+            saturday,
+            MealSlot::Lunch,
+            "chicken-and-rice",
+            servings(4),
+            &[(owner, 1), (manager, 1), (basic, 1)],
+        )
+        .await?;
+
+        let thursday = self.week_start + Duration::days(3);
+        self.ensure_household_meal(
+            thursday,
+            MealSlot::Lunch,
+            "chicken-and-rice",
+            servings(3),
+            &[(owner, 2), (manager, 1), (basic, 1)],
+        )
+        .await?;
+        Ok(())
+    }
+
+    async fn ensure_household_meal(
+        &mut self,
+        date: Date,
+        slot: MealSlot,
+        recipe_key: &str,
+        prepared: ConsumedAmount,
+        allocations: &[(HouseholdMemberId, i64)],
+    ) -> anyhow::Result<()> {
+        let id = meal_id(date, slot);
+        if !matches!(
+            self.state.meal_plan.get(id).await,
+            Err(CoreError::NotFound { .. })
+        ) {
+            return Ok(());
+        }
+        self.report.meals_created += 1;
+        let view = self
+            .state
+            .meal_plan
+            .create_unchecked(NewMealPlanEntry {
+                id: Some(id),
+                scope: MealPlanScope::Household,
+                member_id: None,
+                planned_on: date,
+                planned_time: slot_time(slot),
+                slot,
+                components: vec![NewMealPlanComponent {
+                    id: None,
+                    item: MealItemRef::recipe(recipe_id(recipe_key)),
+                    amount: prepared,
+                }],
+                actor_id: self.actor.id,
+            })
+            .await?;
+        let component_id = view.components[0].component.id;
+        let participants = allocations
+            .iter()
+            .map(|(member_id, count)| NewMealParticipant {
+                id: None,
+                member_id: *member_id,
+                allocations: vec![NewMealParticipantAllocation {
+                    component_id,
+                    allocated: servings(*count),
+                }],
+            })
+            .collect();
+        self.state
+            .meal_plan
+            .set_participants(
+                view.entry.id,
+                view.entry.revision,
+                SetMealParticipants {
+                    participants,
+                    actor_id: self.actor.id,
+                },
+            )
+            .await?;
+        self.report.household_participants_created += allocations.len();
+        Ok(())
     }
 
     async fn load_previous_partial_week(&mut self) -> anyhow::Result<()> {
@@ -669,7 +760,8 @@ impl Loader<'_> {
                     .meal_plan
                     .create_unchecked(NewMealPlanEntry {
                         id: Some(id),
-                        member_id: self.member.id,
+                        scope: MealPlanScope::Member,
+                        member_id: Some(self.member.id),
                         planned_on: date,
                         planned_time: slot_time(slot),
                         slot,
@@ -694,7 +786,11 @@ impl Loader<'_> {
             view = self
                 .state
                 .meal_plan
-                .reopen(view.entry.id, view.entry.revision, self.actor.id)
+                .reopen(
+                    view.entry.id,
+                    view.entry.revision,
+                    OutcomeActor::own(self.actor.id),
+                )
                 .await?;
         }
 
@@ -717,6 +813,7 @@ impl Loader<'_> {
                                 .map(|time| PrimitiveDateTime::new(date, time).assume_utc()),
                             amount: component.component.amount,
                             actor_id: self.actor.id,
+                            subject_member_id: None,
                         },
                     )
                     .await?;
@@ -725,7 +822,11 @@ impl Loader<'_> {
             Outcome::NotEaten => {
                 self.state
                     .meal_plan
-                    .mark_not_eaten_unchecked(view.entry.id, view.entry.revision, self.actor.id)
+                    .mark_not_eaten_unchecked(
+                        view.entry.id,
+                        view.entry.revision,
+                        OutcomeActor::own(self.actor.id),
+                    )
                     .await?;
                 self.report.meals_resolved += 1;
             }
@@ -755,6 +856,7 @@ impl Loader<'_> {
                                 .map(|time| PrimitiveDateTime::new(date, time).assume_utc()),
                             components,
                             actor_id: self.actor.id,
+                            subject_member_id: None,
                         },
                     )
                     .await?;
@@ -783,7 +885,8 @@ impl Loader<'_> {
             .meal_plan
             .create_unchecked(NewMealPlanEntry {
                 id: Some(id),
-                member_id: self.member.id,
+                scope: MealPlanScope::Member,
+                member_id: Some(self.member.id),
                 planned_on: date,
                 planned_time: slot_time(slot),
                 slot,

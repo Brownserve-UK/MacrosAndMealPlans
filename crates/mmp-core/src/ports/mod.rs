@@ -5,9 +5,10 @@ pub use clock::{Clock, FixedClock, SystemClock};
 pub use repository::{
     AccessGrantRepository, ConsumptionQuery, ConsumptionRecordRepository,
     HouseholdMemberRepository, HouseholdSettingsRepository, IngredientQuery, IngredientRepository,
-    MealPlanQuery, MealPlanRepository, MemberQuery, NutritionTargetRepository, ProductQuery,
-    ProductRepository, RecipeQuery, RecipeRepository, SortDirection, StockQuery, StockRepository,
-    UpdateOutcome, UserQuery, UserRepository,
+    MealPlanComponentUpdate, MealPlanQuery, MealPlanRepository, MemberQuery,
+    NutritionTargetRepository, ProductQuery, ProductRepository, RecipeQuery, RecipeRepository,
+    SnapshotOp, SortDirection, StockQuery, StockRepository, UpdateOutcome, UserQuery,
+    UserRepository,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

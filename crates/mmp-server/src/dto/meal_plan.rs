@@ -1,10 +1,12 @@
 use mmp_core::domain::{
-    ActualMealPlanComponent, ConfirmMealPlanComponent, ConfirmMealPlanEntry, MealItemRef,
-    MealPlanEntryPatch, MealPlanStatus, MealSlot, NewMealPlanComponent, NewMealPlanEntry, Patch,
+    ActualMealPlanComponent, ComponentPreparation, ConfirmMealPlanComponent, ConfirmMealPlanEntry,
+    MealItemRef, MealParticipantAllocation, MealPlanEntryPatch, MealPlanScope, MealPlanStatus,
+    MealSlot, NewMealParticipant, NewMealParticipantAllocation, NewMealPlanComponent,
+    NewMealPlanEntry, ParticipantStatus, Patch, SetMealParticipants,
 };
 use mmp_core::services::{
-    MealItem, MealItemSource, MealPlanComponentView, MealPlanDay, MealPlanEntryView, MealPlanWeek,
-    MealSlotView, NutritionSummary,
+    MealItem, MealItemSource, MealParticipantView, MealPlanComponentView, MealPlanDay,
+    MealPlanEntryView, MealPlanWeek, MealSlotView, NutritionSummary,
 };
 use serde::{Deserialize, Serialize};
 use time::{Date, OffsetDateTime, Time};
@@ -77,6 +79,91 @@ impl From<ItemRefRequest> for MealItemRef {
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct AmountSummaryDto {
+    pub kind: String,
+    #[schema(value_type = String)]
+    pub value: rust_decimal::Decimal,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unit: Option<String>,
+}
+
+impl From<mmp_core::domain::ConsumedAmount> for AmountSummaryDto {
+    fn from(value: mmp_core::domain::ConsumedAmount) -> Self {
+        let unit = match value {
+            mmp_core::domain::ConsumedAmount::Measure(quantity) => Some(quantity.unit.to_string()),
+            _ => None,
+        };
+        Self {
+            kind: value.kind_code().to_owned(),
+            value: value.value(),
+            unit,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct ComponentPreparationDto {
+    pub prepared: AmountSummaryDto,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub allocated: Option<AmountSummaryDto>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unallocated: Option<AmountSummaryDto>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub leftover: Option<AmountSummaryDto>,
+    pub shortage: bool,
+}
+
+impl From<ComponentPreparation> for ComponentPreparationDto {
+    fn from(value: ComponentPreparation) -> Self {
+        Self {
+            prepared: value.prepared.into(),
+            allocated: value.allocated.map(Into::into),
+            unallocated: value.unallocated.map(Into::into),
+            leftover: value.leftover.map(Into::into),
+            shortage: value.shortage,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct MealParticipantAllocationDto {
+    pub component_id: Uuid,
+    pub allocated: AmountSummaryDto,
+    pub status: ParticipantStatus,
+}
+
+impl From<MealParticipantAllocation> for MealParticipantAllocationDto {
+    fn from(value: MealParticipantAllocation) -> Self {
+        Self {
+            component_id: value.component_id.as_uuid(),
+            allocated: value.allocated.into(),
+            status: value.status,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct MealParticipantDto {
+    pub member_id: Uuid,
+    pub display_name: String,
+    pub status: MealPlanStatus,
+    pub allocations: Vec<MealParticipantAllocationDto>,
+    pub nutrition: NutritionSummaryDto,
+}
+
+impl From<MealParticipantView> for MealParticipantDto {
+    fn from(value: MealParticipantView) -> Self {
+        Self {
+            member_id: value.member_id.as_uuid(),
+            display_name: value.display_name,
+            status: value.status,
+            allocations: value.allocations.into_iter().map(Into::into).collect(),
+            nutrition: value.nutrition.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct MealPlanComponentDto {
     pub id: Uuid,
     #[serde(flatten)]
@@ -87,6 +174,8 @@ pub struct MealPlanComponentDto {
     pub nutrition: NutritionDto,
     pub quality: mmp_core::domain::NutritionQuality,
     pub status: MealPlanStatus,
+    pub subject_status: MealPlanStatus,
+    pub preparation: ComponentPreparationDto,
     pub revision: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub consumption_record: Option<ConsumptionRecordDto>,
@@ -103,6 +192,8 @@ impl From<MealPlanComponentView> for MealPlanComponentDto {
             nutrition: value.nutrition.into(),
             quality: value.quality,
             status: value.component.status,
+            subject_status: value.subject_status,
+            preparation: value.preparation.into(),
             revision: value.component.revision.get(),
             consumption_record: value.consumption_record.map(Into::into),
         }
@@ -112,7 +203,12 @@ impl From<MealPlanComponentView> for MealPlanComponentDto {
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct MealPlanEntryDto {
     pub id: Uuid,
-    pub member_id: Uuid,
+    pub scope: MealPlanScope,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub member_id: Option<Uuid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subject_member_id: Option<Uuid>,
+    pub participants: Vec<MealParticipantDto>,
     #[serde(with = "iso_date")]
     #[schema(value_type = String, format = Date)]
     pub planned_on: Date,
@@ -149,7 +245,10 @@ impl From<MealPlanEntryView> for MealPlanEntryDto {
     fn from(value: MealPlanEntryView) -> Self {
         Self {
             id: value.entry.id.as_uuid(),
-            member_id: value.entry.member_id.as_uuid(),
+            scope: value.entry.scope,
+            member_id: value.entry.member_id.map(|id| id.as_uuid()),
+            subject_member_id: value.subject_member_id.map(|id| id.as_uuid()),
+            participants: value.participants.into_iter().map(Into::into).collect(),
             planned_on: value.entry.planned_on,
             planned_time: value.entry.planned_time,
             slot: value.entry.slot,
@@ -348,6 +447,8 @@ impl From<MealPlanComponentRequest> for NewMealPlanComponent {
 pub struct CreateMealPlanEntryRequest {
     #[serde(default)]
     pub id: Option<Uuid>,
+    #[serde(default)]
+    pub household: bool,
     #[serde(with = "iso_date")]
     #[schema(value_type = String, format = Date)]
     pub planned_on: Date,
@@ -364,14 +465,62 @@ impl CreateMealPlanEntryRequest {
         member_id: mmp_core::domain::HouseholdMemberId,
         actor_id: mmp_core::domain::UserId,
     ) -> NewMealPlanEntry {
+        let (scope, member_id) = if self.household {
+            (MealPlanScope::Household, None)
+        } else {
+            (MealPlanScope::Member, Some(member_id))
+        };
         NewMealPlanEntry {
             id: self.id.map(Into::into),
+            scope,
             member_id,
             planned_on: self.planned_on,
             planned_time: self.planned_time,
             slot: self.slot,
             components: self.components.into_iter().map(Into::into).collect(),
             actor_id,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+pub struct SetMealPlanParticipantsRequest {
+    pub participants: Vec<MealParticipantRequest>,
+}
+
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+pub struct MealParticipantRequest {
+    pub member_id: Uuid,
+    #[serde(default)]
+    pub allocations: Vec<MealParticipantAllocationRequest>,
+}
+
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+pub struct MealParticipantAllocationRequest {
+    pub component_id: Uuid,
+    pub amount: AmountDto,
+}
+
+impl SetMealPlanParticipantsRequest {
+    pub fn into_domain(self, actor_id: mmp_core::domain::UserId) -> SetMealParticipants {
+        SetMealParticipants {
+            actor_id,
+            participants: self
+                .participants
+                .into_iter()
+                .map(|participant| NewMealParticipant {
+                    id: None,
+                    member_id: participant.member_id.into(),
+                    allocations: participant
+                        .allocations
+                        .into_iter()
+                        .map(|allocation| NewMealParticipantAllocation {
+                            component_id: allocation.component_id.into(),
+                            allocated: allocation.amount.into(),
+                        })
+                        .collect(),
+                })
+                .collect(),
         }
     }
 }
@@ -424,6 +573,8 @@ pub struct MarkMealPlanEatenRequest {
     #[serde(default, with = "time::serde::rfc3339::option")]
     #[schema(value_type = Option<String>, format = DateTime)]
     pub consumed_at: Option<OffsetDateTime>,
+    #[serde(default)]
+    pub member_id: Option<Uuid>,
     pub components: Vec<ActualMealPlanComponentRequest>,
 }
 
@@ -432,6 +583,7 @@ impl MarkMealPlanEatenRequest {
         ConfirmMealPlanEntry {
             consumed_on: self.consumed_on,
             consumed_at: self.consumed_at,
+            subject_member_id: self.member_id.map(Into::into),
             components: self
                 .components
                 .into_iter()
@@ -453,6 +605,8 @@ pub struct MarkMealPlanComponentEatenRequest {
     #[serde(default, with = "time::serde::rfc3339::option")]
     #[schema(value_type = Option<String>, format = DateTime)]
     pub consumed_at: Option<OffsetDateTime>,
+    #[serde(default)]
+    pub member_id: Option<Uuid>,
     pub amount: AmountDto,
 }
 
@@ -461,6 +615,7 @@ impl MarkMealPlanComponentEatenRequest {
         ConfirmMealPlanComponent {
             consumed_on: self.consumed_on,
             consumed_at: self.consumed_at,
+            subject_member_id: self.member_id.map(Into::into),
             amount: self.amount.into(),
             actor_id,
         }

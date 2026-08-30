@@ -7,8 +7,8 @@ use async_trait::async_trait;
 
 use crate::domain::{
     AccessScope, ConsumptionRecord, ConsumptionRecordId, HouseholdMember, HouseholdMemberId,
-    HouseholdSettings, Ingredient, IngredientId, MealPlanEntry, MealPlanEntryId, MealTimes,
-    MemberAccessGrant, MissingStockInterpretation, NewStockEvent, NutritionTarget,
+    HouseholdSettings, Ingredient, IngredientId, MealParticipant, MealPlanEntry, MealPlanEntryId,
+    MealTimes, MemberAccessGrant, MissingStockInterpretation, NewStockEvent, NutritionTarget,
     NutritionTargetId, Product, ProductId, Recipe, RecipeId, RecipePhoto, RecipeSummary, Revision,
     Role, StockEvent, StockEventId, StockItem, StockItemId, User, UserId,
 };
@@ -16,9 +16,10 @@ use crate::error::{CoreError, Result};
 use crate::ports::{
     AccessGrantRepository, ConsumptionQuery, ConsumptionRecordRepository,
     HouseholdMemberRepository, HouseholdSettingsRepository, IngredientQuery, IngredientRepository,
-    MealPlanQuery, MealPlanRepository, MemberQuery, NutritionTargetRepository, Paginated,
-    ProductQuery, ProductRepository, RecipeQuery, RecipeRepository, SortDirection, StockQuery,
-    StockRepository, UpdateOutcome, UserQuery, UserRepository,
+    MealPlanComponentUpdate, MealPlanQuery, MealPlanRepository, MemberQuery,
+    NutritionTargetRepository, Paginated, ProductQuery, ProductRepository, RecipeQuery,
+    RecipeRepository, SnapshotOp, SortDirection, StockQuery, StockRepository, UpdateOutcome,
+    UserQuery, UserRepository,
 };
 
 // This _should_ reflect the indexes that a real database would enforce
@@ -793,7 +794,14 @@ impl MealPlanRepository for InMemoryMealPlanRepository {
             .lock()
             .unwrap()
             .values()
-            .filter(|entry| entry.member_id == query.member_id)
+            .filter(|entry| {
+                entry.member_id == Some(query.member_id)
+                    || (query.include_participating
+                        && entry
+                            .participants
+                            .iter()
+                            .any(|participant| participant.member_id == query.member_id))
+            })
             .filter(|entry| entry.planned_on >= query.from && entry.planned_on <= query.to)
             .cloned()
             .collect();
@@ -864,6 +872,7 @@ impl MealPlanRepository for InMemoryMealPlanRepository {
             records.values().any(|existing| {
                 candidate.meal_plan_component_id.is_some()
                     && existing.meal_plan_component_id == candidate.meal_plan_component_id
+                    && existing.member_id == candidate.member_id
             })
         }) {
             return Err(CoreError::conflict("That meal has already been confirmed."));
@@ -886,17 +895,33 @@ impl MealPlanRepository for InMemoryMealPlanRepository {
             }
             Some(_) => {}
         }
-
-        let mut records = self.consumption.rows.lock().unwrap();
-        records.retain(|_, record| record.meal_plan_entry_id != Some(entry.id));
         rows.insert(entry.id, entry.clone());
         Ok(UpdateOutcome::Updated)
+    }
+
+    async fn set_participants(
+        &self,
+        entry: &MealPlanEntry,
+        expected: Revision,
+    ) -> Result<UpdateOutcome> {
+        let mut rows = self.rows.lock().unwrap();
+        match rows.get(&entry.id) {
+            None => Ok(UpdateOutcome::NotFound),
+            Some(current) if current.revision != expected => Ok(UpdateOutcome::RevisionMismatch {
+                actual: current.revision,
+            }),
+            Some(_) => {
+                rows.insert(entry.id, entry.clone());
+                Ok(UpdateOutcome::Updated)
+            }
+        }
     }
 
     async fn resolve_component(
         &self,
         entry_id: MealPlanEntryId,
-        component: &crate::domain::MealPlanComponent,
+        component: &MealPlanComponentUpdate<'_>,
+        participants: &[MealParticipant],
         expected: Revision,
         consumption: Option<&ConsumptionRecord>,
     ) -> Result<UpdateOutcome> {
@@ -926,81 +951,68 @@ impl MealPlanRepository for InMemoryMealPlanRepository {
             }
             records.insert(record.id, record.clone());
         }
-        *current = component.clone();
-        refresh_in_memory_progress(entry, component.resolved_by, component.resolved_at);
+        apply_component_update(current, component);
+        entry.participants = participants.to_vec();
+        apply_entry_update(entry, component);
         Ok(UpdateOutcome::Updated)
     }
 
     async fn reopen_component(
         &self,
         entry_id: MealPlanEntryId,
-        component_id: crate::domain::MealPlanComponentId,
+        component: &MealPlanComponentUpdate<'_>,
+        participants: &[MealParticipant],
         expected: Revision,
-        actor_id: UserId,
     ) -> Result<UpdateOutcome> {
         let mut rows = self.rows.lock().unwrap();
         let Some(entry) = rows.get_mut(&entry_id) else {
             return Ok(UpdateOutcome::NotFound);
         };
-        let Some(component) = entry
+        let Some(current) = entry
             .components
             .iter_mut()
-            .find(|candidate| candidate.id == component_id)
+            .find(|candidate| candidate.id == component.id)
         else {
             return Ok(UpdateOutcome::NotFound);
         };
-        if component.revision != expected {
+        if current.revision != expected {
             return Ok(UpdateOutcome::RevisionMismatch {
-                actual: component.revision,
+                actual: current.revision,
             });
         }
-        component.snapshot = None;
-        component.status = crate::domain::MealPlanStatus::Planned;
-        component.resolved_by = None;
-        component.resolved_at = None;
-        component.revision = component.revision.next();
-        self.consumption
-            .rows
-            .lock()
-            .unwrap()
-            .retain(|_, record| record.meal_plan_component_id != Some(component_id));
-        refresh_in_memory_progress(entry, Some(actor_id), Some(time::OffsetDateTime::now_utc()));
+        apply_component_update(current, component);
+        entry.participants = participants.to_vec();
+        apply_entry_update(entry, component);
         Ok(UpdateOutcome::Updated)
     }
 }
 
-fn refresh_in_memory_progress(
-    entry: &mut MealPlanEntry,
-    actor_id: Option<UserId>,
-    at: Option<time::OffsetDateTime>,
+fn apply_component_update(
+    component: &mut crate::domain::MealPlanComponent,
+    update: &MealPlanComponentUpdate<'_>,
 ) {
-    let planned = entry
-        .components
-        .iter()
-        .filter(|component| component.status == crate::domain::MealPlanStatus::Planned)
-        .count();
-    let eaten = entry
-        .components
-        .iter()
-        .filter(|component| component.status == crate::domain::MealPlanStatus::Eaten)
-        .count();
-    entry.status = if planned == entry.components.len() {
-        crate::domain::MealPlanStatus::Planned
-    } else if eaten == entry.components.len() {
-        crate::domain::MealPlanStatus::Eaten
-    } else if planned == 0 && eaten == 0 {
-        crate::domain::MealPlanStatus::NotEaten
-    } else {
-        crate::domain::MealPlanStatus::PartiallyResolved
-    };
-    entry.revision = entry.revision.next();
-    if entry.status == crate::domain::MealPlanStatus::Planned {
-        entry.resolved_by = None;
-        entry.resolved_at = None;
-    } else {
-        entry.resolved_by = actor_id;
-        entry.resolved_at = at;
+    component.status = update.status;
+    component.resolved_by = update.resolved_by;
+    component.resolved_at = update.resolved_at;
+    component.revision = update.revision;
+    match update.snapshot {
+        SnapshotOp::Keep => {}
+        SnapshotOp::Clear => component.snapshot = None,
+        SnapshotOp::Set(snapshot) => {
+            if component.snapshot.is_none() {
+                component.snapshot = Some(snapshot.clone());
+            }
+        }
     }
+}
+
+fn apply_entry_update(entry: &mut MealPlanEntry, update: &MealPlanComponentUpdate<'_>) {
+    entry.status = update.entry_status;
+    entry.resolved_by = update.entry_resolved_by;
+    entry.resolved_at = update.entry_resolved_at;
+    entry.updated_by = update.actor_id;
+    entry.updated_at = update.now;
+    entry.revision = entry.revision.next();
 }
 
 fn enforce_target_uniqueness(
@@ -1118,11 +1130,18 @@ impl InMemoryHouseholdSettingsRepository {
                     dinner: time::macros::time!(18:00),
                 },
                 missing_stock_interpretation: MissingStockInterpretation::Unknown,
+                default_all_members_participate: false,
                 revision: Revision::INITIAL,
                 created_at: time::OffsetDateTime::UNIX_EPOCH,
                 updated_at: time::OffsetDateTime::UNIX_EPOCH,
             })),
         }
+    }
+}
+
+impl InMemoryHouseholdSettingsRepository {
+    pub fn set_default_all_members_participate(&self, value: bool) {
+        self.row.lock().unwrap().default_all_members_participate = value;
     }
 }
 

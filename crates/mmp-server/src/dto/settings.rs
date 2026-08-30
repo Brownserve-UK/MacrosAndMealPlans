@@ -48,6 +48,7 @@ pub struct HouseholdSettingsDto {
     #[serde(flatten)]
     pub meal_times: MealTimesDto,
     pub missing_stock_interpretation: MissingStockInterpretationDto,
+    pub default_all_members_participate: bool,
     pub revision: i64,
     #[serde(with = "time::serde::rfc3339")]
     #[schema(value_type = String, format = DateTime)]
@@ -66,6 +67,7 @@ impl From<HouseholdSettings> for HouseholdSettingsDto {
                 dinner: value.meal_times.dinner,
             },
             missing_stock_interpretation: value.missing_stock_interpretation.into(),
+            default_all_members_participate: value.default_all_members_participate,
             revision: value.revision.get(),
             created_at: value.created_at,
             updated_at: value.updated_at,
@@ -86,6 +88,8 @@ pub struct UpdateMealTimesRequest {
     pub dinner: Option<Time>,
     #[serde(default)]
     pub missing_stock_interpretation: Option<MissingStockInterpretationDto>,
+    #[serde(default)]
+    pub default_all_members_participate: Option<bool>,
 }
 
 impl From<UpdateMealTimesRequest> for HouseholdSettingsPatch {
@@ -95,6 +99,7 @@ impl From<UpdateMealTimesRequest> for HouseholdSettingsPatch {
             lunch_time: value.lunch,
             dinner_time: value.dinner,
             missing_stock_interpretation: value.missing_stock_interpretation.map(Into::into),
+            default_all_members_participate: value.default_all_members_participate,
         }
     }
 }

@@ -1,13 +1,16 @@
 import Alert from '@mui/material/Alert';
 import Button from '@mui/material/Button';
+import FormControlLabel from '@mui/material/FormControlLabel';
 import Paper from '@mui/material/Paper';
 import Snackbar from '@mui/material/Snackbar';
 import Stack from '@mui/material/Stack';
+import Switch from '@mui/material/Switch';
 import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
 import { Link } from '@tanstack/react-router';
 import { useState, type FormEvent } from 'react';
 import { ApiError, type MealTimesSettings } from '../../api/client';
+import type { components } from '../../api/schema';
 import { useMealTimes, useUpdateMealTimes } from '../../api/queries';
 import { useAuth } from '../../auth/AuthProvider';
 import { BackLabel } from '../../components/BackLink';
@@ -50,15 +53,21 @@ function EditMealTimes({
   const [failure, setFailure] = useState<string | null>(null);
   const [conflict, setConflict] = useState<ApiError | null>(null);
   const [saved, setSaved] = useState(false);
+  const [defaultAll, setDefaultAll] = useState(settings.default_all_members_participate);
 
-  const dirty = SLOTS.some(({ key }) => times[key] !== settings[key]);
+  const dirty =
+    SLOTS.some(({ key }) => times[key] !== settings[key]) ||
+    defaultAll !== settings.default_all_members_participate;
 
   async function onSubmit(event: FormEvent) {
     event.preventDefault();
     setFailure(null);
-    const body: Partial<Record<(typeof SLOTS)[number]['key'], string>> = {};
+    const body: components['schemas']['UpdateMealTimesRequest'] = {};
     for (const { key } of SLOTS) {
       if (times[key] !== settings[key]) body[key] = times[key];
+    }
+    if (defaultAll !== settings.default_all_members_participate) {
+      body.default_all_members_participate = defaultAll;
     }
     try {
       await update.mutateAsync({ revision: settings.revision, body });
@@ -106,6 +115,17 @@ function EditMealTimes({
             <Typography variant="body2" color="text.secondary">
               Snacks have no set time.
             </Typography>
+
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={defaultAll}
+                  onChange={(event) => setDefaultAll(event.target.checked)}
+                  disabled={!canManage}
+                />
+              }
+              label="Add everyone to new household meals"
+            />
 
             {canManage ? (
               <Button

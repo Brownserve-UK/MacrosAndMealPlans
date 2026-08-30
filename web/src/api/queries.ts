@@ -665,6 +665,24 @@ export function useReopenMealPlanComponent() {
   });
 }
 
+export function useSetMealPlanParticipants() {
+  const invalidate = useMealPlanInvalidation();
+  return useMutation({
+    mutationFn: async (input: {
+      id: string;
+      revision: number;
+      body: components['schemas']['SetMealPlanParticipantsRequest'];
+    }) =>
+      unwrap(
+        await client.PUT('/api/v1/meal-plan-entries/{id}/participants', {
+          params: { path: { id: input.id }, header: ifMatch(input.revision) },
+          body: input.body,
+        }),
+      ),
+    onSuccess: () => invalidate(),
+  });
+}
+
 export function useNutritionTargets(memberId: string) {
   return useQuery({
     queryKey: keys.nutritionTargets(memberId),

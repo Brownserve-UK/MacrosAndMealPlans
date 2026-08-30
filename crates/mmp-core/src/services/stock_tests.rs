@@ -89,7 +89,8 @@ async fn plan_measured(h: &Harness, product_id: ProductId, g: i64) {
     let now = OffsetDateTime::UNIX_EPOCH;
     let entry = MealPlanEntry {
         id: crate::domain::MealPlanEntryId::new(),
-        member_id: h.member_id,
+        scope: crate::domain::MealPlanScope::Member,
+        member_id: Some(h.member_id),
         planned_on: date!(2026 - 08 - 25),
         planned_time: None,
         slot: MealSlot::Dinner,
@@ -106,6 +107,7 @@ async fn plan_measured(h: &Harness, product_id: ProductId, g: i64) {
             revision: Revision::INITIAL,
             display_order: uuid::Uuid::nil(),
         }],
+        participants: Vec::new(),
         created_by: h.actor_id,
         updated_by: h.actor_id,
         resolved_by: None,
@@ -299,7 +301,8 @@ async fn a_recipe_component_in_the_horizon_marks_demand_incomplete() {
     let now = OffsetDateTime::UNIX_EPOCH;
     let entry = MealPlanEntry {
         id: crate::domain::MealPlanEntryId::new(),
-        member_id: h.member_id,
+        scope: crate::domain::MealPlanScope::Member,
+        member_id: Some(h.member_id),
         planned_on: date!(2026 - 08 - 25),
         planned_time: None,
         slot: MealSlot::Lunch,
@@ -316,6 +319,7 @@ async fn a_recipe_component_in_the_horizon_marks_demand_incomplete() {
             revision: Revision::INITIAL,
             display_order: uuid::Uuid::nil(),
         }],
+        participants: Vec::new(),
         created_by: h.actor_id,
         updated_by: h.actor_id,
         resolved_by: None,

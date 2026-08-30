@@ -4,19 +4,21 @@ use mmp_core::CoreError;
 use mmp_core::domain::{
     AccessScope, CatalogueOrigin, ConsumedAmount, ConsumptionRecord, ConsumptionRecordId,
     HouseholdMember, HouseholdMemberId, Ingredient, IngredientId, MealCategory, MealItemRef,
-    MealPlanComponent, MealPlanComponentId, MealPlanComponentSnapshot, MealPlanEntry,
-    MealPlanEntryId, MealPlanStatus, MealSlot, MemberAccessGrant, NewStockEvent, NutritionFacts,
-    NutritionGoals, NutritionQuality, NutritionTarget, NutritionTargetId, Product, ProductId,
-    Provenance, Quantity, Recipe, RecipeComponent, RecipeComponentId, RecipeId, RecipeInstruction,
-    RecipeInstructionId, RecipePhoto, RecipePhotoDerivatives, RecipeRequirement, RecipeVisibility,
-    Revision, Role, StockEventKind, StockItemId, StockLevel, StorageLocation, Unit, User, UserId,
+    MealParticipant, MealPlanComponent, MealPlanComponentId, MealPlanComponentSnapshot,
+    MealPlanEntry, MealPlanEntryId, MealPlanScope, MealPlanStatus, MealSlot, MemberAccessGrant,
+    NewStockEvent, NutritionFacts, NutritionGoals, NutritionQuality, NutritionTarget,
+    NutritionTargetId, Product, ProductId, Provenance, Quantity, Recipe, RecipeComponent,
+    RecipeComponentId, RecipeId, RecipeInstruction, RecipeInstructionId, RecipePhoto,
+    RecipePhotoDerivatives, RecipeRequirement, RecipeVisibility, Revision, Role, StockEventKind,
+    StockItemId, StockLevel, StorageLocation, Unit, User, UserId,
 };
 use mmp_core::ports::{
     AccessGrantRepository, ConsumptionQuery, ConsumptionRecordRepository,
     HouseholdMemberRepository, HouseholdSettingsRepository, IngredientQuery, IngredientRepository,
-    MealPlanQuery, MealPlanRepository, MemberQuery, NutritionTargetRepository, PageRequest,
-    ProductQuery, ProductRepository, RecipeQuery, RecipeRepository, SortDirection, StockQuery,
-    StockRepository, UpdateOutcome, UserRepository,
+    MealPlanComponentUpdate, MealPlanQuery, MealPlanRepository, MemberQuery,
+    NutritionTargetRepository, PageRequest, ProductQuery, ProductRepository, RecipeQuery,
+    RecipeRepository, SnapshotOp, SortDirection, StockQuery, StockRepository, UpdateOutcome,
+    UserRepository,
 };
 use mmp_postgres::{
     PgAccessGrantRepository, PgConsumptionRecordRepository, PgHouseholdMemberRepository,
@@ -1224,7 +1226,8 @@ fn meal_plan_entry(
         .unwrap();
     MealPlanEntry {
         id: MealPlanEntryId::new(),
-        member_id,
+        scope: MealPlanScope::Member,
+        member_id: Some(member_id),
         planned_on: date!(2026 - 08 - 25),
         planned_time: Some(time::macros::time!(18:30)),
         slot: MealSlot::Dinner,
@@ -1241,6 +1244,7 @@ fn meal_plan_entry(
             revision: Revision::INITIAL,
             display_order: Uuid::now_v7(),
         }],
+        participants: Vec::<MealParticipant>::new(),
         created_by: actor_id,
         updated_by: actor_id,
         resolved_by: None,
@@ -1266,6 +1270,7 @@ async fn round_trips_a_planned_meal_with_components(pool: PgPool) {
             member_id,
             from: date!(2026 - 08 - 24),
             to: date!(2026 - 08 - 30),
+            include_participating: false,
         })
         .await
         .unwrap();
@@ -1330,24 +1335,35 @@ async fn resolving_and_reopening_one_component_preserves_its_sibling(pool: PgPoo
     original.components.push(sibling.clone());
     plans.insert(&original).await.unwrap();
 
-    let mut resolved = original.components[0].clone();
-    resolved.snapshot = Some(MealPlanComponentSnapshot {
+    let component_id = original.components[0].id;
+    let snapshot = MealPlanComponentSnapshot {
         item_name: "Whole Milk".to_owned(),
         nutrition: NutritionFacts::default(),
         quality: NutritionQuality::Unknown,
-    });
-    resolved.status = MealPlanStatus::Eaten;
-    resolved.resolved_by = Some(actor_id);
-    resolved.resolved_at = Some(original.updated_at);
-    resolved.revision = resolved.revision.next();
+    };
+    let now = original.updated_at;
+    let eaten_update = MealPlanComponentUpdate {
+        id: component_id,
+        status: MealPlanStatus::Eaten,
+        snapshot: SnapshotOp::Set(&snapshot),
+        resolved_by: Some(actor_id),
+        resolved_at: Some(now),
+        revision: original.components[0].revision.next(),
+        entry_status: MealPlanStatus::PartiallyResolved,
+        entry_resolved_by: Some(actor_id),
+        entry_resolved_at: Some(now),
+        actor_id,
+        now,
+    };
     let mut record = consumption_record(member_id, product_id);
     record.meal_plan_entry_id = Some(original.id);
-    record.meal_plan_component_id = Some(resolved.id);
+    record.meal_plan_component_id = Some(component_id);
 
     let outcome = plans
         .resolve_component(
             original.id,
-            &resolved,
+            &eaten_update,
+            &[],
             original.components[0].revision,
             Some(&record),
         )
@@ -1357,12 +1373,34 @@ async fn resolving_and_reopening_one_component_preserves_its_sibling(pool: PgPoo
 
     let partially_resolved = plans.get(original.id).await.unwrap().unwrap();
     assert_eq!(partially_resolved.status, MealPlanStatus::PartiallyResolved);
-    assert_eq!(partially_resolved.components[0], resolved);
+    assert_eq!(
+        partially_resolved.components[0].status,
+        MealPlanStatus::Eaten
+    );
+    assert!(partially_resolved.components[0].snapshot.is_some());
     assert_eq!(partially_resolved.components[1], sibling);
     assert!(consumption.get(record.id).await.unwrap().is_some());
 
+    let reopen_update = MealPlanComponentUpdate {
+        id: component_id,
+        status: MealPlanStatus::Planned,
+        snapshot: SnapshotOp::Clear,
+        resolved_by: None,
+        resolved_at: None,
+        revision: partially_resolved.components[0].revision.next(),
+        entry_status: MealPlanStatus::Planned,
+        entry_resolved_by: None,
+        entry_resolved_at: None,
+        actor_id,
+        now,
+    };
     let outcome = plans
-        .reopen_component(original.id, resolved.id, resolved.revision, actor_id)
+        .reopen_component(
+            original.id,
+            &reopen_update,
+            &[],
+            partially_resolved.components[0].revision,
+        )
         .await
         .unwrap();
     assert_eq!(outcome, UpdateOutcome::Updated);
@@ -1372,7 +1410,7 @@ async fn resolving_and_reopening_one_component_preserves_its_sibling(pool: PgPoo
     assert_eq!(reopened.components[0].status, MealPlanStatus::Planned);
     assert_eq!(reopened.components[0].snapshot, None);
     assert_eq!(reopened.components[1], sibling);
-    assert!(consumption.get(record.id).await.unwrap().is_none());
+    assert!(consumption.get(record.id).await.unwrap().is_some());
 }
 
 #[sqlx::test]
@@ -1511,7 +1549,7 @@ async fn deleting_an_unknown_meal_plan_entry_reports_not_found(pool: PgPool) {
 }
 
 #[sqlx::test]
-async fn reopening_a_meal_removes_its_consumption_and_clears_the_snapshot(pool: PgPool) {
+async fn reopening_a_meal_clears_the_snapshot(pool: PgPool) {
     let (member_id, product_id, actor_id) = seed_meal_plan_dependencies(&pool).await;
     let plans = PgMealPlanRepository::new(pool.clone());
     let consumption = PgConsumptionRecordRepository::new(pool);
@@ -1558,7 +1596,7 @@ async fn reopening_a_meal_removes_its_consumption_and_clears_the_snapshot(pool: 
     let outcome = plans.reopen(&reopened, resolved.revision).await.unwrap();
     assert_eq!(outcome, UpdateOutcome::Updated);
     assert_eq!(plans.get(original.id).await.unwrap().unwrap(), reopened);
-    assert!(consumption.get(record.id).await.unwrap().is_none());
+    assert!(consumption.get(record.id).await.unwrap().is_some());
 }
 
 #[sqlx::test]

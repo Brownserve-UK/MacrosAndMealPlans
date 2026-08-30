@@ -110,6 +110,8 @@ pub fn app_state(config: &Config, pool: &PgPool) -> AppState {
         recipes_repo,
         consumption,
         targets.clone(),
+        Arc::new(PgHouseholdMemberRepository::new(pool.clone())),
+        Arc::new(PgHouseholdSettingsRepository::new(pool.clone())),
         Arc::new(SystemClock),
     );
     let nutrition_targets = NutritionTargetService::new(targets, Arc::new(SystemClock));

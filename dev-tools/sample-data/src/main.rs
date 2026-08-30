@@ -41,6 +41,7 @@ async fn main() -> anyhow::Result<()> {
         stock_items_created = report.stock_items_created,
         meals_created = report.meals_created,
         meals_resolved = report.meals_resolved,
+        household_participants_created = report.household_participants_created,
         diary_entries_created = report.diary_entries_created,
         "sample data loaded"
     );

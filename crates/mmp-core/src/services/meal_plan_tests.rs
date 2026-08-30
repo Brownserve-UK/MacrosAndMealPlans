@@ -6,16 +6,17 @@ use time::macros::{date, datetime, time};
 
 use super::*;
 use crate::domain::{
-    ActualMealPlanComponent, ConfirmMealPlanComponent, ConsumedAmount, HouseholdMemberId,
-    MealItemRef, MealPlanEntryPatch, MealPlanStatus, MealSlot, NewConsumptionRecord,
-    NewMealPlanComponent, NewMealPlanEntry, NewNutritionTarget, NutritionFacts, NutritionGoals,
-    NutritionQuality, Product, ProductId, Provenance, Quantity, Recipe, RecipeComponent, RecipeId,
-    RecipeVisibility, Revision, Unit, UserId,
+    ActualMealPlanComponent, ConfirmMealPlanComponent, ConsumedAmount, HouseholdMember,
+    HouseholdMemberId, MealItemRef, MealPlanEntryPatch, MealPlanScope, MealPlanStatus, MealSlot,
+    NewConsumptionRecord, NewMealPlanComponent, NewMealPlanEntry, NewNutritionTarget,
+    NutritionFacts, NutritionGoals, NutritionQuality, OutcomeActor, Product, ProductId, Provenance,
+    Quantity, Recipe, RecipeComponent, RecipeId, RecipeVisibility, Revision, Unit, UserId,
 };
 use crate::ports::FixedClock;
 use crate::services::{DiaryService, NutritionTargetService};
 use crate::testing::{
-    InMemoryConsumptionRecordRepository, InMemoryMealPlanRepository,
+    InMemoryConsumptionRecordRepository, InMemoryHouseholdMemberRepository,
+    InMemoryHouseholdSettingsRepository, InMemoryMealPlanRepository,
     InMemoryNutritionTargetRepository, InMemoryProductRepository, InMemoryRecipeRepository,
 };
 
@@ -26,8 +27,26 @@ struct Harness {
     products: InMemoryProductRepository,
     recipes: InMemoryRecipeRepository,
     records: InMemoryConsumptionRecordRepository,
+    members: InMemoryHouseholdMemberRepository,
+    settings: InMemoryHouseholdSettingsRepository,
     member_id: HouseholdMemberId,
     actor_id: UserId,
+}
+
+impl Harness {
+    fn add_member(&self, name: &str) -> HouseholdMemberId {
+        let id = HouseholdMemberId::new();
+        self.members.seed(HouseholdMember {
+            id,
+            display_name: name.to_owned(),
+            linked_user_id: None,
+            revision: Revision::INITIAL,
+            created_at: OffsetDateTime::UNIX_EPOCH,
+            updated_at: OffsetDateTime::UNIX_EPOCH,
+            archived_at: None,
+        });
+        id
+    }
 }
 
 fn harness() -> Harness {
@@ -35,13 +54,27 @@ fn harness() -> Harness {
     let recipes = InMemoryRecipeRepository::new();
     let records = InMemoryConsumptionRecordRepository::new();
     let target_repo = InMemoryNutritionTargetRepository::new();
+    let members = InMemoryHouseholdMemberRepository::new();
+    let settings = InMemoryHouseholdSettingsRepository::new();
     let clock = Arc::new(FixedClock::new(datetime!(2026-08-24 09:00 UTC)));
+    let member_id = HouseholdMemberId::new();
+    members.seed(HouseholdMember {
+        id: member_id,
+        display_name: "Test Member".to_owned(),
+        linked_user_id: None,
+        revision: Revision::INITIAL,
+        created_at: OffsetDateTime::UNIX_EPOCH,
+        updated_at: OffsetDateTime::UNIX_EPOCH,
+        archived_at: None,
+    });
     let service = MealPlanService::new(
         Arc::new(InMemoryMealPlanRepository::new(records.clone())),
         Arc::new(products.clone()),
         Arc::new(recipes.clone()),
         Arc::new(records.clone()),
         Arc::new(target_repo.clone()),
+        Arc::new(members.clone()),
+        Arc::new(settings.clone()),
         clock.clone(),
     );
     let diary = DiaryService::new(
@@ -58,7 +91,9 @@ fn harness() -> Harness {
         products,
         recipes,
         records,
-        member_id: HouseholdMemberId::new(),
+        members,
+        settings,
+        member_id,
         actor_id: UserId::new(),
     }
 }
@@ -166,7 +201,8 @@ async fn planned(h: &Harness, components: Vec<NewMealPlanComponent>) -> MealPlan
     h.service
         .create(NewMealPlanEntry {
             id: None,
-            member_id: h.member_id,
+            scope: MealPlanScope::Member,
+            member_id: Some(h.member_id),
             planned_on: date!(2026 - 08 - 25),
             planned_time: Some(time!(18:30)),
             slot: MealSlot::Dinner,
@@ -188,7 +224,8 @@ async fn a_member_has_one_meal_entry_per_day_and_slot() {
         .service
         .create(NewMealPlanEntry {
             id: None,
-            member_id: h.member_id,
+            scope: MealPlanScope::Member,
+            member_id: Some(h.member_id),
             planned_on: date!(2026 - 08 - 25),
             planned_time: Some(time!(19:00)),
             slot: MealSlot::Dinner,
@@ -210,7 +247,8 @@ async fn snacks_never_have_a_planned_time() {
         .service
         .create(NewMealPlanEntry {
             id: None,
-            member_id: h.member_id,
+            scope: MealPlanScope::Member,
+            member_id: Some(h.member_id),
             planned_on: date!(2026 - 08 - 25),
             planned_time: Some(time!(20:30)),
             slot: MealSlot::Snacks,
@@ -332,6 +370,7 @@ async fn confirming_eaten_creates_one_linked_diary_record_per_component() {
                     })
                     .collect(),
                 actor_id: h.actor_id,
+                subject_member_id: None,
             },
         )
         .await
@@ -378,6 +417,7 @@ async fn confirming_one_component_does_not_resolve_its_siblings() {
                 consumed_at: Some(datetime!(2026-08-25 08:00 UTC)),
                 amount: banana_component.amount,
                 actor_id: h.actor_id,
+                subject_member_id: None,
             },
         )
         .await
@@ -590,7 +630,7 @@ async fn marking_remaining_eaten_skips_an_item_marked_not_eaten() {
             entry.entry.id,
             entry.components[0].component.id,
             entry.components[0].component.revision,
-            h.actor_id,
+            OutcomeActor::own(h.actor_id),
         )
         .await
         .unwrap();
@@ -614,6 +654,7 @@ async fn marking_remaining_eaten_skips_an_item_marked_not_eaten() {
                 consumed_at: Some(datetime!(2026-08-25 08:00 UTC)),
                 components: pending,
                 actor_id: h.actor_id,
+                subject_member_id: None,
             },
         )
         .await
@@ -640,7 +681,11 @@ async fn a_resolved_entry_keeps_its_product_snapshot() {
     let entry = planned(&h, vec![measured(original.id, 100)]).await;
     let resolved = h
         .service
-        .mark_not_eaten(entry.entry.id, entry.entry.revision, h.actor_id)
+        .mark_not_eaten(
+            entry.entry.id,
+            entry.entry.revision,
+            OutcomeActor::own(h.actor_id),
+        )
         .await
         .unwrap();
 
@@ -671,7 +716,11 @@ async fn resolved_entries_are_locked() {
     let entry = planned(&h, vec![measured(food.id, 100)]).await;
     let resolved = h
         .service
-        .mark_not_eaten(entry.entry.id, entry.entry.revision, h.actor_id)
+        .mark_not_eaten(
+            entry.entry.id,
+            entry.entry.revision,
+            OutcomeActor::own(h.actor_id),
+        )
         .await
         .unwrap();
 
@@ -711,6 +760,7 @@ async fn linked_diary_records_can_be_amended_but_not_deleted() {
                     amount: entry.components[0].component.amount,
                 }],
                 actor_id: h.actor_id,
+                subject_member_id: None,
             },
         )
         .await
@@ -784,7 +834,8 @@ async fn an_archived_product_may_be_retained_but_not_newly_added() {
         .service
         .create(NewMealPlanEntry {
             id: None,
-            member_id: h.member_id,
+            scope: MealPlanScope::Member,
+            member_id: Some(h.member_id),
             planned_on: date!(2026 - 08 - 26),
             planned_time: None,
             slot: MealSlot::Lunch,
@@ -814,6 +865,7 @@ async fn reopening_an_eaten_entry_removes_its_diary_records() {
                     amount: entry.components[0].component.amount,
                 }],
                 actor_id: h.actor_id,
+                subject_member_id: None,
             },
         )
         .await
@@ -822,7 +874,11 @@ async fn reopening_an_eaten_entry_removes_its_diary_records() {
 
     let reopened = h
         .service
-        .reopen(confirmed.entry.id, confirmed.entry.revision, h.actor_id)
+        .reopen(
+            confirmed.entry.id,
+            confirmed.entry.revision,
+            OutcomeActor::own(h.actor_id),
+        )
         .await
         .unwrap();
 
@@ -841,13 +897,21 @@ async fn reopening_a_not_eaten_entry_returns_it_to_planned() {
     let entry = planned(&h, vec![measured(food.id, 100)]).await;
     let resolved = h
         .service
-        .mark_not_eaten(entry.entry.id, entry.entry.revision, h.actor_id)
+        .mark_not_eaten(
+            entry.entry.id,
+            entry.entry.revision,
+            OutcomeActor::own(h.actor_id),
+        )
         .await
         .unwrap();
 
     let reopened = h
         .service
-        .reopen(resolved.entry.id, resolved.entry.revision, h.actor_id)
+        .reopen(
+            resolved.entry.id,
+            resolved.entry.revision,
+            OutcomeActor::own(h.actor_id),
+        )
         .await
         .unwrap();
 
@@ -872,7 +936,11 @@ async fn a_still_planned_entry_cannot_be_reopened() {
 
     let error = h
         .service
-        .reopen(entry.entry.id, entry.entry.revision, h.actor_id)
+        .reopen(
+            entry.entry.id,
+            entry.entry.revision,
+            OutcomeActor::own(h.actor_id),
+        )
         .await
         .unwrap_err();
 
@@ -887,13 +955,21 @@ async fn reopening_with_a_stale_revision_is_refused() {
     let entry = planned(&h, vec![measured(food.id, 100)]).await;
     let resolved = h
         .service
-        .mark_not_eaten(entry.entry.id, entry.entry.revision, h.actor_id)
+        .mark_not_eaten(
+            entry.entry.id,
+            entry.entry.revision,
+            OutcomeActor::own(h.actor_id),
+        )
         .await
         .unwrap();
 
     let error = h
         .service
-        .reopen(resolved.entry.id, entry.entry.revision, h.actor_id)
+        .reopen(
+            resolved.entry.id,
+            entry.entry.revision,
+            OutcomeActor::own(h.actor_id),
+        )
         .await
         .unwrap_err();
 
@@ -1002,13 +1078,18 @@ async fn a_reopened_entry_can_be_edited_and_confirmed_again() {
                     amount: entry.components[0].component.amount,
                 }],
                 actor_id: h.actor_id,
+                subject_member_id: None,
             },
         )
         .await
         .unwrap();
     let reopened = h
         .service
-        .reopen(confirmed.entry.id, confirmed.entry.revision, h.actor_id)
+        .reopen(
+            confirmed.entry.id,
+            confirmed.entry.revision,
+            OutcomeActor::own(h.actor_id),
+        )
         .await
         .unwrap();
 
@@ -1039,6 +1120,7 @@ async fn a_reopened_entry_can_be_edited_and_confirmed_again() {
                     amount: edited.components[0].component.amount,
                 }],
                 actor_id: h.actor_id,
+                subject_member_id: None,
             },
         )
         .await
@@ -1057,7 +1139,8 @@ async fn date_policy_forbids_creating_a_plan_in_the_past() {
         .service
         .create(NewMealPlanEntry {
             id: None,
-            member_id: h.member_id,
+            scope: MealPlanScope::Member,
+            member_id: Some(h.member_id),
             planned_on: date!(2026 - 08 - 20),
             planned_time: None,
             slot: MealSlot::Dinner,
@@ -1077,7 +1160,8 @@ async fn date_policy_allows_a_one_day_grace_into_the_past() {
     h.service
         .create(NewMealPlanEntry {
             id: None,
-            member_id: h.member_id,
+            scope: MealPlanScope::Member,
+            member_id: Some(h.member_id),
             planned_on: date!(2026 - 08 - 23),
             planned_time: None,
             slot: MealSlot::Dinner,
@@ -1120,7 +1204,8 @@ async fn date_policy_forbids_resolving_a_plan_that_is_not_yet_due() {
         .service
         .create(NewMealPlanEntry {
             id: None,
-            member_id: h.member_id,
+            scope: MealPlanScope::Member,
+            member_id: Some(h.member_id),
             planned_on: date!(2026 - 08 - 30),
             planned_time: None,
             slot: MealSlot::Dinner,
@@ -1147,6 +1232,7 @@ async fn date_policy_forbids_resolving_a_plan_that_is_not_yet_due() {
                     })
                     .collect(),
                 actor_id: h.actor_id,
+                subject_member_id: None,
             },
         )
         .await
@@ -1195,6 +1281,7 @@ async fn the_week_projects_a_planned_item_and_moves_it_once_eaten() {
                     )),
                 }],
                 actor_id: h.actor_id,
+                subject_member_id: None,
             },
         )
         .await
@@ -1369,7 +1456,8 @@ async fn planning_a_recipe_you_do_not_own_is_refused() {
         .service
         .create(NewMealPlanEntry {
             id: None,
-            member_id: h.member_id,
+            scope: MealPlanScope::Member,
+            member_id: Some(h.member_id),
             planned_on: date!(2026 - 08 - 25),
             planned_time: Some(time!(18:30)),
             slot: MealSlot::Dinner,
@@ -1393,7 +1481,8 @@ async fn a_recipe_component_rejects_a_measured_amount() {
         .service
         .create(NewMealPlanEntry {
             id: None,
-            member_id: h.member_id,
+            scope: MealPlanScope::Member,
+            member_id: Some(h.member_id),
             planned_on: date!(2026 - 08 - 25),
             planned_time: Some(time!(18:30)),
             slot: MealSlot::Dinner,
@@ -1444,6 +1533,7 @@ async fn editing_a_recipe_moves_planned_numbers_but_not_eaten_history() {
                 consumed_at: None,
                 amount: ConsumedAmount::Servings(Decimal::ONE),
                 actor_id: h.actor_id,
+                subject_member_id: None,
             },
         )
         .await
@@ -1494,6 +1584,7 @@ async fn confirming_a_recipe_component_writes_a_recipe_referencing_record() {
                 consumed_at: None,
                 amount: ConsumedAmount::Servings(Decimal::ONE),
                 actor_id: h.actor_id,
+                subject_member_id: None,
             },
         )
         .await
@@ -1506,6 +1597,141 @@ async fn confirming_a_recipe_component_writes_a_recipe_referencing_record() {
         .unwrap();
     assert_eq!(logged.len(), 1);
     assert_eq!(logged[0].item, MealItemRef::recipe(curry.id));
+}
+
+#[tokio::test]
+async fn a_household_meal_defaults_to_every_member_when_enabled() {
+    let h = harness();
+    h.settings.set_default_all_members_participate(true);
+    let morgan = h.add_member("Morgan");
+    let taylor = h.add_member("Taylor");
+    let food = product("Stew", 200);
+    h.products.seed(food.clone());
+
+    let entry = h
+        .service
+        .create(NewMealPlanEntry {
+            id: None,
+            scope: MealPlanScope::Household,
+            member_id: None,
+            planned_on: date!(2026 - 08 - 25),
+            planned_time: Some(time!(18:30)),
+            slot: MealSlot::Dinner,
+            components: vec![measured(food.id, 600)],
+            actor_id: h.actor_id,
+        })
+        .await
+        .unwrap();
+
+    let member_ids: std::collections::HashSet<_> = entry
+        .participants
+        .iter()
+        .map(|participant| participant.member_id)
+        .collect();
+    assert_eq!(member_ids.len(), 3);
+    assert!(member_ids.contains(&h.member_id));
+    assert!(member_ids.contains(&morgan));
+    assert!(member_ids.contains(&taylor));
+}
+
+#[tokio::test]
+async fn a_personal_meal_never_auto_adds_members() {
+    let h = harness();
+    h.settings.set_default_all_members_participate(true);
+    h.add_member("Morgan");
+    let food = product("Toast", 120);
+    h.products.seed(food.clone());
+
+    let entry = planned(&h, vec![measured(food.id, 60)]).await;
+
+    assert_eq!(entry.participants.len(), 1);
+    assert_eq!(entry.participants[0].member_id, h.member_id);
+}
+
+#[tokio::test]
+async fn a_participant_sees_only_their_own_share_and_outcome() {
+    let h = harness();
+    let taylor = h.add_member("Taylor");
+    let food = product("Curry", 100);
+    h.products.seed(food.clone());
+    let entry = planned(&h, vec![measured(food.id, 400)]).await;
+
+    let with_taylor = h
+        .service
+        .set_participants(
+            entry.entry.id,
+            entry.entry.revision,
+            crate::domain::SetMealParticipants {
+                actor_id: h.actor_id,
+                participants: vec![
+                    crate::domain::NewMealParticipant {
+                        id: None,
+                        member_id: h.member_id,
+                        allocations: vec![crate::domain::NewMealParticipantAllocation {
+                            component_id: entry.components[0].component.id,
+                            allocated: ConsumedAmount::Measure(Quantity::new(
+                                Decimal::new(300, 0),
+                                Unit::Gram,
+                            )),
+                        }],
+                    },
+                    crate::domain::NewMealParticipant {
+                        id: None,
+                        member_id: taylor,
+                        allocations: vec![crate::domain::NewMealParticipantAllocation {
+                            component_id: entry.components[0].component.id,
+                            allocated: ConsumedAmount::Measure(Quantity::new(
+                                Decimal::new(100, 0),
+                                Unit::Gram,
+                            )),
+                        }],
+                    },
+                ],
+            },
+        )
+        .await
+        .unwrap();
+
+    let prep = &with_taylor.components[0].preparation;
+    assert_eq!(
+        prep.leftover,
+        Some(ConsumedAmount::Measure(Quantity::new(
+            Decimal::ZERO,
+            Unit::Gram
+        )))
+    );
+
+    let component = with_taylor.components[0].component.clone();
+    h.service
+        .mark_component_eaten_unchecked(
+            with_taylor.entry.id,
+            component.id,
+            component.revision,
+            ConfirmMealPlanComponent {
+                consumed_on: date!(2026 - 08 - 25),
+                consumed_at: None,
+                amount: ConsumedAmount::Measure(Quantity::new(Decimal::new(280, 0), Unit::Gram)),
+                actor_id: h.actor_id,
+                subject_member_id: Some(taylor),
+            },
+        )
+        .await
+        .unwrap();
+
+    let after = h.service.get(with_taylor.entry.id).await.unwrap();
+    assert_eq!(after.entry.status, MealPlanStatus::PartiallyResolved);
+    let taylor_participant = after
+        .participants
+        .iter()
+        .find(|participant| participant.member_id == taylor)
+        .unwrap();
+    assert_eq!(taylor_participant.status, MealPlanStatus::Eaten);
+    let owner_participant = after
+        .participants
+        .iter()
+        .find(|participant| participant.member_id == h.member_id)
+        .unwrap();
+    assert_eq!(owner_participant.status, MealPlanStatus::Planned);
 }
 
 #[tokio::test]

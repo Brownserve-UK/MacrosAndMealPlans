@@ -30,6 +30,7 @@ import {
 } from '../../api/queries';
 import { useAuth } from '../../auth/AuthProvider';
 import { InitialsAvatar } from '../../components/InitialsAvatar';
+import { ParticipantSummary } from './ParticipantSummary';
 import { PageHeader } from '../../components/PageHeader';
 import { ErrorState, Loading } from '../../components/States';
 import { MaybeNumber } from '../../components/Unknown';
@@ -446,6 +447,12 @@ function SlotSection({
                     <Typography variant="caption" color="text.secondary">
                       Planned meal
                     </Typography>
+                    {workspace === 'planner' && entryId
+                      ? (() => {
+                          const groupEntry = entries.find((entry) => entry.id === entryId);
+                          return groupEntry ? <ParticipantSummary entry={groupEntry} /> : null;
+                        })()
+                      : null}
                     {workspace === 'today' && allowChanges && pending.length > 0 && entryId ? (
                       <Button size="small" onClick={() => onMarkRemaining(entryId, pending)}>
                         Mark remaining eaten

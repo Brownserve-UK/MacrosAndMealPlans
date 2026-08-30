@@ -72,7 +72,7 @@ async fn app() -> Router {
             clock.clone(),
         ),
         household.clone(),
-        HouseholdSettingsService::new(Arc::new(settings_repo), clock.clone()),
+        HouseholdSettingsService::new(Arc::new(settings_repo.clone()), clock.clone()),
         DiaryService::new(
             Arc::new(consumption.clone()),
             Arc::new(products.clone()),
@@ -85,6 +85,8 @@ async fn app() -> Router {
             recipes_repo,
             Arc::new(consumption),
             Arc::new(targets.clone()),
+            Arc::new(members.clone()),
+            Arc::new(settings_repo.clone()),
             clock.clone(),
         ),
         NutritionTargetService::new(Arc::new(targets), clock),
@@ -1668,6 +1670,55 @@ async fn a_meal_plan_entry_round_trips_through_the_week() {
         json!(128.0)
     );
     assert_eq!(week["projected"]["nutrition"]["energy_kcal"], json!(128.0));
+}
+
+#[tokio::test]
+async fn a_meal_gains_household_participants_with_per_component_allocations() {
+    let app = app().await;
+    let me = send(&app, Call::new("GET", "/api/v1/auth/me")).await.1;
+    let member_id = me["member_id"].as_str().unwrap().to_owned();
+    let product = create_milk_product(&app).await;
+
+    let (status, entry, headers) = send(
+        &app,
+        Call::new("POST", "/api/v1/meal-plan-entries").body(json!({
+            "planned_on": "2026-08-25",
+            "planned_time": "18:30",
+            "slot": "dinner",
+            "components": [{"product_id": product["id"], "amount": measured_amount(600.0)}]
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{entry}");
+    let entry_id = entry["id"].as_str().unwrap().to_owned();
+    let component_id = entry["components"][0]["id"].as_str().unwrap().to_owned();
+
+    let (status, updated, _) = send(
+        &app,
+        Call::new(
+            "PUT",
+            format!("/api/v1/meal-plan-entries/{entry_id}/participants"),
+        )
+        .if_match(etag(&headers))
+        .body(json!({
+            "participants": [
+                {"member_id": member_id, "allocations": [
+                    {"component_id": component_id, "amount": measured_amount(400.0)}
+                ]}
+            ]
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{updated}");
+    assert_eq!(updated["participants"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        updated["components"][0]["preparation"]["leftover"]["value"],
+        json!("200")
+    );
+    assert_eq!(
+        updated["components"][0]["preparation"]["shortage"],
+        json!(false)
+    );
 }
 
 #[tokio::test]

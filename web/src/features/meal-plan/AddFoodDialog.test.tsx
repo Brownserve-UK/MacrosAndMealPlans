@@ -128,7 +128,10 @@ describe('AddFoodDialog', () => {
     mocks.updatePlan.mockResolvedValue({});
     const entry = {
       id: 'entry-1',
+      scope: 'member' as const,
       member_id: 'member-1',
+      subject_member_id: 'member-1',
+      participants: [],
       planned_on: '2999-08-26',
       planned_time: '18:30',
       slot: 'dinner',
@@ -144,6 +147,8 @@ describe('AddFoodDialog', () => {
           nutrition: {},
           quality: 'unknown',
           status: 'planned',
+          preparation: { prepared: { kind: 'servings', value: '0' }, shortage: false },
+          subject_status: 'planned' as const,
           revision: 1,
         },
       ],

@@ -85,7 +85,10 @@ const latteItem: MealItem = {
 
 const plannedEntry = {
   id: 'entry-1',
+  scope: 'member' as const,
   member_id: 'member-1',
+  subject_member_id: 'member-1',
+  participants: [],
   planned_on: DAY,
   planned_time: '08:30',
   slot: 'breakfast',
@@ -158,6 +161,8 @@ vi.mock('../../api/queries', () => ({
   useMarkMealPlanComponentEaten: () => ({ mutateAsync: mocks.markComponentEaten }),
   useReopenMealPlanComponent: () => ({ mutateAsync: mocks.reopen }),
   useUpdateMealPlanEntry: () => ({ mutateAsync: mocks.updateEntry, isPending: false }),
+  useMembers: () => ({ data: { items: [] } }),
+  useSetMealPlanParticipants: () => ({ mutateAsync: vi.fn(), isPending: false }),
 }));
 
 function renderPage(workspace: 'today' | 'planner' = 'today') {

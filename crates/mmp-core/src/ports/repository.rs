@@ -6,10 +6,11 @@ use time::Date;
 use super::{PageRequest, Paginated};
 use crate::domain::{
     AccessScope, CatalogueOrigin, ConsumptionRecord, ConsumptionRecordId, HouseholdMember,
-    HouseholdMemberId, HouseholdSettings, Ingredient, IngredientId, MealPlanComponent,
-    MealPlanComponentId, MealPlanEntry, MealPlanEntryId, MemberAccessGrant, NewStockEvent,
-    NutritionTarget, NutritionTargetId, Product, ProductId, Recipe, RecipeId, RecipePhoto,
-    RecipeSummary, Revision, Role, StockEvent, StockItem, StockItemId, User, UserId,
+    HouseholdMemberId, HouseholdSettings, Ingredient, IngredientId, MealParticipant,
+    MealPlanComponentId, MealPlanComponentSnapshot, MealPlanEntry, MealPlanEntryId,
+    MemberAccessGrant, NewStockEvent, NutritionTarget, NutritionTargetId, Product, ProductId,
+    Recipe, RecipeId, RecipePhoto, RecipeSummary, Revision, Role, StockEvent, StockItem,
+    StockItemId, User, UserId,
 };
 use crate::error::Result;
 
@@ -82,6 +83,7 @@ pub struct MealPlanQuery {
     pub member_id: HouseholdMemberId,
     pub from: Date,
     pub to: Date,
+    pub include_participating: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -260,10 +262,17 @@ pub trait MealPlanRepository: Send + Sync + 'static {
 
     async fn reopen(&self, entry: &MealPlanEntry, expected: Revision) -> Result<UpdateOutcome>;
 
+    async fn set_participants(
+        &self,
+        entry: &MealPlanEntry,
+        expected: Revision,
+    ) -> Result<UpdateOutcome>;
+
     async fn resolve_component(
         &self,
         entry_id: MealPlanEntryId,
-        component: &MealPlanComponent,
+        component: &MealPlanComponentUpdate<'_>,
+        participants: &[MealParticipant],
         expected: Revision,
         consumption: Option<&ConsumptionRecord>,
     ) -> Result<UpdateOutcome>;
@@ -271,10 +280,30 @@ pub trait MealPlanRepository: Send + Sync + 'static {
     async fn reopen_component(
         &self,
         entry_id: MealPlanEntryId,
-        component_id: MealPlanComponentId,
+        component: &MealPlanComponentUpdate<'_>,
+        participants: &[MealParticipant],
         expected: Revision,
-        actor_id: UserId,
     ) -> Result<UpdateOutcome>;
+}
+
+pub enum SnapshotOp<'a> {
+    Keep,
+    Set(&'a MealPlanComponentSnapshot),
+    Clear,
+}
+
+pub struct MealPlanComponentUpdate<'a> {
+    pub id: MealPlanComponentId,
+    pub status: crate::domain::MealPlanStatus,
+    pub snapshot: SnapshotOp<'a>,
+    pub resolved_by: Option<UserId>,
+    pub resolved_at: Option<time::OffsetDateTime>,
+    pub revision: Revision,
+    pub entry_status: crate::domain::MealPlanStatus,
+    pub entry_resolved_by: Option<UserId>,
+    pub entry_resolved_at: Option<time::OffsetDateTime>,
+    pub actor_id: UserId,
+    pub now: time::OffsetDateTime,
 }
 
 #[async_trait]

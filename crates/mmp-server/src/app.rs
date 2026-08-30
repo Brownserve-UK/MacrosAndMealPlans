@@ -91,6 +91,8 @@ pub fn stub_state() -> AppState {
             Arc::new(NoopRecipes),
             consumption,
             targets.clone(),
+            Arc::new(NoopMembers),
+            Arc::new(NoopHouseholdSettings),
             Arc::new(SystemClock),
         ),
         mmp_core::services::NutritionTargetService::new(targets, Arc::new(SystemClock)),
@@ -211,6 +213,7 @@ impl mmp_core::ports::HouseholdSettingsRepository for NoopHouseholdSettings {
                 dinner: time::macros::time!(18:00),
             },
             missing_stock_interpretation: mmp_core::domain::MissingStockInterpretation::Unknown,
+            default_all_members_participate: true,
             revision: mmp_core::domain::Revision::INITIAL,
             created_at: time::OffsetDateTime::UNIX_EPOCH,
             updated_at: time::OffsetDateTime::UNIX_EPOCH,
@@ -514,10 +517,18 @@ impl mmp_core::ports::MealPlanRepository for NoopMealPlans {
     ) -> mmp_core::Result<mmp_core::ports::UpdateOutcome> {
         Ok(mmp_core::ports::UpdateOutcome::NotFound)
     }
+    async fn set_participants(
+        &self,
+        _: &mmp_core::domain::MealPlanEntry,
+        _: mmp_core::domain::Revision,
+    ) -> mmp_core::Result<mmp_core::ports::UpdateOutcome> {
+        Ok(mmp_core::ports::UpdateOutcome::NotFound)
+    }
     async fn resolve_component(
         &self,
         _: mmp_core::domain::MealPlanEntryId,
-        _: &mmp_core::domain::MealPlanComponent,
+        _: &mmp_core::ports::MealPlanComponentUpdate<'_>,
+        _: &[mmp_core::domain::MealParticipant],
         _: mmp_core::domain::Revision,
         _: Option<&mmp_core::domain::ConsumptionRecord>,
     ) -> mmp_core::Result<mmp_core::ports::UpdateOutcome> {
@@ -526,9 +537,9 @@ impl mmp_core::ports::MealPlanRepository for NoopMealPlans {
     async fn reopen_component(
         &self,
         _: mmp_core::domain::MealPlanEntryId,
-        _: mmp_core::domain::MealPlanComponentId,
+        _: &mmp_core::ports::MealPlanComponentUpdate<'_>,
+        _: &[mmp_core::domain::MealParticipant],
         _: mmp_core::domain::Revision,
-        _: mmp_core::domain::UserId,
     ) -> mmp_core::Result<mmp_core::ports::UpdateOutcome> {
         Ok(mmp_core::ports::UpdateOutcome::NotFound)
     }

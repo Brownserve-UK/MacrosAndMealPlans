@@ -11,7 +11,7 @@ use crate::auth::Principal;
 use crate::dto::common::iso_date;
 use crate::dto::{
     CreateMealPlanEntryRequest, MarkMealPlanComponentEatenRequest, MarkMealPlanEatenRequest,
-    MealPlanEntryDto, MealPlanWeekDto, UpdateMealPlanEntryRequest,
+    MealPlanEntryDto, MealPlanWeekDto, SetMealPlanParticipantsRequest, UpdateMealPlanEntryRequest,
 };
 use crate::error::{ApiError, ApiResult};
 use crate::http::{Created, IfMatch, Tagged};
@@ -28,6 +28,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(mark_component_eaten))
         .routes(routes!(mark_component_not_eaten))
         .routes(routes!(reopen_component))
+        .routes(routes!(set_participants))
 }
 
 fn entry_id(id: Uuid) -> MealPlanEntryId {
@@ -59,28 +60,39 @@ async fn personal_member(state: &AppState, principal: &Principal) -> ApiResult<H
     Ok(member_id)
 }
 
-async fn require_personal_entry(
+async fn require_entry_access(
     state: &AppState,
     principal: &Principal,
-    entry_member_id: HouseholdMemberId,
+    entry: &mmp_core::domain::MealPlanEntry,
 ) -> ApiResult<()> {
-    let member = state.household.get_member(entry_member_id).await?;
-    if member.is_archived() {
-        return Err(ApiError::new(
-            StatusCode::CONFLICT,
-            "archived-member",
-            "Archived member",
-            "Archived household members cannot have their meal plan changed.",
-        ));
+    if principal.roles.contains(&Role::Admin) {
+        return Ok(());
     }
-    if principal.roles.contains(&Role::Admin) || principal.member_id == Some(entry_member_id) {
+    if let Some(entry_member_id) = entry.member_id {
+        let member = state.household.get_member(entry_member_id).await?;
+        if member.is_archived() {
+            return Err(ApiError::new(
+                StatusCode::CONFLICT,
+                "archived-member",
+                "Archived member",
+                "Archived household members cannot have their meal plan changed.",
+            ));
+        }
+        if principal.member_id == Some(entry_member_id) {
+            return Ok(());
+        }
+    }
+    let participating = principal
+        .member_id
+        .is_some_and(|member_id| entry.participant_for(member_id).is_some());
+    if participating || principal.roles.contains(&Role::HouseholdManager) {
         Ok(())
     } else {
         Err(ApiError::new(
             StatusCode::FORBIDDEN,
             "forbidden",
             "Forbidden",
-            "This meal does not belong to your personal plan.",
+            "This meal does not belong to your plan.",
         ))
     }
 }
@@ -159,7 +171,7 @@ async fn get_one(
     Path(id): Path<Uuid>,
 ) -> ApiResult<Tagged<MealPlanEntryDto>> {
     let entry = state.meal_plan.get(entry_id(id)).await?;
-    require_personal_entry(&state, &principal, entry.entry.member_id).await?;
+    require_entry_access(&state, &principal, &entry.entry).await?;
     Ok(Tagged(entry.entry.revision, entry.into()))
 }
 
@@ -182,7 +194,7 @@ async fn update(
 ) -> ApiResult<Tagged<MealPlanEntryDto>> {
     let id = entry_id(id);
     let current = state.meal_plan.get(id).await?;
-    require_personal_entry(&state, &principal, current.entry.member_id).await?;
+    require_entry_access(&state, &principal, &current.entry).await?;
     let patch = body.into_domain().map_err(|message| {
         let mut errors = mmp_core::ValidationErrors::new();
         errors.push("planned_time", message);
@@ -212,7 +224,7 @@ async fn delete(
 ) -> ApiResult<StatusCode> {
     let id = entry_id(id);
     let current = state.meal_plan.get(id).await?;
-    require_personal_entry(&state, &principal, current.entry.member_id).await?;
+    require_entry_access(&state, &principal, &current.entry).await?;
     state.meal_plan.delete(id, revision).await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -236,7 +248,7 @@ async fn mark_eaten(
 ) -> ApiResult<Tagged<MealPlanEntryDto>> {
     let id = entry_id(id);
     let current = state.meal_plan.get(id).await?;
-    require_personal_entry(&state, &principal, current.entry.member_id).await?;
+    require_entry_access(&state, &principal, &current.entry).await?;
     let updated = state
         .meal_plan
         .mark_eaten(id, revision, body.into_domain(principal.user_id))
@@ -261,10 +273,14 @@ async fn mark_not_eaten(
 ) -> ApiResult<Tagged<MealPlanEntryDto>> {
     let id = entry_id(id);
     let current = state.meal_plan.get(id).await?;
-    require_personal_entry(&state, &principal, current.entry.member_id).await?;
+    require_entry_access(&state, &principal, &current.entry).await?;
     let updated = state
         .meal_plan
-        .mark_not_eaten(id, revision, principal.user_id)
+        .mark_not_eaten(
+            id,
+            revision,
+            mmp_core::domain::OutcomeActor::own(principal.user_id),
+        )
         .await?;
     Ok(Tagged(updated.entry.revision, updated.into()))
 }
@@ -286,10 +302,14 @@ async fn reopen(
 ) -> ApiResult<Tagged<MealPlanEntryDto>> {
     let id = entry_id(id);
     let current = state.meal_plan.get(id).await?;
-    require_personal_entry(&state, &principal, current.entry.member_id).await?;
+    require_entry_access(&state, &principal, &current.entry).await?;
     let updated = state
         .meal_plan
-        .reopen(id, revision, principal.user_id)
+        .reopen(
+            id,
+            revision,
+            mmp_core::domain::OutcomeActor::own(principal.user_id),
+        )
         .await?;
     Ok(Tagged(updated.entry.revision, updated.into()))
 }
@@ -313,7 +333,7 @@ async fn mark_component_eaten(
 ) -> ApiResult<Json<MealPlanEntryDto>> {
     let id = entry_id(id);
     let current = state.meal_plan.get(id).await?;
-    require_personal_entry(&state, &principal, current.entry.member_id).await?;
+    require_entry_access(&state, &principal, &current.entry).await?;
     let updated = state
         .meal_plan
         .mark_component_eaten(
@@ -343,10 +363,15 @@ async fn mark_component_not_eaten(
 ) -> ApiResult<Json<MealPlanEntryDto>> {
     let id = entry_id(id);
     let current = state.meal_plan.get(id).await?;
-    require_personal_entry(&state, &principal, current.entry.member_id).await?;
+    require_entry_access(&state, &principal, &current.entry).await?;
     let updated = state
         .meal_plan
-        .mark_component_not_eaten(id, component_id(component), revision, principal.user_id)
+        .mark_component_not_eaten(
+            id,
+            component_id(component),
+            revision,
+            mmp_core::domain::OutcomeActor::own(principal.user_id),
+        )
         .await?;
     Ok(Json(updated.into()))
 }
@@ -368,10 +393,42 @@ async fn reopen_component(
 ) -> ApiResult<Json<MealPlanEntryDto>> {
     let id = entry_id(id);
     let current = state.meal_plan.get(id).await?;
-    require_personal_entry(&state, &principal, current.entry.member_id).await?;
+    require_entry_access(&state, &principal, &current.entry).await?;
     let updated = state
         .meal_plan
-        .reopen_component(id, component_id(component), revision, principal.user_id)
+        .reopen_component(
+            id,
+            component_id(component),
+            revision,
+            mmp_core::domain::OutcomeActor::own(principal.user_id),
+        )
         .await?;
     Ok(Json(updated.into()))
+}
+
+#[utoipa::path(
+    put,
+    path = "/api/v1/meal-plan-entries/{id}/participants",
+    operation_id = "setMealPlanParticipants",
+    params(("id" = Uuid, Path), ("If-Match" = String, Header)),
+    request_body = SetMealPlanParticipantsRequest,
+    responses((status = 200, body = MealPlanEntryDto)),
+    tag = "meal-plan",
+    security(("basic" = []))
+)]
+async fn set_participants(
+    State(state): State<AppState>,
+    principal: Principal,
+    Path(id): Path<Uuid>,
+    IfMatch(revision): IfMatch,
+    Json(body): Json<SetMealPlanParticipantsRequest>,
+) -> ApiResult<Tagged<MealPlanEntryDto>> {
+    let id = entry_id(id);
+    let current = state.meal_plan.get(id).await?;
+    require_entry_access(&state, &principal, &current.entry).await?;
+    let updated = state
+        .meal_plan
+        .set_participants(id, revision, body.into_domain(principal.user_id))
+        .await?;
+    Ok(Tagged(updated.entry.revision, updated.into()))
 }

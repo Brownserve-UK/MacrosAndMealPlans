@@ -333,6 +333,7 @@ pub struct HouseholdSettingsRow {
     pub lunch_time: Time,
     pub dinner_time: Time,
     pub missing_stock_interpretation: String,
+    pub default_all_members_participate: bool,
     pub revision: i64,
     pub created_at: OffsetDateTime,
     pub updated_at: OffsetDateTime,
@@ -357,6 +358,7 @@ impl TryFrom<HouseholdSettingsRow> for HouseholdSettings {
                     &row.missing_stock_interpretation,
                 )
             })?,
+            default_all_members_participate: row.default_all_members_participate,
             revision: Revision::new(row.revision),
             created_at: row.created_at,
             updated_at: row.updated_at,

@@ -75,6 +75,11 @@ entity_id!(HouseholdMemberId, "household_member");
 entity_id!(ConsumptionRecordId, "consumption_record");
 entity_id!(MealPlanEntryId, "meal_plan_entry");
 entity_id!(MealPlanComponentId, "meal_plan_component");
+entity_id!(MealParticipantId, "meal_plan_participant");
+entity_id!(
+    MealParticipantAllocationId,
+    "meal_plan_participant_allocation"
+);
 entity_id!(NutritionTargetId, "nutrition_target");
 entity_id!(RecipeId, "recipe");
 entity_id!(RecipeComponentId, "recipe_component");

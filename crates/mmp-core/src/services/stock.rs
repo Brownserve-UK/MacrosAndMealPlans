@@ -261,6 +261,7 @@ impl StockService {
                     member_id: member.id,
                     from,
                     to,
+                    include_participating: false,
                 })
                 .await?;
             for entry in entries {

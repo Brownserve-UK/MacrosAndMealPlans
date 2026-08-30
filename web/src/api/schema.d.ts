@@ -308,6 +308,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/meal-plan-entries/{id}/participants": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["setMealPlanParticipants"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/meal-plan-entries/{id}/reopen": {
         parameters: {
             query?: never;
@@ -955,6 +971,11 @@ export interface components {
         };
         /** @enum {string} */
         AmountKindDto: "measure" | "servings" | "packs";
+        AmountSummaryDto: {
+            kind: string;
+            unit?: string | null;
+            value: string;
+        };
         AvailabilityDto: {
             confidence: components["schemas"]["ConfidenceDto"];
             on_hand: components["schemas"]["QuantityDto"];
@@ -976,6 +997,13 @@ export interface components {
         CatalogueOrigin: "seeded" | "local" | "external";
         /** @enum {string} */
         ComponentNutritionSource: "known" | "estimated" | "none";
+        ComponentPreparationDto: {
+            allocated?: null | components["schemas"]["AmountSummaryDto"];
+            leftover?: null | components["schemas"]["AmountSummaryDto"];
+            prepared: components["schemas"]["AmountSummaryDto"];
+            shortage: boolean;
+            unallocated?: null | components["schemas"]["AmountSummaryDto"];
+        };
         /** @enum {string} */
         ConfidenceDto: "exact" | "estimated";
         ConsumptionRecordDto: components["schemas"]["MealItemRefDto"] & {
@@ -1029,6 +1057,7 @@ export interface components {
         };
         CreateMealPlanEntryRequest: {
             components: components["schemas"]["MealPlanComponentRequest"][];
+            household?: boolean;
             /** Format: uuid */
             id?: string | null;
             /** Format: date */
@@ -1163,6 +1192,7 @@ export interface components {
         HouseholdSettingsDto: components["schemas"]["MealTimesDto"] & {
             /** Format: date-time */
             created_at: string;
+            default_all_members_participate: boolean;
             missing_stock_interpretation: components["schemas"]["MissingStockInterpretationDto"];
             /** Format: int64 */
             revision: number;
@@ -1215,6 +1245,8 @@ export interface components {
             consumed_at?: string | null;
             /** Format: date */
             consumed_on: string;
+            /** Format: uuid */
+            member_id?: string | null;
         };
         MarkMealPlanEatenRequest: {
             components: components["schemas"]["ActualMealPlanComponentRequest"][];
@@ -1222,6 +1254,8 @@ export interface components {
             consumed_at?: string | null;
             /** Format: date */
             consumed_on: string;
+            /** Format: uuid */
+            member_id?: string | null;
         };
         /** @enum {string} */
         MealCategory: "breakfast" | "lunch" | "dinner" | "snack";
@@ -1270,6 +1304,30 @@ export interface components {
             /** Format: uuid */
             record_id: string;
         };
+        MealParticipantAllocationDto: {
+            allocated: components["schemas"]["AmountSummaryDto"];
+            /** Format: uuid */
+            component_id: string;
+            status: components["schemas"]["ParticipantStatus"];
+        };
+        MealParticipantAllocationRequest: {
+            amount: components["schemas"]["AmountDto"];
+            /** Format: uuid */
+            component_id: string;
+        };
+        MealParticipantDto: {
+            allocations: components["schemas"]["MealParticipantAllocationDto"][];
+            display_name: string;
+            /** Format: uuid */
+            member_id: string;
+            nutrition: components["schemas"]["NutritionSummaryDto"];
+            status: components["schemas"]["MealPlanStatus"];
+        };
+        MealParticipantRequest: {
+            allocations?: components["schemas"]["MealParticipantAllocationRequest"][];
+            /** Format: uuid */
+            member_id: string;
+        };
         MealPlanComponentDto: components["schemas"]["MealItemRefDto"] & {
             amount: components["schemas"]["AmountDto"];
             consumption_record?: null | components["schemas"]["ConsumptionRecordDto"];
@@ -1279,10 +1337,12 @@ export interface components {
             nutrition: components["schemas"]["NutritionDto"];
             /** Format: int32 */
             position: number;
+            preparation: components["schemas"]["ComponentPreparationDto"];
             quality: components["schemas"]["NutritionQuality"];
             /** Format: int64 */
             revision: number;
             status: components["schemas"]["MealPlanStatus"];
+            subject_status: components["schemas"]["MealPlanStatus"];
         };
         MealPlanComponentRequest: components["schemas"]["ItemRefRequest"] & {
             amount: components["schemas"]["AmountDto"];
@@ -1309,8 +1369,9 @@ export interface components {
             /** Format: uuid */
             id: string;
             /** Format: uuid */
-            member_id: string;
+            member_id?: string | null;
             needs_attention: boolean;
+            participants: components["schemas"]["MealParticipantDto"][];
             planned: components["schemas"]["NutritionSummaryDto"];
             /** Format: date */
             planned_on: string;
@@ -1322,13 +1383,18 @@ export interface components {
             resolved_by?: string | null;
             /** Format: int64 */
             revision: number;
+            scope: components["schemas"]["MealPlanScope"];
             slot: components["schemas"]["MealSlot"];
             status: components["schemas"]["MealPlanStatus"];
+            /** Format: uuid */
+            subject_member_id?: string | null;
             /** Format: date-time */
             updated_at: string;
             /** Format: uuid */
             updated_by: string;
         };
+        /** @enum {string} */
+        MealPlanScope: "member" | "household";
         /** @enum {string} */
         MealPlanStatus: "planned" | "partially_resolved" | "eaten" | "not_eaten";
         MealPlanWeekDto: {
@@ -1483,6 +1549,8 @@ export interface components {
              */
             total_pages: number;
         };
+        /** @enum {string} */
+        ParticipantStatus: "planned" | "eaten" | "not_eaten";
         PrincipalDto: {
             /** Format: uuid */
             member_id?: string | null;
@@ -1732,6 +1800,9 @@ export interface components {
             /** Format: uuid */
             ingredient_id: string;
         };
+        SetMealPlanParticipantsRequest: {
+            participants: components["schemas"]["MealParticipantRequest"][];
+        };
         SetRolesRequest: {
             roles: components["schemas"]["Role"][];
         };
@@ -1842,6 +1913,7 @@ export interface components {
         UpdateMealTimesRequest: {
             /** @example 08:00 */
             breakfast?: string | null;
+            default_all_members_participate?: boolean | null;
             /** @example 18:00 */
             dinner?: string | null;
             /** @example 12:30 */
@@ -2795,6 +2867,33 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MealPlanEntryDto"];
+                };
+            };
+        };
+    };
+    setMealPlanParticipants: {
+        parameters: {
+            query?: never;
+            header: {
+                "If-Match": string;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetMealPlanParticipantsRequest"];
+            };
+        };
         responses: {
             200: {
                 headers: {

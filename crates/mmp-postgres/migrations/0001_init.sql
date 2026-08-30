@@ -714,3 +714,130 @@ CREATE TABLE stock_event (
 );
 
 CREATE INDEX stock_event_item ON stock_event (stock_item_id, occurred_at DESC);
+
+ALTER TABLE household_settings
+    ADD COLUMN default_all_members_participate BOOLEAN NOT NULL DEFAULT TRUE;
+
+ALTER TABLE member_access_grant
+    DROP CONSTRAINT member_access_grant_scope_valid,
+    ADD CONSTRAINT member_access_grant_scope_valid
+        CHECK (scope IN ('health_data', 'meal_plan'));
+
+ALTER TABLE meal_plan_entry
+    ADD COLUMN scope TEXT NOT NULL DEFAULT 'member',
+    ALTER COLUMN member_id DROP NOT NULL,
+    ADD CONSTRAINT meal_plan_entry_scope_valid
+        CHECK (scope IN ('member', 'household')),
+    ADD CONSTRAINT meal_plan_entry_owner_matches_scope
+        CHECK ((scope = 'member') = (member_id IS NOT NULL)),
+    ADD CONSTRAINT meal_plan_entry_id_day_slot_unique
+        UNIQUE (id, planned_on, slot);
+
+DROP INDEX meal_plan_entry_member_day_slot_unique;
+CREATE UNIQUE INDEX meal_plan_entry_member_day_slot_unique
+    ON meal_plan_entry (member_id, planned_on, slot)
+    WHERE member_id IS NOT NULL;
+
+ALTER TABLE meal_plan_component
+    ADD CONSTRAINT meal_plan_component_entry_id_unique
+        UNIQUE (entry_id, id);
+
+CREATE TABLE meal_plan_participant (
+    id          UUID PRIMARY KEY,
+    entry_id    UUID NOT NULL,
+    member_id   UUID NOT NULL REFERENCES household_member (id) ON DELETE CASCADE,
+    planned_on  DATE NOT NULL,
+    slot        TEXT NOT NULL,
+
+    revision    BIGINT NOT NULL DEFAULT 1,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    CONSTRAINT meal_plan_participant_slot_valid
+        CHECK (slot IN ('breakfast', 'lunch', 'dinner', 'snacks')),
+    CONSTRAINT meal_plan_participant_entry_occurrence_fk
+        FOREIGN KEY (entry_id, planned_on, slot)
+        REFERENCES meal_plan_entry (id, planned_on, slot)
+        ON UPDATE CASCADE ON DELETE CASCADE,
+    CONSTRAINT meal_plan_participant_entry_member_unique
+        UNIQUE (entry_id, member_id),
+    CONSTRAINT meal_plan_participant_entry_id_unique
+        UNIQUE (entry_id, id),
+    CONSTRAINT meal_plan_participant_member_occurrence_unique
+        UNIQUE (member_id, planned_on, slot)
+);
+
+CREATE INDEX meal_plan_participant_entry ON meal_plan_participant (entry_id);
+CREATE INDEX meal_plan_participant_member ON meal_plan_participant (member_id);
+
+CREATE TABLE meal_plan_participant_allocation (
+    id                    UUID PRIMARY KEY,
+    entry_id              UUID NOT NULL,
+    participant_id        UUID NOT NULL,
+    component_id          UUID NOT NULL,
+
+    allocated_kind        TEXT NOT NULL,
+    allocated_value       NUMERIC(16, 4) NOT NULL,
+    allocated_unit        TEXT,
+
+    status                TEXT NOT NULL DEFAULT 'planned',
+    consumption_record_id UUID REFERENCES consumption_record (id) ON DELETE SET NULL,
+    resolved_by           UUID REFERENCES app_user (id) ON DELETE RESTRICT,
+    resolved_at           TIMESTAMPTZ,
+
+    CONSTRAINT meal_plan_participant_allocation_participant_fk
+        FOREIGN KEY (entry_id, participant_id)
+        REFERENCES meal_plan_participant (entry_id, id)
+        ON DELETE CASCADE,
+    CONSTRAINT meal_plan_participant_allocation_component_fk
+        FOREIGN KEY (entry_id, component_id)
+        REFERENCES meal_plan_component (entry_id, id)
+        ON DELETE CASCADE,
+    CONSTRAINT meal_plan_participant_allocation_unique
+        UNIQUE (participant_id, component_id),
+    CONSTRAINT meal_plan_participant_allocation_status_valid
+        CHECK (status IN ('planned', 'eaten', 'not_eaten')),
+    CONSTRAINT meal_plan_participant_allocation_kind_valid
+        CHECK (allocated_kind IN ('measure', 'servings', 'packs')),
+    CONSTRAINT meal_plan_participant_allocation_value_positive
+        CHECK (allocated_value > 0),
+    CONSTRAINT meal_plan_participant_allocation_unit_present
+        CHECK ((allocated_kind = 'measure') = (allocated_unit IS NOT NULL)),
+    CONSTRAINT meal_plan_participant_allocation_unit_valid
+        CHECK (allocated_unit IS NULL OR allocated_unit IN ('mg', 'g', 'kg', 'oz', 'lb', 'ml', 'l', 'tsp', 'tbsp', 'fl_oz', 'cup', 'item', 'piece', 'slice', 'clove', 'can', 'pack', 'bunch')),
+    CONSTRAINT meal_plan_participant_allocation_resolution_complete
+        CHECK ((status = 'planned') = (resolved_by IS NULL AND resolved_at IS NULL)),
+    CONSTRAINT meal_plan_participant_allocation_eaten_has_record
+        CHECK (status <> 'eaten' OR consumption_record_id IS NOT NULL)
+);
+
+CREATE INDEX meal_plan_participant_allocation_participant
+    ON meal_plan_participant_allocation (participant_id);
+CREATE INDEX meal_plan_participant_allocation_component
+    ON meal_plan_participant_allocation (component_id);
+
+INSERT INTO meal_plan_participant (id, entry_id, member_id, planned_on, slot, revision, created_at, updated_at)
+SELECT uuidv7(), e.id, e.member_id, e.planned_on, e.slot, 1, e.created_at, e.updated_at
+FROM meal_plan_entry e
+WHERE e.member_id IS NOT NULL;
+
+INSERT INTO meal_plan_participant_allocation
+    (id, entry_id, participant_id, component_id,
+     allocated_kind, allocated_value, allocated_unit,
+     status, consumption_record_id, resolved_by, resolved_at)
+SELECT uuidv7(), c.entry_id, p.id, c.id,
+       c.amount_kind, c.amount_value, c.amount_unit,
+       c.status, cr.id, c.resolved_by, c.resolved_at
+FROM meal_plan_component c
+JOIN meal_plan_participant p ON p.entry_id = c.entry_id
+LEFT JOIN consumption_record cr ON cr.meal_plan_component_id = c.id;
+
+ALTER TABLE meal_plan_component
+    DROP CONSTRAINT meal_plan_component_status_valid,
+    ADD CONSTRAINT meal_plan_component_status_valid
+        CHECK (status IN ('planned', 'partially_resolved', 'eaten', 'not_eaten'));
+
+DROP INDEX consumption_record_meal_plan_component_unique;
+CREATE UNIQUE INDEX consumption_record_meal_plan_component_member_unique
+    ON consumption_record (meal_plan_component_id, member_id)
+    WHERE meal_plan_component_id IS NOT NULL;

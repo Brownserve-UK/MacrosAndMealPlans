@@ -14,8 +14,8 @@ pub use diary::{DayTotals, DiaryDay, DiaryEntry, DiaryService};
 pub use household::HouseholdService;
 pub use household_settings::HouseholdSettingsService;
 pub use meal_plan::{
-    MealItem, MealItemSource, MealPlanComponentView, MealPlanDay, MealPlanEntryView,
-    MealPlanService, MealPlanWeek, MealSlotView, NutritionSummary,
+    MealItem, MealItemSource, MealParticipantView, MealPlanComponentView, MealPlanDay,
+    MealPlanEntryView, MealPlanService, MealPlanWeek, MealSlotView, NutritionSummary,
 };
 pub use nutrition_target::NutritionTargetService;
 pub use recipe::{
