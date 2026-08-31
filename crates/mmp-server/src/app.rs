@@ -157,6 +157,13 @@ impl mmp_core::ports::StockRepository for NoopStock {
     ) -> mmp_core::Result<Vec<mmp_core::domain::StockEvent>> {
         Ok(vec![])
     }
+    async fn effects_for_source(
+        &self,
+        _: mmp_core::domain::StockEffectSource,
+        _: uuid::Uuid,
+    ) -> mmp_core::Result<Vec<mmp_core::domain::StockEffect>> {
+        Ok(vec![])
+    }
 }
 
 #[async_trait::async_trait]
@@ -456,18 +463,34 @@ impl mmp_core::ports::ConsumptionRecordRepository for NoopConsumptionRecords {
     ) -> mmp_core::Result<Vec<mmp_core::domain::ConsumptionRecord>> {
         Ok(vec![])
     }
-    async fn insert(&self, _: &mmp_core::domain::ConsumptionRecord) -> mmp_core::Result<()> {
-        Ok(())
+    async fn insert(
+        &self,
+        _: &mmp_core::domain::ConsumptionRecord,
+        _: &mmp_core::ports::StockWrite,
+    ) -> mmp_core::Result<Vec<mmp_core::domain::StockOutcome>> {
+        Ok(vec![])
     }
     async fn update(
         &self,
         _: &mmp_core::domain::ConsumptionRecord,
         _: mmp_core::domain::Revision,
-    ) -> mmp_core::Result<mmp_core::ports::UpdateOutcome> {
-        Ok(mmp_core::ports::UpdateOutcome::NotFound)
+        _: &mmp_core::ports::StockWrite,
+    ) -> mmp_core::Result<(
+        mmp_core::ports::UpdateOutcome,
+        Vec<mmp_core::domain::StockOutcome>,
+    )> {
+        Ok((mmp_core::ports::UpdateOutcome::NotFound, vec![]))
     }
-    async fn delete(&self, _: mmp_core::domain::ConsumptionRecordId) -> mmp_core::Result<bool> {
-        Ok(false)
+    async fn delete(
+        &self,
+        _: mmp_core::domain::ConsumptionRecordId,
+        _: mmp_core::domain::Revision,
+        _: &mmp_core::ports::StockWrite,
+    ) -> mmp_core::Result<(
+        mmp_core::ports::UpdateOutcome,
+        Vec<mmp_core::domain::StockOutcome>,
+    )> {
+        Ok((mmp_core::ports::UpdateOutcome::NotFound, vec![]))
     }
 }
 
@@ -507,15 +530,24 @@ impl mmp_core::ports::MealPlanRepository for NoopMealPlans {
         _: &mmp_core::domain::MealPlanEntry,
         _: mmp_core::domain::Revision,
         _: &[mmp_core::domain::ConsumptionRecord],
-    ) -> mmp_core::Result<mmp_core::ports::UpdateOutcome> {
-        Ok(mmp_core::ports::UpdateOutcome::NotFound)
+        _: &mmp_core::ports::StockWrite,
+    ) -> mmp_core::Result<(
+        mmp_core::ports::UpdateOutcome,
+        Vec<mmp_core::domain::StockOutcome>,
+    )> {
+        Ok((mmp_core::ports::UpdateOutcome::NotFound, vec![]))
     }
     async fn reopen(
         &self,
         _: &mmp_core::domain::MealPlanEntry,
         _: mmp_core::domain::Revision,
-    ) -> mmp_core::Result<mmp_core::ports::UpdateOutcome> {
-        Ok(mmp_core::ports::UpdateOutcome::NotFound)
+        _: &[mmp_core::domain::ConsumptionRecordId],
+        _: &mmp_core::ports::StockWrite,
+    ) -> mmp_core::Result<(
+        mmp_core::ports::UpdateOutcome,
+        Vec<mmp_core::domain::StockOutcome>,
+    )> {
+        Ok((mmp_core::ports::UpdateOutcome::NotFound, vec![]))
     }
     async fn set_participants(
         &self,
@@ -531,8 +563,12 @@ impl mmp_core::ports::MealPlanRepository for NoopMealPlans {
         _: &[mmp_core::domain::MealParticipant],
         _: mmp_core::domain::Revision,
         _: Option<&mmp_core::domain::ConsumptionRecord>,
-    ) -> mmp_core::Result<mmp_core::ports::UpdateOutcome> {
-        Ok(mmp_core::ports::UpdateOutcome::NotFound)
+        _: &mmp_core::ports::StockWrite,
+    ) -> mmp_core::Result<(
+        mmp_core::ports::UpdateOutcome,
+        Vec<mmp_core::domain::StockOutcome>,
+    )> {
+        Ok((mmp_core::ports::UpdateOutcome::NotFound, vec![]))
     }
     async fn reopen_component(
         &self,
@@ -540,8 +576,13 @@ impl mmp_core::ports::MealPlanRepository for NoopMealPlans {
         _: &mmp_core::ports::MealPlanComponentUpdate<'_>,
         _: &[mmp_core::domain::MealParticipant],
         _: mmp_core::domain::Revision,
-    ) -> mmp_core::Result<mmp_core::ports::UpdateOutcome> {
-        Ok(mmp_core::ports::UpdateOutcome::NotFound)
+        _: Option<mmp_core::domain::ConsumptionRecordId>,
+        _: &mmp_core::ports::StockWrite,
+    ) -> mmp_core::Result<(
+        mmp_core::ports::UpdateOutcome,
+        Vec<mmp_core::domain::StockOutcome>,
+    )> {
+        Ok((mmp_core::ports::UpdateOutcome::NotFound, vec![]))
     }
 }
 

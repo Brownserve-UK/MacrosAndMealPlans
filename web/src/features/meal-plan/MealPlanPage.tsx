@@ -6,6 +6,7 @@ import ChevronRightIcon from '@mui/icons-material/ChevronRightOutlined';
 import RadioButtonUncheckedIcon from '@mui/icons-material/RadioButtonUncheckedOutlined';
 import RemoveCircleOutlineIcon from '@mui/icons-material/RemoveCircleOutlineOutlined';
 import WarningAmberIcon from '@mui/icons-material/WarningAmberOutlined';
+import Alert from '@mui/material/Alert';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
 import ButtonBase from '@mui/material/ButtonBase';
@@ -19,7 +20,8 @@ import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
 import { useNavigate } from '@tanstack/react-router';
 import { useState } from 'react';
-import type { MealItem, MealPlanDay, MealPlanEntry, MealSlot } from '../../api/client';
+import { ApiError, type MealItem, type MealPlanDay, type MealPlanEntry, type MealSlot } from '../../api/client';
+import { collectStockOutcomes, describeStockOutcome } from './stockShortfall';
 import {
   useMealPlanWeek,
   useMarkMealPlanComponentEaten,
@@ -638,6 +640,8 @@ export function MealPlanPage({
   const [adding, setAdding] = useState<AddSelection | null>(null);
   const [editing, setEditing] = useState<EditSelection | null>(null);
   const [toggling, setToggling] = useState<string | null>(null);
+  const [stockNotice, setStockNotice] = useState<string[]>([]);
+  const [toggleError, setToggleError] = useState<string | null>(null);
   const markEaten = useMarkMealPlanEaten();
   const markComponentEaten = useMarkMealPlanComponentEaten();
   const reopenComponent = useReopenMealPlanComponent();
@@ -687,7 +691,7 @@ export function MealPlanPage({
     setToggling(key);
     try {
       if (item.status === 'planned') {
-        await markComponentEaten.mutateAsync({
+        const updated = await markComponentEaten.mutateAsync({
           id: item.entry_id,
           componentId: item.component_id,
           revision: item.revision,
@@ -697,6 +701,7 @@ export function MealPlanPage({
             amount: item.amount,
           },
         });
+        setStockNotice(collectStockOutcomes([updated]).map(describeStockOutcome));
       } else {
         await reopenComponent.mutateAsync({
           id: item.entry_id,
@@ -704,6 +709,9 @@ export function MealPlanPage({
           revision: item.revision,
         });
       }
+      setToggleError(null);
+    } catch (caught) {
+      setToggleError(caught instanceof ApiError ? caught.message : 'Could not update this item.');
     } finally {
       setToggling(null);
     }
@@ -714,7 +722,7 @@ export function MealPlanPage({
     if (!entry) return;
     setToggling(entryId);
     try {
-      await markEaten.mutateAsync({
+      const updated = await markEaten.mutateAsync({
         id: entryId,
         revision: entry.revision,
         body: {
@@ -725,6 +733,10 @@ export function MealPlanPage({
           ),
         },
       });
+      setStockNotice(collectStockOutcomes([updated]).map(describeStockOutcome));
+      setToggleError(null);
+    } catch (caught) {
+      setToggleError(caught instanceof ApiError ? caught.message : 'Could not update this meal.');
     } finally {
       setToggling(null);
     }
@@ -746,15 +758,18 @@ export function MealPlanPage({
         }
       />
 
-      {workspace === 'today' && future ? (
-        <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
-          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} sx={{ alignItems: { sm: 'center' }, justifyContent: 'space-between' }}>
-            <Typography variant="body2">Future food is read-only in the food log.</Typography>
-            <Button onClick={() => void navigate({ to: '/planner/$weekStart/$day', params: { weekStart, day: activeDate } })}>
-              Open in Planner
-            </Button>
-          </Stack>
-        </Paper>
+      {toggleError ? (
+        <Alert severity="error" onClose={() => setToggleError(null)} sx={{ mb: 3 }}>
+          {toggleError}
+        </Alert>
+      ) : null}
+
+      {stockNotice.length > 0 ? (
+        <Alert severity="warning" onClose={() => setStockNotice([])} sx={{ mb: 3 }}>
+          {stockNotice.map((line) => (
+            <div key={line}>{line}</div>
+          ))}
+        </Alert>
       ) : null}
 
       {week.data ? (

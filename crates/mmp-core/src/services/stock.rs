@@ -63,6 +63,14 @@ impl StockService {
         self.stock.list_events(id).await
     }
 
+    pub async fn effects_for_source(
+        &self,
+        source_kind: crate::domain::StockEffectSource,
+        source_id: uuid::Uuid,
+    ) -> Result<Vec<crate::domain::StockEffect>> {
+        self.stock.effects_for_source(source_kind, source_id).await
+    }
+
     pub async fn create(
         &self,
         input: NewStockItem,
@@ -98,6 +106,8 @@ impl StockService {
             quantity_delta: item.level.conservative_quantity(),
             actor_user_id: Some(actor),
             subject_member_id: subject,
+            source: None,
+            reverses_event_id: None,
             note: None,
         };
         self.stock.insert(&item, &event).await?;
@@ -144,6 +154,8 @@ impl StockService {
             quantity_delta: current.level.conservative_quantity(),
             actor_user_id: Some(actor),
             subject_member_id: subject,
+            source: None,
+            reverses_event_id: None,
             note: None,
         };
         commit(
@@ -172,6 +184,8 @@ impl StockService {
             quantity_delta: None,
             actor_user_id: Some(actor),
             subject_member_id: None,
+            source: None,
+            reverses_event_id: None,
             note: None,
         };
         commit(
@@ -265,7 +279,10 @@ impl StockService {
                 })
                 .await?;
             for entry in entries {
-                for component in entry.components {
+                for component in &entry.components {
+                    if !component_is_future_demand(&entry, component.id) {
+                        continue;
+                    }
                     let Some(product_id) = component.item.product_id() else {
                         incomplete = true;
                         continue;
@@ -293,6 +310,26 @@ impl StockService {
         }
         Ok((demand, incomplete))
     }
+}
+
+fn component_is_future_demand(
+    entry: &crate::domain::MealPlanEntry,
+    component_id: crate::domain::MealPlanComponentId,
+) -> bool {
+    let statuses: Vec<crate::domain::ParticipantStatus> = entry
+        .participants
+        .iter()
+        .flat_map(|participant| participant.allocations.iter())
+        .filter(|allocation| allocation.component_id == component_id)
+        .map(|allocation| allocation.status)
+        .collect();
+    if statuses.is_empty() {
+        return true;
+    }
+    if statuses.contains(&crate::domain::ParticipantStatus::Eaten) {
+        return false;
+    }
+    statuses.contains(&crate::domain::ParticipantStatus::Planned)
 }
 
 fn add_demand(

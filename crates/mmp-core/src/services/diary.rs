@@ -11,10 +11,11 @@ use crate::domain::{
 use crate::error::{CoreError, Result, ValidationErrors};
 use crate::ports::{
     Clock, ConsumptionQuery, ConsumptionRecordRepository, PageRequest, ProductRepository,
-    RecipeRepository, UpdateOutcome,
+    RecipeRepository, StockWrite, UpdateOutcome,
 };
 
 use super::fulfilment::RecipeFulfilments;
+use super::stock_effects::{StockAffected, name_outcomes, record_deduction, record_release};
 
 const CONSUMPTION_RECORD: &str = "consumption record";
 const PRODUCT: &str = "product";
@@ -65,12 +66,18 @@ impl DiaryService {
         }
     }
 
-    pub async fn record(&self, input: NewConsumptionRecord) -> Result<ConsumptionRecord> {
+    pub async fn record(
+        &self,
+        input: NewConsumptionRecord,
+    ) -> Result<StockAffected<ConsumptionRecord>> {
         ensure_not_future(&*self.clock, input.consumed_on)?;
         self.record_unchecked(input).await
     }
 
-    pub async fn record_unchecked(&self, input: NewConsumptionRecord) -> Result<ConsumptionRecord> {
+    pub async fn record_unchecked(
+        &self,
+        input: NewConsumptionRecord,
+    ) -> Result<StockAffected<ConsumptionRecord>> {
         input.validate()?;
         let scaled = self
             .resolve_item(input.item, &input.amount, input.recorded_by)
@@ -94,8 +101,30 @@ impl DiaryService {
             updated_at: now,
         };
 
-        self.records.insert(&record).await?;
-        Ok(record)
+        let write = StockWrite {
+            deductions: self.deduction_for(&record).await?.into_iter().collect(),
+            releases: Vec::new(),
+        };
+        let outcomes = self.records.insert(&record, &write).await?;
+        Ok(StockAffected::new(
+            record,
+            name_outcomes(&*self.products, outcomes).await?,
+        ))
+    }
+
+    async fn deduction_for(
+        &self,
+        record: &ConsumptionRecord,
+    ) -> Result<Option<crate::ports::StockDeduction>> {
+        if record.meal_plan_component_id.is_some() {
+            return Ok(None);
+        }
+        let MealItemRef::Product { product_id } = record.item else {
+            return Ok(None);
+        };
+        let product = self.get_product(product_id).await?;
+        let label = format!("Logged food \u{2014} {}", product.name);
+        Ok(record_deduction(record, &product, label))
     }
 
     pub async fn get(&self, id: ConsumptionRecordId) -> Result<ConsumptionRecord> {
@@ -110,14 +139,15 @@ impl DiaryService {
         id: ConsumptionRecordId,
         expected: Revision,
         patch: ConsumptionRecordPatch,
-    ) -> Result<ConsumptionRecord> {
+    ) -> Result<StockAffected<ConsumptionRecord>> {
         patch.validate()?;
         let mut current = self.get(id).await?;
         require_revision(id, expected, current.revision)?;
 
         if patch.is_empty() {
-            return Ok(current);
+            return Ok(StockAffected::bare(current));
         }
+        let amount_changing = patch.amount.is_some();
 
         if patch.slot.is_some() && current.meal_plan_component_id.is_some() {
             return Err(CoreError::conflict(
@@ -146,11 +176,32 @@ impl DiaryService {
 
         current.revision = current.revision.next();
         current.updated_at = self.clock.now();
-        self.commit(&current, expected).await?;
-        Ok(current)
+
+        let mut write = StockWrite::default();
+        if amount_changing
+            && current.meal_plan_component_id.is_none()
+            && let MealItemRef::Product { product_id } = current.item
+        {
+            let product = self.get_product(product_id).await?;
+            let label = format!("Logged food \u{2014} {}", product.name);
+            write.releases.push(record_release(&current, label.clone()));
+            if let Some(deduction) = record_deduction(&current, &product, label) {
+                write.deductions.push(deduction);
+            }
+        }
+
+        let outcomes = self.commit(&current, expected, &write).await?;
+        Ok(StockAffected::new(
+            current,
+            name_outcomes(&*self.products, outcomes).await?,
+        ))
     }
 
-    pub async fn remove(&self, id: ConsumptionRecordId, expected: Revision) -> Result<()> {
+    pub async fn remove(
+        &self,
+        id: ConsumptionRecordId,
+        expected: Revision,
+    ) -> Result<StockAffected<()>> {
         let current = self.get(id).await?;
         require_revision(id, expected, current.revision)?;
         if current.meal_plan_component_id.is_some() {
@@ -158,10 +209,29 @@ impl DiaryService {
                 "This food came from a planned meal. Reopen the meal in your plan to remove it.",
             ));
         }
-        if self.records.delete(id).await? {
-            Ok(())
-        } else {
-            Err(CoreError::not_found(CONSUMPTION_RECORD, id))
+
+        let mut write = StockWrite::default();
+        if let MealItemRef::Product { product_id } = current.item {
+            let product = self.get_product(product_id).await?;
+            write.releases.push(record_release(
+                &current,
+                format!("Logged food \u{2014} {}", product.name),
+            ));
+        }
+
+        let (outcome, stock_outcomes) = self.records.delete(id, expected, &write).await?;
+        match outcome {
+            UpdateOutcome::Updated => Ok(StockAffected::new(
+                (),
+                name_outcomes(&*self.products, stock_outcomes).await?,
+            )),
+            UpdateOutcome::RevisionMismatch { actual } => Err(CoreError::RevisionMismatch {
+                resource: CONSUMPTION_RECORD,
+                id: id.to_string(),
+                expected,
+                actual,
+            }),
+            UpdateOutcome::NotFound => Err(CoreError::not_found(CONSUMPTION_RECORD, id)),
         }
     }
 
@@ -267,9 +337,15 @@ impl DiaryService {
         }
     }
 
-    async fn commit(&self, record: &ConsumptionRecord, expected: Revision) -> Result<()> {
-        match self.records.update(record, expected).await? {
-            UpdateOutcome::Updated => Ok(()),
+    async fn commit(
+        &self,
+        record: &ConsumptionRecord,
+        expected: Revision,
+        stock: &StockWrite,
+    ) -> Result<Vec<crate::domain::StockOutcome>> {
+        let (outcome, stock_outcomes) = self.records.update(record, expected, stock).await?;
+        match outcome {
+            UpdateOutcome::Updated => Ok(stock_outcomes),
             UpdateOutcome::RevisionMismatch { actual } => Err(CoreError::RevisionMismatch {
                 resource: CONSUMPTION_RECORD,
                 id: record.id.to_string(),

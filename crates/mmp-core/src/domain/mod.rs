@@ -32,7 +32,8 @@ pub use household_settings::{
 pub use ids::{ConsumptionRecordId, HouseholdMemberId, IngredientId, ProductId, Revision, UserId};
 pub use ids::{
     MealParticipantAllocationId, MealParticipantId, MealPlanComponentId, MealPlanEntryId,
-    NutritionTargetId, RecipeComponentId, RecipeId, RecipeInstructionId, StockEventId, StockItemId,
+    NutritionTargetId, RecipeComponentId, RecipeId, RecipeInstructionId, StockEffectId,
+    StockEventId, StockItemId,
 };
 pub use ingredient::{
     Ingredient, IngredientPatch, IngredientSummary, MAX_NAME_LEN, NewIngredient, validate_name,
@@ -68,8 +69,11 @@ pub use recipe::{
     recipe_nutrition_detailed,
 };
 pub use stock::{
-    Availability, Confidence, NewStockEvent, NewStockItem, ProductAvailability, SourceDate,
-    SourceDateKind, StockEvent, StockEventKind, StockItem, StockItemPatch, StockLevel,
-    StorageLocation, TrackingMode, UnknownSourceDateKind, UnknownStockEventKind,
-    UnknownStorageLocation, UnknownTrackingMode, UsabilityDeadline,
+    AppliedDelta, Availability, Confidence, DeductionPlan, NewStockEffect, NewStockEvent,
+    NewStockItem, PlannedTake, ProductAvailability, ReleasePlan, Shortfall, SourceDate,
+    SourceDateKind, StockEffect, StockEffectSource, StockEffectState, StockEvent, StockEventKind,
+    StockEventSource, StockItem, StockItemPatch, StockLevel, StockOutcome, StorageLocation,
+    TrackingMode, UnknownSourceDateKind, UnknownStockEffectSource, UnknownStockEffectState,
+    UnknownStockEventKind, UnknownStorageLocation, UnknownTrackingMode, UsabilityDeadline,
+    apply_take, plan_deduction, plan_release,
 };

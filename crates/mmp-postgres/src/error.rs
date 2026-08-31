@@ -1,4 +1,4 @@
-use mmp_core::{CoreError, RepositoryError, ValidationErrors};
+use mmp_core::{CoreError, RepositoryError};
 
 const UNIQUE_VIOLATION: &str = "23505";
 const FOREIGN_KEY_VIOLATION: &str = "23503";
@@ -30,11 +30,10 @@ pub fn map_db_error(error: sqlx::Error, context: &str) -> CoreError {
         FOREIGN_KEY_VIOLATION => {
             CoreError::not_found(foreign_key_target(&constraint), "referenced here")
         }
-        CHECK_VIOLATION => {
-            let mut errors = ValidationErrors::new();
-            errors.push(constraint_field(&constraint), "Not valid");
-            CoreError::Validation(errors)
-        }
+        CHECK_VIOLATION => CoreError::Repository(RepositoryError::with_source(
+            format!("{context} violated the check constraint `{constraint}`"),
+            error,
+        )),
         _ => CoreError::Repository(RepositoryError::with_source(
             format!("{context} failed"),
             error,
@@ -42,23 +41,7 @@ pub fn map_db_error(error: sqlx::Error, context: &str) -> CoreError {
     }
 }
 
-const TABLES: [(&str, &str); 13] = [
-    ("household_member_", "household member"),
-    ("household_settings_", "household settings"),
-    ("member_access_grant_", "access grant"),
-    ("ingredient_", "ingredient"),
-    ("app_user_", "user"),
-    ("product_", "product"),
-    ("consumption_record_", "consumption record"),
-    ("meal_plan_entry_", "meal plan entry"),
-    ("meal_plan_component_", "meal plan component"),
-    ("nutrition_target_", "nutrition target"),
-    ("recipe_component_", "recipe component"),
-    ("recipe_instruction_", "recipe instruction"),
-    ("recipe_", "recipe"),
-];
-
-const UNIQUE_CONSTRAINTS: [(&str, &str, &str); 21] = [
+const UNIQUE_CONSTRAINTS: [(&str, &str, &str); 22] = [
     ("ingredient_name_unique", "ingredient", "name"),
     ("ingredient_seed_key_unique", "ingredient", "seed_key"),
     ("ingredient_pkey", "ingredient", "id"),
@@ -112,6 +95,11 @@ const UNIQUE_CONSTRAINTS: [(&str, &str, &str); 21] = [
         "nutrition target",
         "effective_from",
     ),
+    (
+        "stock_effect_active_source_item_unique",
+        "stock effect",
+        "source",
+    ),
 ];
 
 fn unique_violation(constraint: &str) -> Option<(&'static str, &'static str)> {
@@ -154,14 +142,6 @@ fn foreign_key_target(constraint: &str) -> &'static str {
         return "household member";
     }
     "referenced record"
-}
-
-fn constraint_field(constraint: &str) -> String {
-    TABLES
-        .iter()
-        .find_map(|(prefix, _)| constraint.strip_prefix(prefix))
-        .unwrap_or(constraint)
-        .to_owned()
 }
 
 pub fn repository_error(context: &str, error: sqlx::Error) -> CoreError {

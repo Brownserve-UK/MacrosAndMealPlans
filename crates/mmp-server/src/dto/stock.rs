@@ -1,8 +1,9 @@
 use mmp_core::domain::{
-    Availability, Confidence, NewStockItem, Patch, ProductAvailability, SourceDate, SourceDateKind,
-    StockEvent, StockItem, StockItemId, StockItemPatch, StockLevel, StorageLocation, TrackingMode,
-    Unit, UsabilityDeadline,
+    Availability, Confidence, NewStockItem, Patch, ProductAvailability, Shortfall, SourceDate,
+    SourceDateKind, StockEvent, StockItem, StockItemId, StockItemPatch, StockLevel, StockOutcome,
+    StorageLocation, TrackingMode, Unit, UsabilityDeadline,
 };
+use mmp_core::services::StockOutcomeView;
 use rust_decimal::Decimal;
 use rust_decimal::prelude::FromPrimitive;
 use serde::{Deserialize, Serialize};
@@ -296,6 +297,10 @@ pub struct StockEventDto {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub subject_member_id: Option<Uuid>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_label: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reverses_event_id: Option<Uuid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
     #[serde(with = "time::serde::rfc3339")]
     #[schema(value_type = String, format = DateTime)]
@@ -311,8 +316,80 @@ impl From<StockEvent> for StockEventDto {
             quantity_delta: value.quantity_delta.map(Into::into),
             actor_user_id: value.actor_user_id.map(|id| id.as_uuid()),
             subject_member_id: value.subject_member_id.map(|id| id.as_uuid()),
+            source_label: value.source.map(|s| s.label),
+            reverses_event_id: value.reverses_event_id.map(|id| id.as_uuid()),
             note: value.note,
             occurred_at: value.occurred_at,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum ShortfallDto {
+    Covered,
+    Short {
+        amount: QuantityDto,
+        confidence: ConfidenceDto,
+    },
+    Indeterminate {
+        amount: QuantityDto,
+    },
+}
+
+impl From<Shortfall> for ShortfallDto {
+    fn from(value: Shortfall) -> Self {
+        match value {
+            Shortfall::Covered => Self::Covered,
+            Shortfall::Short { amount, confidence } => Self::Short {
+                amount: amount.into(),
+                confidence: confidence.into(),
+            },
+            Shortfall::Indeterminate { amount } => Self::Indeterminate {
+                amount: amount.into(),
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct StockOutcomesResponse {
+    #[serde(default)]
+    pub stock_outcomes: Vec<StockOutcomeDto>,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct StockOutcomeDto {
+    pub product_id: Uuid,
+    pub product_name: String,
+    pub wanted: QuantityDto,
+    pub deducted: QuantityDto,
+    pub shortfall: ShortfallDto,
+    pub unresolved_release: bool,
+}
+
+impl From<StockOutcomeView> for StockOutcomeDto {
+    fn from(value: StockOutcomeView) -> Self {
+        Self {
+            product_id: value.product_id.as_uuid(),
+            product_name: value.product_name,
+            wanted: value.wanted.into(),
+            deducted: value.deducted.into(),
+            shortfall: value.shortfall.into(),
+            unresolved_release: value.unresolved_release,
+        }
+    }
+}
+
+impl From<StockOutcome> for StockOutcomeDto {
+    fn from(value: StockOutcome) -> Self {
+        Self {
+            product_id: value.product_id.as_uuid(),
+            product_name: String::new(),
+            wanted: value.wanted.into(),
+            deducted: value.deducted.into(),
+            shortfall: value.shortfall.into(),
+            unresolved_release: value.unresolved_release,
         }
     }
 }

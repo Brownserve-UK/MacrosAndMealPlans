@@ -10,14 +10,16 @@ use crate::domain::{
     HouseholdMemberId, MealItemRef, MealPlanEntryPatch, MealPlanScope, MealPlanStatus, MealSlot,
     NewConsumptionRecord, NewMealPlanComponent, NewMealPlanEntry, NewNutritionTarget,
     NutritionFacts, NutritionGoals, NutritionQuality, OutcomeActor, Product, ProductId, Provenance,
-    Quantity, Recipe, RecipeComponent, RecipeId, RecipeVisibility, Revision, Unit, UserId,
+    Quantity, Recipe, RecipeComponent, RecipeId, RecipeVisibility, Revision, StockItem, StockLevel,
+    StorageLocation, Unit, UserId,
 };
-use crate::ports::FixedClock;
+use crate::ports::{FixedClock, StockRepository};
 use crate::services::{DiaryService, NutritionTargetService};
 use crate::testing::{
     InMemoryConsumptionRecordRepository, InMemoryHouseholdMemberRepository,
     InMemoryHouseholdSettingsRepository, InMemoryMealPlanRepository,
     InMemoryNutritionTargetRepository, InMemoryProductRepository, InMemoryRecipeRepository,
+    InMemoryStockRepository,
 };
 
 struct Harness {
@@ -29,8 +31,40 @@ struct Harness {
     records: InMemoryConsumptionRecordRepository,
     members: InMemoryHouseholdMemberRepository,
     settings: InMemoryHouseholdSettingsRepository,
+    stock: InMemoryStockRepository,
+    plans: InMemoryMealPlanRepository,
     member_id: HouseholdMemberId,
     actor_id: UserId,
+}
+
+impl Harness {
+    fn seed_stock_grams(&self, product_id: ProductId, grams: i64) -> crate::domain::StockItemId {
+        let item = StockItem {
+            id: crate::domain::StockItemId::new(),
+            product_id,
+            level: StockLevel::Exact {
+                quantity: Quantity::new(Decimal::new(grams, 0), Unit::Gram),
+            },
+            storage_location: StorageLocation::Chilled,
+            source_date: None,
+            usability_deadline: None,
+            note: None,
+            revision: Revision::INITIAL,
+            created_at: OffsetDateTime::UNIX_EPOCH,
+            updated_at: OffsetDateTime::UNIX_EPOCH,
+            archived_at: None,
+        };
+        let id = item.id;
+        self.stock.seed(item);
+        id
+    }
+
+    async fn stock_grams(&self, id: crate::domain::StockItemId) -> Decimal {
+        match self.stock.get(id).await.unwrap().unwrap().level {
+            StockLevel::Exact { quantity } => quantity.amount,
+            _ => panic!("expected an exact level"),
+        }
+    }
 }
 
 impl Harness {
@@ -52,7 +86,8 @@ impl Harness {
 fn harness() -> Harness {
     let products = InMemoryProductRepository::new();
     let recipes = InMemoryRecipeRepository::new();
-    let records = InMemoryConsumptionRecordRepository::new();
+    let stock = InMemoryStockRepository::new();
+    let records = InMemoryConsumptionRecordRepository::with_stock(stock.clone());
     let target_repo = InMemoryNutritionTargetRepository::new();
     let members = InMemoryHouseholdMemberRepository::new();
     let settings = InMemoryHouseholdSettingsRepository::new();
@@ -67,8 +102,9 @@ fn harness() -> Harness {
         updated_at: OffsetDateTime::UNIX_EPOCH,
         archived_at: None,
     });
+    let plans = InMemoryMealPlanRepository::new(records.clone());
     let service = MealPlanService::new(
-        Arc::new(InMemoryMealPlanRepository::new(records.clone())),
+        Arc::new(plans.clone()),
         Arc::new(products.clone()),
         Arc::new(recipes.clone()),
         Arc::new(records.clone()),
@@ -93,6 +129,8 @@ fn harness() -> Harness {
         records,
         members,
         settings,
+        stock,
+        plans,
         member_id,
         actor_id: UserId::new(),
     }
@@ -1746,4 +1784,269 @@ async fn a_recipe_built_from_products_without_nutrition_reports_unknown_not_zero
 
     assert_eq!(entry.components[0].quality, NutritionQuality::Unknown);
     assert_eq!(entry.components[0].nutrition.energy_kcal, None);
+}
+
+fn dgrams(value: i64) -> Decimal {
+    Decimal::new(value, 0)
+}
+
+async fn confirm_component(
+    h: &Harness,
+    entry_id: crate::domain::MealPlanEntryId,
+    component_id: crate::domain::MealPlanComponentId,
+    revision: Revision,
+    amount: ConsumedAmount,
+) -> StockAffected<MealPlanEntryView> {
+    h.service
+        .mark_component_eaten_unchecked(
+            entry_id,
+            component_id,
+            revision,
+            ConfirmMealPlanComponent {
+                consumed_on: date!(2026 - 08 - 25),
+                consumed_at: None,
+                amount,
+                actor_id: h.actor_id,
+                subject_member_id: None,
+            },
+        )
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn confirming_a_planned_component_draws_its_prepared_amount_from_stock() {
+    let h = harness();
+    let chicken = product("Chicken", 120);
+    h.products.seed(chicken.clone());
+    let item = h.seed_stock_grams(chicken.id, 500);
+
+    let entry = planned(&h, vec![measured(chicken.id, 300)]).await;
+    let component = entry.components[0].component.clone();
+
+    let outcome = confirm_component(
+        &h,
+        entry.entry.id,
+        component.id,
+        component.revision,
+        ConsumedAmount::Measure(Quantity::new(dgrams(300), Unit::Gram)),
+    )
+    .await;
+
+    assert!(outcome.stock.is_empty(), "a covered draw raises no warning");
+    assert_eq!(h.stock_grams(item).await, dgrams(200));
+}
+
+#[tokio::test]
+async fn a_second_participant_confirming_does_not_draw_stock_again() {
+    let h = harness();
+    h.settings.set_default_all_members_participate(true);
+    let other = h.add_member("Other");
+    let chicken = product("Chicken", 120);
+    h.products.seed(chicken.clone());
+    let item = h.seed_stock_grams(chicken.id, 500);
+
+    let created = h
+        .service
+        .create(NewMealPlanEntry {
+            id: None,
+            scope: MealPlanScope::Household,
+            member_id: None,
+            planned_on: date!(2026 - 08 - 25),
+            planned_time: Some(time!(18:30)),
+            slot: MealSlot::Dinner,
+            components: vec![measured(chicken.id, 300)],
+            actor_id: h.actor_id,
+        })
+        .await
+        .unwrap();
+    let component = created.components[0].component.clone();
+
+    let confirm = |subject, revision| {
+        h.service.mark_component_eaten_unchecked(
+            created.entry.id,
+            component.id,
+            revision,
+            ConfirmMealPlanComponent {
+                consumed_on: date!(2026 - 08 - 25),
+                consumed_at: None,
+                amount: ConsumedAmount::Measure(Quantity::new(dgrams(150), Unit::Gram)),
+                actor_id: h.actor_id,
+                subject_member_id: Some(subject),
+            },
+        )
+    };
+
+    let first = confirm(h.member_id, component.revision).await.unwrap();
+    assert_eq!(h.stock_grams(item).await, dgrams(200));
+
+    let next_revision = first.components[0].component.revision;
+    confirm(other, next_revision).await.unwrap();
+
+    assert_eq!(
+        h.stock_grams(item).await,
+        dgrams(200),
+        "the physical draw already happened at first confirmation"
+    );
+}
+
+#[tokio::test]
+async fn marking_a_component_not_eaten_draws_no_stock() {
+    let h = harness();
+    let chicken = product("Chicken", 120);
+    h.products.seed(chicken.clone());
+    let item = h.seed_stock_grams(chicken.id, 500);
+
+    let entry = planned(&h, vec![measured(chicken.id, 300)]).await;
+    let component = entry.components[0].component.clone();
+
+    h.service
+        .mark_component_not_eaten_unchecked(
+            entry.entry.id,
+            component.id,
+            component.revision,
+            OutcomeActor::own(h.actor_id),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(h.stock_grams(item).await, dgrams(500));
+}
+
+#[tokio::test]
+async fn reopening_the_last_eater_returns_the_exact_amount_taken() {
+    let h = harness();
+    let chicken = product("Chicken", 120);
+    h.products.seed(chicken.clone());
+    let item = h.seed_stock_grams(chicken.id, 500);
+
+    let entry = planned(&h, vec![measured(chicken.id, 300)]).await;
+    let component = entry.components[0].component.clone();
+
+    let after = confirm_component(
+        &h,
+        entry.entry.id,
+        component.id,
+        component.revision,
+        ConsumedAmount::Measure(Quantity::new(dgrams(300), Unit::Gram)),
+    )
+    .await;
+    assert_eq!(h.stock_grams(item).await, dgrams(200));
+
+    let component = after.components[0].component.clone();
+    h.service
+        .reopen_component(
+            entry.entry.id,
+            component.id,
+            component.revision,
+            OutcomeActor::own(h.actor_id),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(h.stock_grams(item).await, dgrams(500));
+}
+
+#[tokio::test]
+async fn a_short_confirmation_floors_stock_at_zero_and_warns() {
+    let h = harness();
+    let chicken = product("Chicken", 120);
+    h.products.seed(chicken.clone());
+    let item = h.seed_stock_grams(chicken.id, 150);
+
+    let entry = planned(&h, vec![measured(chicken.id, 400)]).await;
+    let component = entry.components[0].component.clone();
+
+    let outcome = confirm_component(
+        &h,
+        entry.entry.id,
+        component.id,
+        component.revision,
+        ConsumedAmount::Measure(Quantity::new(dgrams(400), Unit::Gram)),
+    )
+    .await;
+
+    assert_eq!(h.stock_grams(item).await, dgrams(0));
+    assert_eq!(outcome.stock.len(), 1);
+    let warning = &outcome.stock[0];
+    assert_eq!(warning.product_name, "Chicken");
+    assert!(matches!(
+        warning.shortfall,
+        crate::domain::Shortfall::Short { .. }
+    ));
+}
+
+#[tokio::test]
+async fn a_recipe_component_draws_no_stock_and_raises_no_warning() {
+    let h = harness();
+    let rice = product("Rice", 100);
+    h.products.seed(rice.clone());
+    let curry = seed_recipe(&h, "Curry", 4, vec![recipe_line(rice.id, 400)]).await;
+    let item = h.seed_stock_grams(rice.id, 500);
+
+    let entry = planned(&h, vec![servings_of(curry.id, 1)]).await;
+    let component = entry.components[0].component.clone();
+
+    let outcome = confirm_component(
+        &h,
+        entry.entry.id,
+        component.id,
+        component.revision,
+        ConsumedAmount::Servings(Decimal::ONE),
+    )
+    .await;
+
+    assert!(outcome.stock.is_empty());
+    assert_eq!(h.stock_grams(item).await, dgrams(500));
+}
+
+#[tokio::test]
+async fn a_confirmed_component_stops_counting_as_planned_stock_demand() {
+    let h = harness();
+    let chicken = product("Chicken", 120);
+    h.products.seed(chicken.clone());
+    h.seed_stock_grams(chicken.id, 500);
+
+    let entry = planned(&h, vec![measured(chicken.id, 300)]).await;
+    let component = entry.components[0].component.clone();
+
+    let stock_service = crate::services::StockService::new(
+        Arc::new(h.stock.clone()),
+        Arc::new(h.products.clone()),
+        Arc::new(h.plans.clone()),
+        Arc::new(h.members.clone()),
+        Arc::new(h.settings.clone()),
+        Arc::new(FixedClock::new(datetime!(2026-08-24 09:00 UTC))),
+    );
+
+    let before = stock_service
+        .availability(&[chicken.id], date!(2026 - 08 - 25), date!(2026 - 08 - 25))
+        .await
+        .unwrap();
+    let crate::domain::Availability::Quantified { unallocated, .. } = before[0].availability else {
+        panic!("expected a quantified availability");
+    };
+    assert_eq!(unallocated.amount, dgrams(200));
+
+    confirm_component(
+        &h,
+        entry.entry.id,
+        component.id,
+        component.revision,
+        ConsumedAmount::Measure(Quantity::new(dgrams(300), Unit::Gram)),
+    )
+    .await;
+
+    let after = stock_service
+        .availability(&[chicken.id], date!(2026 - 08 - 25), date!(2026 - 08 - 25))
+        .await
+        .unwrap();
+    let crate::domain::Availability::Quantified { unallocated, .. } = after[0].availability else {
+        panic!("expected a quantified availability");
+    };
+    assert_eq!(
+        unallocated.amount,
+        dgrams(200),
+        "the meal is no longer future demand and the 200 g left is really free"
+    );
 }

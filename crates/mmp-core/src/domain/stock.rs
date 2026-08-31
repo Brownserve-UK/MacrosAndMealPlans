@@ -5,8 +5,8 @@ use rust_decimal::Decimal;
 use time::{Date, OffsetDateTime};
 
 use super::{
-    HouseholdMemberId, Patch, ProductId, Quantity, Revision, StockEventId, StockItemId, Unit,
-    UserId,
+    HouseholdMemberId, Patch, ProductId, Quantity, Revision, StockEffectId, StockEventId,
+    StockItemId, Unit, UserId,
 };
 use crate::error::{Result, ValidationErrors};
 
@@ -288,6 +288,7 @@ impl StockItemPatch {
 pub enum StockEventKind {
     Added,
     Consumed,
+    Released,
     Discarded,
     Corrected,
     Observed,
@@ -297,9 +298,10 @@ pub enum StockEventKind {
 }
 
 impl StockEventKind {
-    pub const ALL: [StockEventKind; 8] = [
+    pub const ALL: [StockEventKind; 9] = [
         StockEventKind::Added,
         StockEventKind::Consumed,
+        StockEventKind::Released,
         StockEventKind::Discarded,
         StockEventKind::Corrected,
         StockEventKind::Observed,
@@ -312,6 +314,7 @@ impl StockEventKind {
         match self {
             StockEventKind::Added => "added",
             StockEventKind::Consumed => "consumed",
+            StockEventKind::Released => "released",
             StockEventKind::Discarded => "discarded",
             StockEventKind::Corrected => "corrected",
             StockEventKind::Observed => "observed",
@@ -351,6 +354,8 @@ pub struct StockEvent {
     pub quantity_delta: Option<Quantity>,
     pub actor_user_id: Option<UserId>,
     pub subject_member_id: Option<HouseholdMemberId>,
+    pub source: Option<StockEventSource>,
+    pub reverses_event_id: Option<StockEventId>,
     pub note: Option<String>,
     pub occurred_at: OffsetDateTime,
 }
@@ -361,7 +366,16 @@ pub struct NewStockEvent {
     pub quantity_delta: Option<Quantity>,
     pub actor_user_id: Option<UserId>,
     pub subject_member_id: Option<HouseholdMemberId>,
+    pub source: Option<StockEventSource>,
+    pub reverses_event_id: Option<StockEventId>,
     pub note: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct StockEventSource {
+    pub kind: StockEffectSource,
+    pub id: uuid::Uuid,
+    pub label: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -396,6 +410,356 @@ pub struct ProductAvailability {
     pub product_id: ProductId,
     pub availability: Availability,
     pub demand_incomplete: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StockEffectSource {
+    MealPlanComponent,
+    ConsumptionRecord,
+}
+
+impl StockEffectSource {
+    pub const ALL: [StockEffectSource; 2] = [
+        StockEffectSource::MealPlanComponent,
+        StockEffectSource::ConsumptionRecord,
+    ];
+
+    pub const fn code(&self) -> &'static str {
+        match self {
+            StockEffectSource::MealPlanComponent => "meal_plan_component",
+            StockEffectSource::ConsumptionRecord => "consumption_record",
+        }
+    }
+}
+
+impl fmt::Display for StockEffectSource {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.code())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("`{0}` is not a known stock effect source")]
+pub struct UnknownStockEffectSource(pub String);
+
+impl FromStr for StockEffectSource {
+    type Err = UnknownStockEffectSource;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        StockEffectSource::ALL
+            .into_iter()
+            .find(|k| k.code() == s)
+            .ok_or_else(|| UnknownStockEffectSource(s.to_owned()))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StockEffectState {
+    Applied,
+    Released,
+    ReleaseFailed,
+}
+
+impl StockEffectState {
+    pub const ALL: [StockEffectState; 3] = [
+        StockEffectState::Applied,
+        StockEffectState::Released,
+        StockEffectState::ReleaseFailed,
+    ];
+
+    pub const fn code(&self) -> &'static str {
+        match self {
+            StockEffectState::Applied => "applied",
+            StockEffectState::Released => "released",
+            StockEffectState::ReleaseFailed => "release_failed",
+        }
+    }
+}
+
+impl fmt::Display for StockEffectState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.code())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("`{0}` is not a known stock effect state")]
+pub struct UnknownStockEffectState(pub String);
+
+impl FromStr for StockEffectState {
+    type Err = UnknownStockEffectState;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        StockEffectState::ALL
+            .into_iter()
+            .find(|k| k.code() == s)
+            .ok_or_else(|| UnknownStockEffectState(s.to_owned()))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct StockEffect {
+    pub id: StockEffectId,
+    pub source_kind: StockEffectSource,
+    pub source_id: uuid::Uuid,
+    pub stock_item_id: StockItemId,
+    pub product_id: ProductId,
+    pub state: StockEffectState,
+    pub applied_mode: TrackingMode,
+    pub applied_unit: Unit,
+    pub exact_delta: Option<Decimal>,
+    pub low_delta: Option<Decimal>,
+    pub high_delta: Option<Decimal>,
+    pub requested_value: Decimal,
+    pub apply_event_id: StockEventId,
+    pub applied_at: OffsetDateTime,
+    pub released_at: Option<OffsetDateTime>,
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct NewStockEffect {
+    pub source_kind: StockEffectSource,
+    pub source_id: uuid::Uuid,
+    pub stock_item_id: StockItemId,
+    pub product_id: ProductId,
+    pub applied_mode: TrackingMode,
+    pub applied_unit: Unit,
+    pub exact_delta: Option<Decimal>,
+    pub low_delta: Option<Decimal>,
+    pub high_delta: Option<Decimal>,
+    pub requested_value: Decimal,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PlannedTake {
+    pub stock_item_id: StockItemId,
+    pub requested: Quantity,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum Shortfall {
+    Covered,
+    Short {
+        amount: Quantity,
+        confidence: Confidence,
+    },
+    Indeterminate {
+        amount: Quantity,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DeductionPlan {
+    NotTracked,
+    NoRecord,
+    Planned {
+        takes: Vec<PlannedTake>,
+        shortfall: Shortfall,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AppliedDelta {
+    pub new_level: StockLevel,
+    pub exact_delta: Option<Decimal>,
+    pub low_delta: Option<Decimal>,
+    pub high_delta: Option<Decimal>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReleasePlan {
+    Restored { new_level: StockLevel },
+    Failed { reason: String },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct StockOutcome {
+    pub product_id: ProductId,
+    pub wanted: Quantity,
+    pub deducted: Quantity,
+    pub shortfall: Shortfall,
+    pub unresolved_release: bool,
+}
+
+fn floor_zero(value: Decimal) -> Decimal {
+    if value.is_sign_negative() {
+        Decimal::ZERO
+    } else {
+        value
+    }
+}
+
+fn current_unit(level: &StockLevel) -> Option<Unit> {
+    match level {
+        StockLevel::Exact { quantity } => Some(quantity.unit),
+        StockLevel::Estimated { unit, .. } => Some(*unit),
+        StockLevel::NotTracked => None,
+    }
+}
+
+type FefoKey = (
+    bool,
+    Option<time::Date>,
+    bool,
+    Option<time::Date>,
+    time::OffsetDateTime,
+    uuid::Uuid,
+);
+
+fn fefo_key(item: &StockItem) -> FefoKey {
+    let deadline = item.usability_deadline.as_ref().map(|d| d.date);
+    let source = item.source_date.as_ref().map(|d| d.date);
+    (
+        deadline.is_none(),
+        deadline,
+        source.is_none(),
+        source,
+        item.created_at,
+        item.id.as_uuid(),
+    )
+}
+
+pub fn apply_take(level: &StockLevel, requested: Quantity) -> Option<AppliedDelta> {
+    match level {
+        StockLevel::Exact { quantity } if quantity.unit == requested.unit => {
+            let new = floor_zero(quantity.amount - requested.amount);
+            Some(AppliedDelta {
+                new_level: StockLevel::Exact {
+                    quantity: Quantity::new(new, quantity.unit),
+                },
+                exact_delta: Some(new - quantity.amount),
+                low_delta: None,
+                high_delta: None,
+            })
+        }
+        StockLevel::Estimated { low, high, unit } if *unit == requested.unit => {
+            let new_low = floor_zero(low - requested.amount);
+            let new_high = floor_zero(high - requested.amount);
+            Some(AppliedDelta {
+                new_level: StockLevel::Estimated {
+                    low: new_low,
+                    high: new_high,
+                    unit: *unit,
+                },
+                exact_delta: None,
+                low_delta: Some(new_low - low),
+                high_delta: Some(new_high - high),
+            })
+        }
+        _ => None,
+    }
+}
+
+pub fn plan_deduction(items: &[StockItem], want: Quantity) -> DeductionPlan {
+    let live: Vec<&StockItem> = items.iter().filter(|item| !item.is_archived()).collect();
+
+    if live.iter().any(|item| item.level.is_not_tracked()) {
+        return DeductionPlan::NotTracked;
+    }
+    if live.is_empty() {
+        return DeductionPlan::NoRecord;
+    }
+
+    let mut candidates = live;
+    candidates.sort_by_key(|item| fefo_key(item));
+
+    let mut remaining = want.amount;
+    let mut takes = Vec::new();
+    let mut skipped_incompatible = false;
+    let mut took_from_estimated = false;
+
+    for item in candidates {
+        if remaining <= Decimal::ZERO {
+            break;
+        }
+        let Some(unit) = current_unit(&item.level) else {
+            continue;
+        };
+        let Some(available) = item.level.conservative_quantity() else {
+            continue;
+        };
+        let want_here = match Quantity::new(remaining, want.unit).convert_to(unit) {
+            Ok(converted) => converted.amount,
+            Err(_) => {
+                skipped_incompatible = true;
+                continue;
+            }
+        };
+        let take_here = want_here.min(available.amount);
+        if take_here <= Decimal::ZERO {
+            continue;
+        }
+        if item.level.is_estimated() {
+            took_from_estimated = true;
+        }
+        takes.push(PlannedTake {
+            stock_item_id: item.id,
+            requested: Quantity::new(take_here, unit),
+        });
+        let taken_in_want = Quantity::new(take_here, unit)
+            .convert_to(want.unit)
+            .map(|q| q.amount)
+            .unwrap_or(Decimal::ZERO);
+        remaining -= taken_in_want;
+    }
+
+    let shortfall = if remaining <= Decimal::ZERO {
+        Shortfall::Covered
+    } else if skipped_incompatible {
+        Shortfall::Indeterminate {
+            amount: Quantity::new(remaining, want.unit),
+        }
+    } else {
+        Shortfall::Short {
+            amount: Quantity::new(remaining, want.unit),
+            confidence: if took_from_estimated {
+                Confidence::Estimated
+            } else {
+                Confidence::Exact
+            },
+        }
+    };
+
+    DeductionPlan::Planned { takes, shortfall }
+}
+
+pub fn plan_release(item: &StockItem, effect: &StockEffect) -> ReleasePlan {
+    let mode_matches = item.tracking_mode() == effect.applied_mode;
+    let unit_matches = current_unit(&item.level) == Some(effect.applied_unit);
+    if !mode_matches || !unit_matches {
+        return ReleasePlan::Failed {
+            reason: "The item's tracking has changed since this was applied, so it cannot be put back automatically.".to_owned(),
+        };
+    }
+
+    match (
+        &item.level,
+        effect.exact_delta,
+        effect.low_delta,
+        effect.high_delta,
+    ) {
+        (StockLevel::Exact { quantity }, Some(delta), _, _) => ReleasePlan::Restored {
+            new_level: StockLevel::Exact {
+                quantity: Quantity::new(quantity.amount - delta, quantity.unit),
+            },
+        },
+        (StockLevel::Estimated { low, high, unit }, _, Some(low_delta), Some(high_delta)) => {
+            ReleasePlan::Restored {
+                new_level: StockLevel::Estimated {
+                    low: low - low_delta,
+                    high: high - high_delta,
+                    unit: *unit,
+                },
+            }
+        }
+        _ => ReleasePlan::Failed {
+            reason: "The stored change does not match the item's current shape.".to_owned(),
+        },
+    }
 }
 
 #[cfg(test)]

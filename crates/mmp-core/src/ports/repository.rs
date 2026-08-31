@@ -9,8 +9,8 @@ use crate::domain::{
     HouseholdMemberId, HouseholdSettings, Ingredient, IngredientId, MealParticipant,
     MealPlanComponentId, MealPlanComponentSnapshot, MealPlanEntry, MealPlanEntryId,
     MemberAccessGrant, NewStockEvent, NutritionTarget, NutritionTargetId, Product, ProductId,
-    Recipe, RecipeId, RecipePhoto, RecipeSummary, Revision, Role, StockEvent, StockItem,
-    StockItemId, User, UserId,
+    Quantity, Recipe, RecipeId, RecipePhoto, RecipeSummary, Revision, Role, StockEffect,
+    StockEffectSource, StockEvent, StockItem, StockItemId, StockOutcome, User, UserId,
 };
 use crate::error::Result;
 
@@ -215,6 +215,38 @@ pub trait ProductRepository: Send + Sync + 'static {
     async fn update(&self, product: &Product, expected: Revision) -> Result<UpdateOutcome>;
 }
 
+#[derive(Debug, Clone)]
+pub struct StockDeduction {
+    pub source_kind: StockEffectSource,
+    pub source_id: uuid::Uuid,
+    pub product_id: ProductId,
+    pub want: Quantity,
+    pub actor_user_id: Option<UserId>,
+    pub subject_member_id: Option<HouseholdMemberId>,
+    pub source_label: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct StockRelease {
+    pub source_kind: StockEffectSource,
+    pub source_id: uuid::Uuid,
+    pub actor_user_id: Option<UserId>,
+    pub subject_member_id: Option<HouseholdMemberId>,
+    pub source_label: String,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct StockWrite {
+    pub deductions: Vec<StockDeduction>,
+    pub releases: Vec<StockRelease>,
+}
+
+impl StockWrite {
+    pub fn is_empty(&self) -> bool {
+        self.deductions.is_empty() && self.releases.is_empty()
+    }
+}
+
 #[async_trait]
 pub trait ConsumptionRecordRepository: Send + Sync + 'static {
     async fn get(&self, id: ConsumptionRecordId) -> Result<Option<ConsumptionRecord>>;
@@ -233,12 +265,25 @@ pub trait ConsumptionRecordRepository: Send + Sync + 'static {
         entry_id: MealPlanEntryId,
     ) -> Result<Vec<ConsumptionRecord>>;
 
-    async fn insert(&self, record: &ConsumptionRecord) -> Result<()>;
+    async fn insert(
+        &self,
+        record: &ConsumptionRecord,
+        stock: &StockWrite,
+    ) -> Result<Vec<StockOutcome>>;
 
-    async fn update(&self, record: &ConsumptionRecord, expected: Revision)
-    -> Result<UpdateOutcome>;
+    async fn update(
+        &self,
+        record: &ConsumptionRecord,
+        expected: Revision,
+        stock: &StockWrite,
+    ) -> Result<(UpdateOutcome, Vec<StockOutcome>)>;
 
-    async fn delete(&self, id: ConsumptionRecordId) -> Result<bool>;
+    async fn delete(
+        &self,
+        id: ConsumptionRecordId,
+        expected: Revision,
+        stock: &StockWrite,
+    ) -> Result<(UpdateOutcome, Vec<StockOutcome>)>;
 }
 
 #[async_trait]
@@ -258,9 +303,16 @@ pub trait MealPlanRepository: Send + Sync + 'static {
         entry: &MealPlanEntry,
         expected: Revision,
         consumption: &[ConsumptionRecord],
-    ) -> Result<UpdateOutcome>;
+        stock: &StockWrite,
+    ) -> Result<(UpdateOutcome, Vec<StockOutcome>)>;
 
-    async fn reopen(&self, entry: &MealPlanEntry, expected: Revision) -> Result<UpdateOutcome>;
+    async fn reopen(
+        &self,
+        entry: &MealPlanEntry,
+        expected: Revision,
+        delete_records: &[ConsumptionRecordId],
+        stock: &StockWrite,
+    ) -> Result<(UpdateOutcome, Vec<StockOutcome>)>;
 
     async fn set_participants(
         &self,
@@ -275,7 +327,8 @@ pub trait MealPlanRepository: Send + Sync + 'static {
         participants: &[MealParticipant],
         expected: Revision,
         consumption: Option<&ConsumptionRecord>,
-    ) -> Result<UpdateOutcome>;
+        stock: &StockWrite,
+    ) -> Result<(UpdateOutcome, Vec<StockOutcome>)>;
 
     async fn reopen_component(
         &self,
@@ -283,7 +336,9 @@ pub trait MealPlanRepository: Send + Sync + 'static {
         component: &MealPlanComponentUpdate<'_>,
         participants: &[MealParticipant],
         expected: Revision,
-    ) -> Result<UpdateOutcome>;
+        delete_record: Option<ConsumptionRecordId>,
+        stock: &StockWrite,
+    ) -> Result<(UpdateOutcome, Vec<StockOutcome>)>;
 }
 
 pub enum SnapshotOp<'a> {
@@ -354,6 +409,12 @@ pub trait StockRepository: Send + Sync + 'static {
     ) -> Result<UpdateOutcome>;
 
     async fn list_events(&self, id: StockItemId) -> Result<Vec<StockEvent>>;
+
+    async fn effects_for_source(
+        &self,
+        source_kind: StockEffectSource,
+        source_id: uuid::Uuid,
+    ) -> Result<Vec<StockEffect>>;
 }
 
 #[async_trait]

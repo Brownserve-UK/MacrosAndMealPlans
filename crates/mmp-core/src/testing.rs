@@ -9,8 +9,9 @@ use crate::domain::{
     AccessScope, ConsumptionRecord, ConsumptionRecordId, HouseholdMember, HouseholdMemberId,
     HouseholdSettings, Ingredient, IngredientId, MealParticipant, MealPlanEntry, MealPlanEntryId,
     MealTimes, MemberAccessGrant, MissingStockInterpretation, NewStockEvent, NutritionTarget,
-    NutritionTargetId, Product, ProductId, Recipe, RecipeId, RecipePhoto, RecipeSummary, Revision,
-    Role, StockEvent, StockEventId, StockItem, StockItemId, User, UserId,
+    NutritionTargetId, Product, ProductId, Quantity, Recipe, RecipeId, RecipePhoto, RecipeSummary,
+    Revision, Role, StockEffect, StockEffectSource, StockEvent, StockEventId, StockItem,
+    StockItemId, StockOutcome, Unit, User, UserId,
 };
 use crate::error::{CoreError, Result};
 use crate::ports::{
@@ -18,8 +19,8 @@ use crate::ports::{
     HouseholdMemberRepository, HouseholdSettingsRepository, IngredientQuery, IngredientRepository,
     MealPlanComponentUpdate, MealPlanQuery, MealPlanRepository, MemberQuery,
     NutritionTargetRepository, Paginated, ProductQuery, ProductRepository, RecipeQuery,
-    RecipeRepository, SnapshotOp, SortDirection, StockQuery, StockRepository, UpdateOutcome,
-    UserQuery, UserRepository,
+    RecipeRepository, SnapshotOp, SortDirection, StockQuery, StockRepository, StockWrite,
+    UpdateOutcome, UserQuery, UserRepository,
 };
 
 // This _should_ reflect the indexes that a real database would enforce
@@ -650,11 +651,19 @@ impl AccessGrantRepository for InMemoryAccessGrantRepository {
 #[derive(Default, Clone)]
 pub struct InMemoryConsumptionRecordRepository {
     rows: Arc<Mutex<HashMap<ConsumptionRecordId, ConsumptionRecord>>>,
+    stock: InMemoryStockRepository,
 }
 
 impl InMemoryConsumptionRecordRepository {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn with_stock(stock: InMemoryStockRepository) -> Self {
+        Self {
+            rows: Arc::new(Mutex::new(HashMap::new())),
+            stock,
+        }
     }
 
     pub fn seed(&self, record: ConsumptionRecord) {
@@ -727,33 +736,77 @@ impl ConsumptionRecordRepository for InMemoryConsumptionRecordRepository {
         Ok(records)
     }
 
-    async fn insert(&self, record: &ConsumptionRecord) -> Result<()> {
+    async fn insert(
+        &self,
+        record: &ConsumptionRecord,
+        stock: &StockWrite,
+    ) -> Result<Vec<StockOutcome>> {
         self.rows.lock().unwrap().insert(record.id, record.clone());
-        Ok(())
+        Ok(self
+            .stock
+            .apply_write(stock, time::OffsetDateTime::UNIX_EPOCH))
     }
 
     async fn update(
         &self,
         record: &ConsumptionRecord,
         expected: Revision,
-    ) -> Result<UpdateOutcome> {
-        let mut rows = self.rows.lock().unwrap();
-        match rows.get(&record.id) {
-            None => Ok(UpdateOutcome::NotFound),
-            Some(existing) if existing.revision != expected => {
-                Ok(UpdateOutcome::RevisionMismatch {
-                    actual: existing.revision,
-                })
+        stock: &StockWrite,
+    ) -> Result<(UpdateOutcome, Vec<StockOutcome>)> {
+        let outcome = {
+            let mut rows = self.rows.lock().unwrap();
+            match rows.get(&record.id) {
+                None => UpdateOutcome::NotFound,
+                Some(existing) if existing.revision != expected => {
+                    UpdateOutcome::RevisionMismatch {
+                        actual: existing.revision,
+                    }
+                }
+                Some(_) => {
+                    rows.insert(record.id, record.clone());
+                    UpdateOutcome::Updated
+                }
             }
-            Some(_) => {
-                rows.insert(record.id, record.clone());
-                Ok(UpdateOutcome::Updated)
-            }
+        };
+        if outcome == UpdateOutcome::Updated {
+            let stock_outcomes = self
+                .stock
+                .apply_write(stock, time::OffsetDateTime::UNIX_EPOCH);
+            Ok((outcome, stock_outcomes))
+        } else {
+            Ok((outcome, Vec::new()))
         }
     }
 
-    async fn delete(&self, id: ConsumptionRecordId) -> Result<bool> {
-        Ok(self.rows.lock().unwrap().remove(&id).is_some())
+    async fn delete(
+        &self,
+        id: ConsumptionRecordId,
+        expected: Revision,
+        stock: &StockWrite,
+    ) -> Result<(UpdateOutcome, Vec<StockOutcome>)> {
+        let outcome = {
+            let mut rows = self.rows.lock().unwrap();
+            match rows.get(&id) {
+                None => UpdateOutcome::NotFound,
+                Some(existing) if existing.revision != expected => {
+                    UpdateOutcome::RevisionMismatch {
+                        actual: existing.revision,
+                    }
+                }
+                Some(_) => {
+                    rows.remove(&id);
+                    UpdateOutcome::Updated
+                }
+            }
+        };
+        if outcome == UpdateOutcome::Updated {
+            let stock_outcomes = self
+                .stock
+                .apply_write(stock, time::OffsetDateTime::UNIX_EPOCH);
+            Ok((outcome, stock_outcomes))
+        } else {
+            Ok((outcome, Vec::new()))
+        }
     }
 }
 
@@ -855,48 +908,77 @@ impl MealPlanRepository for InMemoryMealPlanRepository {
         entry: &MealPlanEntry,
         expected: Revision,
         consumption: &[ConsumptionRecord],
-    ) -> Result<UpdateOutcome> {
-        let mut rows = self.rows.lock().unwrap();
-        match rows.get(&entry.id) {
-            None => return Ok(UpdateOutcome::NotFound),
-            Some(current) if current.revision != expected => {
-                return Ok(UpdateOutcome::RevisionMismatch {
-                    actual: current.revision,
-                });
+        stock: &StockWrite,
+    ) -> Result<(UpdateOutcome, Vec<StockOutcome>)> {
+        {
+            let mut rows = self.rows.lock().unwrap();
+            match rows.get(&entry.id) {
+                None => return Ok((UpdateOutcome::NotFound, Vec::new())),
+                Some(current) if current.revision != expected => {
+                    return Ok((
+                        UpdateOutcome::RevisionMismatch {
+                            actual: current.revision,
+                        },
+                        Vec::new(),
+                    ));
+                }
+                Some(_) => {}
             }
-            Some(_) => {}
-        }
 
-        let mut records = self.consumption.rows.lock().unwrap();
-        if consumption.iter().any(|candidate| {
-            records.values().any(|existing| {
-                candidate.meal_plan_component_id.is_some()
-                    && existing.meal_plan_component_id == candidate.meal_plan_component_id
-                    && existing.member_id == candidate.member_id
-            })
-        }) {
-            return Err(CoreError::conflict("That meal has already been confirmed."));
+            let mut records = self.consumption.rows.lock().unwrap();
+            if consumption.iter().any(|candidate| {
+                records.values().any(|existing| {
+                    candidate.meal_plan_component_id.is_some()
+                        && existing.meal_plan_component_id == candidate.meal_plan_component_id
+                        && existing.member_id == candidate.member_id
+                })
+            }) {
+                return Err(CoreError::conflict("That meal has already been confirmed."));
+            }
+            for record in consumption {
+                records.insert(record.id, record.clone());
+            }
+            rows.insert(entry.id, entry.clone());
         }
-        for record in consumption {
-            records.insert(record.id, record.clone());
-        }
-        rows.insert(entry.id, entry.clone());
-        Ok(UpdateOutcome::Updated)
+        let stock_outcomes = self
+            .consumption
+            .stock
+            .apply_write(stock, time::OffsetDateTime::UNIX_EPOCH);
+        Ok((UpdateOutcome::Updated, stock_outcomes))
     }
 
-    async fn reopen(&self, entry: &MealPlanEntry, expected: Revision) -> Result<UpdateOutcome> {
-        let mut rows = self.rows.lock().unwrap();
-        match rows.get(&entry.id) {
-            None => return Ok(UpdateOutcome::NotFound),
-            Some(current) if current.revision != expected => {
-                return Ok(UpdateOutcome::RevisionMismatch {
-                    actual: current.revision,
-                });
+    async fn reopen(
+        &self,
+        entry: &MealPlanEntry,
+        expected: Revision,
+        delete_records: &[ConsumptionRecordId],
+        stock: &StockWrite,
+    ) -> Result<(UpdateOutcome, Vec<StockOutcome>)> {
+        {
+            let mut rows = self.rows.lock().unwrap();
+            match rows.get(&entry.id) {
+                None => return Ok((UpdateOutcome::NotFound, Vec::new())),
+                Some(current) if current.revision != expected => {
+                    return Ok((
+                        UpdateOutcome::RevisionMismatch {
+                            actual: current.revision,
+                        },
+                        Vec::new(),
+                    ));
+                }
+                Some(_) => {}
             }
-            Some(_) => {}
+            let mut records = self.consumption.rows.lock().unwrap();
+            for record_id in delete_records {
+                records.remove(record_id);
+            }
+            rows.insert(entry.id, entry.clone());
         }
-        rows.insert(entry.id, entry.clone());
-        Ok(UpdateOutcome::Updated)
+        let stock_outcomes = self
+            .consumption
+            .stock
+            .apply_write(stock, time::OffsetDateTime::UNIX_EPOCH);
+        Ok((UpdateOutcome::Updated, stock_outcomes))
     }
 
     async fn set_participants(
@@ -924,37 +1006,47 @@ impl MealPlanRepository for InMemoryMealPlanRepository {
         participants: &[MealParticipant],
         expected: Revision,
         consumption: Option<&ConsumptionRecord>,
-    ) -> Result<UpdateOutcome> {
-        let mut rows = self.rows.lock().unwrap();
-        let Some(entry) = rows.get_mut(&entry_id) else {
-            return Ok(UpdateOutcome::NotFound);
-        };
-        let Some(current) = entry
-            .components
-            .iter_mut()
-            .find(|candidate| candidate.id == component.id)
-        else {
-            return Ok(UpdateOutcome::NotFound);
-        };
-        if current.revision != expected {
-            return Ok(UpdateOutcome::RevisionMismatch {
-                actual: current.revision,
-            });
-        }
-        if let Some(record) = consumption {
-            let mut records = self.consumption.rows.lock().unwrap();
-            if records.values().any(|existing| {
-                existing.meal_plan_component_id == Some(component.id)
-                    && existing.member_id == record.member_id
-            }) {
-                return Err(CoreError::conflict("That item has already been confirmed."));
+        stock: &StockWrite,
+    ) -> Result<(UpdateOutcome, Vec<StockOutcome>)> {
+        {
+            let mut rows = self.rows.lock().unwrap();
+            let Some(entry) = rows.get_mut(&entry_id) else {
+                return Ok((UpdateOutcome::NotFound, Vec::new()));
+            };
+            let Some(current) = entry
+                .components
+                .iter_mut()
+                .find(|candidate| candidate.id == component.id)
+            else {
+                return Ok((UpdateOutcome::NotFound, Vec::new()));
+            };
+            if current.revision != expected {
+                return Ok((
+                    UpdateOutcome::RevisionMismatch {
+                        actual: current.revision,
+                    },
+                    Vec::new(),
+                ));
             }
-            records.insert(record.id, record.clone());
+            if let Some(record) = consumption {
+                let mut records = self.consumption.rows.lock().unwrap();
+                if records.values().any(|existing| {
+                    existing.meal_plan_component_id == Some(component.id)
+                        && existing.member_id == record.member_id
+                }) {
+                    return Err(CoreError::conflict("That item has already been confirmed."));
+                }
+                records.insert(record.id, record.clone());
+            }
+            apply_component_update(current, component);
+            entry.participants = participants.to_vec();
+            apply_entry_update(entry, component);
         }
-        apply_component_update(current, component);
-        entry.participants = participants.to_vec();
-        apply_entry_update(entry, component);
-        Ok(UpdateOutcome::Updated)
+        let stock_outcomes = self
+            .consumption
+            .stock
+            .apply_write(stock, time::OffsetDateTime::UNIX_EPOCH);
+        Ok((UpdateOutcome::Updated, stock_outcomes))
     }
 
     async fn reopen_component(
@@ -963,27 +1055,41 @@ impl MealPlanRepository for InMemoryMealPlanRepository {
         component: &MealPlanComponentUpdate<'_>,
         participants: &[MealParticipant],
         expected: Revision,
-    ) -> Result<UpdateOutcome> {
-        let mut rows = self.rows.lock().unwrap();
-        let Some(entry) = rows.get_mut(&entry_id) else {
-            return Ok(UpdateOutcome::NotFound);
-        };
-        let Some(current) = entry
-            .components
-            .iter_mut()
-            .find(|candidate| candidate.id == component.id)
-        else {
-            return Ok(UpdateOutcome::NotFound);
-        };
-        if current.revision != expected {
-            return Ok(UpdateOutcome::RevisionMismatch {
-                actual: current.revision,
-            });
+        delete_record: Option<ConsumptionRecordId>,
+        stock: &StockWrite,
+    ) -> Result<(UpdateOutcome, Vec<StockOutcome>)> {
+        {
+            let mut rows = self.rows.lock().unwrap();
+            let Some(entry) = rows.get_mut(&entry_id) else {
+                return Ok((UpdateOutcome::NotFound, Vec::new()));
+            };
+            let Some(current) = entry
+                .components
+                .iter_mut()
+                .find(|candidate| candidate.id == component.id)
+            else {
+                return Ok((UpdateOutcome::NotFound, Vec::new()));
+            };
+            if current.revision != expected {
+                return Ok((
+                    UpdateOutcome::RevisionMismatch {
+                        actual: current.revision,
+                    },
+                    Vec::new(),
+                ));
+            }
+            apply_component_update(current, component);
+            entry.participants = participants.to_vec();
+            apply_entry_update(entry, component);
+            if let Some(record_id) = delete_record {
+                self.consumption.rows.lock().unwrap().remove(&record_id);
+            }
         }
-        apply_component_update(current, component);
-        entry.participants = participants.to_vec();
-        apply_entry_update(entry, component);
-        Ok(UpdateOutcome::Updated)
+        let stock_outcomes = self
+            .consumption
+            .stock
+            .apply_write(stock, time::OffsetDateTime::UNIX_EPOCH);
+        Ok((UpdateOutcome::Updated, stock_outcomes))
     }
 }
 
@@ -1287,6 +1393,7 @@ impl RecipeRepository for InMemoryRecipeRepository {
 pub struct InMemoryStockRepository {
     rows: Arc<Mutex<HashMap<StockItemId, StockItem>>>,
     events: Arc<Mutex<Vec<StockEvent>>>,
+    effects: Arc<Mutex<Vec<StockEffect>>>,
 }
 
 impl InMemoryStockRepository {
@@ -1306,17 +1413,221 @@ impl InMemoryStockRepository {
         self.events.lock().unwrap().len()
     }
 
-    fn record(&self, item_id: StockItemId, event: &NewStockEvent) {
+    pub fn effect_count(&self) -> usize {
+        self.effects.lock().unwrap().len()
+    }
+
+    fn record(&self, item_id: StockItemId, event: &NewStockEvent) -> StockEventId {
+        let id = StockEventId::new();
         self.events.lock().unwrap().push(StockEvent {
-            id: StockEventId::new(),
+            id,
             stock_item_id: item_id,
             kind: event.kind,
             quantity_delta: event.quantity_delta,
             actor_user_id: event.actor_user_id,
             subject_member_id: event.subject_member_id,
+            source: event.source.clone(),
+            reverses_event_id: event.reverses_event_id,
             note: event.note.clone(),
             occurred_at: time::OffsetDateTime::UNIX_EPOCH,
         });
+        id
+    }
+
+    pub(crate) fn apply_write(
+        &self,
+        write: &crate::ports::StockWrite,
+        now: time::OffsetDateTime,
+    ) -> Vec<StockOutcome> {
+        use crate::domain::{
+            DeductionPlan, ReleasePlan, Shortfall, StockEffectState, StockEventKind,
+            StockEventSource, apply_take, plan_deduction, plan_release,
+        };
+
+        let mut outcomes = Vec::new();
+
+        for release in &write.releases {
+            let targets: Vec<StockEffect> = self
+                .effects
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|e| {
+                    e.state == StockEffectState::Applied
+                        && e.source_kind == release.source_kind
+                        && e.source_id == release.source_id
+                })
+                .cloned()
+                .collect();
+            let mut unresolved = false;
+            let mut product_id = None;
+            let mut unit = Unit::Gram;
+            for effect in targets {
+                product_id = Some(effect.product_id);
+                unit = effect.applied_unit;
+                let item = self
+                    .rows
+                    .lock()
+                    .unwrap()
+                    .get(&effect.stock_item_id)
+                    .cloned();
+                let Some(item) = item else {
+                    continue;
+                };
+                match plan_release(&item, &effect) {
+                    ReleasePlan::Restored { new_level } => {
+                        let mut updated = item.clone();
+                        updated.level = new_level;
+                        updated.revision = updated.revision.next();
+                        updated.updated_at = now;
+                        self.rows.lock().unwrap().insert(updated.id, updated);
+                        let event = NewStockEvent {
+                            kind: StockEventKind::Released,
+                            quantity_delta: None,
+                            actor_user_id: release.actor_user_id,
+                            subject_member_id: release.subject_member_id,
+                            source: Some(StockEventSource {
+                                kind: release.source_kind,
+                                id: release.source_id,
+                                label: release.source_label.clone(),
+                            }),
+                            reverses_event_id: Some(effect.apply_event_id),
+                            note: None,
+                        };
+                        self.record(effect.stock_item_id, &event);
+                        let mut effects = self.effects.lock().unwrap();
+                        if let Some(stored) = effects.iter_mut().find(|e| e.id == effect.id) {
+                            stored.state = StockEffectState::Released;
+                            stored.released_at = Some(now);
+                        }
+                    }
+                    ReleasePlan::Failed { reason } => {
+                        unresolved = true;
+                        let event = NewStockEvent {
+                            kind: StockEventKind::Released,
+                            quantity_delta: None,
+                            actor_user_id: release.actor_user_id,
+                            subject_member_id: release.subject_member_id,
+                            source: Some(StockEventSource {
+                                kind: release.source_kind,
+                                id: release.source_id,
+                                label: release.source_label.clone(),
+                            }),
+                            reverses_event_id: Some(effect.apply_event_id),
+                            note: Some(reason.clone()),
+                        };
+                        self.record(effect.stock_item_id, &event);
+                        let mut effects = self.effects.lock().unwrap();
+                        if let Some(stored) = effects.iter_mut().find(|e| e.id == effect.id) {
+                            stored.state = StockEffectState::ReleaseFailed;
+                            stored.note = Some(reason.clone());
+                        }
+                    }
+                }
+            }
+            if unresolved && let Some(product_id) = product_id {
+                outcomes.push(StockOutcome {
+                    product_id,
+                    wanted: Quantity::new(rust_decimal::Decimal::ZERO, unit),
+                    deducted: Quantity::new(rust_decimal::Decimal::ZERO, unit),
+                    shortfall: Shortfall::Covered,
+                    unresolved_release: true,
+                });
+            }
+        }
+
+        for deduction in &write.deductions {
+            let items: Vec<StockItem> = {
+                let rows = self.rows.lock().unwrap();
+                rows.values()
+                    .filter(|item| item.product_id == deduction.product_id)
+                    .cloned()
+                    .collect()
+            };
+            let DeductionPlan::Planned { takes, shortfall } =
+                plan_deduction(&items, deduction.want)
+            else {
+                continue;
+            };
+
+            let mut deducted = rust_decimal::Decimal::ZERO;
+            for take in &takes {
+                let already = self.effects.lock().unwrap().iter().any(|e| {
+                    e.state == StockEffectState::Applied
+                        && e.source_kind == deduction.source_kind
+                        && e.source_id == deduction.source_id
+                        && e.stock_item_id == take.stock_item_id
+                });
+                if already {
+                    continue;
+                }
+                let mut rows = self.rows.lock().unwrap();
+                let Some(item) = rows.get(&take.stock_item_id).cloned() else {
+                    continue;
+                };
+                let Some(applied) = apply_take(&item.level, take.requested) else {
+                    continue;
+                };
+                let mut updated = item.clone();
+                updated.level = applied.new_level;
+                updated.revision = updated.revision.next();
+                updated.updated_at = now;
+                rows.insert(updated.id, updated.clone());
+                drop(rows);
+
+                let delta = applied
+                    .exact_delta
+                    .or(applied.low_delta)
+                    .unwrap_or(rust_decimal::Decimal::ZERO);
+                let event = NewStockEvent {
+                    kind: StockEventKind::Consumed,
+                    quantity_delta: Some(Quantity::new(delta, take.requested.unit)),
+                    actor_user_id: deduction.actor_user_id,
+                    subject_member_id: deduction.subject_member_id,
+                    source: Some(StockEventSource {
+                        kind: deduction.source_kind,
+                        id: deduction.source_id,
+                        label: deduction.source_label.clone(),
+                    }),
+                    reverses_event_id: None,
+                    note: None,
+                };
+                let event_id = self.record(take.stock_item_id, &event);
+                self.effects.lock().unwrap().push(StockEffect {
+                    id: crate::domain::StockEffectId::new(),
+                    source_kind: deduction.source_kind,
+                    source_id: deduction.source_id,
+                    stock_item_id: take.stock_item_id,
+                    product_id: deduction.product_id,
+                    state: StockEffectState::Applied,
+                    applied_mode: item.tracking_mode(),
+                    applied_unit: take.requested.unit,
+                    exact_delta: applied.exact_delta,
+                    low_delta: applied.low_delta,
+                    high_delta: applied.high_delta,
+                    requested_value: take.requested.amount,
+                    apply_event_id: event_id,
+                    applied_at: now,
+                    released_at: None,
+                    note: None,
+                });
+                if let Ok(converted) = take.requested.convert_to(deduction.want.unit) {
+                    deducted += converted.amount;
+                }
+            }
+
+            if !matches!(shortfall, Shortfall::Covered) {
+                outcomes.push(StockOutcome {
+                    product_id: deduction.product_id,
+                    wanted: deduction.want,
+                    deducted: Quantity::new(deducted, deduction.want.unit),
+                    shortfall,
+                    unresolved_release: false,
+                });
+            }
+        }
+
+        outcomes
     }
 }
 
@@ -1384,6 +1695,21 @@ impl StockRepository for InMemoryStockRepository {
             .unwrap()
             .iter()
             .filter(|event| event.stock_item_id == id)
+            .cloned()
+            .collect())
+    }
+
+    async fn effects_for_source(
+        &self,
+        source_kind: StockEffectSource,
+        source_id: uuid::Uuid,
+    ) -> Result<Vec<StockEffect>> {
+        Ok(self
+            .effects
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|effect| effect.source_kind == source_kind && effect.source_id == source_id)
             .cloned()
             .collect())
     }

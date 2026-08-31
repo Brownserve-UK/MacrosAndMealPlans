@@ -7,8 +7,8 @@ pub use repository::{
     HouseholdMemberRepository, HouseholdSettingsRepository, IngredientQuery, IngredientRepository,
     MealPlanComponentUpdate, MealPlanQuery, MealPlanRepository, MemberQuery,
     NutritionTargetRepository, ProductQuery, ProductRepository, RecipeQuery, RecipeRepository,
-    SnapshotOp, SortDirection, StockQuery, StockRepository, UpdateOutcome, UserQuery,
-    UserRepository,
+    SnapshotOp, SortDirection, StockDeduction, StockQuery, StockRelease, StockRepository,
+    StockWrite, UpdateOutcome, UserQuery, UserRepository,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

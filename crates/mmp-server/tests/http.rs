@@ -46,9 +46,9 @@ async fn app() -> Router {
 
     let products = InMemoryProductRepository::new();
     let ingredients = Arc::new(InMemoryIngredientRepository::new());
-    let consumption = InMemoryConsumptionRecordRepository::new();
-    let targets = InMemoryNutritionTargetRepository::new();
     let stock_repo = InMemoryStockRepository::new();
+    let consumption = InMemoryConsumptionRecordRepository::with_stock(stock_repo.clone());
+    let targets = InMemoryNutritionTargetRepository::new();
     let meal_plans = InMemoryMealPlanRepository::new(consumption.clone());
     let recipes_repo = Arc::new(InMemoryRecipeRepository::new());
     let stock = StockService::new(
@@ -1571,12 +1571,13 @@ async fn deleting_a_consumption_record_removes_it() {
     .await;
     let id = created["id"].as_str().unwrap();
 
-    let (status, _, _) = send(
+    let (status, body, _) = send(
         &app,
         Call::new("DELETE", format!("/api/v1/consumption/{id}")).if_match(1),
     )
     .await;
-    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert_eq!(status, StatusCode::OK);
+    assert!(body["stock_outcomes"].as_array().unwrap().is_empty());
 
     let (status, _, _) = send(&app, Call::new("GET", format!("/api/v1/consumption/{id}"))).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
@@ -1872,6 +1873,83 @@ async fn confirming_one_component_leaves_the_rest_of_the_meal_pending() {
     assert!(updated["components"][0]["consumption_record"].is_null());
     assert!(updated["components"][1]["consumption_record"].is_null());
     assert!(updated["components"][2]["consumption_record"].is_object());
+}
+
+#[tokio::test]
+async fn confirming_a_planned_component_draws_stock_and_warns_on_a_shortfall() {
+    let app = app().await;
+    let product_id = create_product(&app, "Chicken breast").await;
+
+    let (status, _, _) = send(
+        &app,
+        Call::new("POST", "/api/v1/stock").body(json!({
+            "product_id": product_id,
+            "level": {"mode": "exact", "quantity": {"amount": 150.0, "unit": "g"}},
+            "storage_location": "chilled",
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, entry, _) = send(
+        &app,
+        Call::new("POST", "/api/v1/meal-plan-entries").body(json!({
+            "planned_on": "2026-08-25",
+            "planned_time": "18:00",
+            "slot": "dinner",
+            "components": [{"product_id": product_id, "amount": measured_amount(400.0)}]
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{entry}");
+    let entry_id = entry["id"].as_str().unwrap();
+    let component_id = entry["components"][0]["id"].as_str().unwrap();
+
+    let (status, updated, _) = send(
+        &app,
+        Call::new(
+            "POST",
+            format!("/api/v1/meal-plan-entries/{entry_id}/components/{component_id}/eaten"),
+        )
+        .if_match(1)
+        .body(json!({
+            "consumed_on": "2026-08-25",
+            "consumed_at": "2026-08-25T18:00:00Z",
+            "amount": measured_amount(400.0)
+        })),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "{updated}");
+    let outcomes = updated["stock_outcomes"].as_array().unwrap();
+    assert_eq!(outcomes.len(), 1, "{updated}");
+    assert_eq!(outcomes[0]["product_name"], "Chicken breast");
+    assert_eq!(outcomes[0]["shortfall"]["state"], "short");
+
+    let stock = send(&app, Call::new("GET", "/api/v1/stock")).await.1;
+    let level = &stock["items"][0]["level"];
+    assert_eq!(level["quantity"]["amount"], 0.0, "floored at zero: {stock}");
+
+    let item_id = stock["items"][0]["id"].as_str().unwrap();
+    let events = send(
+        &app,
+        Call::new("GET", format!("/api/v1/stock/{item_id}/events")),
+    )
+    .await
+    .1;
+    let consumed = events
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|event| event["kind"] == "consumed")
+        .expect("a consumed event");
+    assert!(
+        consumed["source_label"]
+            .as_str()
+            .unwrap()
+            .contains("Chicken breast"),
+        "{consumed}"
+    );
 }
 
 #[tokio::test]

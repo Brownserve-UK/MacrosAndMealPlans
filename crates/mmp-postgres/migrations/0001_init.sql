@@ -841,3 +841,58 @@ DROP INDEX consumption_record_meal_plan_component_unique;
 CREATE UNIQUE INDEX consumption_record_meal_plan_component_member_unique
     ON consumption_record (meal_plan_component_id, member_id)
     WHERE meal_plan_component_id IS NOT NULL;
+
+CREATE TABLE stock_effect (
+    id                UUID PRIMARY KEY,
+
+    source_kind       TEXT NOT NULL,
+    source_id         UUID NOT NULL,
+
+    stock_item_id     UUID NOT NULL REFERENCES stock_item (id) ON DELETE RESTRICT,
+    product_id        UUID NOT NULL REFERENCES product (id) ON DELETE RESTRICT,
+
+    state             TEXT NOT NULL DEFAULT 'applied',
+
+    applied_mode      TEXT NOT NULL,
+    applied_unit      TEXT NOT NULL,
+    exact_delta       NUMERIC(16, 4),
+    low_delta         NUMERIC(16, 4),
+    high_delta        NUMERIC(16, 4),
+    requested_value   NUMERIC(16, 4) NOT NULL,
+
+    apply_event_id    UUID NOT NULL,
+    applied_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    released_at       TIMESTAMPTZ,
+    note              TEXT,
+
+    CONSTRAINT stock_effect_source_kind_valid
+        CHECK (source_kind IN ('meal_plan_component', 'consumption_record')),
+    CONSTRAINT stock_effect_state_valid
+        CHECK (state IN ('applied', 'released', 'release_failed')),
+    CONSTRAINT stock_effect_mode_valid
+        CHECK (applied_mode IN ('exact', 'estimated')),
+    CONSTRAINT stock_effect_unit_valid
+        CHECK (applied_unit IN ('mg', 'g', 'kg', 'oz', 'lb', 'ml', 'l', 'tsp', 'tbsp', 'fl_oz', 'cup', 'item', 'piece', 'slice', 'clove', 'can', 'pack', 'bunch')),
+    CONSTRAINT stock_effect_exact_delta_matches_mode
+        CHECK ((applied_mode = 'exact') = (exact_delta IS NOT NULL)),
+    CONSTRAINT stock_effect_band_delta_matches_mode
+        CHECK ((applied_mode = 'estimated') = (low_delta IS NOT NULL AND high_delta IS NOT NULL))
+);
+
+CREATE UNIQUE INDEX stock_effect_active_source_item_unique
+    ON stock_effect (source_kind, source_id, stock_item_id)
+    WHERE state = 'applied';
+CREATE INDEX stock_effect_source ON stock_effect (source_kind, source_id);
+CREATE INDEX stock_effect_item ON stock_effect (stock_item_id);
+
+ALTER TABLE stock_event
+    ADD COLUMN source_kind TEXT,
+    ADD COLUMN source_id UUID,
+    ADD COLUMN source_label TEXT,
+    ADD COLUMN reverses_event_id UUID REFERENCES stock_event (id) ON DELETE SET NULL,
+    DROP CONSTRAINT stock_event_kind_valid,
+    ADD CONSTRAINT stock_event_kind_valid
+        CHECK (event_kind IN ('added', 'consumed', 'released', 'discarded', 'corrected',
+                              'observed', 'moved', 'mode_changed', 'archived')),
+    ADD CONSTRAINT stock_event_source_kind_valid
+        CHECK (source_kind IS NULL OR source_kind IN ('meal_plan_component', 'consumption_record'));

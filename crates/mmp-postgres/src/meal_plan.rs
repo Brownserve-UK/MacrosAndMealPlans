@@ -3,6 +3,7 @@ use std::str::FromStr;
 
 use async_trait::async_trait;
 use mmp_core::Result;
+use mmp_core::domain::StockOutcome;
 use mmp_core::domain::{
     ConsumptionRecord, ConsumptionRecordId, MealItemRef, MealParticipant,
     MealParticipantAllocation, MealParticipantAllocationId, MealParticipantId, MealPlanComponent,
@@ -11,8 +12,11 @@ use mmp_core::domain::{
     RecipeId, Revision, UserId,
 };
 use mmp_core::ports::{
-    MealPlanComponentUpdate, MealPlanQuery, MealPlanRepository, SnapshotOp, UpdateOutcome,
+    MealPlanComponentUpdate, MealPlanQuery, MealPlanRepository, SnapshotOp, StockWrite,
+    UpdateOutcome,
 };
+
+use crate::stock::apply_stock_write;
 use rust_decimal::Decimal;
 use sqlx::types::Json;
 use sqlx::{PgPool, Postgres, Transaction};
@@ -389,7 +393,8 @@ impl MealPlanRepository for PgMealPlanRepository {
         entry: &MealPlanEntry,
         expected: Revision,
         consumption: &[ConsumptionRecord],
-    ) -> Result<UpdateOutcome> {
+        stock: &StockWrite,
+    ) -> Result<(UpdateOutcome, Vec<StockOutcome>)> {
         let mut tx = self
             .pool
             .begin()
@@ -400,20 +405,27 @@ impl MealPlanRepository for PgMealPlanRepository {
             tx.rollback()
                 .await
                 .map_err(|error| repository_error("rolling back a meal outcome", error))?;
-            return Ok(outcome);
+            return Ok((outcome, Vec::new()));
         }
         persist_components(&mut tx, entry).await?;
         for record in consumption {
             insert_consumption(&mut tx, record).await?;
         }
         replace_participants(&mut tx, entry.id, &entry.participants).await?;
+        let stock_outcomes = apply_stock_write(&mut tx, stock, OffsetDateTime::now_utc()).await?;
         tx.commit()
             .await
             .map_err(|error| repository_error("committing a meal outcome", error))?;
-        Ok(UpdateOutcome::Updated)
+        Ok((UpdateOutcome::Updated, stock_outcomes))
     }
 
-    async fn reopen(&self, entry: &MealPlanEntry, expected: Revision) -> Result<UpdateOutcome> {
+    async fn reopen(
+        &self,
+        entry: &MealPlanEntry,
+        expected: Revision,
+        delete_records: &[ConsumptionRecordId],
+        stock: &StockWrite,
+    ) -> Result<(UpdateOutcome, Vec<StockOutcome>)> {
         let mut tx = self
             .pool
             .begin()
@@ -424,14 +436,18 @@ impl MealPlanRepository for PgMealPlanRepository {
             tx.rollback()
                 .await
                 .map_err(|error| repository_error("rolling back a meal reopen", error))?;
-            return Ok(outcome);
+            return Ok((outcome, Vec::new()));
         }
         persist_components(&mut tx, entry).await?;
         replace_participants(&mut tx, entry.id, &entry.participants).await?;
+        for record_id in delete_records {
+            delete_consumption(&mut tx, *record_id).await?;
+        }
+        let stock_outcomes = apply_stock_write(&mut tx, stock, OffsetDateTime::now_utc()).await?;
         tx.commit()
             .await
             .map_err(|error| repository_error("committing a meal reopen", error))?;
-        Ok(UpdateOutcome::Updated)
+        Ok((UpdateOutcome::Updated, stock_outcomes))
     }
 
     async fn set_participants(
@@ -465,7 +481,8 @@ impl MealPlanRepository for PgMealPlanRepository {
         participants: &[MealParticipant],
         expected: Revision,
         consumption: Option<&ConsumptionRecord>,
-    ) -> Result<UpdateOutcome> {
+        stock: &StockWrite,
+    ) -> Result<(UpdateOutcome, Vec<StockOutcome>)> {
         let mut tx = self
             .pool
             .begin()
@@ -476,17 +493,18 @@ impl MealPlanRepository for PgMealPlanRepository {
             tx.rollback()
                 .await
                 .map_err(|error| repository_error("rolling back a component outcome", error))?;
-            return Ok(outcome);
+            return Ok((outcome, Vec::new()));
         }
         if let Some(record) = consumption {
             insert_consumption(&mut tx, record).await?;
         }
         replace_participants(&mut tx, entry_id, participants).await?;
         update_entry_state(&mut tx, entry_id, component).await?;
+        let stock_outcomes = apply_stock_write(&mut tx, stock, OffsetDateTime::now_utc()).await?;
         tx.commit()
             .await
             .map_err(|error| repository_error("committing a component outcome", error))?;
-        Ok(UpdateOutcome::Updated)
+        Ok((UpdateOutcome::Updated, stock_outcomes))
     }
 
     async fn reopen_component(
@@ -495,7 +513,9 @@ impl MealPlanRepository for PgMealPlanRepository {
         component: &MealPlanComponentUpdate<'_>,
         participants: &[MealParticipant],
         expected: Revision,
-    ) -> Result<UpdateOutcome> {
+        delete_record: Option<ConsumptionRecordId>,
+        stock: &StockWrite,
+    ) -> Result<(UpdateOutcome, Vec<StockOutcome>)> {
         let mut tx = self
             .pool
             .begin()
@@ -506,15 +526,31 @@ impl MealPlanRepository for PgMealPlanRepository {
             tx.rollback()
                 .await
                 .map_err(|error| repository_error("rolling back a component reopen", error))?;
-            return Ok(outcome);
+            return Ok((outcome, Vec::new()));
         }
         replace_participants(&mut tx, entry_id, participants).await?;
+        if let Some(record_id) = delete_record {
+            delete_consumption(&mut tx, record_id).await?;
+        }
         update_entry_state(&mut tx, entry_id, component).await?;
+        let stock_outcomes = apply_stock_write(&mut tx, stock, OffsetDateTime::now_utc()).await?;
         tx.commit()
             .await
             .map_err(|error| repository_error("committing a component reopen", error))?;
-        Ok(UpdateOutcome::Updated)
+        Ok((UpdateOutcome::Updated, stock_outcomes))
     }
+}
+
+async fn delete_consumption(
+    tx: &mut Transaction<'_, Postgres>,
+    id: ConsumptionRecordId,
+) -> Result<()> {
+    sqlx::query("DELETE FROM consumption_record WHERE id = $1")
+        .bind(id.as_uuid())
+        .execute(&mut **tx)
+        .await
+        .map_err(|error| map_db_error(error, "removing a consumption record"))?;
+    Ok(())
 }
 
 async fn insert_entry(tx: &mut Transaction<'_, Postgres>, entry: &MealPlanEntry) -> Result<()> {

@@ -18,15 +18,17 @@ use crate::domain::{
     recipe_nutrition, recipe_nutrition_for, resolve_on, sum_nutrition, validate_components,
     validate_participants,
 };
+use crate::domain::{StockEffectSource, StockOutcome};
 use crate::error::{CoreError, Result, ValidationErrors};
 use crate::ports::{
     Clock, ConsumptionRecordRepository, HouseholdMemberRepository, HouseholdSettingsRepository,
     MealPlanComponentUpdate, MealPlanQuery, MealPlanRepository, MemberQuery,
     NutritionTargetRepository, PageRequest, ProductRepository, RecipeRepository, SnapshotOp,
-    UpdateOutcome,
+    StockDeduction, StockRelease, StockWrite, UpdateOutcome,
 };
 
 use super::fulfilment::RecipeFulfilments;
+use super::stock_effects::{StockAffected, component_release, name_outcomes, product_deduction};
 
 const MEAL_PLAN_ENTRY: &str = "meal plan entry";
 const MEAL_PLAN_COMPONENT: &str = "meal plan component";
@@ -498,7 +500,7 @@ impl MealPlanService {
         component_id: MealPlanComponentId,
         expected: Revision,
         input: ConfirmMealPlanComponent,
-    ) -> Result<MealPlanEntryView> {
+    ) -> Result<StockAffected<MealPlanEntryView>> {
         let entry = self.get_entry(id).await?;
         ensure_due(&*self.clock, entry.planned_on)?;
         self.mark_component_eaten_unchecked(id, component_id, expected, input)
@@ -511,7 +513,7 @@ impl MealPlanService {
         component_id: MealPlanComponentId,
         expected: Revision,
         input: ConfirmMealPlanComponent,
-    ) -> Result<MealPlanEntryView> {
+    ) -> Result<StockAffected<MealPlanEntryView>> {
         let mut entry = self.get_entry(id).await?;
         let subject = self.resolve_subject(&entry, input.subject_member_id)?;
         let component = find_component(&entry, component_id)?;
@@ -521,6 +523,7 @@ impl MealPlanService {
         let old_component_revision = component.revision;
 
         require_allocation_planned(&entry, subject, component_id)?;
+        let already_drawn = component_still_eaten(&entry, component_id);
 
         let catalogue = self.catalogue_for([component_item]).await?;
         let planned = catalogue.resolve(component_item, &planned_amount);
@@ -530,6 +533,24 @@ impl MealPlanService {
             errors.push("amount", "We cannot work out this item's nutrition");
             return Err(errors.into());
         }
+        let write = StockWrite {
+            deductions: if already_drawn {
+                Vec::new()
+            } else {
+                self.component_deduction(
+                    &catalogue,
+                    &entry,
+                    component_id,
+                    component_item,
+                    &planned_amount,
+                    input.actor_id,
+                    subject,
+                )
+                .into_iter()
+                .collect()
+            },
+            releases: Vec::new(),
+        };
         let now = self.clock.now();
         let record = ConsumptionRecord {
             id: Default::default(),
@@ -572,14 +593,19 @@ impl MealPlanService {
             input.actor_id,
             now,
         );
-        commit_component_outcome(
-            self.plans
-                .resolve_component(id, &update, &entry.participants, expected, Some(&record))
-                .await?,
-            component_id,
-            expected,
-        )?;
-        self.get(id).await
+        let (outcome, stock_outcomes) = self
+            .plans
+            .resolve_component(
+                id,
+                &update,
+                &entry.participants,
+                expected,
+                Some(&record),
+                &write,
+            )
+            .await?;
+        commit_component_outcome(outcome, component_id, expected)?;
+        self.stock_affected(id, stock_outcomes).await
     }
 
     pub async fn mark_component_not_eaten(
@@ -588,7 +614,7 @@ impl MealPlanService {
         component_id: MealPlanComponentId,
         expected: Revision,
         actor: OutcomeActor,
-    ) -> Result<MealPlanEntryView> {
+    ) -> Result<StockAffected<MealPlanEntryView>> {
         let entry = self.get_entry(id).await?;
         ensure_due(&*self.clock, entry.planned_on)?;
         self.mark_component_not_eaten_unchecked(id, component_id, expected, actor)
@@ -601,7 +627,7 @@ impl MealPlanService {
         component_id: MealPlanComponentId,
         expected: Revision,
         actor: OutcomeActor,
-    ) -> Result<MealPlanEntryView> {
+    ) -> Result<StockAffected<MealPlanEntryView>> {
         let mut entry = self.get_entry(id).await?;
         let subject = self.resolve_subject(&entry, actor.subject_member_id)?;
         let component = find_component(&entry, component_id)?;
@@ -638,14 +664,19 @@ impl MealPlanService {
             actor.actor_id,
             now,
         );
-        commit_component_outcome(
-            self.plans
-                .resolve_component(id, &update, &entry.participants, expected, None)
-                .await?,
-            component_id,
-            expected,
-        )?;
-        self.get(id).await
+        let (outcome, stock_outcomes) = self
+            .plans
+            .resolve_component(
+                id,
+                &update,
+                &entry.participants,
+                expected,
+                None,
+                &StockWrite::default(),
+            )
+            .await?;
+        commit_component_outcome(outcome, component_id, expected)?;
+        self.stock_affected(id, stock_outcomes).await
     }
 
     pub async fn reopen_component(
@@ -654,12 +685,13 @@ impl MealPlanService {
         component_id: MealPlanComponentId,
         expected: Revision,
         actor: OutcomeActor,
-    ) -> Result<MealPlanEntryView> {
+    ) -> Result<StockAffected<MealPlanEntryView>> {
         let mut entry = self.get_entry(id).await?;
         let subject = self.resolve_subject(&entry, actor.subject_member_id)?;
         let component = find_component(&entry, component_id)?;
         require_component_revision(component_id, expected, component.revision)?;
         let old_component_revision = component.revision;
+        let component_item = component.item;
 
         let existing_allocation = entry.participant_for(subject).and_then(|p| {
             p.allocations
@@ -674,10 +706,8 @@ impl MealPlanService {
         }
         let record_to_remove = existing_allocation.and_then(|a| a.consumption_record_id);
 
+        let catalogue = self.catalogue_for([component_item]).await?;
         let now = self.clock.now();
-        if let Some(record_id) = record_to_remove {
-            self.consumption.delete(record_id).await?;
-        }
         set_allocation(
             &mut entry,
             subject,
@@ -688,15 +718,26 @@ impl MealPlanService {
             None,
         );
         recompute_statuses(&mut entry);
-        let still_eaten = entry.participants.iter().any(|p| {
-            p.allocations
-                .iter()
-                .any(|a| a.component_id == component_id && a.status == ParticipantStatus::Eaten)
-        });
+        let still_eaten = component_still_eaten(&entry, component_id);
         let snapshot_op = if still_eaten {
             SnapshotOp::Keep
         } else {
             SnapshotOp::Clear
+        };
+        let write = StockWrite {
+            deductions: Vec::new(),
+            releases: if still_eaten {
+                Vec::new()
+            } else {
+                vec![self.component_release(
+                    &catalogue,
+                    &entry,
+                    component_id,
+                    component_item,
+                    actor.actor_id,
+                    subject,
+                )]
+            },
         };
         let update = component_update(
             &entry,
@@ -706,14 +747,19 @@ impl MealPlanService {
             actor.actor_id,
             now,
         );
-        commit_component_outcome(
-            self.plans
-                .reopen_component(id, &update, &entry.participants, expected)
-                .await?,
-            component_id,
-            expected,
-        )?;
-        self.get(id).await
+        let (outcome, stock_outcomes) = self
+            .plans
+            .reopen_component(
+                id,
+                &update,
+                &entry.participants,
+                expected,
+                record_to_remove,
+                &write,
+            )
+            .await?;
+        commit_component_outcome(outcome, component_id, expected)?;
+        self.stock_affected(id, stock_outcomes).await
     }
 
     pub async fn mark_not_eaten(
@@ -721,7 +767,7 @@ impl MealPlanService {
         id: MealPlanEntryId,
         expected: Revision,
         actor: OutcomeActor,
-    ) -> Result<MealPlanEntryView> {
+    ) -> Result<StockAffected<MealPlanEntryView>> {
         let entry = self.get_entry(id).await?;
         ensure_due(&*self.clock, entry.planned_on)?;
         self.mark_not_eaten_unchecked(id, expected, actor).await
@@ -732,7 +778,7 @@ impl MealPlanService {
         id: MealPlanEntryId,
         expected: Revision,
         actor: OutcomeActor,
-    ) -> Result<MealPlanEntryView> {
+    ) -> Result<StockAffected<MealPlanEntryView>> {
         let mut entry = self.get_entry(id).await?;
         require_revision(id, expected, entry.revision)?;
         let subject = self.resolve_subject(&entry, actor.subject_member_id)?;
@@ -754,12 +800,12 @@ impl MealPlanService {
         entry.updated_at = now;
         entry.revision = entry.revision.next();
         recompute_statuses(&mut entry);
-        commit_outcome(
-            self.plans.resolve(&entry, expected, &[]).await?,
-            id,
-            expected,
-        )?;
-        self.get(id).await
+        let (outcome, stock_outcomes) = self
+            .plans
+            .resolve(&entry, expected, &[], &StockWrite::default())
+            .await?;
+        commit_outcome(outcome, id, expected)?;
+        self.stock_affected(id, stock_outcomes).await
     }
 
     pub async fn mark_eaten(
@@ -767,7 +813,7 @@ impl MealPlanService {
         id: MealPlanEntryId,
         expected: Revision,
         input: ConfirmMealPlanEntry,
-    ) -> Result<MealPlanEntryView> {
+    ) -> Result<StockAffected<MealPlanEntryView>> {
         let entry = self.get_entry(id).await?;
         ensure_due(&*self.clock, entry.planned_on)?;
         self.mark_eaten_unchecked(id, expected, input).await
@@ -778,7 +824,7 @@ impl MealPlanService {
         id: MealPlanEntryId,
         expected: Revision,
         input: ConfirmMealPlanEntry,
-    ) -> Result<MealPlanEntryView> {
+    ) -> Result<StockAffected<MealPlanEntryView>> {
         let mut entry = self.get_entry(id).await?;
         require_revision(id, expected, entry.revision)?;
         let subject = self.resolve_subject(&entry, input.subject_member_id)?;
@@ -797,6 +843,7 @@ impl MealPlanService {
             .collect();
         let now = self.clock.now();
         let mut records = Vec::with_capacity(input.components.len());
+        let mut deductions: Vec<StockDeduction> = Vec::new();
         for component_id in &pending {
             let component = find_component(&entry, *component_id)?.clone();
             let amount = actual_by_component[component_id];
@@ -808,6 +855,19 @@ impl MealPlanService {
                     "We cannot work out this item's nutrition",
                 );
                 return Err(errors.into());
+            }
+            if !component_still_eaten(&entry, *component_id)
+                && let Some(deduction) = self.component_deduction(
+                    &catalogue,
+                    &entry,
+                    *component_id,
+                    component.item,
+                    &component.amount,
+                    input.actor_id,
+                    subject,
+                )
+            {
+                deductions.push(deduction);
             }
             let record = ConsumptionRecord {
                 id: Default::default(),
@@ -842,12 +902,16 @@ impl MealPlanService {
         entry.updated_at = now;
         entry.revision = entry.revision.next();
         recompute_statuses(&mut entry);
-        commit_outcome(
-            self.plans.resolve(&entry, expected, &records).await?,
-            id,
-            expected,
-        )?;
-        self.get(id).await
+        let write = StockWrite {
+            deductions,
+            releases: Vec::new(),
+        };
+        let (outcome, stock_outcomes) = self
+            .plans
+            .resolve(&entry, expected, &records, &write)
+            .await?;
+        commit_outcome(outcome, id, expected)?;
+        self.stock_affected(id, stock_outcomes).await
     }
 
     pub async fn reopen(
@@ -855,7 +919,7 @@ impl MealPlanService {
         id: MealPlanEntryId,
         expected: Revision,
         actor: OutcomeActor,
-    ) -> Result<MealPlanEntryView> {
+    ) -> Result<StockAffected<MealPlanEntryView>> {
         let mut entry = self.get_entry(id).await?;
         require_revision(id, expected, entry.revision)?;
         let subject = self.resolve_subject(&entry, actor.subject_member_id)?;
@@ -879,11 +943,11 @@ impl MealPlanService {
         if resolved.is_empty() {
             return Err(CoreError::conflict("This meal has not been resolved yet."));
         }
+        let catalogue = self
+            .catalogue_for(entry.components.iter().map(|component| component.item))
+            .await?;
         let now = self.clock.now();
-        for record_id in record_ids {
-            self.consumption.delete(record_id).await?;
-        }
-        for component_id in resolved {
+        for &component_id in &resolved {
             set_allocation(
                 &mut entry,
                 subject,
@@ -907,12 +971,101 @@ impl MealPlanService {
                 component.snapshot = None;
             }
         }
+        let mut releases: Vec<StockRelease> = Vec::new();
+        for &component_id in &resolved {
+            if !component_still_eaten(&entry, component_id) {
+                let item = entry
+                    .components
+                    .iter()
+                    .find(|c| c.id == component_id)
+                    .map(|c| c.item);
+                if let Some(item) = item {
+                    releases.push(self.component_release(
+                        &catalogue,
+                        &entry,
+                        component_id,
+                        item,
+                        actor.actor_id,
+                        subject,
+                    ));
+                }
+            }
+        }
         entry.updated_by = actor.actor_id;
         entry.updated_at = now;
         entry.revision = entry.revision.next();
         recompute_statuses(&mut entry);
-        commit_outcome(self.plans.reopen(&entry, expected).await?, id, expected)?;
-        self.get(id).await
+        let write = StockWrite {
+            deductions: Vec::new(),
+            releases,
+        };
+        let (outcome, stock_outcomes) = self
+            .plans
+            .reopen(&entry, expected, &record_ids, &write)
+            .await?;
+        commit_outcome(outcome, id, expected)?;
+        self.stock_affected(id, stock_outcomes).await
+    }
+
+    async fn stock_affected(
+        &self,
+        id: MealPlanEntryId,
+        outcomes: Vec<StockOutcome>,
+    ) -> Result<StockAffected<MealPlanEntryView>> {
+        let view = self.get(id).await?;
+        let named = name_outcomes(&*self.products, outcomes).await?;
+        Ok(StockAffected::new(view, named))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn component_deduction(
+        &self,
+        catalogue: &ItemCatalogue,
+        entry: &MealPlanEntry,
+        component_id: MealPlanComponentId,
+        item: MealItemRef,
+        amount: &ConsumedAmount,
+        actor: UserId,
+        subject: HouseholdMemberId,
+    ) -> Option<StockDeduction> {
+        let MealItemRef::Product { product_id } = item else {
+            return None;
+        };
+        let product = catalogue.products.get(&product_id)?;
+        product_deduction(
+            StockEffectSource::MealPlanComponent,
+            component_id.as_uuid(),
+            product,
+            amount,
+            stock_source_label(entry, &product.name),
+            Some(actor),
+            Some(subject),
+        )
+    }
+
+    fn component_release(
+        &self,
+        catalogue: &ItemCatalogue,
+        entry: &MealPlanEntry,
+        component_id: MealPlanComponentId,
+        item: MealItemRef,
+        actor: UserId,
+        subject: HouseholdMemberId,
+    ) -> StockRelease {
+        let name = match item {
+            MealItemRef::Product { product_id } => catalogue
+                .products
+                .get(&product_id)
+                .map(|p| p.name.clone())
+                .unwrap_or_else(|| "food".to_owned()),
+            MealItemRef::Recipe { .. } => "food".to_owned(),
+        };
+        component_release(
+            component_id.as_uuid(),
+            stock_source_label(entry, &name),
+            Some(actor),
+            Some(subject),
+        )
     }
 
     pub async fn week(
@@ -1583,6 +1736,24 @@ fn component_update<'a>(
         actor_id,
         now,
     }
+}
+
+fn component_still_eaten(entry: &MealPlanEntry, component_id: MealPlanComponentId) -> bool {
+    entry.participants.iter().any(|p| {
+        p.allocations
+            .iter()
+            .any(|a| a.component_id == component_id && a.status == ParticipantStatus::Eaten)
+    })
+}
+
+fn stock_source_label(entry: &MealPlanEntry, item_name: &str) -> String {
+    let slot = match entry.slot {
+        MealSlot::Breakfast => "Breakfast",
+        MealSlot::Lunch => "Lunch",
+        MealSlot::Dinner => "Dinner",
+        MealSlot::Snacks => "Snacks",
+    };
+    format!("{slot} {} \u{2014} {item_name}", entry.planned_on)
 }
 
 fn find_component(

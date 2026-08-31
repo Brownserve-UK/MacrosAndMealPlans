@@ -1,24 +1,6 @@
 use super::*;
 
 #[test]
-fn constraint_names_reduce_to_a_field() {
-    assert_eq!(
-        constraint_field("ingredient_name_not_blank"),
-        "name_not_blank"
-    );
-    assert_eq!(constraint_field("product_barcode_valid"), "barcode_valid");
-    assert_eq!(
-        constraint_field("household_member_display_name_not_blank"),
-        "display_name_not_blank"
-    );
-    assert_eq!(
-        constraint_field("app_user_username_not_blank"),
-        "username_not_blank"
-    );
-    assert_eq!(constraint_field("something_else"), "something_else");
-}
-
-#[test]
 fn every_unique_index_in_the_schema_maps_to_a_duplicate() {
     let migration = include_str!("../migrations/0001_init.sql");
 
@@ -109,22 +91,6 @@ fn an_unmapped_foreign_key_does_not_pretend_to_know_the_target() {
     assert_eq!(
         foreign_key_target("some_future_table_other_id_fkey"),
         "referenced record"
-    );
-}
-
-#[test]
-fn recipe_child_constraints_reduce_to_a_field() {
-    assert_eq!(
-        constraint_field("recipe_component_amount_kind_valid"),
-        "amount_kind_valid"
-    );
-    assert_eq!(
-        constraint_field("recipe_instruction_not_blank"),
-        "not_blank"
-    );
-    assert_eq!(
-        constraint_field("recipe_servings_positive"),
-        "servings_positive"
     );
 }
 

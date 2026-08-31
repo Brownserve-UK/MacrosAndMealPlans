@@ -7,8 +7,9 @@ use mmp_core::domain::{
     MealPlanComponentId, MealPlanEntryId, MealSlot, MealTimes, MemberAccessGrant,
     MissingStockInterpretation, NutritionFacts, NutritionGoals, NutritionQuality, NutritionTarget,
     NutritionTargetId, Product, ProductId, Provenance, Quantity, RecipeId, Revision, Role,
-    SourceDate, SourceDateKind, StockEvent, StockEventId, StockEventKind, StockItem, StockItemId,
-    StockLevel, StorageLocation, TrackingMode, Unit, UsabilityDeadline, User, UserId,
+    SourceDate, SourceDateKind, StockEffect, StockEffectId, StockEffectSource, StockEffectState,
+    StockEvent, StockEventId, StockEventKind, StockEventSource, StockItem, StockItemId, StockLevel,
+    StorageLocation, TrackingMode, Unit, UsabilityDeadline, User, UserId,
 };
 use mmp_core::{CoreError, RepositoryError};
 use rust_decimal::Decimal;
@@ -456,6 +457,10 @@ pub struct StockEventRow {
     pub quantity_unit: Option<String>,
     pub actor_user_id: Option<Uuid>,
     pub subject_member_id: Option<Uuid>,
+    pub source_kind: Option<String>,
+    pub source_id: Option<Uuid>,
+    pub source_label: Option<String>,
+    pub reverses_event_id: Option<Uuid>,
     pub note: Option<String>,
     pub occurred_at: OffsetDateTime,
 }
@@ -471,6 +476,15 @@ impl TryFrom<StockEventRow> for StockEvent {
             )),
             _ => None,
         };
+        let source = match (row.source_kind, row.source_id, row.source_label) {
+            (Some(kind), Some(id), label) => Some(StockEventSource {
+                kind: StockEffectSource::from_str(&kind)
+                    .map_err(|_| bad_value("source_kind", &kind))?,
+                id,
+                label: label.unwrap_or_default(),
+            }),
+            _ => None,
+        };
         Ok(StockEvent {
             id: StockEventId::from(row.id),
             stock_item_id: StockItemId::from(row.stock_item_id),
@@ -479,8 +493,59 @@ impl TryFrom<StockEventRow> for StockEvent {
             quantity_delta,
             actor_user_id: row.actor_user_id.map(UserId::from),
             subject_member_id: row.subject_member_id.map(HouseholdMemberId::from),
+            source,
+            reverses_event_id: row.reverses_event_id.map(StockEventId::from),
             note: row.note,
             occurred_at: row.occurred_at,
+        })
+    }
+}
+
+#[derive(Debug, sqlx::FromRow)]
+pub struct StockEffectRow {
+    pub id: Uuid,
+    pub source_kind: String,
+    pub source_id: Uuid,
+    pub stock_item_id: Uuid,
+    pub product_id: Uuid,
+    pub state: String,
+    pub applied_mode: String,
+    pub applied_unit: String,
+    pub exact_delta: Option<Decimal>,
+    pub low_delta: Option<Decimal>,
+    pub high_delta: Option<Decimal>,
+    pub requested_value: Decimal,
+    pub apply_event_id: Uuid,
+    pub applied_at: OffsetDateTime,
+    pub released_at: Option<OffsetDateTime>,
+    pub note: Option<String>,
+}
+
+impl TryFrom<StockEffectRow> for StockEffect {
+    type Error = CoreError;
+
+    fn try_from(row: StockEffectRow) -> Result<Self, Self::Error> {
+        Ok(StockEffect {
+            id: StockEffectId::from(row.id),
+            source_kind: StockEffectSource::from_str(&row.source_kind)
+                .map_err(|_| bad_value("source_kind", &row.source_kind))?,
+            source_id: row.source_id,
+            stock_item_id: StockItemId::from(row.stock_item_id),
+            product_id: ProductId::from(row.product_id),
+            state: StockEffectState::from_str(&row.state)
+                .map_err(|_| bad_value("state", &row.state))?,
+            applied_mode: TrackingMode::from_str(&row.applied_mode)
+                .map_err(|_| bad_value("applied_mode", &row.applied_mode))?,
+            applied_unit: Unit::from_str(&row.applied_unit)
+                .map_err(|_| bad_value("applied_unit", &row.applied_unit))?,
+            exact_delta: row.exact_delta,
+            low_delta: row.low_delta,
+            high_delta: row.high_delta,
+            requested_value: row.requested_value,
+            apply_event_id: StockEventId::from(row.apply_event_id),
+            applied_at: row.applied_at,
+            released_at: row.released_at,
+            note: row.note,
         })
     }
 }

@@ -64,6 +64,8 @@ function History({ id }: { id: string }) {
             {event.quantity_delta
               ? ` · ${event.quantity_delta.amount} ${displayUnit(event.quantity_delta.unit)}`
               : ''}
+            {event.source_label ? ` · ${event.source_label}` : ''}
+            {event.note ? ` · ${event.note}` : ''}
           </Typography>
           <Typography variant="caption" color="text.secondary">
             {new Date(event.occurred_at).toLocaleString()}

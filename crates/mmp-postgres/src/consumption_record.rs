@@ -1,13 +1,18 @@
 use async_trait::async_trait;
 use mmp_core::Result;
-use mmp_core::domain::{ConsumptionRecord, ConsumptionRecordId, HouseholdMemberId, Revision};
+use mmp_core::domain::{
+    ConsumptionRecord, ConsumptionRecordId, HouseholdMemberId, Revision, StockOutcome,
+};
 use mmp_core::ports::{
-    ConsumptionQuery, ConsumptionRecordRepository, Paginated, SortDirection, UpdateOutcome,
+    ConsumptionQuery, ConsumptionRecordRepository, Paginated, SortDirection, StockWrite,
+    UpdateOutcome,
 };
 use sqlx::PgPool;
+use time::OffsetDateTime;
 
 use crate::error::{map_db_error, repository_error};
 use crate::rows::{ConsumptionRecordRow, amount_bindings, item_bindings, nutrition_bindings};
+use crate::stock::apply_stock_write;
 
 macro_rules! columns {
     () => {
@@ -57,7 +62,6 @@ const LIST_FOR_MEAL_PLAN_ENTRY: &str = concat!(
     "WHERE mpc.entry_id = $1 ORDER BY c.created_at ASC, c.id ASC"
 );
 const CURRENT_REVISION: &str = "SELECT revision FROM consumption_record WHERE id = $1";
-const DELETE: &str = "DELETE FROM consumption_record WHERE id = $1";
 
 pub struct PgConsumptionRecordRepository {
     pool: PgPool,
@@ -140,10 +144,19 @@ impl ConsumptionRecordRepository for PgConsumptionRecordRepository {
         rows.into_iter().map(TryInto::try_into).collect()
     }
 
-    async fn insert(&self, record: &ConsumptionRecord) -> Result<()> {
+    async fn insert(
+        &self,
+        record: &ConsumptionRecord,
+        stock: &StockWrite,
+    ) -> Result<Vec<StockOutcome>> {
         let (amount_kind, amount_value, amount_unit) = amount_bindings(&record.amount);
         let (item_kind, item_product_id, item_recipe_id) = item_bindings(&record.item);
         let n = nutrition_bindings(&record.nutrition);
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| repository_error("starting a consumption insert", e))?;
         sqlx::query(
             "INSERT INTO consumption_record (
                  id, member_id, product_id, recorded_by, meal_plan_component_id, slot,
@@ -196,20 +209,30 @@ impl ConsumptionRecordRepository for PgConsumptionRecordRepository {
         .bind(record.updated_at)
         .bind(item_kind)
         .bind(item_recipe_id)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
         .map_err(|e| map_db_error(e, "creating a consumption record"))?;
-        Ok(())
+        let outcomes = apply_stock_write(&mut tx, stock, OffsetDateTime::now_utc()).await?;
+        tx.commit()
+            .await
+            .map_err(|e| repository_error("committing a consumption insert", e))?;
+        Ok(outcomes)
     }
 
     async fn update(
         &self,
         record: &ConsumptionRecord,
         expected: Revision,
-    ) -> Result<UpdateOutcome> {
+        stock: &StockWrite,
+    ) -> Result<(UpdateOutcome, Vec<StockOutcome>)> {
         let (amount_kind, amount_value, amount_unit) = amount_bindings(&record.amount);
         let (item_kind, item_product_id, item_recipe_id) = item_bindings(&record.item);
         let n = nutrition_bindings(&record.nutrition);
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| repository_error("starting a consumption update", e))?;
         let affected = sqlx::query(
             "UPDATE consumption_record SET
                  member_id = $2, product_id = $3, recorded_by = $4, slot = $5,
@@ -252,15 +275,22 @@ impl ConsumptionRecordRepository for PgConsumptionRecordRepository {
         .bind(expected.get())
         .bind(item_kind)
         .bind(item_recipe_id)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
         .map_err(|e| map_db_error(e, "updating a consumption record"))?
         .rows_affected();
 
         if affected == 1 {
-            return Ok(UpdateOutcome::Updated);
+            let outcomes = apply_stock_write(&mut tx, stock, OffsetDateTime::now_utc()).await?;
+            tx.commit()
+                .await
+                .map_err(|e| repository_error("committing a consumption update", e))?;
+            return Ok((UpdateOutcome::Updated, outcomes));
         }
 
+        tx.rollback()
+            .await
+            .map_err(|e| repository_error("rolling back a consumption update", e))?;
         let current: Option<(i64,)> = sqlx::query_as(CURRENT_REVISION)
             .bind(record.id.as_uuid())
             .fetch_optional(&self.pool)
@@ -268,20 +298,60 @@ impl ConsumptionRecordRepository for PgConsumptionRecordRepository {
             .map_err(|e| repository_error("re-reading a consumption record revision", e))?;
 
         Ok(match current {
-            Some((actual,)) => UpdateOutcome::RevisionMismatch {
-                actual: Revision::new(actual),
-            },
-            None => UpdateOutcome::NotFound,
+            Some((actual,)) => (
+                UpdateOutcome::RevisionMismatch {
+                    actual: Revision::new(actual),
+                },
+                Vec::new(),
+            ),
+            None => (UpdateOutcome::NotFound, Vec::new()),
         })
     }
 
-    async fn delete(&self, id: ConsumptionRecordId) -> Result<bool> {
-        let affected = sqlx::query(DELETE)
-            .bind(id.as_uuid())
-            .execute(&self.pool)
+    async fn delete(
+        &self,
+        id: ConsumptionRecordId,
+        expected: Revision,
+        stock: &StockWrite,
+    ) -> Result<(UpdateOutcome, Vec<StockOutcome>)> {
+        let mut tx = self
+            .pool
+            .begin()
             .await
-            .map_err(|e| map_db_error(e, "deleting a consumption record"))?
-            .rows_affected();
-        Ok(affected == 1)
+            .map_err(|e| repository_error("starting a consumption delete", e))?;
+        let affected =
+            sqlx::query("DELETE FROM consumption_record WHERE id = $1 AND revision = $2")
+                .bind(id.as_uuid())
+                .bind(expected.get())
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| map_db_error(e, "deleting a consumption record"))?
+                .rows_affected();
+
+        if affected == 1 {
+            let outcomes = apply_stock_write(&mut tx, stock, OffsetDateTime::now_utc()).await?;
+            tx.commit()
+                .await
+                .map_err(|e| repository_error("committing a consumption delete", e))?;
+            return Ok((UpdateOutcome::Updated, outcomes));
+        }
+
+        tx.rollback()
+            .await
+            .map_err(|e| repository_error("rolling back a consumption delete", e))?;
+        let current: Option<(i64,)> = sqlx::query_as(CURRENT_REVISION)
+            .bind(id.as_uuid())
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| repository_error("re-reading a consumption record revision", e))?;
+        Ok(match current {
+            Some((actual,)) => (
+                UpdateOutcome::RevisionMismatch {
+                    actual: Revision::new(actual),
+                },
+                Vec::new(),
+            ),
+            None => (UpdateOutcome::NotFound, Vec::new()),
+        })
     }
 }

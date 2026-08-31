@@ -5,9 +5,11 @@ use crate::domain::{
     ConsumptionRecordId, HouseholdMemberId, MealItemRef, MealSlot, NutritionQuality, Provenance,
     Quantity, Unit,
 };
-use crate::ports::FixedClock;
+use crate::domain::{StockItem, StockItemId, StockLevel, StorageLocation};
+use crate::ports::{FixedClock, StockRepository};
 use crate::testing::{
     InMemoryConsumptionRecordRepository, InMemoryProductRepository, InMemoryRecipeRepository,
+    InMemoryStockRepository,
 };
 use rust_decimal::Decimal;
 use time::OffsetDateTime;
@@ -18,6 +20,37 @@ struct Harness {
     records: InMemoryConsumptionRecordRepository,
     products: InMemoryProductRepository,
     recipes: InMemoryRecipeRepository,
+    stock: InMemoryStockRepository,
+}
+
+impl Harness {
+    fn seed_stock_grams(&self, product_id: ProductId, grams: i64) -> StockItemId {
+        let item = StockItem {
+            id: StockItemId::new(),
+            product_id,
+            level: StockLevel::Exact {
+                quantity: Quantity::new(Decimal::new(grams, 0), Unit::Gram),
+            },
+            storage_location: StorageLocation::Chilled,
+            source_date: None,
+            usability_deadline: None,
+            note: None,
+            revision: Revision::INITIAL,
+            created_at: OffsetDateTime::UNIX_EPOCH,
+            updated_at: OffsetDateTime::UNIX_EPOCH,
+            archived_at: None,
+        };
+        let id = item.id;
+        self.stock.seed(item);
+        id
+    }
+
+    async fn stock_grams(&self, id: StockItemId) -> Decimal {
+        match self.stock.get(id).await.unwrap().unwrap().level {
+            StockLevel::Exact { quantity } => quantity.amount,
+            _ => panic!("expected an exact level"),
+        }
+    }
 }
 
 fn harness() -> Harness {
@@ -25,7 +58,8 @@ fn harness() -> Harness {
 }
 
 fn harness_at(now: OffsetDateTime) -> Harness {
-    let records = InMemoryConsumptionRecordRepository::new();
+    let stock = InMemoryStockRepository::new();
+    let records = InMemoryConsumptionRecordRepository::with_stock(stock.clone());
     let products = InMemoryProductRepository::new();
     let recipes = InMemoryRecipeRepository::new();
     let service = DiaryService::new(
@@ -39,6 +73,7 @@ fn harness_at(now: OffsetDateTime) -> Harness {
         records,
         products,
         recipes,
+        stock,
     }
 }
 
@@ -546,4 +581,146 @@ async fn logging_a_recipe_owned_by_someone_else_is_refused() {
         .unwrap_err();
 
     assert!(matches!(error, CoreError::NotFound { .. }));
+}
+
+fn dgrams(value: i64) -> Decimal {
+    Decimal::new(value, 0)
+}
+
+#[tokio::test]
+async fn logging_ad_hoc_food_draws_it_from_stock_and_edits_follow() {
+    let h = harness();
+    let product = seed_product(&h, known_nutrition());
+    let member = HouseholdMemberId::new();
+    let item = h.seed_stock_grams(product.id, 500);
+
+    let recorded = h
+        .service
+        .record(measure_150g(product.id, member))
+        .await
+        .unwrap();
+    assert!(recorded.stock.is_empty());
+    assert_eq!(h.stock_grams(item).await, dgrams(350));
+
+    let amended = h
+        .service
+        .amend(
+            recorded.id,
+            recorded.revision,
+            ConsumptionRecordPatch {
+                amount: Some(ConsumedAmount::Measure(Quantity::new(
+                    dgrams(250),
+                    Unit::Gram,
+                ))),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        h.stock_grams(item).await,
+        dgrams(250),
+        "the 150 g came back and 250 g went out again"
+    );
+
+    h.service
+        .remove(amended.id, amended.revision)
+        .await
+        .unwrap();
+    assert_eq!(h.stock_grams(item).await, dgrams(500));
+}
+
+#[tokio::test]
+async fn amending_a_planned_meals_record_does_not_move_stock() {
+    let h = harness();
+    let product = seed_product(&h, known_nutrition());
+    let member = HouseholdMemberId::new();
+    let item = h.seed_stock_grams(product.id, 500);
+
+    let mut input = measure_150g(product.id, member);
+    input.meal_plan_entry_id = Some(crate::domain::MealPlanEntryId::new());
+    input.meal_plan_component_id = Some(crate::domain::MealPlanComponentId::new());
+    let recorded = h.service.record(input).await.unwrap();
+    assert_eq!(
+        h.stock_grams(item).await,
+        dgrams(500),
+        "a linked record leaves stock to the meal-plan path"
+    );
+
+    h.service
+        .amend(
+            recorded.id,
+            recorded.revision,
+            ConsumptionRecordPatch {
+                amount: Some(ConsumedAmount::Measure(Quantity::new(
+                    dgrams(400),
+                    Unit::Gram,
+                ))),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(h.stock_grams(item).await, dgrams(500));
+}
+
+#[tokio::test]
+async fn an_ad_hoc_recipe_record_produces_no_stock_effect() {
+    let h = harness();
+    let product = seed_product(&h, known_nutrition());
+    let member = HouseholdMemberId::new();
+    let recipe = crate::domain::Recipe {
+        id: RecipeId::new(),
+        name: "Smoothie".to_owned(),
+        description: None,
+        servings: 2,
+        preparation_minutes: None,
+        cooking_minutes: None,
+        notes: None,
+        components: vec![crate::domain::RecipeComponent {
+            id: crate::domain::RecipeComponentId::new(),
+            requirement: crate::domain::RecipeRequirement::Product {
+                product_id: product.id,
+            },
+            source_text: None,
+            amount: ConsumedAmount::Measure(Quantity::new(dgrams(200), Unit::Gram)),
+            position: 0,
+        }],
+        instructions: Vec::new(),
+        meal_categories: Vec::new(),
+        country_categories: Vec::new(),
+        tags: Vec::new(),
+        photo_version: None,
+        owner_id: crate::domain::UserId::new(),
+        visibility: crate::domain::RecipeVisibility::Private,
+        created_by: crate::domain::UserId::new(),
+        updated_by: crate::domain::UserId::new(),
+        revision: Revision::INITIAL,
+        created_at: OffsetDateTime::UNIX_EPOCH,
+        updated_at: OffsetDateTime::UNIX_EPOCH,
+        archived_at: None,
+    };
+    let recipe_owner = recipe.owner_id;
+    h.recipes.seed(recipe.clone());
+    let item = h.seed_stock_grams(product.id, 500);
+
+    let recorded = h
+        .service
+        .record(NewConsumptionRecord {
+            id: None,
+            member_id: member,
+            item: MealItemRef::recipe(recipe.id),
+            recorded_by: Some(recipe_owner),
+            meal_plan_entry_id: None,
+            meal_plan_component_id: None,
+            slot: MealSlot::Breakfast,
+            amount: ConsumedAmount::Servings(Decimal::ONE),
+            consumed_on: date!(2026 - 08 - 22),
+            consumed_at: None,
+        })
+        .await
+        .unwrap();
+
+    assert!(recorded.stock.is_empty());
+    assert_eq!(h.stock_grams(item).await, dgrams(500));
 }

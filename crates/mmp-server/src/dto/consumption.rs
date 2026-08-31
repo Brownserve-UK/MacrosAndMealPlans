@@ -2,7 +2,7 @@ use mmp_core::domain::{
     ConsumedAmount, ConsumptionRecord, ConsumptionRecordId, ConsumptionRecordPatch, MealSlot,
     NewConsumptionRecord, NutritionQuality, Patch, Quantity, Unit,
 };
-use mmp_core::services::{DayTotals, DiaryDay, DiaryEntry};
+use mmp_core::services::{DayTotals, DiaryDay, DiaryEntry, StockAffected};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use time::{Date, OffsetDateTime};
@@ -90,6 +90,8 @@ pub struct ConsumptionRecordDto {
     pub consumed_at: Option<OffsetDateTime>,
     pub nutrition: NutritionDto,
     pub quality: NutritionQuality,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stock_outcomes: Vec<super::StockOutcomeDto>,
     pub revision: i64,
     #[serde(with = "time::serde::rfc3339")]
     #[schema(value_type = String, format = DateTime)]
@@ -114,10 +116,20 @@ impl From<ConsumptionRecord> for ConsumptionRecordDto {
             consumed_at: value.consumed_at,
             nutrition: value.nutrition.into(),
             quality: value.quality,
+            stock_outcomes: Vec::new(),
             revision: value.revision.get(),
             created_at: value.created_at,
             updated_at: value.updated_at,
         }
+    }
+}
+
+impl From<StockAffected<ConsumptionRecord>> for ConsumptionRecordDto {
+    fn from(value: StockAffected<ConsumptionRecord>) -> Self {
+        let stock_outcomes = value.stock.iter().cloned().map(Into::into).collect();
+        let mut dto: ConsumptionRecordDto = value.into_value().into();
+        dto.stock_outcomes = stock_outcomes;
+        dto
     }
 }
 

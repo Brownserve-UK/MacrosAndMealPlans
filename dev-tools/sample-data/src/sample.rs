@@ -59,6 +59,7 @@ pub struct Report {
     pub stock_items_created: usize,
     pub meals_created: usize,
     pub meals_resolved: usize,
+    pub stock_effects_applied: usize,
     pub household_participants_created: usize,
     pub diary_entries_created: usize,
 }
@@ -68,6 +69,7 @@ struct Loader<'a> {
     actor: User,
     member: HouseholdMember,
     week_start: Date,
+    today: Date,
     report: Report,
 }
 
@@ -102,6 +104,7 @@ pub async fn load(
     actor_username: &str,
     scenario: Scenario,
     week_start: Date,
+    today: Date,
 ) -> anyhow::Result<Report> {
     let actor = state
         .household
@@ -118,6 +121,7 @@ pub async fn load(
         actor,
         member,
         week_start,
+        today,
         report: Report::default(),
     };
 
@@ -687,41 +691,40 @@ impl Loader<'_> {
     }
 
     async fn load_current_partial_week(&mut self) -> anyhow::Result<()> {
-        let monday = self.week_start;
-        for slot in MealSlot::ALL {
-            self.ensure_meal(monday, slot, Outcome::Eaten { varied: true })
-                .await?;
+        let week_end = self.week_start + Duration::days(6);
+
+        let mut date = self.week_start;
+        while date < self.today {
+            for slot in MealSlot::ALL {
+                self.ensure_meal(date, slot, Outcome::Eaten { varied: true })
+                    .await?;
+            }
+            date += Duration::days(1);
         }
 
-        let tuesday = self.week_start + Duration::days(1);
         self.ensure_meal(
-            tuesday,
+            self.today,
             MealSlot::Breakfast,
             Outcome::Eaten { varied: true },
         )
         .await?;
-        self.ensure_meal(tuesday, MealSlot::Lunch, Outcome::Eaten { varied: true })
+        self.ensure_meal(self.today, MealSlot::Lunch, Outcome::Eaten { varied: true })
             .await?;
-        self.ensure_meal(tuesday, MealSlot::Dinner, Outcome::Planned)
+        self.ensure_meal(self.today, MealSlot::Dinner, Outcome::Planned)
             .await?;
+        self.ensure_meal(self.today, MealSlot::Snacks, Outcome::Planned)
+            .await?;
+
         self.ensure_diary_entry(
-            tuesday,
+            self.today,
             MealSlot::Snacks,
             "extra-snack",
             "greek-yoghurt",
             servings(1),
         )
         .await?;
-
-        let wednesday = self.week_start + Duration::days(2);
-        self.ensure_meal(wednesday, MealSlot::Breakfast, Outcome::Planned)
-            .await?;
-        self.ensure_recipe_meal(wednesday, MealSlot::Lunch, "chicken-and-rice", servings(1))
-            .await?;
-        self.ensure_meal(wednesday, MealSlot::Dinner, Outcome::Planned)
-            .await?;
         self.ensure_recipe_diary_entry(
-            tuesday,
+            self.today,
             MealSlot::Lunch,
             "leftover-porridge",
             "porridge",
@@ -729,19 +732,20 @@ impl Loader<'_> {
         )
         .await?;
 
-        for day_offset in 3..7 {
-            let date = self.week_start + Duration::days(day_offset);
+        let mut date = self.today + Duration::days(1);
+        while date <= week_end {
             for slot in [MealSlot::Breakfast, MealSlot::Dinner] {
                 self.ensure_meal(date, slot, Outcome::Planned).await?;
             }
+            date += Duration::days(1);
         }
 
-        self.ensure_meal(
-            self.week_start + Duration::days(4),
-            MealSlot::Lunch,
-            Outcome::Planned,
-        )
-        .await?;
+        let recipe_day = self.today + Duration::days(1);
+        if recipe_day <= week_end {
+            self.ensure_recipe_meal(recipe_day, MealSlot::Lunch, "chicken-and-rice", servings(1))
+                .await?;
+        }
+
         Ok(())
     }
 
@@ -751,6 +755,11 @@ impl Loader<'_> {
         slot: MealSlot,
         outcome: Outcome,
     ) -> anyhow::Result<()> {
+        let outcome = if date > self.today {
+            Outcome::Planned
+        } else {
+            outcome
+        };
         let id = meal_id(date, slot);
         let mut view = match self.state.meal_plan.get(id).await {
             Ok(view) => view,
@@ -791,7 +800,8 @@ impl Loader<'_> {
                     view.entry.revision,
                     OutcomeActor::own(self.actor.id),
                 )
-                .await?;
+                .await?
+                .into_value();
         }
 
         match outcome {
@@ -845,7 +855,8 @@ impl Loader<'_> {
                         },
                     })
                     .collect();
-                self.state
+                let resolved = self
+                    .state
                     .meal_plan
                     .mark_eaten_unchecked(
                         view.entry.id,
@@ -861,7 +872,29 @@ impl Loader<'_> {
                     )
                     .await?;
                 self.report.meals_resolved += 1;
+                self.count_stock_effects(&resolved.entry).await?;
             }
+        }
+        Ok(())
+    }
+
+    async fn count_stock_effects(
+        &mut self,
+        entry: &mmp_core::domain::MealPlanEntry,
+    ) -> anyhow::Result<()> {
+        for component in &entry.components {
+            let effects = self
+                .state
+                .stock
+                .effects_for_source(
+                    mmp_core::domain::StockEffectSource::MealPlanComponent,
+                    component.id.as_uuid(),
+                )
+                .await?;
+            self.report.stock_effects_applied += effects
+                .iter()
+                .filter(|effect| effect.state == mmp_core::domain::StockEffectState::Applied)
+                .count();
         }
         Ok(())
     }

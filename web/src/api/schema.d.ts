@@ -1032,6 +1032,7 @@ export interface components {
             /** Format: int64 */
             revision: number;
             slot: components["schemas"]["MealSlot"];
+            stock_outcomes?: components["schemas"]["StockOutcomeDto"][];
             /** Format: date-time */
             updated_at: string;
         };
@@ -1386,6 +1387,7 @@ export interface components {
             scope: components["schemas"]["MealPlanScope"];
             slot: components["schemas"]["MealSlot"];
             status: components["schemas"]["MealPlanStatus"];
+            stock_outcomes?: components["schemas"]["StockOutcomeDto"][];
             /** Format: uuid */
             subject_member_id?: string | null;
             /** Format: date-time */
@@ -1806,6 +1808,19 @@ export interface components {
         SetRolesRequest: {
             roles: components["schemas"]["Role"][];
         };
+        ShortfallDto: {
+            /** @enum {string} */
+            state: "covered";
+        } | {
+            amount: components["schemas"]["QuantityDto"];
+            confidence: components["schemas"]["ConfidenceDto"];
+            /** @enum {string} */
+            state: "short";
+        } | {
+            amount: components["schemas"]["QuantityDto"];
+            /** @enum {string} */
+            state: "indeterminate";
+        };
         /** @enum {string} */
         SortDirectionDto: "asc" | "desc";
         SourceDateDto: {
@@ -1828,6 +1843,9 @@ export interface components {
             /** Format: date-time */
             occurred_at: string;
             quantity_delta?: null | components["schemas"]["QuantityDto"];
+            /** Format: uuid */
+            reverses_event_id?: string | null;
+            source_label?: string | null;
             /** Format: uuid */
             stock_item_id: string;
             /** Format: uuid */
@@ -1868,6 +1886,18 @@ export interface components {
         } | {
             /** @enum {string} */
             mode: "not_tracked";
+        };
+        StockOutcomeDto: {
+            deducted: components["schemas"]["QuantityDto"];
+            /** Format: uuid */
+            product_id: string;
+            product_name: string;
+            shortfall: components["schemas"]["ShortfallDto"];
+            unresolved_release: boolean;
+            wanted: components["schemas"]["QuantityDto"];
+        };
+        StockOutcomesResponse: {
+            stock_outcomes?: components["schemas"]["StockOutcomeDto"][];
         };
         StockPage: {
             items: components["schemas"]["StockItemDto"][];
@@ -2199,11 +2229,13 @@ export interface operations {
         requestBody?: never;
         responses: {
             /** @description Deleted */
-            204: {
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["StockOutcomesResponse"];
+                };
             };
             /** @description Not permitted */
             403: {

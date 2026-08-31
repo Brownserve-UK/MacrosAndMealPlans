@@ -1,6 +1,5 @@
 use axum::Json;
 use axum::extract::{Path, State};
-use axum::http::StatusCode;
 use time::Date;
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
@@ -10,8 +9,8 @@ use super::require_member_access;
 use crate::auth::Principal;
 use crate::dto::common::iso_date;
 use crate::dto::{
-    ConsumptionRecordDto, CreateConsumptionRequest, DiaryDayDto, UpdateConsumptionRequest,
-    consumption_id, member_id,
+    ConsumptionRecordDto, CreateConsumptionRequest, DiaryDayDto, StockOutcomesResponse,
+    UpdateConsumptionRequest, consumption_id, member_id,
 };
 use crate::error::{ApiError, ApiResult};
 use crate::http::{Created, IfMatch, Tagged};
@@ -128,7 +127,7 @@ async fn update(
         ("If-Match" = String, Header, description = "The revision you loaded"),
     ),
     responses(
-        (status = 204, description = "Deleted"),
+        (status = 200, description = "Deleted", body = StockOutcomesResponse),
         (status = 403, description = "Not permitted", body = crate::error::Problem),
         (status = 409, description = "Someone else changed it first", body = crate::error::Problem),
     ),
@@ -140,13 +139,15 @@ async fn delete(
     principal: Principal,
     Path(id): Path<Uuid>,
     IfMatch(revision): IfMatch,
-) -> ApiResult<StatusCode> {
+) -> ApiResult<Json<StockOutcomesResponse>> {
     let id = consumption_id(id);
     let existing = state.diary.get(id).await?;
     require_member_access(&state, &principal, existing.member_id).await?;
 
-    state.diary.remove(id, revision).await?;
-    Ok(StatusCode::NO_CONTENT)
+    let removed = state.diary.remove(id, revision).await?;
+    Ok(Json(StockOutcomesResponse {
+        stock_outcomes: removed.stock.into_iter().map(Into::into).collect(),
+    }))
 }
 
 #[utoipa::path(

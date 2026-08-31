@@ -6,7 +6,7 @@ use mmp_core::domain::{
 };
 use mmp_core::services::{
     MealItem, MealItemSource, MealParticipantView, MealPlanComponentView, MealPlanDay,
-    MealPlanEntryView, MealPlanWeek, MealSlotView, NutritionSummary,
+    MealPlanEntryView, MealPlanWeek, MealSlotView, NutritionSummary, StockAffected,
 };
 use serde::{Deserialize, Serialize};
 use time::{Date, OffsetDateTime, Time};
@@ -14,7 +14,7 @@ use utoipa::ToSchema;
 use uuid::Uuid;
 
 use super::common::{iso_date, iso_time};
-use super::{AmountDto, ConsumptionRecordDto, NutritionDto, NutritionGoalsDto};
+use super::{AmountDto, ConsumptionRecordDto, NutritionDto, NutritionGoalsDto, StockOutcomeDto};
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct NutritionSummaryDto {
@@ -222,6 +222,8 @@ pub struct MealPlanEntryDto {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub actual: Option<NutritionSummaryDto>,
     pub needs_attention: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stock_outcomes: Vec<StockOutcomeDto>,
     pub created_by: Uuid,
     pub updated_by: Uuid,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -257,6 +259,7 @@ impl From<MealPlanEntryView> for MealPlanEntryDto {
             planned: value.planned.into(),
             actual: value.actual.map(Into::into),
             needs_attention: value.needs_attention,
+            stock_outcomes: Vec::new(),
             created_by: value.entry.created_by.as_uuid(),
             updated_by: value.entry.updated_by.as_uuid(),
             resolved_by: value.entry.resolved_by.map(|id| id.as_uuid()),
@@ -265,6 +268,15 @@ impl From<MealPlanEntryView> for MealPlanEntryDto {
             created_at: value.entry.created_at,
             updated_at: value.entry.updated_at,
         }
+    }
+}
+
+impl From<StockAffected<MealPlanEntryView>> for MealPlanEntryDto {
+    fn from(value: StockAffected<MealPlanEntryView>) -> Self {
+        let stock_outcomes = value.stock.iter().cloned().map(Into::into).collect();
+        let mut dto: MealPlanEntryDto = value.into_value().into();
+        dto.stock_outcomes = stock_outcomes;
+        dto
     }
 }
 

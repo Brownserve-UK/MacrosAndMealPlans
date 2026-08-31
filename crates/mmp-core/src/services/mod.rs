@@ -8,6 +8,7 @@ mod nutrition_target;
 mod recipe;
 mod seed;
 mod stock;
+mod stock_effects;
 
 pub use catalogue::CatalogueService;
 pub use diary::{DayTotals, DiaryDay, DiaryEntry, DiaryService};
@@ -24,3 +25,4 @@ pub use recipe::{
 };
 pub use seed::{SeedIngredient, SeedReport};
 pub use stock::StockService;
+pub use stock_effects::{StockAffected, StockOutcomeView};
