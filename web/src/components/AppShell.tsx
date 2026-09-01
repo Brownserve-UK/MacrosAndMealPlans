@@ -114,6 +114,10 @@ export function AppShell() {
   const { principal } = useAuth();
   const pathname = useRouterState({ select: (s) => s.location.pathname });
 
+  const activeNavTo = [...NAV, ...BOTTOM_NAV]
+    .filter((item) => pathname === item.to || pathname.startsWith(`${item.to}/`))
+    .sort((a, b) => b.to.length - a.to.length)[0]?.to;
+
   return (
     <Box sx={{ display: 'flex', minHeight: '100vh' }}>
       <Drawer
@@ -141,7 +145,7 @@ export function AppShell() {
               key={item.to}
               component={Link}
               to={item.to}
-              selected={pathname.startsWith(item.to)}
+              selected={item.to === activeNavTo}
               sx={{ mb: 0.5, py: 1 }}
             >
               <ListItemIcon sx={{ minWidth: 36 }}>{item.icon}</ListItemIcon>
@@ -162,7 +166,7 @@ export function AppShell() {
                 key={item.to}
                 component={Link}
                 to={item.to}
-                selected={pathname.startsWith(item.to)}
+                selected={item.to === activeNavTo}
                 sx={{ py: 1 }}
               >
                 <ListItemIcon sx={{ minWidth: 36 }}>{item.icon}</ListItemIcon>

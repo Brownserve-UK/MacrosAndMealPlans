@@ -296,11 +296,11 @@ export function MealEditorDialog({
         <Stack spacing={3}>
           {error ? <Alert severity="error">{error}</Alert> : null}
           <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
-            <TextField label="Date" type="date" value={plannedOn} onChange={(event) => setPlannedOn(event.target.value)} fullWidth />
+            <TextField label="Date" type="date" value={plannedOn} onChange={(event) => setPlannedOn(event.target.value)} slotProps={{ inputLabel: { shrink: true } }} fullWidth />
             <TextField select label="Meal" value={plannedSlot} onChange={(event) => setPlannedSlot(event.target.value as MealSlot)} fullWidth>
               {slotOptions.map((option) => <MenuItem key={option.value} value={option.value}>{option.label}</MenuItem>)}
             </TextField>
-            <TextField label="Time (optional)" type="time" value={plannedTime} onChange={(event) => setPlannedTime(event.target.value)} fullWidth />
+            <TextField label="Time (optional)" type="time" value={plannedTime} onChange={(event) => setPlannedTime(event.target.value)} slotProps={{ inputLabel: { shrink: true } }} fullWidth />
           </Stack>
 
           {household ? (

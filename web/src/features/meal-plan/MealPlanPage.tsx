@@ -310,7 +310,11 @@ function SlotSection({
           {Array.from(groups.entries()).map(([groupKey, group], groupIndex) => {
             const planned = group[0]?.kind === 'planned';
             const entryId = planned && group[0]?.kind === 'planned' ? group[0].entry_id : null;
-            const showPlannedHeader = entryId !== null && firstPlannedGroup.get(entryId) === groupKey;
+            // 2026-09-01 - SB: Claude introduced a regression in the planner rework with snacks.
+            // by reintroducing the header between planned snacks. This isn't needed for Snacks
+            // as they are one long list of snacks differentiated per-row and by the "Unplanned" chip.
+            const showPlannedHeader =
+              slot !== 'snacks' && entryId !== null && firstPlannedGroup.get(entryId) === groupKey;
             const pending = entryId === null
               ? []
               : items.filter(
