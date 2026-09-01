@@ -23,3 +23,4 @@ If the requested change conflicts with them, or they do not settle behaviour the
 - Android and iOS code will live in a separate repository, which does not yet exist. Mobile development is out of scope until not having it would create significant problems/pain for the future.
 - When adding new features and functionality the `sample-data` build should get seeded data that can be used to test the new functionality (where appropriate)
 - When deferring tasks store them in `.ai/deferred.md` so they are not lost between sessions.
+- When running inside the `bsdev` devcontainer Playwright is installed globally with the Chromium driver for driving UI tests.
