@@ -177,6 +177,9 @@ pub struct SlotAttendanceDto {
     pub member_id: Uuid,
     pub display_name: String,
     pub attendance: SlotAttendance,
+    #[serde(with = "iso_time::option")]
+    #[schema(value_type = Option<String>, example = "18:30")]
+    pub claimed_time: Option<Time>,
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]

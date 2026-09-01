@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MealPlanEntry, MealPlanWeek } from '../../api/client';
@@ -11,8 +11,19 @@ const mocks = vi.hoisted(() => ({
   rejoin: vi.fn(),
 }));
 
-const WEEK_START = '2026-08-24';
-const DAY = '2026-08-25';
+function iso(date: Date) {
+  return date.toISOString().slice(0, 10);
+}
+function startOfWeek(date: Date) {
+  const copy = new Date(date);
+  const weekday = (copy.getUTCDay() + 6) % 7;
+  copy.setUTCDate(copy.getUTCDate() - weekday);
+  return copy;
+}
+
+const TODAY = new Date();
+const WEEK_START = iso(startOfWeek(TODAY));
+const DAY = iso(TODAY);
 const nutrition = { nutrition: {}, unknown_count: 0, partial_count: 0 };
 
 function baseEntry(overrides: Partial<MealPlanEntry>): MealPlanEntry {
@@ -58,12 +69,12 @@ let entries: MealPlanEntry[] = [];
 
 function week(): MealPlanWeek {
   const days = Array.from({ length: 7 }, (_, index) => {
-    const date = new Date('2026-08-24T00:00:00');
-    date.setDate(date.getDate() + index);
-    const iso = date.toISOString().slice(0, 10);
+    const date = new Date(`${WEEK_START}T00:00:00Z`);
+    date.setUTCDate(date.getUTCDate() + index);
+    const dayIso = iso(date);
     return {
-      date: iso,
-      entries: iso === DAY ? entries : [],
+      date: dayIso,
+      entries: dayIso === DAY ? entries : [],
       slots: ['breakfast', 'lunch', 'dinner', 'snacks'].map((slot) => ({ slot: slot as 'dinner', items: [], nutrition })),
       actual: nutrition,
       remaining_planned: nutrition,
@@ -73,12 +84,17 @@ function week(): MealPlanWeek {
   return {
     member_id: 'me',
     week_start: WEEK_START,
-    week_end: '2026-08-30',
+    week_end: days[days.length - 1]?.date ?? WEEK_START,
     days,
     actual: nutrition,
     remaining_planned: nutrition,
     projected: nutrition,
   };
+}
+
+function snackEntry(id: string, time: string | null, foodName: string): MealPlanEntry {
+  const base = baseEntry({ id, slot: 'snacks', planned_time: time });
+  return { ...base, components: [{ ...base.components[0], id: `${id}-c`, item_name: foodName }] } as MealPlanEntry;
 }
 
 vi.mock('@tanstack/react-router', () => ({ useNavigate: () => mocks.navigate }));
@@ -93,22 +109,35 @@ vi.mock('../../api/queries', () => ({
 vi.mock('./NutritionSummary', () => ({ DayWeekNutrition: () => <div>nutrition panel</div> }));
 vi.mock('./MealEditorDialog', () => ({ MealEditorDialog: () => <div>Meal editor</div> }));
 
+function dinnerSection() {
+  return screen.getByRole('heading', { name: 'Dinner' }).closest('section') as HTMLElement;
+}
+
 describe('MyPlannerPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     entries = [];
   });
 
-  it('shows a personal meal with edit controls', () => {
+  it('offers Add food on a filled personal slot, never Add meal', () => {
     entries = [baseEntry({ id: 'mine', scope: 'member' })];
     render(<MyPlannerPage weekStart={WEEK_START} day={DAY} />);
-    expect(screen.getByText('Pasta bake')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Edit meal' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Delete' })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Opt out' })).not.toBeInTheDocument();
+    const dinner = within(dinnerSection());
+    expect(dinner.getByText('Pasta bake')).toBeInTheDocument();
+    expect(dinner.getByRole('button', { name: 'Add food' })).toBeInTheDocument();
+    expect(dinner.getByRole('button', { name: 'Edit meal' })).toBeInTheDocument();
+    expect(dinner.getByRole('button', { name: 'Delete' })).toBeInTheDocument();
+    expect(dinner.queryByRole('button', { name: /Add meal/ })).not.toBeInTheDocument();
+    expect(dinner.queryByRole('button', { name: /Opt out/ })).not.toBeInTheDocument();
   });
 
-  it('shows a household meal read-only with an opt-out action', async () => {
+  it('shows an empty slot as a single Plan action', () => {
+    render(<MyPlannerPage weekStart={WEEK_START} day={DAY} />);
+    const lunch = within(screen.getByRole('heading', { name: 'Lunch' }).closest('section') as HTMLElement);
+    expect(lunch.getByRole('button', { name: 'Plan lunch' })).toBeInTheDocument();
+  });
+
+  it('shows a household meal read-only with only an opt-out action', async () => {
     entries = [baseEntry({
       id: 'shared',
       scope: 'household',
@@ -122,13 +151,15 @@ describe('MyPlannerPage', () => {
       }],
     })];
     render(<MyPlannerPage weekStart={WEEK_START} day={DAY} />);
-    expect(screen.getByText('Household')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Edit meal' })).not.toBeInTheDocument();
-    await userEvent.setup().click(screen.getByRole('button', { name: 'Opt out' }));
+    const dinner = within(dinnerSection());
+    expect(dinner.getByText('Household meal')).toBeInTheDocument();
+    expect(dinner.queryByRole('button', { name: 'Edit meal' })).not.toBeInTheDocument();
+    expect(dinner.queryByRole('button', { name: /Plan dinner/ })).not.toBeInTheDocument();
+    await userEvent.setup().click(dinner.getByRole('button', { name: 'Opt out to plan your own' }));
     expect(mocks.optOut).toHaveBeenCalledWith({ id: 'shared', revision: 2 });
   });
 
-  it('collapses an opted-out household meal to a Join action and frees the slot', async () => {
+  it('frees the slot with Join and Plan once a household meal is opted out of', async () => {
     entries = [baseEntry({
       id: 'shared',
       scope: 'household',
@@ -136,10 +167,24 @@ describe('MyPlannerPage', () => {
       opted_out: [{ member_id: 'me', created_by: 'u', created_at: '2026-08-24T10:00:00Z' }],
     })];
     render(<MyPlannerPage weekStart={WEEK_START} day={DAY} />);
-    expect(screen.getByText('Opted out')).toBeInTheDocument();
-    expect(screen.queryByText('Pasta bake')).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Add food' })).toBeInTheDocument();
-    await userEvent.setup().click(screen.getByRole('button', { name: 'Join meal' }));
+    const dinner = within(dinnerSection());
+    expect(dinner.getByText('Opted out')).toBeInTheDocument();
+    expect(dinner.queryByText('Pasta bake')).not.toBeInTheDocument();
+    expect(dinner.getByRole('button', { name: 'Plan dinner' })).toBeInTheDocument();
+    await userEvent.setup().click(dinner.getByRole('button', { name: 'Join meal' }));
     expect(mocks.rejoin).toHaveBeenCalledWith({ id: 'shared', revision: 2 });
+  });
+
+  it('orders snack occurrences by time with the untimed one last', () => {
+    entries = [
+      snackEntry('s-late', '14:00', 'Afternoon crackers'),
+      snackEntry('s-none', null, 'Anytime apple'),
+      snackEntry('s-early', '10:00', 'Morning banana'),
+    ];
+    render(<MyPlannerPage weekStart={WEEK_START} day={DAY} />);
+    const snacks = within(screen.getByRole('heading', { name: 'Snacks' }).closest('section') as HTMLElement);
+    const foods = snacks.getAllByText(/banana|crackers|apple/i).map((node) => node.textContent);
+    expect(foods).toEqual(['Morning banana', 'Afternoon crackers', 'Anytime apple']);
+    expect(snacks.getByText('No set time')).toBeInTheDocument();
   });
 });

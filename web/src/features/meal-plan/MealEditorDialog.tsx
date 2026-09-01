@@ -25,9 +25,9 @@ import {
 import { useAuth } from '../../auth/AuthProvider';
 import { FormDialog } from '../../components/FormDialog';
 import { displayUnit } from '../../components/UnitSelect';
-import { ProductPicker } from './ProductPicker';
-import { RecipePicker } from './RecipePicker';
-import { SLOTS } from './slots';
+import { parseIsoDate } from './date';
+import { FoodSearch, type FoodChoice } from './FoodSearch';
+import { MAIN_SLOTS, SLOTS } from './slots';
 
 type EditorMode = 'member' | 'household';
 
@@ -42,7 +42,6 @@ type FoodDraft = {
 type PortionValues = Record<string, string>;
 
 const UNITS: Unit[] = ['mg', 'g', 'kg', 'oz', 'lb', 'ml', 'l', 'tsp', 'tbsp', 'fl_oz', 'cup', 'item', 'piece', 'slice', 'clove', 'can', 'pack', 'bunch'];
-const HOUSEHOLD_SLOTS = SLOTS.filter((slot) => slot.value !== 'snacks');
 
 function amountValue(amount: Amount) {
   return String(amount.value);
@@ -119,10 +118,9 @@ export function MealEditorDialog({
   );
   const [guestCount, setGuestCount] = useState(meal?.guest_groups.reduce((sum, group) => sum + group.count, 0) ?? 0);
   const [foods, setFoods] = useState<FoodDraft[]>(() => initialFoods(meal));
-  const [product, setProduct] = useState<Product | null>(null);
-  const [recipe, setRecipe] = useState<RecipeSummary | null>(null);
   const [customPortions, setCustomPortions] = useState(() => meal?.portioning === 'custom');
   const [portions, setPortions] = useState<PortionValues>(() => initialPortions(meal));
+  const [showWhen, setShowWhen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const busy = create.isPending || update.isPending;
 
@@ -132,8 +130,10 @@ export function MealEditorDialog({
     meal?.id,
   );
   const attendanceByMember = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const row of attendance.data ?? []) map.set(row.member_id, row.attendance);
+    const map = new Map<string, { state: string; claimedTime: string | null }>();
+    for (const row of attendance.data ?? []) {
+      map.set(row.member_id, { state: row.attendance, claimedTime: row.claimed_time ?? null });
+    }
     return map;
   }, [attendance.data]);
 
@@ -142,15 +142,18 @@ export function MealEditorDialog({
 
   function memberBlockedReason(memberId: string): string | null {
     if (meal?.people.some((person) => person.member_id === memberId)) return null;
-    const state = attendanceByMember.get(memberId);
-    if (state === 'self_catering') return 'Has own plan';
-    if (state === 'opted_out') return 'Opted out';
+    const row = attendanceByMember.get(memberId);
+    if (!row) return null;
+    if (row.state === 'self_catering') return 'Has their own plan';
+    if (row.state === 'opted_out') return 'Opted out';
+    if (row.state === 'participating') {
+      return row.claimedTime ? `Already eating at ${row.claimedTime}` : 'Already in another meal';
+    }
     return null;
   }
 
-  function addProduct(next: Product | null) {
-    setProduct(null);
-    if (!next || foods.some((food) => food.itemKind === 'product' && food.itemId === next.id)) return;
+  function addProduct(next: Product) {
+    if (foods.some((food) => food.itemKind === 'product' && food.itemId === next.id)) return;
     const food: FoodDraft = {
       componentId: crypto.randomUUID(),
       itemKind: 'product',
@@ -162,9 +165,8 @@ export function MealEditorDialog({
     if (customPortions) initialiseFoodPortions(food);
   }
 
-  function addRecipe(next: RecipeSummary | null) {
-    setRecipe(null);
-    if (!next || foods.some((food) => food.itemKind === 'recipe' && food.itemId === next.id)) return;
+  function addRecipe(next: RecipeSummary) {
+    if (foods.some((food) => food.itemKind === 'recipe' && food.itemId === next.id)) return;
     const food: FoodDraft = {
       componentId: crypto.randomUUID(),
       itemKind: 'recipe',
@@ -174,6 +176,11 @@ export function MealEditorDialog({
     };
     setFoods((current) => [...current, food]);
     if (customPortions) initialiseFoodPortions(food);
+  }
+
+  function addFood(choice: FoodChoice) {
+    if (choice.kind === 'product') addProduct(choice.product);
+    else addRecipe(choice.recipe);
   }
 
   function initialiseFoodPortions(food: FoodDraft) {
@@ -287,7 +294,12 @@ export function MealEditorDialog({
     }
   }
 
-  const slotOptions = household ? HOUSEHOLD_SLOTS : SLOTS;
+  const slotOptions = household ? MAIN_SLOTS : SLOTS;
+  const whenSummary = [
+    parseIsoDate(plannedOn).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' }),
+    SLOTS.find((option) => option.value === plannedSlot)?.label ?? plannedSlot,
+    plannedTime || 'add time',
+  ].join(' · ');
 
   return (
     <FormDialog open={open} onClose={busy ? undefined : onClose} fullWidth maxWidth="md">
@@ -295,31 +307,51 @@ export function MealEditorDialog({
       <DialogContent dividers>
         <Stack spacing={3}>
           {error ? <Alert severity="error">{error}</Alert> : null}
-          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
-            <TextField label="Date" type="date" value={plannedOn} onChange={(event) => setPlannedOn(event.target.value)} slotProps={{ inputLabel: { shrink: true } }} fullWidth />
-            <TextField select label="Meal" value={plannedSlot} onChange={(event) => setPlannedSlot(event.target.value as MealSlot)} fullWidth>
-              {slotOptions.map((option) => <MenuItem key={option.value} value={option.value}>{option.label}</MenuItem>)}
-            </TextField>
-            <TextField label="Time (optional)" type="time" value={plannedTime} onChange={(event) => setPlannedTime(event.target.value)} slotProps={{ inputLabel: { shrink: true } }} fullWidth />
-          </Stack>
+          <Box>
+            <Stack direction="row" spacing={1} sx={{ alignItems: 'center', justifyContent: 'space-between' }}>
+              <Typography color={plannedTime ? 'text.primary' : 'text.secondary'}>{whenSummary}</Typography>
+              <Button size="small" onClick={() => setShowWhen((current) => !current)}>{showWhen ? 'Done' : 'Edit'}</Button>
+            </Stack>
+            {showWhen ? (
+              <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} sx={{ mt: 2 }}>
+                <TextField label="Date" type="date" value={plannedOn} onChange={(event) => setPlannedOn(event.target.value)} slotProps={{ inputLabel: { shrink: true } }} fullWidth />
+                <TextField select label="Meal" value={plannedSlot} onChange={(event) => setPlannedSlot(event.target.value as MealSlot)} fullWidth>
+                  {slotOptions.map((option) => <MenuItem key={option.value} value={option.value}>{option.label}</MenuItem>)}
+                </TextField>
+                <TextField label="Time (optional)" type="time" value={plannedTime} onChange={(event) => setPlannedTime(event.target.value)} slotProps={{ inputLabel: { shrink: true } }} fullWidth />
+              </Stack>
+            ) : null}
+          </Box>
 
           {household ? (
             <Box>
-              <Typography variant="h3" sx={{ mb: 1 }}>Who is eating?</Typography>
-              <Stack direction="row" sx={{ flexWrap: 'wrap', gap: 0.5 }}>
+              <Stack direction="row" spacing={1} sx={{ alignItems: 'baseline', mb: 1 }}>
+                <Typography variant="h3">Who is eating?</Typography>
+                {attendance.isFetching ? (
+                  <Typography variant="caption" color="text.secondary">Checking who's free…</Typography>
+                ) : null}
+              </Stack>
+              <Stack sx={{ gap: 0.25 }}>
                 {visibleMembers.map((member) => {
                   const blocked = memberBlockedReason(member.id);
                   return (
                     <FormControlLabel
                       key={member.id}
+                      sx={{ alignItems: 'flex-start', mr: 0 }}
                       control={
                         <Checkbox
+                          sx={{ pt: 0.5 }}
                           checked={selectedMembers.includes(member.id)}
-                          disabled={Boolean(blocked)}
+                          disabled={Boolean(blocked) || attendance.isFetching}
                           onChange={(_, checked) => setSelectedMembers((current) => checked ? [...current, member.id] : current.filter((id) => id !== member.id))}
                         />
                       }
-                      label={blocked ? `${member.display_name} (${blocked})` : member.display_name}
+                      label={
+                        <Box sx={{ py: 0.5 }}>
+                          <Typography color={blocked ? 'text.disabled' : 'text.primary'}>{member.display_name}</Typography>
+                          {blocked ? <Typography variant="caption" color="text.secondary">{blocked}</Typography> : null}
+                        </Box>
+                      }
                     />
                   );
                 })}
@@ -336,31 +368,42 @@ export function MealEditorDialog({
           ) : null}
 
           <Box>
-            <Typography variant="h3" sx={{ mb: 0.5 }}>Food for the {mealNoun}</Typography>
+            <Typography variant="h3" sx={{ mb: 1 }}>Food for the {mealNoun}</Typography>
             <Stack spacing={2}>
-              {foods.map((food) => (
-                <Stack key={food.componentId} direction={{ xs: 'column', sm: 'row' }} spacing={1.5} sx={{ alignItems: { sm: 'center' } }}>
-                  <Typography sx={{ flex: 1, minWidth: 180 }}>{food.name}</Typography>
-                  <TextField
-                    label="Amount"
-                    type="number"
-                    value={amountValue(food.amount)}
-                    onChange={(event) => setFoodAmount(food.componentId, withAmountValue(food.amount, event.target.value))}
-                    slotProps={{ htmlInput: { min: 0, step: 'any' } }}
-                    sx={{ width: 180 }}
-                  />
-                  {food.amount.kind === 'measure' ? (
-                    <TextField select label="Unit" value={food.amount.unit} onChange={(event) => setFoodAmount(food.componentId, { kind: 'measure', value: food.amount.value, unit: event.target.value as Unit })} sx={{ width: 130 }}>
-                      {UNITS.map((unit) => <MenuItem key={unit} value={unit}>{displayUnit(unit)}</MenuItem>)}
-                    </TextField>
-                  ) : <Typography color="text.secondary" sx={{ width: 130 }}>{food.amount.kind}</Typography>}
-                  <IconButton aria-label={`Remove ${food.name}`} onClick={() => setFoods((current) => current.filter((candidate) => candidate.componentId !== food.componentId))}><DeleteIcon /></IconButton>
+              <FoodSearch
+                onPick={addFood}
+                excludeProductIds={foods.filter((food) => food.itemKind === 'product').map((food) => food.itemId)}
+                excludeRecipeIds={foods.filter((food) => food.itemKind === 'recipe').map((food) => food.itemId)}
+              />
+              {foods.length === 0 ? (
+                <Typography variant="body2" color="text.secondary">No food added yet.</Typography>
+              ) : (
+                <Stack spacing={1.5}>
+                  {foods.map((food) => (
+                    <Stack key={food.componentId} direction={{ xs: 'column', sm: 'row' }} spacing={1.5} sx={{ alignItems: { sm: 'center' } }}>
+                      <Typography sx={{ flex: 1, minWidth: 180 }}>{food.name}</Typography>
+                      <TextField
+                        label="Amount"
+                        type="number"
+                        value={amountValue(food.amount)}
+                        onChange={(event) => setFoodAmount(food.componentId, withAmountValue(food.amount, event.target.value))}
+                        slotProps={{ htmlInput: { min: 0, step: 'any' } }}
+                        sx={{ width: 140 }}
+                      />
+                      {food.amount.kind === 'measure' ? (
+                        <TextField select label="Unit" value={food.amount.unit} onChange={(event) => setFoodAmount(food.componentId, { kind: 'measure', value: food.amount.value, unit: event.target.value as Unit })} sx={{ width: 130 }}>
+                          {UNITS.map((unit) => <MenuItem key={unit} value={unit}>{displayUnit(unit)}</MenuItem>)}
+                        </TextField>
+                      ) : (
+                        <Typography color="text.secondary" sx={{ width: 130 }}>
+                          {food.amount.value === 1 ? 'serving' : 'servings'}
+                        </Typography>
+                      )}
+                      <IconButton aria-label={`Remove ${food.name}`} onClick={() => setFoods((current) => current.filter((candidate) => candidate.componentId !== food.componentId))}><DeleteIcon /></IconButton>
+                    </Stack>
+                  ))}
                 </Stack>
-              ))}
-              <Stack direction={{ xs: 'column', md: 'row' }} spacing={2}>
-                <Box sx={{ flex: 1 }}><ProductPicker value={product} onChange={addProduct} excludeIds={foods.filter((food) => food.itemKind === 'product').map((food) => food.itemId)} /></Box>
-                <Box sx={{ flex: 1 }}><RecipePicker value={recipe} onChange={addRecipe} /></Box>
-              </Stack>
+              )}
             </Stack>
           </Box>
 

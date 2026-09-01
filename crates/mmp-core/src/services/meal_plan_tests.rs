@@ -2398,7 +2398,7 @@ async fn slot_attendance_marks_self_catering_and_opted_out_members() {
             scope: MealPlanScope::Member,
             member_id: Some(morgan),
             planned_on: date!(2026 - 08 - 25),
-            planned_time: None,
+            planned_time: Some(time!(19:00)),
             slot: MealSlot::Dinner,
             portioning: Portioning::Equal,
             components: vec![measured(food.id, 100)],
@@ -2453,15 +2453,27 @@ async fn slot_attendance_marks_self_catering_and_opted_out_members() {
         .slot_attendance(date!(2026 - 08 - 25), MealSlot::Dinner, None)
         .await
         .unwrap();
-    let by_member: std::collections::HashMap<_, _> = attendance.into_iter().collect();
+    let by_member: std::collections::HashMap<_, _> = attendance
+        .into_iter()
+        .map(|(member, state, claimed)| (member, (state, claimed)))
+        .collect();
     assert_eq!(
         by_member[&morgan],
-        crate::domain::SlotAttendance::SelfCatering
+        (
+            crate::domain::SlotAttendance::SelfCatering,
+            Some(time!(19:00))
+        )
     );
-    assert_eq!(by_member[&taylor], crate::domain::SlotAttendance::OptedOut);
+    assert_eq!(
+        by_member[&taylor],
+        (crate::domain::SlotAttendance::OptedOut, None)
+    );
     assert_eq!(
         by_member[&h.member_id],
-        crate::domain::SlotAttendance::Participating
+        (
+            crate::domain::SlotAttendance::Participating,
+            Some(time!(18:30))
+        )
     );
 }
 

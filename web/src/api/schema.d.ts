@@ -1996,6 +1996,8 @@ export interface components {
         SlotAttendance: "participating" | "opted_out" | "self_catering" | "available";
         SlotAttendanceDto: {
             attendance: components["schemas"]["SlotAttendance"];
+            /** @example 18:30 */
+            claimed_time?: string | null;
             display_name: string;
             /** Format: uuid */
             member_id: string;

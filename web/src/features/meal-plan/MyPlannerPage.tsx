@@ -1,5 +1,5 @@
 import AddIcon from '@mui/icons-material/AddOutlined';
-import WarningIcon from '@mui/icons-material/WarningAmberOutlined';
+import ClockIcon from '@mui/icons-material/AccessTimeOutlined';
 import Alert from '@mui/material/Alert';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
@@ -8,13 +8,12 @@ import Dialog from '@mui/material/Dialog';
 import DialogActions from '@mui/material/DialogActions';
 import DialogContent from '@mui/material/DialogContent';
 import DialogTitle from '@mui/material/DialogTitle';
-import Divider from '@mui/material/Divider';
 import Paper from '@mui/material/Paper';
 import Stack from '@mui/material/Stack';
 import Typography from '@mui/material/Typography';
 import { useNavigate } from '@tanstack/react-router';
-import { useState } from 'react';
-import { ApiError, type Amount, type MealPlanEntry, type MealSlot, type PlannerMeal } from '../../api/client';
+import { useState, type ReactNode } from 'react';
+import { ApiError, type MealPlanEntry, type MealSlot, type PlannerMeal } from '../../api/client';
 import {
   useDeleteMealPlanEntry,
   useMealPlanWeek,
@@ -26,10 +25,12 @@ import { useAuth } from '../../auth/AuthProvider';
 import { PageHeader } from '../../components/PageHeader';
 import { ErrorState, Loading } from '../../components/States';
 import { addDays, defaultDayFor, parseIsoDate, startOfWeekIso, todayIso } from './date';
-import { formatAmount } from './format';
+import { Fact, FactBar, MealCard } from './MealCard';
 import { MealEditorDialog } from './MealEditorDialog';
 import { DayWeekNutrition } from './NutritionSummary';
-import { labelForSlot, SLOTS } from './slots';
+import { EmptySlot, SlotSection } from './SlotSection';
+import { SnackSection } from './SnackSection';
+import { labelForSlot, MAIN_SLOTS } from './slots';
 import { WeekNavigator } from './WeekNavigator';
 
 type EditSelection = { key: string; entry: MealPlanEntry | null; slot: MealSlot };
@@ -38,11 +39,18 @@ function fullDayLabel(date: string) {
   return parseIsoDate(date).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' });
 }
 
-function myPortion(entry: MealPlanEntry, componentId: string, memberId: string | null | undefined): Amount | null {
-  const allocation = entry.participants
+function iParticipateIn(entry: MealPlanEntry, memberId: string | null | undefined) {
+  return entry.participants.some((person) => person.member_id === memberId);
+}
+
+function iOptedOutOf(entry: MealPlanEntry, memberId: string | null | undefined) {
+  return (entry.opted_out ?? []).some((record) => record.member_id === memberId);
+}
+
+function myPortionResolved(entry: MealPlanEntry, memberId: string | null | undefined) {
+  return entry.participants
     .find((person) => person.member_id === memberId)
-    ?.allocations.find((candidate) => candidate.component_id === componentId);
-  return allocation ? (allocation.allocated as unknown as Amount) : null;
+    ?.allocations.some((allocation) => allocation.status !== 'planned') ?? false;
 }
 
 function statusChip(entry: MealPlanEntry) {
@@ -52,92 +60,97 @@ function statusChip(entry: MealPlanEntry) {
   return null;
 }
 
-function MyMealCard({
+function OwnMealCard({
+  entry,
+  canPlan,
+  onAddFood,
+  onEdit,
+  onDelete,
+}: {
+  entry: MealPlanEntry;
+  canPlan: boolean;
+  onAddFood: () => void;
+  onEdit: () => void;
+  onDelete: () => void;
+}) {
+  const kcal = entry.planned.nutrition.energy_kcal;
+  const itemCount = entry.components.length;
+  const plannedValue = kcal != null
+    ? `${itemCount} ${itemCount === 1 ? 'item' : 'items'} · ${Math.round(kcal)} kcal`
+    : `${itemCount} ${itemCount === 1 ? 'item' : 'items'}`;
+  const editable = canPlan && entry.status === 'planned';
+
+  return (
+    <MealCard
+      header={
+        <Stack direction="row" spacing={2} sx={{ justifyContent: 'space-between', alignItems: 'center' }}>
+          <FactBar>
+            {entry.planned_time ? <Fact icon={<ClockIcon fontSize="small" />} label="Time" value={entry.planned_time} /> : null}
+            <Fact label="Planned" value={plannedValue} />
+          </FactBar>
+          {statusChip(entry)}
+        </Stack>
+      }
+      foods={entry.components.map((component) => ({ id: component.id, name: component.item_name, amount: component.amount }))}
+      warning={entry.needs_attention ? 'Some items need attention' : null}
+      actions={
+        editable ? (
+          <>
+            <Button size="small" startIcon={<AddIcon />} onClick={onAddFood}>Add food</Button>
+            <Button size="small" onClick={onEdit}>Edit meal</Button>
+            <Button size="small" color="error" onClick={onDelete}>Delete</Button>
+          </>
+        ) : null
+      }
+    />
+  );
+}
+
+function HouseholdHeldCard({
   entry,
   memberId,
   busy,
-  onEdit,
-  onDelete,
   onOptOut,
-  onJoin,
-  onAddFood,
 }: {
   entry: MealPlanEntry;
   memberId: string | null | undefined;
   busy: boolean;
-  onEdit: () => void;
-  onDelete: () => void;
   onOptOut: () => void;
-  onJoin: () => void;
-  onAddFood: () => void;
 }) {
-  const household = entry.scope === 'household';
-  const iParticipate = entry.participants.some((person) => person.member_id === memberId);
-  const iOptedOut = (entry.opted_out ?? []).some((record) => record.member_id === memberId);
-  const myPortionResolved = entry.participants
-    .find((person) => person.member_id === memberId)
-    ?.allocations.some((allocation) => allocation.status !== 'planned') ?? false;
-  const canOptOut = household && iParticipate && !myPortionResolved;
-
-  if (household && iOptedOut) {
-    return (
-      <Paper variant="outlined" sx={{ px: { xs: 2, sm: 2.5 }, py: 2 }}>
-        <Stack direction="row" spacing={2} sx={{ justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap' }}>
-          <Box sx={{ minWidth: 0 }}>
-            <Chip label="Opted out" size="small" />
-            <Typography color="text.secondary" sx={{ mt: 0.75 }}>
-              Household meal{entry.planned_time ? ` at ${entry.planned_time}` : ''}
-            </Typography>
-          </Box>
-          <Stack direction="row" spacing={1}>
-            <Button size="small" disabled={busy} onClick={onJoin}>Join meal</Button>
-            <Button size="small" startIcon={<AddIcon />} onClick={onAddFood}>Add food</Button>
-          </Stack>
-        </Stack>
-      </Paper>
-    );
-  }
-
+  const canOptOut = !myPortionResolved(entry, memberId) && entry.status === 'planned';
   return (
-    <Paper variant="outlined" sx={{ overflow: 'hidden' }}>
-      <Box sx={{ px: { xs: 2, sm: 2.5 }, py: 1.5 }}>
-        <Stack direction="row" spacing={2} sx={{ justifyContent: 'space-between', alignItems: 'center' }}>
-          <Stack direction="row" spacing={1} sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
-            {entry.planned_time ? <Typography sx={{ fontWeight: 700 }}>{entry.planned_time}</Typography> : null}
-            {household ? <Chip size="small" variant="outlined" label="Household" /> : null}
-          </Stack>
-          {statusChip(entry)}
-        </Stack>
-      </Box>
-      <Divider />
-      <Stack divider={<Divider flexItem />}>
-        {entry.components.map((component) => {
-          const portion = household ? myPortion(entry, component.id, memberId) : null;
-          return (
-            <Stack key={component.id} direction="row" spacing={2} sx={{ justifyContent: 'space-between', px: { xs: 2, sm: 2.5 }, py: 1.5 }}>
-              <Typography>{component.item_name}</Typography>
-              <Typography color="text.secondary" sx={{ whiteSpace: 'nowrap' }}>
-                {formatAmount((portion ?? component.amount) as Amount)}
-              </Typography>
-            </Stack>
-          );
-        })}
-      </Stack>
-      {entry.needs_attention ? (
-        <Stack direction="row" spacing={1} sx={{ alignItems: 'center', px: { xs: 2, sm: 2.5 }, py: 1.25, color: 'warning.dark', bgcolor: 'warning.50' }}>
-          <WarningIcon fontSize="small" />
-          <Typography variant="body2">Some items need attention</Typography>
-        </Stack>
-      ) : null}
-      <Stack direction="row" spacing={1} sx={{ px: { xs: 1.5, sm: 2 }, py: 1.25, flexWrap: 'wrap' }}>
-        {household ? (
-          canOptOut ? <Button size="small" disabled={busy} onClick={onOptOut}>Opt out</Button> : null
-        ) : (
-          <>
-            {entry.status === 'planned' ? <Button size="small" onClick={onEdit}>Edit meal</Button> : null}
-            {entry.status === 'planned' ? <Button size="small" color="error" onClick={onDelete}>Delete</Button> : null}
-          </>
-        )}
+    <MealCard
+      header={
+        <FactBar>
+          {entry.planned_time ? <Fact icon={<ClockIcon fontSize="small" />} label="Time" value={entry.planned_time} /> : null}
+          <Chip size="small" variant="outlined" label="Household meal" />
+        </FactBar>
+      }
+      foods={entry.components.map((component) => ({ id: component.id, name: component.item_name, amount: component.amount }))}
+      actions={canOptOut ? <Button size="small" disabled={busy} onClick={onOptOut}>Opt out to plan your own</Button> : null}
+    />
+  );
+}
+
+function OptedOutCard({
+  entry,
+  busy,
+  onJoin,
+}: {
+  entry: MealPlanEntry;
+  busy: boolean;
+  onJoin: () => void;
+}) {
+  return (
+    <Paper variant="outlined" sx={{ px: { xs: 2, sm: 2.5 }, py: 2 }}>
+      <Stack direction="row" spacing={2} sx={{ justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 1 }}>
+        <Box sx={{ minWidth: 0 }}>
+          <Chip label="Opted out" size="small" />
+          <Typography color="text.secondary" sx={{ mt: 0.75 }}>
+            Household meal{entry.planned_time ? ` at ${entry.planned_time}` : ''}
+          </Typography>
+        </Box>
+        <Button size="small" disabled={busy} onClick={onJoin}>Join meal</Button>
       </Stack>
     </Paper>
   );
@@ -192,11 +205,15 @@ export function MyPlannerPage({ weekStart, day }: { weekStart: string; day: stri
 
   const selectedDay = week.data?.days.find((candidate) => candidate.date === activeDate) ?? week.data?.days[0];
 
+  function openEditor(entry: MealPlanEntry | null, slot: MealSlot) {
+    setEditing({ key: crypto.randomUUID(), entry, slot });
+  }
+
   return (
     <Box>
       <PageHeader
         title="My planner"
-        actions={canPlan ? <Button variant="contained" startIcon={<AddIcon />} onClick={() => setEditing({ key: crypto.randomUUID(), entry: null, slot: 'dinner' })}>Plan meal</Button> : null}
+        actions={canPlan ? <Button variant="contained" startIcon={<AddIcon />} onClick={() => openEditor(null, 'dinner')}>Plan meal</Button> : null}
       />
       {error ? <Alert severity="error" onClose={() => setError(null)} sx={{ mb: 2 }}>{error}</Alert> : null}
       {week.data ? (
@@ -237,43 +254,81 @@ export function MyPlannerPage({ weekStart, day }: { weekStart: string; day: stri
               notEnoughData: week.data.insufficient_target_coverage,
             }}
           />
-          {SLOTS.map((slot) => {
+          {MAIN_SLOTS.map((slot) => {
             const slotEntries = selectedDay.entries.filter((entry) => entry.slot === slot.value);
-            const slotHeldByHousehold = slotEntries.some(
-              (entry) => entry.scope === 'household' && !(entry.opted_out ?? []).some((record) => record.member_id === memberId),
+            const ownEntry = slotEntries.find((entry) => entry.scope === 'member');
+            const heldEntry = slotEntries.find(
+              (entry) => entry.scope === 'household' && iParticipateIn(entry, memberId),
             );
-            return (
-              <Box component="section" key={slot.value} aria-labelledby={`planner-${slot.value}`}>
-                <Stack direction="row" sx={{ justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
-                  <Typography variant="h3" id={`planner-${slot.value}`}>{labelForSlot(slot.value)}</Typography>
-                  {canPlan && !slotHeldByHousehold ? (
-                    <Button size="small" startIcon={<AddIcon />} onClick={() => setEditing({ key: crypto.randomUUID(), entry: null, slot: slot.value })}>Add meal</Button>
-                  ) : null}
+            const optedOutEntry = slotEntries.find(
+              (entry) => entry.scope === 'household' && iOptedOutOf(entry, memberId) && !iParticipateIn(entry, memberId),
+            );
+
+            let body: ReactNode;
+            if (ownEntry) {
+              body = (
+                <OwnMealCard
+                  entry={ownEntry}
+                  canPlan={canPlan}
+                  onAddFood={() => openEditor(ownEntry, ownEntry.slot)}
+                  onEdit={() => openEditor(ownEntry, ownEntry.slot)}
+                  onDelete={() => setDeleting(ownEntry)}
+                />
+              );
+            } else if (heldEntry) {
+              body = (
+                <HouseholdHeldCard
+                  entry={heldEntry}
+                  memberId={memberId}
+                  busy={busy}
+                  onOptOut={() => void changeAttendance(heldEntry, false)}
+                />
+              );
+            } else if (optedOutEntry) {
+              body = (
+                <Stack spacing={1.5}>
+                  <OptedOutCard entry={optedOutEntry} busy={busy} onJoin={() => void changeAttendance(optedOutEntry, true)} />
+                  {canPlan ? <EmptySlot label={`Plan ${slot.label.toLowerCase()}`} onClick={() => openEditor(null, slot.value)} /> : null}
                 </Stack>
-                {slotEntries.length > 0 ? (
-                  <Stack spacing={1.5}>
-                    {slotEntries.map((entry) => (
-                      <MyMealCard
-                        key={entry.id}
-                        entry={entry}
-                        memberId={memberId}
-                        busy={busy}
-                        onEdit={() => setEditing({ key: crypto.randomUUID(), entry, slot: entry.slot })}
-                        onDelete={() => setDeleting(entry)}
-                        onOptOut={() => void changeAttendance(entry, false)}
-                        onJoin={() => void changeAttendance(entry, true)}
-                        onAddFood={() => setEditing({ key: crypto.randomUUID(), entry: null, slot: entry.slot })}
-                      />
-                    ))}
-                  </Stack>
-                ) : <Typography variant="body2" color="text.secondary">No meal planned</Typography>}
-              </Box>
+              );
+            } else if (canPlan) {
+              body = <EmptySlot label={`Plan ${slot.label.toLowerCase()}`} onClick={() => openEditor(null, slot.value)} />;
+            } else {
+              body = <Typography variant="body2" color="text.secondary">No meal planned</Typography>;
+            }
+
+            return (
+              <SlotSection key={slot.value} id={slot.value} title={labelForSlot(slot.value)}>
+                {body}
+              </SlotSection>
             );
           })}
+
+          <SlotSection id="snacks" title="Snacks">
+            <SnackSection
+              entries={selectedDay.entries.filter((entry) => entry.slot === 'snacks')}
+              memberId={memberId}
+              canPlan={canPlan}
+              onAddSnack={() => openEditor(null, 'snacks')}
+              onAddFood={(entry) => openEditor(entry, 'snacks')}
+              onEdit={(entry) => openEditor(entry, 'snacks')}
+              onDelete={(entry) => setDeleting(entry)}
+            />
+          </SlotSection>
         </Stack>
       ) : null}
 
-      {editing ? <MealEditorDialog key={editing.key} open mode="member" onClose={() => setEditing(null)} date={activeDate} slot={editing.slot} meal={editing.entry ? entryToPlannerMeal(editing.entry) : null} /> : null}
+      {editing ? (
+        <MealEditorDialog
+          key={editing.key}
+          open
+          mode="member"
+          onClose={() => setEditing(null)}
+          date={activeDate}
+          slot={editing.slot}
+          meal={editing.entry ? entryToPlannerMeal(editing.entry) : null}
+        />
+      ) : null}
       <Dialog open={Boolean(deleting)} onClose={remove.isPending ? undefined : () => setDeleting(null)}>
         <DialogTitle>Delete this meal?</DialogTitle>
         <DialogContent><Typography>The meal and its planned food will be removed.</Typography></DialogContent>

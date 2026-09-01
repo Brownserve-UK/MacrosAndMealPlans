@@ -576,12 +576,13 @@ impl MealPlanService {
         planned_on: Date,
         slot: MealSlot,
         exclude_entry: Option<MealPlanEntryId>,
-    ) -> Result<Vec<(HouseholdMemberId, SlotAttendance)>> {
+    ) -> Result<Vec<(HouseholdMemberId, SlotAttendance, Option<Time>)>> {
         let members = self.active_member_ids().await?;
         let day = self.plans.list_all(planned_on, planned_on).await?;
         let mut result = Vec::with_capacity(members.len());
         for member_id in members {
             let mut attendance = SlotAttendance::Available;
+            let mut claimed_time = None;
             for entry in &day {
                 if entry.slot != slot || Some(entry.id) == exclude_entry {
                     continue;
@@ -589,9 +590,11 @@ impl MealPlanService {
                 match entry.scope {
                     MealPlanScope::Member if entry.member_id == Some(member_id) => {
                         attendance = SlotAttendance::SelfCatering;
+                        claimed_time = entry.planned_time;
                     }
                     MealPlanScope::Household if entry.participant_for(member_id).is_some() => {
                         attendance = SlotAttendance::Participating;
+                        claimed_time = entry.planned_time;
                     }
                     MealPlanScope::Household
                         if entry.has_opted_out(member_id)
@@ -602,7 +605,7 @@ impl MealPlanService {
                     _ => {}
                 }
             }
-            result.push((member_id, attendance));
+            result.push((member_id, attendance, claimed_time));
         }
         Ok(result)
     }

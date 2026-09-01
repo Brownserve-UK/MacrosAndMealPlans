@@ -7,6 +7,8 @@ export const SLOTS: { value: MealSlot; label: string }[] = [
   { value: 'snacks', label: 'Snacks' },
 ];
 
+export const MAIN_SLOTS = SLOTS.filter((slot) => slot.value !== 'snacks');
+
 export function labelForSlot(slot: MealSlot) {
   return SLOTS.find((candidate) => candidate.value === slot)?.label ?? slot;
 }

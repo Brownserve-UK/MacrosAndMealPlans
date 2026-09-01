@@ -568,6 +568,7 @@ function useMealPlanInvalidation() {
   return () => {
     void qc.invalidateQueries({ queryKey: ['mealPlanWeek'] });
     void qc.invalidateQueries({ queryKey: ['plannerWeek'] });
+    void qc.invalidateQueries({ queryKey: ['householdSlotAttendance'] });
   };
 }
 

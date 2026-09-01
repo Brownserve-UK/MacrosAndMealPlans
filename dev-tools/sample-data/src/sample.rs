@@ -623,6 +623,18 @@ impl Loader<'_> {
         )
         .await?;
 
+        self.ensure_household_meal_at(
+            self.today,
+            MealSlot::Dinner,
+            Some("tonight"),
+            Time::from_hms(18, 0, 0).ok(),
+            "chicken-and-rice",
+            servings(2),
+            &[(manager, 1), (basic, 1)],
+            1,
+        )
+        .await?;
+
         Ok(())
     }
 
@@ -693,7 +705,39 @@ impl Loader<'_> {
         allocations: &[(HouseholdMemberId, i64)],
         guest_count: i32,
     ) -> anyhow::Result<()> {
-        let id = meal_id(date, slot);
+        self.ensure_household_meal_at(
+            date,
+            slot,
+            None,
+            None,
+            recipe_key,
+            prepared,
+            allocations,
+            guest_count,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn ensure_household_meal_at(
+        &mut self,
+        date: Date,
+        slot: MealSlot,
+        key: Option<&str>,
+        planned_time: Option<Time>,
+        recipe_key: &str,
+        prepared: ConsumedAmount,
+        allocations: &[(HouseholdMemberId, i64)],
+        guest_count: i32,
+    ) -> anyhow::Result<()> {
+        let id = match key {
+            Some(key) => MealPlanEntryId::from_uuid(sample_uuid(
+                "meal-plan-entry",
+                &format!("{date}:{slot}:household:{key}"),
+            )),
+            None => meal_id(date, slot),
+        };
+        let planned_time = planned_time.or_else(|| slot_time(slot));
         if !matches!(
             self.state.meal_plan.get(id).await,
             Err(CoreError::NotFound { .. })
@@ -720,7 +764,7 @@ impl Loader<'_> {
                 scope: MealPlanScope::Household,
                 member_id: None,
                 planned_on: date,
-                planned_time: slot_time(slot),
+                planned_time,
                 slot,
                 portioning: mmp_core::domain::Portioning::Equal,
                 components: vec![NewMealPlanComponent {

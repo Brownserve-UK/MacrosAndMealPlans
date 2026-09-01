@@ -742,12 +742,13 @@ async fn household_slot_attendance(
         .slot_attendance(date, slot, query.exclude_entry.map(entry_id))
         .await?;
     let mut out = Vec::with_capacity(rows.len());
-    for (member_id, attendance) in rows {
+    for (member_id, attendance, claimed_time) in rows {
         let member = state.household.get_member(member_id).await?;
         out.push(crate::dto::SlotAttendanceDto {
             member_id: member_id.as_uuid(),
             display_name: member.display_name,
             attendance,
+            claimed_time,
         });
     }
     Ok(Json(out))
