@@ -307,10 +307,13 @@ fn entry_is_resolved_only_when_every_participant_is() {
     let pending = participant(vec![allocation(comp, servings(1))]);
 
     assert_eq!(
-        derive_entry_status(&[ate.clone(), pending]),
+        derive_entry_status(&[ate.clone(), pending], &[]),
         MealPlanStatus::PartiallyResolved
     );
-    assert_eq!(derive_entry_status(&[ate, declined]), MealPlanStatus::Eaten);
+    assert_eq!(
+        derive_entry_status(&[ate, declined], &[]),
+        MealPlanStatus::Eaten
+    );
 }
 
 #[test]

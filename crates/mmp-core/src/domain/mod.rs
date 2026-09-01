@@ -31,9 +31,9 @@ pub use household_settings::{
 };
 pub use ids::{ConsumptionRecordId, HouseholdMemberId, IngredientId, ProductId, Revision, UserId};
 pub use ids::{
-    MealParticipantAllocationId, MealParticipantId, MealPlanComponentId, MealPlanEntryId,
-    NutritionTargetId, RecipeComponentId, RecipeId, RecipeInstructionId, StockEffectId,
-    StockEventId, StockItemId,
+    MealGuestAllocationId, MealGuestGroupId, MealParticipantAllocationId, MealParticipantId,
+    MealPlanComponentId, MealPlanEntryId, NutritionTargetId, RecipeComponentId, RecipeId,
+    RecipeInstructionId, StockEffectId, StockEventId, StockItemId,
 };
 pub use ingredient::{
     Ingredient, IngredientPatch, IngredientSummary, MAX_NAME_LEN, NewIngredient, validate_name,
@@ -41,13 +41,15 @@ pub use ingredient::{
 pub use meal_item::{MealItemRef, UnknownMealItemRef};
 pub use meal_plan::{
     ActualMealPlanComponent, AllocationOutcome, ComponentPreparation, ConfirmMealPlanComponent,
-    ConfirmMealPlanEntry, MealParticipant, MealParticipantAllocation, MealPlanComponent,
-    MealPlanComponentSnapshot, MealPlanEntry, MealPlanEntryPatch, MealPlanScope, MealPlanStatus,
-    MealSlot, NewMealParticipant, NewMealParticipantAllocation, NewMealPlanComponent,
-    NewMealPlanEntry, OutcomeActor, ParticipantStatus, SetMealParticipants, UnknownMealPlanScope,
+    ConfirmMealPlanEntry, MealGuestAllocation, MealGuestGroup, MealParticipant,
+    MealParticipantAllocation, MealPlanComponent, MealPlanComponentSnapshot, MealPlanEntry,
+    MealPlanEntryPatch, MealPlanScope, MealPlanStatus, MealSlot, NewMealGuestAllocation,
+    NewMealGuestGroup, NewMealParticipant, NewMealParticipantAllocation, NewMealPlanComponent,
+    NewMealPlanEntry, OutcomeActor, ParticipantStatus, ReviewMealOutcomes, ReviewedGuestOutcome,
+    ReviewedMealOutcome, ReviewedMemberOutcome, SetMealParticipants, UnknownMealPlanScope,
     UnknownMealPlanStatus, UnknownMealSlot, UnknownParticipantStatus, allocated_total,
-    derive_component_status, derive_entry_status, derive_participant_status, effective_consumption,
-    preparation_for, validate_components, validate_participants,
+    derive_component_status, derive_entry_status, derive_guest_status, derive_participant_status,
+    effective_consumption, preparation_for, validate_components, validate_participants,
 };
 pub use nutrition::NutritionFacts;
 pub use nutrition_target::{

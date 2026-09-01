@@ -140,20 +140,23 @@ impl FromStr for Role {
 #[serde(rename_all = "snake_case")]
 pub enum AccessScope {
     HealthData,
+    MealPlan,
 }
 
 impl AccessScope {
-    pub const ALL: [AccessScope; 1] = [AccessScope::HealthData];
+    pub const ALL: [AccessScope; 2] = [AccessScope::HealthData, AccessScope::MealPlan];
 
     pub const fn code(&self) -> &'static str {
         match self {
             AccessScope::HealthData => "health_data",
+            AccessScope::MealPlan => "meal_plan",
         }
     }
 
     pub const fn permission(&self) -> Permission {
         match self {
             AccessScope::HealthData => Permission::MemberHealthData,
+            AccessScope::MealPlan => Permission::HouseholdRead,
         }
     }
 }

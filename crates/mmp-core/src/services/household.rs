@@ -354,6 +354,20 @@ impl HouseholdService {
             .await
     }
 
+    pub async fn can_manage_member_meal_plan(
+        &self,
+        user_id: UserId,
+        member_id: HouseholdMemberId,
+    ) -> Result<bool> {
+        let member = self.get_member(member_id).await?;
+        if member.linked_user_id == Some(user_id) {
+            return Ok(true);
+        }
+        self.grants
+            .exists(user_id, member_id, AccessScope::MealPlan)
+            .await
+    }
+
     async fn commit_member(&self, member: &HouseholdMember, expected: Revision) -> Result<()> {
         match self.members.update(member, expected).await? {
             UpdateOutcome::Updated => Ok(()),

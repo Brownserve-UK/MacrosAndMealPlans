@@ -132,6 +132,7 @@ describe('AddFoodDialog', () => {
       member_id: 'member-1',
       subject_member_id: 'member-1',
       participants: [],
+      guest_groups: [],
       planned_on: '2999-08-26',
       planned_time: '18:30',
       slot: 'dinner',

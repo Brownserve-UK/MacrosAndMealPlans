@@ -2,7 +2,7 @@ use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use mmp_core::domain::{HouseholdMemberId, MealPlanComponentId, MealPlanEntryId, Role};
-use time::{Date, Weekday};
+use time::{Date, Duration, Weekday};
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
 use uuid::Uuid;
@@ -11,7 +11,9 @@ use crate::auth::Principal;
 use crate::dto::common::iso_date;
 use crate::dto::{
     CreateMealPlanEntryRequest, MarkMealPlanComponentEatenRequest, MarkMealPlanEatenRequest,
-    MealPlanEntryDto, MealPlanWeekDto, SetMealPlanParticipantsRequest, UpdateMealPlanEntryRequest,
+    MealGuestGroupDto, MealPlanEntryDto, MealPlanWeekDto, PlannerCapabilitiesDto, PlannerFoodDto,
+    PlannerMealDto, PlannerPersonDto, PlannerWeekDto, ReviewMealOutcomesRequest,
+    SetMealPlanParticipantsRequest, UpdateMealPlanEntryRequest,
 };
 use crate::error::{ApiError, ApiResult};
 use crate::http::{Created, IfMatch, Tagged};
@@ -20,6 +22,7 @@ use crate::state::AppState;
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(get_week))
+        .routes(routes!(get_planner_week))
         .routes(routes!(create))
         .routes(routes!(get_one, update, delete))
         .routes(routes!(mark_eaten))
@@ -29,6 +32,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(mark_component_not_eaten))
         .routes(routes!(reopen_component))
         .routes(routes!(set_participants))
+        .routes(routes!(review_outcomes))
 }
 
 fn entry_id(id: Uuid) -> MealPlanEntryId {
@@ -97,6 +101,71 @@ async fn require_entry_access(
     }
 }
 
+async fn can_manage_personal_meal(
+    state: &AppState,
+    principal: &Principal,
+    member_id: HouseholdMemberId,
+) -> ApiResult<bool> {
+    if principal.roles.contains(&Role::Admin) || principal.member_id == Some(member_id) {
+        return Ok(true);
+    }
+    Ok(state
+        .household
+        .can_manage_member_meal_plan(principal.user_id, member_id)
+        .await?)
+}
+
+async fn require_plan_edit_access(
+    state: &AppState,
+    principal: &Principal,
+    entry: &mmp_core::domain::MealPlanEntry,
+) -> ApiResult<()> {
+    let allowed = match entry.scope {
+        mmp_core::domain::MealPlanScope::Member => {
+            let member_id = entry.member_id.ok_or_else(|| {
+                ApiError::new(
+                    StatusCode::CONFLICT,
+                    "invalid-meal",
+                    "Meal unavailable",
+                    "This personal meal has no owner.",
+                )
+            })?;
+            can_manage_personal_meal(state, principal, member_id).await?
+        }
+        mmp_core::domain::MealPlanScope::Household => {
+            principal.roles.contains(&Role::Admin)
+                || principal.roles.contains(&Role::HouseholdManager)
+        }
+    };
+    if allowed {
+        Ok(())
+    } else {
+        Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            "forbidden",
+            "Forbidden",
+            "You cannot edit this meal.",
+        ))
+    }
+}
+
+async fn require_outcome_access(
+    state: &AppState,
+    principal: &Principal,
+    member_id: HouseholdMemberId,
+) -> ApiResult<()> {
+    if can_manage_personal_meal(state, principal, member_id).await? {
+        Ok(())
+    } else {
+        Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            "forbidden",
+            "Forbidden",
+            "You cannot record this person's meal.",
+        ))
+    }
+}
+
 fn parse_week_start(raw: &str) -> ApiResult<Date> {
     let date = iso_date::parse(raw)
         .map_err(|_| ApiError::bad_request(format!("`{raw}` is not a valid date (YYYY-MM-DD).")))?;
@@ -133,6 +202,125 @@ async fn get_week(
 }
 
 #[utoipa::path(
+    get,
+    path = "/api/v1/planner/{week_start}",
+    operation_id = "getPlannerWeek",
+    params(("week_start" = String, Path, example = "2026-08-24")),
+    responses((status = 200, body = PlannerWeekDto)),
+    tag = "meal-plan",
+    security(("basic" = []))
+)]
+async fn get_planner_week(
+    State(state): State<AppState>,
+    principal: Principal,
+    Path(week_start): Path<String>,
+) -> ApiResult<Json<PlannerWeekDto>> {
+    personal_member(&state, &principal).await?;
+    let week_start = parse_week_start(&week_start)?;
+    let views = state.meal_plan.planner_entries(week_start).await?;
+    let admin = principal.roles.contains(&Role::Admin);
+    let manager = principal.roles.contains(&Role::HouseholdManager);
+    let mut meals = Vec::new();
+    for view in views {
+        let mut people = Vec::with_capacity(view.participants.len());
+        let mut manages_a_participant = false;
+        for participant in &view.participants {
+            let can_record = admin
+                || principal.member_id == Some(participant.member_id)
+                || state
+                    .household
+                    .can_manage_member_meal_plan(principal.user_id, participant.member_id)
+                    .await?;
+            manages_a_participant |= can_record;
+            people.push(PlannerPersonDto {
+                member_id: participant.member_id.as_uuid(),
+                display_name: participant.display_name.clone(),
+                status: participant.status,
+                allocations: participant
+                    .allocations
+                    .clone()
+                    .into_iter()
+                    .map(Into::into)
+                    .collect(),
+                can_record,
+            });
+        }
+        let owns_personal = view.entry.member_id == principal.member_id;
+        let manages_owner = if let Some(owner) = view.entry.member_id {
+            state
+                .household
+                .can_manage_member_meal_plan(principal.user_id, owner)
+                .await?
+        } else {
+            false
+        };
+        let participating = principal
+            .member_id
+            .is_some_and(|id| view.entry.participant_for(id).is_some());
+        let visible = match view.entry.scope {
+            mmp_core::domain::MealPlanScope::Member => admin || owns_personal || manages_owner,
+            mmp_core::domain::MealPlanScope::Household => {
+                admin || manager || participating || manages_a_participant
+            }
+        };
+        if !visible {
+            continue;
+        }
+        let can_edit = match view.entry.scope {
+            mmp_core::domain::MealPlanScope::Member => admin || owns_personal || manages_owner,
+            mmp_core::domain::MealPlanScope::Household => admin || manager,
+        } && view.entry.status == mmp_core::domain::MealPlanStatus::Planned;
+        let owner_name = if let Some(owner) = view.entry.member_id {
+            state.household.get_member(owner).await?.display_name.into()
+        } else {
+            None
+        };
+        let foods = view
+            .components
+            .iter()
+            .map(|component| PlannerFoodDto {
+                id: component.component.id.as_uuid(),
+                item: component.component.item.into(),
+                item_name: component.item_name.clone(),
+                amount: component.component.amount.into(),
+                shortage: component.preparation.shortage,
+            })
+            .collect();
+        meals.push(PlannerMealDto {
+            id: view.entry.id.as_uuid(),
+            scope: view.entry.scope,
+            member_id: view.entry.member_id.map(|id| id.as_uuid()),
+            owner_name,
+            planned_on: view.entry.planned_on,
+            planned_time: view.entry.planned_time,
+            slot: view.entry.slot,
+            status: view.entry.status,
+            foods,
+            people,
+            guest_groups: view
+                .entry
+                .guest_groups
+                .clone()
+                .into_iter()
+                .map(MealGuestGroupDto::from)
+                .collect(),
+            capabilities: PlannerCapabilitiesDto {
+                can_edit,
+                can_delete: can_edit,
+                can_record_guests: (admin || manager)
+                    && view.entry.scope == mmp_core::domain::MealPlanScope::Household,
+            },
+            revision: view.entry.revision.get(),
+        });
+    }
+    Ok(Json(PlannerWeekDto {
+        week_start,
+        week_end: week_start + Duration::days(6),
+        meals,
+    }))
+}
+
+#[utoipa::path(
     post,
     path = "/api/v1/meal-plan-entries",
     operation_id = "createMealPlanEntry",
@@ -147,6 +335,27 @@ async fn create(
     Json(body): Json<CreateMealPlanEntryRequest>,
 ) -> ApiResult<Created<MealPlanEntryDto>> {
     let member = personal_member(&state, &principal).await?;
+    if body.household {
+        if !principal.roles.contains(&Role::Admin)
+            && !principal.roles.contains(&Role::HouseholdManager)
+        {
+            return Err(ApiError::new(
+                StatusCode::FORBIDDEN,
+                "forbidden",
+                "Forbidden",
+                "You cannot plan a household meal.",
+            ));
+        }
+    } else if let Some(requested) = body.member_id {
+        if !can_manage_personal_meal(&state, &principal, requested.into()).await? {
+            return Err(ApiError::new(
+                StatusCode::FORBIDDEN,
+                "forbidden",
+                "Forbidden",
+                "You cannot plan this person's meal.",
+            ));
+        }
+    }
     let mut new_entry = body.into_domain(member, principal.user_id);
     if new_entry.planned_time.is_none() {
         let settings = state.household_settings.get().await?;
@@ -194,7 +403,7 @@ async fn update(
 ) -> ApiResult<Tagged<MealPlanEntryDto>> {
     let id = entry_id(id);
     let current = state.meal_plan.get(id).await?;
-    require_entry_access(&state, &principal, &current.entry).await?;
+    require_plan_edit_access(&state, &principal, &current.entry).await?;
     let patch = body.into_domain().map_err(|message| {
         let mut errors = mmp_core::ValidationErrors::new();
         errors.push("planned_time", message);
@@ -224,7 +433,7 @@ async fn delete(
 ) -> ApiResult<StatusCode> {
     let id = entry_id(id);
     let current = state.meal_plan.get(id).await?;
-    require_entry_access(&state, &principal, &current.entry).await?;
+    require_plan_edit_access(&state, &principal, &current.entry).await?;
     state.meal_plan.delete(id, revision).await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -248,6 +457,12 @@ async fn mark_eaten(
 ) -> ApiResult<Tagged<MealPlanEntryDto>> {
     let id = entry_id(id);
     let current = state.meal_plan.get(id).await?;
+    let subject = body
+        .member_id
+        .map(Into::into)
+        .or(principal.member_id)
+        .ok_or_else(|| ApiError::bad_request("Choose whose meal to record."))?;
+    require_outcome_access(&state, &principal, subject).await?;
     require_entry_access(&state, &principal, &current.entry).await?;
     let updated = state
         .meal_plan
@@ -273,13 +488,20 @@ async fn mark_not_eaten(
 ) -> ApiResult<Tagged<MealPlanEntryDto>> {
     let id = entry_id(id);
     let current = state.meal_plan.get(id).await?;
+    let subject = principal.member_id.ok_or_else(|| {
+        ApiError::bad_request("Your account is not linked to a household member.")
+    })?;
+    require_outcome_access(&state, &principal, subject).await?;
     require_entry_access(&state, &principal, &current.entry).await?;
     let updated = state
         .meal_plan
         .mark_not_eaten(
             id,
             revision,
-            mmp_core::domain::OutcomeActor::own(principal.user_id),
+            mmp_core::domain::OutcomeActor {
+                actor_id: principal.user_id,
+                subject_member_id: Some(subject),
+            },
         )
         .await?;
     Ok(Tagged(updated.entry.revision, updated.into()))
@@ -302,13 +524,20 @@ async fn reopen(
 ) -> ApiResult<Tagged<MealPlanEntryDto>> {
     let id = entry_id(id);
     let current = state.meal_plan.get(id).await?;
+    let subject = principal.member_id.ok_or_else(|| {
+        ApiError::bad_request("Your account is not linked to a household member.")
+    })?;
+    require_outcome_access(&state, &principal, subject).await?;
     require_entry_access(&state, &principal, &current.entry).await?;
     let updated = state
         .meal_plan
         .reopen(
             id,
             revision,
-            mmp_core::domain::OutcomeActor::own(principal.user_id),
+            mmp_core::domain::OutcomeActor {
+                actor_id: principal.user_id,
+                subject_member_id: Some(subject),
+            },
         )
         .await?;
     Ok(Tagged(updated.entry.revision, updated.into()))
@@ -333,6 +562,12 @@ async fn mark_component_eaten(
 ) -> ApiResult<Json<MealPlanEntryDto>> {
     let id = entry_id(id);
     let current = state.meal_plan.get(id).await?;
+    let subject = body
+        .member_id
+        .map(Into::into)
+        .or(principal.member_id)
+        .ok_or_else(|| ApiError::bad_request("Choose whose meal to record."))?;
+    require_outcome_access(&state, &principal, subject).await?;
     require_entry_access(&state, &principal, &current.entry).await?;
     let updated = state
         .meal_plan
@@ -363,6 +598,10 @@ async fn mark_component_not_eaten(
 ) -> ApiResult<Json<MealPlanEntryDto>> {
     let id = entry_id(id);
     let current = state.meal_plan.get(id).await?;
+    let subject = principal.member_id.ok_or_else(|| {
+        ApiError::bad_request("Your account is not linked to a household member.")
+    })?;
+    require_outcome_access(&state, &principal, subject).await?;
     require_entry_access(&state, &principal, &current.entry).await?;
     let updated = state
         .meal_plan
@@ -370,7 +609,10 @@ async fn mark_component_not_eaten(
             id,
             component_id(component),
             revision,
-            mmp_core::domain::OutcomeActor::own(principal.user_id),
+            mmp_core::domain::OutcomeActor {
+                actor_id: principal.user_id,
+                subject_member_id: Some(subject),
+            },
         )
         .await?;
     Ok(Json(updated.into()))
@@ -393,6 +635,10 @@ async fn reopen_component(
 ) -> ApiResult<Json<MealPlanEntryDto>> {
     let id = entry_id(id);
     let current = state.meal_plan.get(id).await?;
+    let subject = principal.member_id.ok_or_else(|| {
+        ApiError::bad_request("Your account is not linked to a household member.")
+    })?;
+    require_outcome_access(&state, &principal, subject).await?;
     require_entry_access(&state, &principal, &current.entry).await?;
     let updated = state
         .meal_plan
@@ -400,7 +646,10 @@ async fn reopen_component(
             id,
             component_id(component),
             revision,
-            mmp_core::domain::OutcomeActor::own(principal.user_id),
+            mmp_core::domain::OutcomeActor {
+                actor_id: principal.user_id,
+                subject_member_id: Some(subject),
+            },
         )
         .await?;
     Ok(Json(updated.into()))
@@ -425,10 +674,65 @@ async fn set_participants(
 ) -> ApiResult<Tagged<MealPlanEntryDto>> {
     let id = entry_id(id);
     let current = state.meal_plan.get(id).await?;
-    require_entry_access(&state, &principal, &current.entry).await?;
+    require_plan_edit_access(&state, &principal, &current.entry).await?;
     let updated = state
         .meal_plan
         .set_participants(id, revision, body.into_domain(principal.user_id))
+        .await?;
+    Ok(Tagged(updated.entry.revision, updated.into()))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/meal-plan-entries/{id}/outcomes",
+    operation_id = "reviewMealPlanOutcomes",
+    params(("id" = Uuid, Path), ("If-Match" = String, Header)),
+    request_body = ReviewMealOutcomesRequest,
+    responses((status = 200, body = MealPlanEntryDto)),
+    tag = "meal-plan",
+    security(("basic" = []))
+)]
+async fn review_outcomes(
+    State(state): State<AppState>,
+    principal: Principal,
+    Path(id): Path<Uuid>,
+    IfMatch(revision): IfMatch,
+    Json(body): Json<ReviewMealOutcomesRequest>,
+) -> ApiResult<Tagged<MealPlanEntryDto>> {
+    let id = entry_id(id);
+    let current = state.meal_plan.get(id).await?;
+    for member in &body.members {
+        let member_id: HouseholdMemberId = member.member_id.into();
+        let allowed = principal.roles.contains(&Role::Admin)
+            || principal.member_id == Some(member_id)
+            || state
+                .household
+                .can_manage_member_meal_plan(principal.user_id, member_id)
+                .await?;
+        if !allowed {
+            return Err(ApiError::new(
+                StatusCode::FORBIDDEN,
+                "forbidden",
+                "Forbidden",
+                "You cannot record this person's meal.",
+            ));
+        }
+    }
+    if !body.guests.is_empty()
+        && !principal.roles.contains(&Role::Admin)
+        && !principal.roles.contains(&Role::HouseholdManager)
+    {
+        return Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            "forbidden",
+            "Forbidden",
+            "You cannot record guest meals.",
+        ));
+    }
+    require_entry_access(&state, &principal, &current.entry).await?;
+    let updated = state
+        .meal_plan
+        .review_outcomes(id, revision, body.into_domain(principal.user_id))
         .await?;
     Ok(Tagged(updated.entry.revision, updated.into()))
 }

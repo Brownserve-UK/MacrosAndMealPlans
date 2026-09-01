@@ -292,6 +292,8 @@ pub trait MealPlanRepository: Send + Sync + 'static {
 
     async fn list(&self, query: &MealPlanQuery) -> Result<Vec<MealPlanEntry>>;
 
+    async fn list_all(&self, from: Date, to: Date) -> Result<Vec<MealPlanEntry>>;
+
     async fn insert(&self, entry: &MealPlanEntry) -> Result<()>;
 
     async fn update(&self, entry: &MealPlanEntry, expected: Revision) -> Result<UpdateOutcome>;

@@ -286,7 +286,11 @@ CREATE TABLE meal_plan_entry (
 CREATE INDEX meal_plan_entry_member_day
     ON meal_plan_entry (member_id, planned_on, slot, planned_time);
 CREATE UNIQUE INDEX meal_plan_entry_member_day_slot_unique
-    ON meal_plan_entry (member_id, planned_on, slot);
+    ON meal_plan_entry (member_id, planned_on, slot)
+    WHERE slot <> 'snacks';
+CREATE UNIQUE INDEX meal_plan_entry_member_day_snack_time_unique
+    ON meal_plan_entry (member_id, planned_on, slot, planned_time) NULLS NOT DISTINCT
+    WHERE slot = 'snacks';
 CREATE INDEX meal_plan_entry_status_day
     ON meal_plan_entry (status, planned_on);
 
@@ -441,14 +445,6 @@ CREATE TABLE household_settings (
 
 INSERT INTO household_settings (singleton, breakfast_time, lunch_time, dinner_time)
 VALUES (TRUE, '08:00', '12:30', '18:00');
-
-UPDATE meal_plan_entry
-SET planned_time = NULL
-WHERE slot = 'snacks' AND planned_time IS NOT NULL;
-
-ALTER TABLE meal_plan_entry
-    ADD CONSTRAINT meal_plan_entry_snacks_have_no_planned_time
-        CHECK (slot <> 'snacks' OR planned_time IS NULL);
 
 CREATE TABLE recipe (
     id            UUID PRIMARY KEY,
@@ -734,9 +730,13 @@ ALTER TABLE meal_plan_entry
         UNIQUE (id, planned_on, slot);
 
 DROP INDEX meal_plan_entry_member_day_slot_unique;
+DROP INDEX meal_plan_entry_member_day_snack_time_unique;
 CREATE UNIQUE INDEX meal_plan_entry_member_day_slot_unique
     ON meal_plan_entry (member_id, planned_on, slot)
-    WHERE member_id IS NOT NULL;
+    WHERE member_id IS NOT NULL AND slot <> 'snacks';
+CREATE UNIQUE INDEX meal_plan_entry_member_day_snack_time_unique
+    ON meal_plan_entry (member_id, planned_on, slot, planned_time) NULLS NOT DISTINCT
+    WHERE member_id IS NOT NULL AND slot = 'snacks';
 
 ALTER TABLE meal_plan_component
     ADD CONSTRAINT meal_plan_component_entry_id_unique
@@ -747,6 +747,7 @@ CREATE TABLE meal_plan_participant (
     entry_id    UUID NOT NULL,
     member_id   UUID NOT NULL REFERENCES household_member (id) ON DELETE CASCADE,
     planned_on  DATE NOT NULL,
+    planned_time TIME,
     slot        TEXT NOT NULL,
 
     revision    BIGINT NOT NULL DEFAULT 1,
@@ -762,13 +763,17 @@ CREATE TABLE meal_plan_participant (
     CONSTRAINT meal_plan_participant_entry_member_unique
         UNIQUE (entry_id, member_id),
     CONSTRAINT meal_plan_participant_entry_id_unique
-        UNIQUE (entry_id, id),
-    CONSTRAINT meal_plan_participant_member_occurrence_unique
-        UNIQUE (member_id, planned_on, slot)
+        UNIQUE (entry_id, id)
 );
 
 CREATE INDEX meal_plan_participant_entry ON meal_plan_participant (entry_id);
 CREATE INDEX meal_plan_participant_member ON meal_plan_participant (member_id);
+CREATE UNIQUE INDEX meal_plan_participant_member_occurrence_unique
+    ON meal_plan_participant (member_id, planned_on, slot)
+    WHERE slot <> 'snacks';
+CREATE UNIQUE INDEX meal_plan_participant_member_snack_time_unique
+    ON meal_plan_participant (member_id, planned_on, slot, planned_time) NULLS NOT DISTINCT
+    WHERE slot = 'snacks';
 
 CREATE TABLE meal_plan_participant_allocation (
     id                    UUID PRIMARY KEY,
@@ -816,8 +821,66 @@ CREATE INDEX meal_plan_participant_allocation_participant
 CREATE INDEX meal_plan_participant_allocation_component
     ON meal_plan_participant_allocation (component_id);
 
-INSERT INTO meal_plan_participant (id, entry_id, member_id, planned_on, slot, revision, created_at, updated_at)
-SELECT uuidv7(), e.id, e.member_id, e.planned_on, e.slot, 1, e.created_at, e.updated_at
+CREATE TABLE meal_guest_group (
+    id          UUID PRIMARY KEY,
+    entry_id    UUID NOT NULL REFERENCES meal_plan_entry (id) ON DELETE CASCADE,
+    guest_count INTEGER NOT NULL,
+    revision    BIGINT NOT NULL DEFAULT 1,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    CONSTRAINT meal_guest_group_count_positive CHECK (guest_count > 0),
+    CONSTRAINT meal_guest_group_entry_id_unique UNIQUE (entry_id, id)
+);
+
+CREATE INDEX meal_guest_group_entry ON meal_guest_group (entry_id);
+
+CREATE TABLE meal_guest_allocation (
+    id                UUID PRIMARY KEY,
+    entry_id          UUID NOT NULL,
+    guest_group_id    UUID NOT NULL,
+    component_id      UUID NOT NULL,
+    allocated_kind    TEXT NOT NULL,
+    allocated_value   NUMERIC(16, 4) NOT NULL,
+    allocated_unit    TEXT,
+    status            TEXT NOT NULL DEFAULT 'planned',
+    confirmed_kind    TEXT,
+    confirmed_value   NUMERIC(16, 4),
+    confirmed_unit    TEXT,
+    resolved_by       UUID REFERENCES app_user (id) ON DELETE RESTRICT,
+    resolved_at       TIMESTAMPTZ,
+
+    CONSTRAINT meal_guest_allocation_group_fk
+        FOREIGN KEY (entry_id, guest_group_id)
+        REFERENCES meal_guest_group (entry_id, id)
+        ON DELETE CASCADE,
+    CONSTRAINT meal_guest_allocation_component_fk
+        FOREIGN KEY (entry_id, component_id)
+        REFERENCES meal_plan_component (entry_id, id)
+        ON DELETE CASCADE,
+    CONSTRAINT meal_guest_allocation_unique UNIQUE (guest_group_id, component_id),
+    CONSTRAINT meal_guest_allocation_status_valid
+        CHECK (status IN ('planned', 'eaten', 'not_eaten')),
+    CONSTRAINT meal_guest_allocation_kind_valid
+        CHECK (allocated_kind IN ('measure', 'servings', 'packs')),
+    CONSTRAINT meal_guest_allocation_value_positive CHECK (allocated_value > 0),
+    CONSTRAINT meal_guest_allocation_unit_present
+        CHECK ((allocated_kind = 'measure') = (allocated_unit IS NOT NULL)),
+    CONSTRAINT meal_guest_allocation_confirmed_complete
+        CHECK (num_nonnulls(confirmed_kind, confirmed_value) <> 1),
+    CONSTRAINT meal_guest_allocation_confirmed_kind_valid
+        CHECK (confirmed_kind IS NULL OR confirmed_kind IN ('measure', 'servings', 'packs')),
+    CONSTRAINT meal_guest_allocation_confirmed_value_positive
+        CHECK (confirmed_value IS NULL OR confirmed_value > 0),
+    CONSTRAINT meal_guest_allocation_resolution_complete
+        CHECK ((status = 'planned') = (resolved_by IS NULL AND resolved_at IS NULL))
+);
+
+CREATE INDEX meal_guest_allocation_group ON meal_guest_allocation (guest_group_id);
+CREATE INDEX meal_guest_allocation_component ON meal_guest_allocation (component_id);
+
+INSERT INTO meal_plan_participant (id, entry_id, member_id, planned_on, planned_time, slot, revision, created_at, updated_at)
+SELECT uuidv7(), e.id, e.member_id, e.planned_on, e.planned_time, e.slot, 1, e.created_at, e.updated_at
 FROM meal_plan_entry e
 WHERE e.member_id IS NOT NULL;
 

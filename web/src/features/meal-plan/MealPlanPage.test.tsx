@@ -89,6 +89,7 @@ const plannedEntry = {
   member_id: 'member-1',
   subject_member_id: 'member-1',
   participants: [],
+  guest_groups: [],
   planned_on: DAY,
   planned_time: '08:30',
   slot: 'breakfast',
@@ -280,13 +281,6 @@ describe('MealPlanPage', () => {
       revision: 3,
       body: { planned_time: '09:15' },
     });
-  });
-
-  it('does not offer a planned time for snacks', () => {
-    renderPage('planner');
-
-    expect(screen.queryByRole('button', { name: '20:30' })).not.toBeInTheDocument();
-    expect(screen.queryByText('· 20:30')).not.toBeInTheDocument();
   });
 
   it('does not offer the slot time control in the food log', () => {

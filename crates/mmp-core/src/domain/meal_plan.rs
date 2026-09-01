@@ -7,9 +7,10 @@ use uuid::Uuid;
 use rust_decimal::Decimal;
 
 use super::{
-    ConsumedAmount, ConsumptionRecordId, HouseholdMemberId, MealItemRef,
-    MealParticipantAllocationId, MealParticipantId, MealPlanComponentId, MealPlanEntryId,
-    NutritionFacts, NutritionQuality, Quantity, Revision, UserId,
+    ConsumedAmount, ConsumptionRecordId, HouseholdMemberId, MealGuestAllocationId,
+    MealGuestGroupId, MealItemRef, MealParticipantAllocationId, MealParticipantId,
+    MealPlanComponentId, MealPlanEntryId, NutritionFacts, NutritionQuality, Quantity, Revision,
+    UserId,
 };
 use crate::error::ValidationErrors;
 
@@ -47,10 +48,6 @@ impl MealSlot {
             MealSlot::Dinner => 2,
             MealSlot::Snacks => 3,
         }
-    }
-
-    pub const fn allows_planned_time(self) -> bool {
-        !matches!(self, MealSlot::Snacks)
     }
 }
 
@@ -156,6 +153,7 @@ pub struct MealPlanEntry {
     pub status: MealPlanStatus,
     pub components: Vec<MealPlanComponent>,
     pub participants: Vec<MealParticipant>,
+    pub guest_groups: Vec<MealGuestGroup>,
     pub created_by: UserId,
     pub updated_by: UserId,
     pub resolved_by: Option<UserId>,
@@ -198,6 +196,8 @@ pub struct NewMealPlanEntry {
     pub planned_time: Option<Time>,
     pub slot: MealSlot,
     pub components: Vec<NewMealPlanComponent>,
+    pub participants: Option<Vec<NewMealParticipant>>,
+    pub guest_groups: Vec<NewMealGuestGroup>,
     pub actor_id: UserId,
 }
 
@@ -207,6 +207,8 @@ pub struct MealPlanEntryPatch {
     pub planned_time: Option<Option<Time>>,
     pub slot: Option<MealSlot>,
     pub components: Option<Vec<NewMealPlanComponent>>,
+    pub participants: Option<Vec<NewMealParticipant>>,
+    pub guest_groups: Option<Vec<NewMealGuestGroup>>,
 }
 
 #[derive(Debug, Clone)]
@@ -240,6 +242,35 @@ pub struct ConfirmMealPlanEntry {
 }
 
 #[derive(Debug, Clone)]
+pub enum ReviewedMealOutcome {
+    AsPlanned,
+    NotEaten,
+    Changed(Vec<ActualMealPlanComponent>),
+}
+
+#[derive(Debug, Clone)]
+pub struct ReviewedMemberOutcome {
+    pub member_id: HouseholdMemberId,
+    pub outcome: ReviewedMealOutcome,
+}
+
+#[derive(Debug, Clone)]
+pub struct ReviewedGuestOutcome {
+    pub source_group_id: MealGuestGroupId,
+    pub count: i32,
+    pub outcome: ReviewedMealOutcome,
+}
+
+#[derive(Debug, Clone)]
+pub struct ReviewMealOutcomes {
+    pub consumed_on: Date,
+    pub consumed_at: Option<OffsetDateTime>,
+    pub members: Vec<ReviewedMemberOutcome>,
+    pub guests: Vec<ReviewedGuestOutcome>,
+    pub actor_id: UserId,
+}
+
+#[derive(Debug, Clone)]
 pub struct ConfirmMealPlanComponent {
     pub consumed_on: Date,
     pub consumed_at: Option<OffsetDateTime>,
@@ -251,6 +282,7 @@ pub struct ConfirmMealPlanComponent {
 #[derive(Debug, Clone)]
 pub struct SetMealParticipants {
     pub participants: Vec<NewMealParticipant>,
+    pub guest_groups: Vec<NewMealGuestGroup>,
     pub actor_id: UserId,
 }
 
@@ -400,6 +432,40 @@ pub struct NewMealParticipant {
     pub allocations: Vec<NewMealParticipantAllocation>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct MealGuestAllocation {
+    pub id: MealGuestAllocationId,
+    pub component_id: MealPlanComponentId,
+    pub allocated: ConsumedAmount,
+    pub status: ParticipantStatus,
+    pub confirmed: Option<ConsumedAmount>,
+    pub resolved_by: Option<UserId>,
+    pub resolved_at: Option<OffsetDateTime>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct MealGuestGroup {
+    pub id: MealGuestGroupId,
+    pub count: i32,
+    pub allocations: Vec<MealGuestAllocation>,
+    pub revision: Revision,
+    pub created_at: OffsetDateTime,
+    pub updated_at: OffsetDateTime,
+}
+
+#[derive(Debug, Clone)]
+pub struct NewMealGuestAllocation {
+    pub component_id: MealPlanComponentId,
+    pub allocated: ConsumedAmount,
+}
+
+#[derive(Debug, Clone)]
+pub struct NewMealGuestGroup {
+    pub id: Option<MealGuestGroupId>,
+    pub count: i32,
+    pub allocations: Vec<NewMealGuestAllocation>,
+}
+
 #[derive(Debug, Clone)]
 pub struct AllocationOutcome {
     pub allocated: ConsumedAmount,
@@ -540,6 +606,10 @@ pub fn derive_participant_status(participant: &MealParticipant) -> MealPlanStatu
     roll_up_status(participant.allocations.iter().map(|a| a.status))
 }
 
+pub fn derive_guest_status(group: &MealGuestGroup) -> MealPlanStatus {
+    roll_up_status(group.allocations.iter().map(|allocation| allocation.status))
+}
+
 pub fn derive_component_status(
     component_id: MealPlanComponentId,
     participants: &[MealParticipant],
@@ -553,13 +623,28 @@ pub fn derive_component_status(
     )
 }
 
-pub fn derive_entry_status(participants: &[MealParticipant]) -> MealPlanStatus {
+pub fn derive_entry_status(
+    participants: &[MealParticipant],
+    guest_groups: &[MealGuestGroup],
+) -> MealPlanStatus {
     let mut any = false;
     let mut any_pending = false;
     let mut any_resolved = false;
     let mut component_ids: Vec<MealPlanComponentId> = Vec::new();
     for participant in participants {
         for allocation in &participant.allocations {
+            any = true;
+            if !component_ids.contains(&allocation.component_id) {
+                component_ids.push(allocation.component_id);
+            }
+            match allocation.status {
+                ParticipantStatus::Planned => any_pending = true,
+                ParticipantStatus::Eaten | ParticipantStatus::NotEaten => any_resolved = true,
+            }
+        }
+    }
+    for group in guest_groups {
+        for allocation in &group.allocations {
             any = true;
             if !component_ids.contains(&allocation.component_id) {
                 component_ids.push(allocation.component_id);
@@ -580,7 +665,22 @@ pub fn derive_entry_status(participants: &[MealParticipant]) -> MealPlanStatus {
 
     let component_statuses: Vec<MealPlanStatus> = component_ids
         .into_iter()
-        .map(|component_id| derive_component_status(component_id, participants))
+        .map(|component_id| {
+            roll_up_status(
+                participants
+                    .iter()
+                    .flat_map(|participant| participant.allocations.iter())
+                    .filter(|allocation| allocation.component_id == component_id)
+                    .map(|allocation| allocation.status)
+                    .chain(
+                        guest_groups
+                            .iter()
+                            .flat_map(|group| group.allocations.iter())
+                            .filter(|allocation| allocation.component_id == component_id)
+                            .map(|allocation| allocation.status),
+                    ),
+            )
+        })
         .collect();
     if component_statuses
         .iter()

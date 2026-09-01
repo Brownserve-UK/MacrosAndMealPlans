@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
+use time::Date;
 
 use crate::domain::{
     AccessScope, ConsumptionRecord, ConsumptionRecordId, HouseholdMember, HouseholdMemberId,
@@ -856,6 +857,27 @@ impl MealPlanRepository for InMemoryMealPlanRepository {
                             .any(|participant| participant.member_id == query.member_id))
             })
             .filter(|entry| entry.planned_on >= query.from && entry.planned_on <= query.to)
+            .cloned()
+            .collect();
+        entries.sort_by_key(|entry| {
+            (
+                entry.planned_on,
+                entry.slot.order(),
+                entry.planned_time,
+                entry.created_at,
+                entry.id,
+            )
+        });
+        Ok(entries)
+    }
+
+    async fn list_all(&self, from: Date, to: Date) -> Result<Vec<MealPlanEntry>> {
+        let mut entries: Vec<_> = self
+            .rows
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|entry| entry.planned_on >= from && entry.planned_on <= to)
             .cloned()
             .collect();
         entries.sort_by_key(|entry| {

@@ -245,6 +245,8 @@ async fn planned(h: &Harness, components: Vec<NewMealPlanComponent>) -> MealPlan
             planned_time: Some(time!(18:30)),
             slot: MealSlot::Dinner,
             components,
+            participants: None,
+            guest_groups: Vec::new(),
             actor_id: h.actor_id,
         })
         .await
@@ -252,7 +254,7 @@ async fn planned(h: &Harness, components: Vec<NewMealPlanComponent>) -> MealPlan
 }
 
 #[tokio::test]
-async fn a_member_has_one_meal_entry_per_day_and_slot() {
+async fn a_member_has_one_main_meal_entry_per_day_and_slot() {
     let h = harness();
     let food = product("Food", 200);
     h.products.seed(food.clone());
@@ -268,6 +270,8 @@ async fn a_member_has_one_meal_entry_per_day_and_slot() {
             planned_time: Some(time!(19:00)),
             slot: MealSlot::Dinner,
             components: vec![measured(food.id, 50)],
+            participants: None,
+            guest_groups: Vec::new(),
             actor_id: h.actor_id,
         })
         .await
@@ -277,7 +281,7 @@ async fn a_member_has_one_meal_entry_per_day_and_slot() {
 }
 
 #[tokio::test]
-async fn snacks_never_have_a_planned_time() {
+async fn snacks_allow_distinct_timed_occurrences_and_one_untimed_occurrence() {
     let h = harness();
     let food = product("Food", 200);
     h.products.seed(food.clone());
@@ -291,11 +295,13 @@ async fn snacks_never_have_a_planned_time() {
             planned_time: Some(time!(20:30)),
             slot: MealSlot::Snacks,
             components: vec![measured(food.id, 100)],
+            participants: None,
+            guest_groups: Vec::new(),
             actor_id: h.actor_id,
         })
         .await
         .unwrap();
-    assert_eq!(entry.entry.planned_time, None);
+    assert_eq!(entry.entry.planned_time, Some(time!(20:30)));
 
     let updated = h
         .service
@@ -310,7 +316,77 @@ async fn snacks_never_have_a_planned_time() {
         )
         .await
         .unwrap();
-    assert_eq!(updated.entry.planned_time, None);
+    assert_eq!(updated.entry.planned_time, Some(time!(21:00)));
+
+    let timed = h
+        .service
+        .create(NewMealPlanEntry {
+            id: None,
+            scope: MealPlanScope::Member,
+            member_id: Some(h.member_id),
+            planned_on: date!(2026 - 08 - 25),
+            planned_time: Some(time!(20:30)),
+            slot: MealSlot::Snacks,
+            components: vec![measured(food.id, 50)],
+            participants: None,
+            guest_groups: Vec::new(),
+            actor_id: h.actor_id,
+        })
+        .await
+        .unwrap();
+    assert_eq!(timed.entry.planned_time, Some(time!(20:30)));
+
+    let duplicate_timed = h
+        .service
+        .create(NewMealPlanEntry {
+            id: None,
+            scope: MealPlanScope::Member,
+            member_id: Some(h.member_id),
+            planned_on: date!(2026 - 08 - 25),
+            planned_time: Some(time!(20:30)),
+            slot: MealSlot::Snacks,
+            components: vec![measured(food.id, 25)],
+            participants: None,
+            guest_groups: Vec::new(),
+            actor_id: h.actor_id,
+        })
+        .await
+        .unwrap_err();
+    assert!(matches!(duplicate_timed, CoreError::Conflict { .. }));
+
+    h.service
+        .create(NewMealPlanEntry {
+            id: None,
+            scope: MealPlanScope::Member,
+            member_id: Some(h.member_id),
+            planned_on: date!(2026 - 08 - 25),
+            planned_time: None,
+            slot: MealSlot::Snacks,
+            components: vec![measured(food.id, 25)],
+            participants: None,
+            guest_groups: Vec::new(),
+            actor_id: h.actor_id,
+        })
+        .await
+        .unwrap();
+
+    let duplicate_untimed = h
+        .service
+        .create(NewMealPlanEntry {
+            id: None,
+            scope: MealPlanScope::Member,
+            member_id: Some(h.member_id),
+            planned_on: date!(2026 - 08 - 25),
+            planned_time: None,
+            slot: MealSlot::Snacks,
+            components: vec![measured(food.id, 25)],
+            participants: None,
+            guest_groups: Vec::new(),
+            actor_id: h.actor_id,
+        })
+        .await
+        .unwrap_err();
+    assert!(matches!(duplicate_untimed, CoreError::Conflict { .. }));
 }
 
 #[tokio::test]
@@ -878,6 +954,8 @@ async fn an_archived_product_may_be_retained_but_not_newly_added() {
             planned_time: None,
             slot: MealSlot::Lunch,
             components: vec![measured(food.id, 100)],
+            participants: None,
+            guest_groups: Vec::new(),
             actor_id: h.actor_id,
         })
         .await;
@@ -1183,6 +1261,8 @@ async fn date_policy_forbids_creating_a_plan_in_the_past() {
             planned_time: None,
             slot: MealSlot::Dinner,
             components: vec![measured(food.id, 100)],
+            participants: None,
+            guest_groups: Vec::new(),
             actor_id: h.actor_id,
         })
         .await
@@ -1204,6 +1284,8 @@ async fn date_policy_allows_a_one_day_grace_into_the_past() {
             planned_time: None,
             slot: MealSlot::Dinner,
             components: vec![measured(food.id, 100)],
+            participants: None,
+            guest_groups: Vec::new(),
             actor_id: h.actor_id,
         })
         .await
@@ -1248,6 +1330,8 @@ async fn date_policy_forbids_resolving_a_plan_that_is_not_yet_due() {
             planned_time: None,
             slot: MealSlot::Dinner,
             components: vec![measured(food.id, 100)],
+            participants: None,
+            guest_groups: Vec::new(),
             actor_id: h.actor_id,
         })
         .await
@@ -1500,6 +1584,8 @@ async fn planning_a_recipe_you_do_not_own_is_refused() {
             planned_time: Some(time!(18:30)),
             slot: MealSlot::Dinner,
             components: vec![servings_of(curry.id, 1)],
+            participants: None,
+            guest_groups: Vec::new(),
             actor_id: h.actor_id,
         })
         .await
@@ -1529,6 +1615,8 @@ async fn a_recipe_component_rejects_a_measured_amount() {
                 item: MealItemRef::recipe(curry.id),
                 amount: ConsumedAmount::Measure(Quantity::new(Decimal::new(200, 0), Unit::Gram)),
             }],
+            participants: None,
+            guest_groups: Vec::new(),
             actor_id: h.actor_id,
         })
         .await
@@ -1656,6 +1744,8 @@ async fn a_household_meal_defaults_to_every_member_when_enabled() {
             planned_time: Some(time!(18:30)),
             slot: MealSlot::Dinner,
             components: vec![measured(food.id, 600)],
+            participants: None,
+            guest_groups: Vec::new(),
             actor_id: h.actor_id,
         })
         .await
@@ -1701,6 +1791,7 @@ async fn a_participant_sees_only_their_own_share_and_outcome() {
             entry.entry.revision,
             crate::domain::SetMealParticipants {
                 actor_id: h.actor_id,
+                guest_groups: Vec::new(),
                 participants: vec![
                     crate::domain::NewMealParticipant {
                         id: None,
@@ -1856,6 +1947,8 @@ async fn a_second_participant_confirming_does_not_draw_stock_again() {
             planned_time: Some(time!(18:30)),
             slot: MealSlot::Dinner,
             components: vec![measured(chicken.id, 300)],
+            participants: None,
+            guest_groups: Vec::new(),
             actor_id: h.actor_id,
         })
         .await

@@ -1723,6 +1723,69 @@ async fn a_meal_gains_household_participants_with_per_component_allocations() {
 }
 
 #[tokio::test]
+async fn the_planner_returns_meal_focused_data_and_reviews_household_outcomes() {
+    let app = app().await;
+    let member_id = send(&app, Call::new("GET", "/api/v1/auth/me")).await.1["member_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let product = create_milk_product(&app).await;
+    let component_id = uuid::Uuid::now_v7();
+
+    let (status, entry, headers) = send(
+        &app,
+        Call::new("POST", "/api/v1/meal-plan-entries").body(json!({
+            "household": true,
+            "planned_on": "2026-08-25",
+            "planned_time": "18:30",
+            "slot": "dinner",
+            "components": [{
+                "id": component_id,
+                "product_id": product["id"],
+                "amount": measured_amount(200.0)
+            }],
+            "participants": [{
+                "member_id": member_id,
+                "allocations": [{"component_id": component_id, "amount": measured_amount(100.0)}]
+            }],
+            "guest_count": 1,
+            "guest_allocations": [{"component_id": component_id, "amount": measured_amount(100.0)}]
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{entry}");
+
+    let (status, planner, _) = send(&app, Call::new("GET", "/api/v1/planner/2026-08-24")).await;
+    assert_eq!(status, StatusCode::OK, "{planner}");
+    let meal = &planner["meals"][0];
+    assert_eq!(meal["foods"][0]["amount"]["value"], 200.0);
+    assert_eq!(meal["people"].as_array().unwrap().len(), 1);
+    assert_eq!(meal["guest_groups"][0]["count"], 1);
+    assert!(meal.get("planned").is_none(), "{meal}");
+
+    let entry_id = entry["id"].as_str().unwrap();
+    let guest_group_id = entry["guest_groups"][0]["id"].as_str().unwrap();
+    let (status, reviewed, _) = send(
+        &app,
+        Call::new(
+            "POST",
+            format!("/api/v1/meal-plan-entries/{entry_id}/outcomes"),
+        )
+        .if_match(etag(&headers))
+        .body(json!({
+            "consumed_on": "2026-08-25",
+            "members": [{"member_id": member_id, "result": "as_planned"}],
+            "guests": [{"source_group_id": guest_group_id, "count": 1, "result": "not_eaten"}]
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{reviewed}");
+    assert_eq!(reviewed["status"], "eaten");
+    assert_eq!(reviewed["participants"][0]["status"], "eaten");
+    assert_eq!(reviewed["guest_groups"][0]["status"], "not_eaten");
+}
+
+#[tokio::test]
 async fn household_meal_times_are_published_with_defaults_and_an_etag() {
     let app = app().await;
     let (status, body, headers) =
@@ -1782,7 +1845,7 @@ async fn a_basic_user_cannot_change_meal_times() {
 }
 
 #[tokio::test]
-async fn meal_times_default_for_timed_slots_but_not_snacks() {
+async fn meal_times_default_for_main_meals_and_remain_optional_for_snacks() {
     let app = app().await;
     let product = create_milk_product(&app).await;
 
@@ -1798,7 +1861,7 @@ async fn meal_times_default_for_timed_slots_but_not_snacks() {
     assert_eq!(status, StatusCode::CREATED, "{dinner}");
     assert_eq!(dinner["planned_time"], "18:00");
 
-    let (_, snack, _) = send(
+    let (status, timed_snack, _) = send(
         &app,
         Call::new("POST", "/api/v1/meal-plan-entries").body(json!({
             "planned_on": "2026-08-27",
@@ -1808,7 +1871,20 @@ async fn meal_times_default_for_timed_slots_but_not_snacks() {
         })),
     )
     .await;
-    assert_eq!(snack["planned_time"], Value::Null);
+    assert_eq!(status, StatusCode::CREATED, "{timed_snack}");
+    assert_eq!(timed_snack["planned_time"], "20:45");
+
+    let (status, untimed_snack, _) = send(
+        &app,
+        Call::new("POST", "/api/v1/meal-plan-entries").body(json!({
+            "planned_on": "2026-08-27",
+            "slot": "snacks",
+            "components": [{"product_id": product["id"], "amount": measured_amount(20.0)}]
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{untimed_snack}");
+    assert_eq!(untimed_snack["planned_time"], Value::Null);
 }
 
 #[tokio::test]

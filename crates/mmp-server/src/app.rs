@@ -508,6 +508,13 @@ impl mmp_core::ports::MealPlanRepository for NoopMealPlans {
     ) -> mmp_core::Result<Vec<mmp_core::domain::MealPlanEntry>> {
         Ok(vec![])
     }
+    async fn list_all(
+        &self,
+        _: time::Date,
+        _: time::Date,
+    ) -> mmp_core::Result<Vec<mmp_core::domain::MealPlanEntry>> {
+        Ok(vec![])
+    }
     async fn insert(&self, _: &mmp_core::domain::MealPlanEntry) -> mmp_core::Result<()> {
         Ok(())
     }

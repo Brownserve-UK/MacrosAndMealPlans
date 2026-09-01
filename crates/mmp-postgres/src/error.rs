@@ -41,7 +41,7 @@ pub fn map_db_error(error: sqlx::Error, context: &str) -> CoreError {
     }
 }
 
-const UNIQUE_CONSTRAINTS: [(&str, &str, &str); 22] = [
+const UNIQUE_CONSTRAINTS: [(&str, &str, &str); 24] = [
     ("ingredient_name_unique", "ingredient", "name"),
     ("ingredient_seed_key_unique", "ingredient", "seed_key"),
     ("ingredient_pkey", "ingredient", "id"),
@@ -63,6 +63,11 @@ const UNIQUE_CONSTRAINTS: [(&str, &str, &str); 22] = [
         "meal plan entry",
         "slot",
     ),
+    (
+        "meal_plan_entry_member_day_snack_time_unique",
+        "meal plan entry",
+        "time",
+    ),
     ("meal_plan_component_pkey", "meal plan component", "id"),
     (
         "consumption_record_meal_plan_component_unique",
@@ -78,6 +83,11 @@ const UNIQUE_CONSTRAINTS: [(&str, &str, &str); 22] = [
         "meal_plan_participant_member_occurrence_unique",
         "meal plan participant",
         "slot",
+    ),
+    (
+        "meal_plan_participant_member_snack_time_unique",
+        "meal plan participant",
+        "time",
     ),
     (
         "meal_plan_participant_entry_member_unique",

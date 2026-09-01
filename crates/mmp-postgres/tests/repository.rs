@@ -3,7 +3,8 @@
 use mmp_core::CoreError;
 use mmp_core::domain::{
     AccessScope, CatalogueOrigin, ConsumedAmount, ConsumptionRecord, ConsumptionRecordId,
-    HouseholdMember, HouseholdMemberId, Ingredient, IngredientId, MealCategory, MealItemRef,
+    HouseholdMember, HouseholdMemberId, Ingredient, IngredientId, MealCategory,
+    MealGuestAllocation, MealGuestAllocationId, MealGuestGroup, MealGuestGroupId, MealItemRef,
     MealParticipant, MealParticipantAllocation, MealParticipantAllocationId, MealParticipantId,
     MealPlanComponent, MealPlanComponentId, MealPlanComponentSnapshot, MealPlanEntry,
     MealPlanEntryId, MealPlanScope, MealPlanStatus, MealSlot, MemberAccessGrant, NewStockEvent,
@@ -1264,6 +1265,7 @@ fn meal_plan_entry(
             display_order: Uuid::now_v7(),
         }],
         participants: Vec::<MealParticipant>::new(),
+        guest_groups: Vec::new(),
         created_by: actor_id,
         updated_by: actor_id,
         resolved_by: None,
@@ -1272,6 +1274,37 @@ fn meal_plan_entry(
         created_at: now,
         updated_at: now,
     }
+}
+
+fn household_snack_entry(
+    member_id: HouseholdMemberId,
+    product_id: ProductId,
+    actor_id: UserId,
+    planned_time: Option<time::Time>,
+) -> MealPlanEntry {
+    let mut entry = meal_plan_entry(member_id, product_id, actor_id);
+    entry.scope = MealPlanScope::Household;
+    entry.member_id = None;
+    entry.slot = MealSlot::Snacks;
+    entry.planned_time = planned_time;
+    let component_id = entry.components[0].id;
+    entry.participants = vec![MealParticipant {
+        id: MealParticipantId::new(),
+        member_id,
+        allocations: vec![MealParticipantAllocation {
+            id: MealParticipantAllocationId::new(),
+            component_id,
+            allocated: entry.components[0].amount,
+            status: ParticipantStatus::Planned,
+            consumption_record_id: None,
+            resolved_by: None,
+            resolved_at: None,
+        }],
+        revision: Revision::INITIAL,
+        created_at: entry.created_at,
+        updated_at: entry.updated_at,
+    }];
+    entry
 }
 
 #[sqlx::test]
@@ -1294,6 +1327,72 @@ async fn round_trips_a_planned_meal_with_components(pool: PgPool) {
         .await
         .unwrap();
     assert_eq!(listed, vec![original]);
+}
+
+#[sqlx::test]
+async fn household_snacks_allow_distinct_times_and_one_untimed_occurrence(pool: PgPool) {
+    let (member_id, product_id, actor_id) = seed_meal_plan_dependencies(&pool).await;
+    let repo = PgMealPlanRepository::new(pool.clone());
+
+    let morning = household_snack_entry(
+        member_id,
+        product_id,
+        actor_id,
+        Some(time::macros::time!(10:00)),
+    );
+    let afternoon = household_snack_entry(
+        member_id,
+        product_id,
+        actor_id,
+        Some(time::macros::time!(14:00)),
+    );
+    let untimed = household_snack_entry(member_id, product_id, actor_id, None);
+    repo.insert(&morning).await.unwrap();
+    repo.insert(&afternoon).await.unwrap();
+    repo.insert(&untimed).await.unwrap();
+
+    assert_eq!(repo.get(morning.id).await.unwrap(), Some(morning));
+    assert_eq!(repo.get(afternoon.id).await.unwrap(), Some(afternoon));
+    assert_eq!(repo.get(untimed.id).await.unwrap(), Some(untimed));
+
+    let duplicate = household_snack_entry(
+        member_id,
+        product_id,
+        actor_id,
+        Some(time::macros::time!(10:00)),
+    );
+    let error = repo.insert(&duplicate).await.unwrap_err();
+    assert!(matches!(error, CoreError::Duplicate { field: "time", .. }));
+}
+
+#[sqlx::test]
+async fn round_trips_counted_guest_allocations(pool: PgPool) {
+    let (member_id, product_id, actor_id) = seed_meal_plan_dependencies(&pool).await;
+    let repo = PgMealPlanRepository::new(pool);
+    let mut original = meal_plan_entry(member_id, product_id, actor_id);
+    original.guest_groups = vec![MealGuestGroup {
+        id: MealGuestGroupId::new(),
+        count: 2,
+        allocations: vec![MealGuestAllocation {
+            id: MealGuestAllocationId::new(),
+            component_id: original.components[0].id,
+            allocated: ConsumedAmount::Measure(Quantity::new(
+                Decimal::new(75, 0),
+                Unit::Millilitre,
+            )),
+            status: ParticipantStatus::Planned,
+            confirmed: None,
+            resolved_by: None,
+            resolved_at: None,
+        }],
+        revision: Revision::INITIAL,
+        created_at: original.created_at,
+        updated_at: original.updated_at,
+    }];
+
+    repo.insert(&original).await.unwrap();
+
+    assert_eq!(repo.get(original.id).await.unwrap(), Some(original));
 }
 
 #[sqlx::test]

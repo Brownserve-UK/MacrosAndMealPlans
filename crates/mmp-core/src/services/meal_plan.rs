@@ -8,15 +8,16 @@ use rust_decimal::Decimal;
 use crate::domain::{
     AllocationOutcome, ComponentPreparation, ConfirmMealPlanComponent, ConfirmMealPlanEntry,
     ConsumedAmount, ConsumedNutrition, ConsumptionRecord, ConsumptionRecordId, HouseholdMemberId,
-    MealItemRef, MealParticipant, MealParticipantAllocation, MealParticipantAllocationId,
-    MealParticipantId, MealPlanComponent, MealPlanComponentId, MealPlanComponentSnapshot,
-    MealPlanEntry, MealPlanEntryId, MealPlanEntryPatch, MealPlanScope, MealPlanStatus, MealSlot,
-    NUTRIENT_KEYS, NewMealParticipant, NewMealPlanComponent, NewMealPlanEntry, NutritionFacts,
-    NutritionGoals, NutritionQuality, OutcomeActor, ParticipantStatus, Product, ProductId, Recipe,
-    RecipeId, RecipeRequirement, Revision, SetMealParticipants, UserId, derive_component_status,
-    derive_entry_status, derive_participant_status, nutrition_for, preparation_for,
-    recipe_nutrition, recipe_nutrition_for, resolve_on, sum_nutrition, validate_components,
-    validate_participants,
+    MealGuestAllocation, MealGuestAllocationId, MealGuestGroup, MealItemRef, MealParticipant,
+    MealParticipantAllocation, MealParticipantAllocationId, MealParticipantId, MealPlanComponent,
+    MealPlanComponentId, MealPlanComponentSnapshot, MealPlanEntry, MealPlanEntryId,
+    MealPlanEntryPatch, MealPlanScope, MealPlanStatus, MealSlot, NUTRIENT_KEYS, NewMealGuestGroup,
+    NewMealParticipant, NewMealPlanComponent, NewMealPlanEntry, NutritionFacts, NutritionGoals,
+    NutritionQuality, OutcomeActor, ParticipantStatus, Product, ProductId, Recipe, RecipeId,
+    RecipeRequirement, ReviewMealOutcomes, ReviewedMealOutcome, Revision, SetMealParticipants,
+    UserId, derive_component_status, derive_entry_status, derive_participant_status, nutrition_for,
+    preparation_for, recipe_nutrition, recipe_nutrition_for, resolve_on, sum_nutrition,
+    validate_components, validate_participants,
 };
 use crate::domain::{StockEffectSource, StockOutcome};
 use crate::error::{CoreError, Result, ValidationErrors};
@@ -262,6 +263,18 @@ impl MealPlanService {
                 "A personal meal needs a household member.",
             ));
         }
+        if input.scope == MealPlanScope::Member {
+            let owner = input.member_id.expect("personal meal owner checked");
+            if !input.guest_groups.is_empty()
+                || input.participants.as_ref().is_some_and(|participants| {
+                    participants.len() != 1 || participants[0].member_id != owner
+                })
+            {
+                return Err(CoreError::conflict(
+                    "A personal meal can only contain its owner.",
+                ));
+            }
+        }
         self.validate_component_items(&input.components, &HashSet::new(), input.actor_id)
             .await?;
 
@@ -280,16 +293,51 @@ impl MealPlanService {
             }
         };
 
-        let mut participants = Vec::new();
-        if let Some(member_id) = owner_member_id {
-            participants.push(build_participant(member_id, &components, now, true));
-        }
-        for member_id in extra_member_ids {
-            participants.push(build_participant(member_id, &components, now, false));
-        }
+        let participants = if let Some(requested) = &input.participants {
+            validate_participants(requested, &components)?;
+            let mut result = Vec::with_capacity(requested.len());
+            for participant in requested {
+                let member = self
+                    .members
+                    .get(participant.member_id)
+                    .await?
+                    .ok_or_else(|| {
+                        CoreError::not_found("household member", participant.member_id)
+                    })?;
+                if member.is_archived() {
+                    let mut errors = ValidationErrors::new();
+                    errors.push("participants", "Archived members cannot join a meal");
+                    return Err(errors.into());
+                }
+                result.push(merge_participant(None, participant, &components, now));
+            }
+            result
+        } else {
+            let mut result = Vec::new();
+            if let Some(member_id) = owner_member_id {
+                result.push(build_participant(member_id, &components, now, true));
+            }
+            for member_id in extra_member_ids {
+                result.push(build_participant(member_id, &components, now, false));
+            }
+            result
+        };
+        validate_guest_groups(&input.guest_groups, &components)?;
+        let guest_groups: Vec<_> = input
+            .guest_groups
+            .iter()
+            .map(|group| merge_guest_group(&[], group, now))
+            .collect();
+        require_household_attendance(input.scope, &participants, &guest_groups)?;
         for member_id in participants.iter().map(|p| p.member_id).collect::<Vec<_>>() {
-            self.ensure_slot_free(member_id, input.planned_on, input.slot, None)
-                .await?;
+            self.ensure_slot_free(
+                member_id,
+                input.planned_on,
+                input.slot,
+                input.planned_time,
+                None,
+            )
+            .await?;
         }
 
         let mut entry = MealPlanEntry {
@@ -297,15 +345,12 @@ impl MealPlanService {
             scope: input.scope,
             member_id: input.member_id,
             planned_on: input.planned_on,
-            planned_time: input
-                .slot
-                .allows_planned_time()
-                .then_some(input.planned_time)
-                .flatten(),
+            planned_time: input.planned_time,
             slot: input.slot,
             status: MealPlanStatus::Planned,
             components,
             participants,
+            guest_groups,
             created_by: input.actor_id,
             updated_by: input.actor_id,
             resolved_by: None,
@@ -329,6 +374,8 @@ impl MealPlanService {
         require_revision(id, expected, entry.revision)?;
         require_planned(&entry)?;
         validate_participants(&input.participants, &entry.components)?;
+        validate_guest_groups(&input.guest_groups, &entry.components)?;
+        require_household_attendance(entry.scope, &input.participants, &input.guest_groups)?;
 
         for participant in &input.participants {
             let member = self
@@ -355,6 +402,7 @@ impl MealPlanService {
                     new_participant.member_id,
                     entry.planned_on,
                     entry.slot,
+                    entry.planned_time,
                     Some(entry.id),
                 )
                 .await?;
@@ -380,6 +428,11 @@ impl MealPlanService {
         }
 
         entry.participants = participants;
+        entry.guest_groups = input
+            .guest_groups
+            .iter()
+            .map(|group| merge_guest_group(&entry.guest_groups, group, now))
+            .collect();
         entry.updated_by = input.actor_id;
         entry.updated_at = now;
         entry.revision = entry.revision.next();
@@ -414,6 +467,7 @@ impl MealPlanService {
         member_id: HouseholdMemberId,
         planned_on: Date,
         slot: MealSlot,
+        planned_time: Option<Time>,
         ignore_entry: Option<MealPlanEntryId>,
     ) -> Result<()> {
         let clash = self
@@ -426,11 +480,22 @@ impl MealPlanService {
             })
             .await?
             .into_iter()
-            .any(|entry| entry.slot == slot && Some(entry.id) != ignore_entry);
+            .any(|entry| {
+                entry.slot == slot
+                    && (slot != MealSlot::Snacks || entry.planned_time == planned_time)
+                    && Some(entry.id) != ignore_entry
+            });
         if clash {
-            return Err(CoreError::conflict(
-                "That meal slot already exists. Add food to the existing meal instead.",
-            ));
+            let message = if slot == MealSlot::Snacks {
+                if planned_time.is_some() {
+                    "A snack is already planned for that time. Edit it to add more food."
+                } else {
+                    "An untimed snack is already planned. Edit it to add more food."
+                }
+            } else {
+                "That meal slot already exists. Add food to the existing meal instead."
+            };
+            return Err(CoreError::conflict(message));
         }
         Ok(())
     }
@@ -466,6 +531,26 @@ impl MealPlanService {
             entry.components = merge_components(&entry.components, components)?;
             sync_allocations(&mut entry, owner, now);
         }
+        if let Some(participants) = patch.participants {
+            validate_participants(&participants, &entry.components)?;
+            entry.participants = participants
+                .iter()
+                .map(|participant| {
+                    let previous = entry
+                        .participants
+                        .iter()
+                        .find(|candidate| candidate.member_id == participant.member_id);
+                    merge_participant(previous, participant, &entry.components, now)
+                })
+                .collect();
+        }
+        if let Some(guest_groups) = patch.guest_groups {
+            validate_guest_groups(&guest_groups, &entry.components)?;
+            entry.guest_groups = guest_groups
+                .iter()
+                .map(|group| merge_guest_group(&entry.guest_groups, group, now))
+                .collect();
+        }
         if let Some(planned_on) = patch.planned_on {
             ensure_not_past(&*self.clock, planned_on)?;
             entry.planned_on = planned_on;
@@ -476,8 +561,37 @@ impl MealPlanService {
         if let Some(slot) = patch.slot {
             entry.slot = slot;
         }
-        if !entry.slot.allows_planned_time() {
-            entry.planned_time = None;
+        if entry.scope == MealPlanScope::Member {
+            let owner = entry.member_id.expect("personal meal owner");
+            if !entry.guest_groups.is_empty()
+                || entry.participants.len() != 1
+                || entry.participants[0].member_id != owner
+            {
+                return Err(CoreError::conflict(
+                    "A personal meal can only contain its owner.",
+                ));
+            }
+        }
+        require_household_attendance(entry.scope, &entry.participants, &entry.guest_groups)?;
+        for participant in &entry.participants {
+            let member = self
+                .members
+                .get(participant.member_id)
+                .await?
+                .ok_or_else(|| CoreError::not_found("household member", participant.member_id))?;
+            if member.is_archived() {
+                let mut errors = ValidationErrors::new();
+                errors.push("participants", "Archived members cannot join a meal");
+                return Err(errors.into());
+            }
+            self.ensure_slot_free(
+                participant.member_id,
+                entry.planned_on,
+                entry.slot,
+                entry.planned_time,
+                Some(entry.id),
+            )
+            .await?;
         }
         entry.updated_by = actor_id;
         entry.updated_at = now;
@@ -544,7 +658,7 @@ impl MealPlanService {
                     component_item,
                     &planned_amount,
                     input.actor_id,
-                    subject,
+                    Some(subject),
                 )
                 .into_iter()
                 .collect()
@@ -864,7 +978,7 @@ impl MealPlanService {
                     component.item,
                     &component.amount,
                     input.actor_id,
-                    subject,
+                    Some(subject),
                 )
             {
                 deductions.push(deduction);
@@ -896,6 +1010,162 @@ impl MealPlanService {
                 Some(now),
             );
             records.push(record);
+        }
+
+        entry.updated_by = input.actor_id;
+        entry.updated_at = now;
+        entry.revision = entry.revision.next();
+        recompute_statuses(&mut entry);
+        let write = StockWrite {
+            deductions,
+            releases: Vec::new(),
+        };
+        let (outcome, stock_outcomes) = self
+            .plans
+            .resolve(&entry, expected, &records, &write)
+            .await?;
+        commit_outcome(outcome, id, expected)?;
+        self.stock_affected(id, stock_outcomes).await
+    }
+
+    pub async fn review_outcomes(
+        &self,
+        id: MealPlanEntryId,
+        expected: Revision,
+        input: ReviewMealOutcomes,
+    ) -> Result<StockAffected<MealPlanEntryView>> {
+        let entry = self.get_entry(id).await?;
+        ensure_due(&*self.clock, entry.planned_on)?;
+        self.review_outcomes_unchecked(id, expected, input).await
+    }
+
+    pub async fn review_outcomes_unchecked(
+        &self,
+        id: MealPlanEntryId,
+        expected: Revision,
+        input: ReviewMealOutcomes,
+    ) -> Result<StockAffected<MealPlanEntryView>> {
+        let mut entry = self.get_entry(id).await?;
+        require_revision(id, expected, entry.revision)?;
+        if input.members.is_empty() && input.guests.is_empty() {
+            return Err(CoreError::conflict("Choose at least one person."));
+        }
+        self.freeze(&mut entry).await?;
+        let catalogue = self
+            .catalogue_for(entry.components.iter().map(|component| component.item))
+            .await?;
+        let now = self.clock.now();
+        let mut records = Vec::new();
+        let mut deductions = Vec::new();
+
+        for reviewed in &input.members {
+            require_subject_pending(&entry, reviewed.member_id)?;
+            let pending = pending_component_ids(&entry, reviewed.member_id);
+            let actual = actual_components_for_member(
+                &reviewed.outcome,
+                &entry,
+                reviewed.member_id,
+                &pending,
+            )?;
+            for component_id in pending {
+                let component = find_component(&entry, component_id)?.clone();
+                if let Some(amount) = actual.get(&component_id).copied() {
+                    let scaled = catalogue.resolve(component.item, &amount);
+                    if !scaled.resolvable {
+                        let mut errors = ValidationErrors::new();
+                        errors.push(
+                            format!("members.{}.components.{component_id}", reviewed.member_id),
+                            "We cannot work out this food's nutrition",
+                        );
+                        return Err(errors.into());
+                    }
+                    if !component_still_eaten(&entry, component_id)
+                        && let Some(deduction) = self.component_deduction(
+                            &catalogue,
+                            &entry,
+                            component_id,
+                            component.item,
+                            &component.amount,
+                            input.actor_id,
+                            Some(reviewed.member_id),
+                        )
+                    {
+                        deductions.push(deduction);
+                    }
+                    let record = ConsumptionRecord {
+                        id: Default::default(),
+                        member_id: reviewed.member_id,
+                        item: component.item,
+                        recorded_by: Some(input.actor_id),
+                        meal_plan_entry_id: Some(entry.id),
+                        meal_plan_component_id: Some(component.id),
+                        slot: entry.slot,
+                        amount,
+                        consumed_on: input.consumed_on,
+                        consumed_at: input.consumed_at,
+                        nutrition: scaled.nutrition.facts,
+                        quality: scaled.nutrition.quality,
+                        revision: Revision::INITIAL,
+                        created_at: now,
+                        updated_at: now,
+                    };
+                    set_allocation(
+                        &mut entry,
+                        reviewed.member_id,
+                        component_id,
+                        ParticipantStatus::Eaten,
+                        Some(record.id),
+                        Some(input.actor_id),
+                        Some(now),
+                    );
+                    records.push(record);
+                } else {
+                    set_allocation(
+                        &mut entry,
+                        reviewed.member_id,
+                        component_id,
+                        ParticipantStatus::NotEaten,
+                        None,
+                        Some(input.actor_id),
+                        Some(now),
+                    );
+                }
+            }
+        }
+
+        let guest_results = build_guest_results(&entry, &input, now)?;
+        let mut guest_deductions = HashSet::new();
+        for group in &guest_results {
+            for allocation in &group.allocations {
+                if allocation.status == ParticipantStatus::Eaten
+                    && !component_still_eaten(&entry, allocation.component_id)
+                    && guest_deductions.insert(allocation.component_id)
+                {
+                    let component = find_component(&entry, allocation.component_id)?.clone();
+                    if let Some(deduction) = self.component_deduction(
+                        &catalogue,
+                        &entry,
+                        component.id,
+                        component.item,
+                        &component.amount,
+                        input.actor_id,
+                        None,
+                    ) {
+                        deductions.push(deduction);
+                    }
+                }
+            }
+        }
+        if !input.guests.is_empty() {
+            let source_ids: HashSet<_> = input
+                .guests
+                .iter()
+                .map(|result| result.source_group_id)
+                .collect();
+            entry
+                .guest_groups
+                .retain(|group| !source_ids.contains(&group.id));
+            entry.guest_groups.extend(guest_results);
         }
 
         entry.updated_by = input.actor_id;
@@ -1026,7 +1296,7 @@ impl MealPlanService {
         item: MealItemRef,
         amount: &ConsumedAmount,
         actor: UserId,
-        subject: HouseholdMemberId,
+        subject: Option<HouseholdMemberId>,
     ) -> Option<StockDeduction> {
         let MealItemRef::Product { product_id } = item else {
             return None;
@@ -1039,7 +1309,7 @@ impl MealPlanService {
             amount,
             stock_source_label(entry, &product.name),
             Some(actor),
-            Some(subject),
+            subject,
         )
     }
 
@@ -1191,6 +1461,17 @@ impl MealPlanService {
             target,
             insufficient_target_coverage,
         })
+    }
+
+    pub async fn planner_entries(&self, week_start: Date) -> Result<Vec<MealPlanEntryView>> {
+        let week_end = week_start + Duration::days(6);
+        let entries = self.plans.list_all(week_start, week_end).await?;
+        let mut views = Vec::with_capacity(entries.len());
+        for entry in entries {
+            let records = self.records_for_entry(entry.id).await?;
+            views.push(self.present(entry, &records, None).await?);
+        }
+        Ok(views)
     }
 
     async fn get_entry(&self, id: MealPlanEntryId) -> Result<MealPlanEntry> {
@@ -1562,6 +1843,94 @@ fn merge_participant(
     }
 }
 
+fn validate_guest_groups(
+    groups: &[NewMealGuestGroup],
+    components: &[MealPlanComponent],
+) -> Result<()> {
+    let mut errors = ValidationErrors::new();
+    for (group_index, group) in groups.iter().enumerate() {
+        if group.count <= 0 {
+            errors.push(
+                format!("guest_groups.{group_index}.count"),
+                "Guest count must be more than zero",
+            );
+        }
+        let mut seen = HashSet::new();
+        for (allocation_index, allocation) in group.allocations.iter().enumerate() {
+            let field = format!("guest_groups.{group_index}.allocations.{allocation_index}");
+            if !seen.insert(allocation.component_id) {
+                errors.push(&field, "This food appears twice");
+                continue;
+            }
+            let Some(component) = components
+                .iter()
+                .find(|component| component.id == allocation.component_id)
+            else {
+                errors.push(&field, "Unknown food");
+                continue;
+            };
+            if allocation.allocated.value() <= Decimal::ZERO {
+                errors.push(format!("{field}.amount"), "Must be more than zero");
+            }
+            if allocation.allocated.kind_code() != component.amount.kind_code() {
+                errors.push(
+                    format!("{field}.amount"),
+                    "Portion must use the meal amount type",
+                );
+            }
+        }
+    }
+    errors.into_result()
+}
+
+fn merge_guest_group(
+    existing: &[MealGuestGroup],
+    new_group: &NewMealGuestGroup,
+    now: OffsetDateTime,
+) -> MealGuestGroup {
+    let previous = new_group
+        .id
+        .and_then(|id| existing.iter().find(|group| group.id == id));
+    let allocations = new_group
+        .allocations
+        .iter()
+        .map(|allocation| {
+            let old = previous.and_then(|group| {
+                group
+                    .allocations
+                    .iter()
+                    .find(|candidate| candidate.component_id == allocation.component_id)
+            });
+            MealGuestAllocation {
+                id: old
+                    .map(|value| value.id)
+                    .unwrap_or_else(MealGuestAllocationId::new),
+                component_id: allocation.component_id,
+                allocated: allocation.allocated,
+                status: old
+                    .map(|value| value.status)
+                    .unwrap_or(ParticipantStatus::Planned),
+                confirmed: old.and_then(|value| value.confirmed),
+                resolved_by: old.and_then(|value| value.resolved_by),
+                resolved_at: old.and_then(|value| value.resolved_at),
+            }
+        })
+        .collect();
+    MealGuestGroup {
+        id: previous
+            .map(|group| group.id)
+            .or(new_group.id)
+            .unwrap_or_default(),
+        count: new_group.count,
+        allocations,
+        revision: previous
+            .map(|group| group.revision.next())
+            .unwrap_or(Revision::INITIAL),
+        created_at: previous.map(|group| group.created_at).unwrap_or(now),
+        updated_at: now,
+    }
+}
+
 fn sync_allocations(
     entry: &mut MealPlanEntry,
     owner: Option<HouseholdMemberId>,
@@ -1606,8 +1975,40 @@ fn participant_status_to_meal(status: ParticipantStatus) -> MealPlanStatus {
 
 fn recompute_statuses(entry: &mut MealPlanEntry) {
     let participants = entry.participants.clone();
+    let guest_groups = entry.guest_groups.clone();
     for component in &mut entry.components {
-        let status = derive_component_status(component.id, &participants);
+        let status = {
+            let member_statuses = participants
+                .iter()
+                .flat_map(|participant| participant.allocations.iter())
+                .filter(|allocation| allocation.component_id == component.id)
+                .map(|allocation| allocation.status);
+            let guest_statuses = guest_groups
+                .iter()
+                .flat_map(|group| group.allocations.iter())
+                .filter(|allocation| allocation.component_id == component.id)
+                .map(|allocation| allocation.status);
+            let statuses: Vec<_> = member_statuses.chain(guest_statuses).collect();
+            if statuses.is_empty()
+                || statuses
+                    .iter()
+                    .all(|status| *status == ParticipantStatus::Planned)
+            {
+                MealPlanStatus::Planned
+            } else if statuses
+                .iter()
+                .any(|status| *status == ParticipantStatus::Planned)
+            {
+                MealPlanStatus::PartiallyResolved
+            } else if statuses
+                .iter()
+                .any(|status| *status == ParticipantStatus::Eaten)
+            {
+                MealPlanStatus::Eaten
+            } else {
+                MealPlanStatus::NotEaten
+            }
+        };
         component.status = status;
         if status == MealPlanStatus::Planned {
             component.resolved_by = None;
@@ -1624,9 +2025,28 @@ fn recompute_statuses(entry: &mut MealPlanEntry) {
                 .iter()
                 .find_map(|allocation| allocation.resolved_by);
             component.resolved_at = resolved.iter().filter_map(|a| a.resolved_at).max();
+            if component.resolved_by.is_none() {
+                component.resolved_by = guest_groups
+                    .iter()
+                    .flat_map(|group| group.allocations.iter())
+                    .filter(|allocation| {
+                        allocation.component_id == component.id && allocation.status.is_resolved()
+                    })
+                    .find_map(|allocation| allocation.resolved_by);
+            }
+            component.resolved_at = component.resolved_at.max(
+                guest_groups
+                    .iter()
+                    .flat_map(|group| group.allocations.iter())
+                    .filter(|allocation| {
+                        allocation.component_id == component.id && allocation.status.is_resolved()
+                    })
+                    .filter_map(|allocation| allocation.resolved_at)
+                    .max(),
+            );
         }
     }
-    let entry_status = derive_entry_status(&participants);
+    let entry_status = derive_entry_status(&participants, &entry.guest_groups);
     entry.status = entry_status;
     if entry_status == MealPlanStatus::Planned {
         entry.resolved_by = None;
@@ -1641,7 +2061,35 @@ fn recompute_statuses(entry: &mut MealPlanEntry) {
             .iter()
             .find_map(|allocation| allocation.resolved_by);
         entry.resolved_at = resolved.iter().filter_map(|a| a.resolved_at).max();
+        if entry.resolved_by.is_none() {
+            entry.resolved_by = guest_groups
+                .iter()
+                .flat_map(|group| group.allocations.iter())
+                .filter(|allocation| allocation.status.is_resolved())
+                .find_map(|allocation| allocation.resolved_by);
+        }
+        entry.resolved_at = entry.resolved_at.max(
+            guest_groups
+                .iter()
+                .flat_map(|group| group.allocations.iter())
+                .filter(|allocation| allocation.status.is_resolved())
+                .filter_map(|allocation| allocation.resolved_at)
+                .max(),
+        );
     }
+}
+
+fn require_household_attendance<P, G>(
+    scope: MealPlanScope,
+    participants: &[P],
+    guest_groups: &[G],
+) -> Result<()> {
+    if scope == MealPlanScope::Household && participants.is_empty() && guest_groups.is_empty() {
+        return Err(CoreError::conflict(
+            "A household meal needs at least one household member or guest.",
+        ));
+    }
+    Ok(())
 }
 
 fn set_allocation(
@@ -1674,7 +2122,7 @@ fn outcomes_for_component(
     records_by_key: &HashMap<(MealPlanComponentId, HouseholdMemberId), ConsumptionRecord>,
     component_id: MealPlanComponentId,
 ) -> Vec<AllocationOutcome> {
-    entry
+    let mut outcomes: Vec<AllocationOutcome> = entry
         .participants
         .iter()
         .filter_map(|participant| {
@@ -1690,7 +2138,174 @@ fn outcomes_for_component(
                         .map(|record| record.amount),
                 })
         })
-        .collect()
+        .collect();
+    for group in &entry.guest_groups {
+        if let Some(allocation) = group
+            .allocations
+            .iter()
+            .find(|allocation| allocation.component_id == component_id)
+        {
+            for _ in 0..group.count {
+                outcomes.push(AllocationOutcome {
+                    allocated: allocation.allocated,
+                    status: allocation.status,
+                    confirmed: allocation.confirmed,
+                });
+            }
+        }
+    }
+    outcomes
+}
+
+fn actual_components_for_member(
+    outcome: &ReviewedMealOutcome,
+    entry: &MealPlanEntry,
+    member_id: HouseholdMemberId,
+    pending: &[MealPlanComponentId],
+) -> Result<HashMap<MealPlanComponentId, ConsumedAmount>> {
+    match outcome {
+        ReviewedMealOutcome::NotEaten => Ok(HashMap::new()),
+        ReviewedMealOutcome::AsPlanned => Ok(entry
+            .participant_for(member_id)
+            .into_iter()
+            .flat_map(|participant| participant.allocations.iter())
+            .filter(|allocation| pending.contains(&allocation.component_id))
+            .map(|allocation| (allocation.component_id, allocation.allocated))
+            .collect()),
+        ReviewedMealOutcome::Changed(components) => {
+            validate_reviewed_components(components, entry, pending)
+        }
+    }
+}
+
+fn validate_reviewed_components(
+    components: &[crate::domain::ActualMealPlanComponent],
+    entry: &MealPlanEntry,
+    pending: &[MealPlanComponentId],
+) -> Result<HashMap<MealPlanComponentId, ConsumedAmount>> {
+    let mut errors = ValidationErrors::new();
+    let mut actual = HashMap::new();
+    for component in components {
+        let Some(planned) = entry
+            .components
+            .iter()
+            .find(|candidate| candidate.id == component.component_id)
+        else {
+            errors.push("components", "Unknown planned food");
+            continue;
+        };
+        if !pending.contains(&component.component_id) {
+            errors.push("components", "This result has already been recorded");
+        }
+        if component.amount.value() <= Decimal::ZERO {
+            errors.push("components", "Amounts must be more than zero");
+        }
+        if component.amount.kind_code() != planned.amount.kind_code() {
+            errors.push("components", "Amount type must match the planned food");
+        }
+        if actual
+            .insert(component.component_id, component.amount)
+            .is_some()
+        {
+            errors.push("components", "This food appears twice");
+        }
+    }
+    errors.into_result()?;
+    Ok(actual)
+}
+
+fn build_guest_results(
+    entry: &MealPlanEntry,
+    input: &ReviewMealOutcomes,
+    now: OffsetDateTime,
+) -> Result<Vec<MealGuestGroup>> {
+    let mut results = Vec::new();
+    let source_ids: HashSet<_> = input
+        .guests
+        .iter()
+        .map(|reviewed| reviewed.source_group_id)
+        .collect();
+    for source_id in source_ids {
+        let source = entry
+            .guest_groups
+            .iter()
+            .find(|group| group.id == source_id)
+            .ok_or_else(|| CoreError::conflict("These guests are no longer part of the meal."))?;
+        if source
+            .allocations
+            .iter()
+            .any(|allocation| allocation.status.is_resolved())
+        {
+            return Err(CoreError::conflict(
+                "A guest result has already been recorded.",
+            ));
+        }
+        let reviewed: Vec<_> = input
+            .guests
+            .iter()
+            .filter(|candidate| candidate.source_group_id == source_id)
+            .collect();
+        if reviewed.iter().any(|candidate| candidate.count <= 0)
+            || reviewed
+                .iter()
+                .map(|candidate| candidate.count)
+                .sum::<i32>()
+                != source.count
+        {
+            let mut errors = ValidationErrors::new();
+            errors.push(
+                "guests",
+                "Guest results must add up to the planned guest count",
+            );
+            return Err(errors.into());
+        }
+        let pending: Vec<_> = source
+            .allocations
+            .iter()
+            .map(|allocation| allocation.component_id)
+            .collect();
+        for reviewed in reviewed {
+            let actual = match &reviewed.outcome {
+                ReviewedMealOutcome::AsPlanned => source
+                    .allocations
+                    .iter()
+                    .map(|allocation| (allocation.component_id, allocation.allocated))
+                    .collect(),
+                ReviewedMealOutcome::NotEaten => HashMap::new(),
+                ReviewedMealOutcome::Changed(components) => {
+                    validate_reviewed_components(components, entry, &pending)?
+                }
+            };
+            results.push(MealGuestGroup {
+                id: Default::default(),
+                count: reviewed.count,
+                allocations: source
+                    .allocations
+                    .iter()
+                    .map(|allocation| {
+                        let confirmed = actual.get(&allocation.component_id).copied();
+                        MealGuestAllocation {
+                            id: Default::default(),
+                            component_id: allocation.component_id,
+                            allocated: allocation.allocated,
+                            status: if confirmed.is_some() {
+                                ParticipantStatus::Eaten
+                            } else {
+                                ParticipantStatus::NotEaten
+                            },
+                            confirmed,
+                            resolved_by: Some(input.actor_id),
+                            resolved_at: Some(now),
+                        }
+                    })
+                    .collect(),
+                revision: Revision::INITIAL,
+                created_at: source.created_at,
+                updated_at: now,
+            });
+        }
+    }
+    Ok(results)
 }
 
 fn pending_component_ids(
@@ -1739,10 +2354,14 @@ fn component_update<'a>(
 }
 
 fn component_still_eaten(entry: &MealPlanEntry, component_id: MealPlanComponentId) -> bool {
-    entry.participants.iter().any(|p| {
-        p.allocations
-            .iter()
-            .any(|a| a.component_id == component_id && a.status == ParticipantStatus::Eaten)
+    entry.participants.iter().any(|participant| {
+        participant.allocations.iter().any(|allocation| {
+            allocation.component_id == component_id && allocation.status == ParticipantStatus::Eaten
+        })
+    }) || entry.guest_groups.iter().any(|group| {
+        group.allocations.iter().any(|allocation| {
+            allocation.component_id == component_id && allocation.status == ParticipantStatus::Eaten
+        })
     })
 }
 

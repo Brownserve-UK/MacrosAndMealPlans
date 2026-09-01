@@ -5,11 +5,12 @@ use async_trait::async_trait;
 use mmp_core::Result;
 use mmp_core::domain::StockOutcome;
 use mmp_core::domain::{
-    ConsumptionRecord, ConsumptionRecordId, MealItemRef, MealParticipant,
-    MealParticipantAllocation, MealParticipantAllocationId, MealParticipantId, MealPlanComponent,
-    MealPlanComponentId, MealPlanComponentSnapshot, MealPlanEntry, MealPlanEntryId, MealPlanScope,
-    MealPlanStatus, MealSlot, NutritionFacts, NutritionQuality, ParticipantStatus, ProductId,
-    RecipeId, Revision, UserId,
+    ConsumptionRecord, ConsumptionRecordId, MealGuestAllocation, MealGuestAllocationId,
+    MealGuestGroup, MealGuestGroupId, MealItemRef, MealParticipant, MealParticipantAllocation,
+    MealParticipantAllocationId, MealParticipantId, MealPlanComponent, MealPlanComponentId,
+    MealPlanComponentSnapshot, MealPlanEntry, MealPlanEntryId, MealPlanScope, MealPlanStatus,
+    MealSlot, NutritionFacts, NutritionQuality, ParticipantStatus, ProductId, RecipeId, Revision,
+    UserId,
 };
 use mmp_core::ports::{
     MealPlanComponentUpdate, MealPlanQuery, MealPlanRepository, SnapshotOp, StockWrite,
@@ -152,6 +153,56 @@ struct AllocationRow {
     resolved_at: Option<OffsetDateTime>,
 }
 
+#[derive(Debug, sqlx::FromRow)]
+struct GuestGroupRow {
+    id: Uuid,
+    entry_id: Uuid,
+    guest_count: i32,
+    revision: i64,
+    created_at: OffsetDateTime,
+    updated_at: OffsetDateTime,
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct GuestAllocationRow {
+    id: Uuid,
+    guest_group_id: Uuid,
+    component_id: Uuid,
+    allocated_kind: String,
+    allocated_value: Decimal,
+    allocated_unit: Option<String>,
+    status: String,
+    confirmed_kind: Option<String>,
+    confirmed_value: Option<Decimal>,
+    confirmed_unit: Option<String>,
+    resolved_by: Option<Uuid>,
+    resolved_at: Option<OffsetDateTime>,
+}
+
+impl GuestAllocationRow {
+    fn into_domain(self) -> Result<MealGuestAllocation> {
+        let confirmed = match (self.confirmed_kind, self.confirmed_value) {
+            (Some(kind), Some(value)) => Some(parse_amount(&kind, value, self.confirmed_unit)?),
+            (None, None) => None,
+            _ => return Err(bad_value("guest confirmed amount", "partial")),
+        };
+        Ok(MealGuestAllocation {
+            id: MealGuestAllocationId::from(self.id),
+            component_id: MealPlanComponentId::from(self.component_id),
+            allocated: parse_amount(
+                &self.allocated_kind,
+                self.allocated_value,
+                self.allocated_unit,
+            )?,
+            status: ParticipantStatus::from_str(&self.status)
+                .map_err(|_| bad_value("guest allocation status", &self.status))?,
+            confirmed,
+            resolved_by: self.resolved_by.map(UserId::from),
+            resolved_at: self.resolved_at,
+        })
+    }
+}
+
 impl AllocationRow {
     fn into_domain(self) -> Result<MealParticipantAllocation> {
         Ok(MealParticipantAllocation {
@@ -175,6 +226,7 @@ fn assemble(
     row: EntryRow,
     components: Vec<MealPlanComponent>,
     participants: Vec<MealParticipant>,
+    guest_groups: Vec<MealGuestGroup>,
 ) -> Result<MealPlanEntry> {
     let slot = MealSlot::from_str(&row.slot).map_err(|_| bad_value("slot", &row.slot))?;
     Ok(MealPlanEntry {
@@ -182,15 +234,13 @@ fn assemble(
         scope: MealPlanScope::from_str(&row.scope).map_err(|_| bad_value("scope", &row.scope))?,
         member_id: row.member_id.map(Into::into),
         planned_on: row.planned_on,
-        planned_time: slot
-            .allows_planned_time()
-            .then_some(row.planned_time)
-            .flatten(),
+        planned_time: row.planned_time,
         slot,
         status: MealPlanStatus::from_str(&row.status)
             .map_err(|_| bad_value("status", &row.status))?,
         components,
         participants,
+        guest_groups,
         created_by: UserId::from(row.created_by),
         updated_by: UserId::from(row.updated_by),
         resolved_by: row.resolved_by.map(UserId::from),
@@ -203,9 +253,12 @@ fn assemble(
 
 const GET_ENTRY: &str = "SELECT id, scope, member_id, planned_on, planned_time, slot, status, created_by, updated_by, resolved_by, resolved_at, revision, created_at, updated_at FROM meal_plan_entry WHERE id = $1";
 const LIST_ENTRIES: &str = "SELECT id, scope, member_id, planned_on, planned_time, slot, status, created_by, updated_by, resolved_by, resolved_at, revision, created_at, updated_at FROM meal_plan_entry WHERE (member_id = $1 OR ($4 AND EXISTS (SELECT 1 FROM meal_plan_participant p WHERE p.entry_id = meal_plan_entry.id AND p.member_id = $1))) AND planned_on >= $2 AND planned_on <= $3 ORDER BY planned_on, CASE slot WHEN 'breakfast' THEN 0 WHEN 'lunch' THEN 1 WHEN 'dinner' THEN 2 ELSE 3 END, planned_time NULLS LAST, created_at, id";
+const LIST_ALL_ENTRIES: &str = "SELECT id, scope, member_id, planned_on, planned_time, slot, status, created_by, updated_by, resolved_by, resolved_at, revision, created_at, updated_at FROM meal_plan_entry WHERE planned_on >= $1 AND planned_on <= $2 ORDER BY planned_on, CASE slot WHEN 'breakfast' THEN 0 WHEN 'lunch' THEN 1 WHEN 'dinner' THEN 2 ELSE 3 END, planned_time NULLS LAST, created_at, id";
 const LIST_COMPONENTS: &str = "SELECT id, entry_id, position, item_kind, product_id, recipe_id, amount_kind, amount_value, amount_unit, frozen_item_name, nutrition_basis_amount, nutrition_basis_unit, energy_kcal, protein_g, carbohydrate_g, sugar_g, fat_g, saturated_fat_g, fibre_g, salt_g, cholesterol_mg, nutrition_extra, nutrition_quality, status, resolved_by, resolved_at, revision, display_order FROM meal_plan_component WHERE entry_id = ANY($1) ORDER BY entry_id, position";
 const LIST_PARTICIPANTS: &str = "SELECT id, entry_id, member_id, revision, created_at, updated_at FROM meal_plan_participant WHERE entry_id = ANY($1) ORDER BY entry_id, created_at, id";
 const LIST_ALLOCATIONS: &str = "SELECT id, participant_id, component_id, allocated_kind, allocated_value, allocated_unit, status, consumption_record_id, resolved_by, resolved_at FROM meal_plan_participant_allocation WHERE participant_id = ANY($1)";
+const LIST_GUEST_GROUPS: &str = "SELECT id, entry_id, guest_count, revision, created_at, updated_at FROM meal_guest_group WHERE entry_id = ANY($1) ORDER BY entry_id, created_at, id";
+const LIST_GUEST_ALLOCATIONS: &str = "SELECT id, guest_group_id, component_id, allocated_kind, allocated_value, allocated_unit, status, confirmed_kind, confirmed_value, confirmed_unit, resolved_by, resolved_at FROM meal_guest_allocation WHERE guest_group_id = ANY($1)";
 
 pub struct PgMealPlanRepository {
     pool: PgPool,
@@ -284,10 +337,55 @@ impl PgMealPlanRepository {
         Ok(grouped)
     }
 
+    async fn guests_for(&self, ids: &[Uuid]) -> Result<HashMap<Uuid, Vec<MealGuestGroup>>> {
+        if ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let group_rows: Vec<GuestGroupRow> = sqlx::query_as(LIST_GUEST_GROUPS)
+            .bind(ids)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|error| repository_error("loading meal guests", error))?;
+        let group_ids: Vec<Uuid> = group_rows.iter().map(|row| row.id).collect();
+        let allocation_rows: Vec<GuestAllocationRow> = if group_ids.is_empty() {
+            Vec::new()
+        } else {
+            sqlx::query_as(LIST_GUEST_ALLOCATIONS)
+                .bind(&group_ids)
+                .fetch_all(&self.pool)
+                .await
+                .map_err(|error| repository_error("loading guest portions", error))?
+        };
+        let mut allocations_by_group: HashMap<Uuid, Vec<MealGuestAllocation>> = HashMap::new();
+        for row in allocation_rows {
+            let group_id = row.guest_group_id;
+            allocations_by_group
+                .entry(group_id)
+                .or_default()
+                .push(row.into_domain()?);
+        }
+        let mut grouped: HashMap<Uuid, Vec<MealGuestGroup>> = HashMap::new();
+        for row in group_rows {
+            grouped
+                .entry(row.entry_id)
+                .or_default()
+                .push(MealGuestGroup {
+                    id: MealGuestGroupId::from(row.id),
+                    count: row.guest_count,
+                    allocations: allocations_by_group.remove(&row.id).unwrap_or_default(),
+                    revision: Revision::new(row.revision),
+                    created_at: row.created_at,
+                    updated_at: row.updated_at,
+                });
+        }
+        Ok(grouped)
+    }
+
     async fn hydrate(&self, rows: Vec<EntryRow>) -> Result<Vec<MealPlanEntry>> {
         let ids: Vec<Uuid> = rows.iter().map(|row| row.id).collect();
         let mut components = self.components_for(&ids).await?;
         let mut participants = self.participants_for(&ids).await?;
+        let mut guests = self.guests_for(&ids).await?;
         rows.into_iter()
             .map(|row| {
                 let id = row.id;
@@ -295,6 +393,7 @@ impl PgMealPlanRepository {
                     row,
                     components.remove(&id).unwrap_or_default(),
                     participants.remove(&id).unwrap_or_default(),
+                    guests.remove(&id).unwrap_or_default(),
                 )
             })
             .collect()
@@ -327,6 +426,16 @@ impl MealPlanRepository for PgMealPlanRepository {
         self.hydrate(rows).await
     }
 
+    async fn list_all(&self, from: Date, to: Date) -> Result<Vec<MealPlanEntry>> {
+        let rows: Vec<EntryRow> = sqlx::query_as(LIST_ALL_ENTRIES)
+            .bind(from)
+            .bind(to)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|error| repository_error("listing Planner meals", error))?;
+        self.hydrate(rows).await
+    }
+
     async fn insert(&self, entry: &MealPlanEntry) -> Result<()> {
         let mut tx = self
             .pool
@@ -336,6 +445,7 @@ impl MealPlanRepository for PgMealPlanRepository {
         insert_entry(&mut tx, entry).await?;
         insert_components(&mut tx, entry).await?;
         insert_participants(&mut tx, entry).await?;
+        insert_guests(&mut tx, entry.id, &entry.guest_groups).await?;
         tx.commit()
             .await
             .map_err(|error| repository_error("committing a meal plan entry", error))?;
@@ -360,6 +470,11 @@ impl MealPlanRepository for PgMealPlanRepository {
             .execute(&mut *tx)
             .await
             .map_err(|error| map_db_error(error, "clearing meal plan participants"))?;
+        sqlx::query("DELETE FROM meal_guest_group WHERE entry_id = $1")
+            .bind(entry.id.as_uuid())
+            .execute(&mut *tx)
+            .await
+            .map_err(|error| map_db_error(error, "clearing meal guests"))?;
         sqlx::query("DELETE FROM meal_plan_component WHERE entry_id = $1")
             .bind(entry.id.as_uuid())
             .execute(&mut *tx)
@@ -367,6 +482,7 @@ impl MealPlanRepository for PgMealPlanRepository {
             .map_err(|error| map_db_error(error, "replacing meal plan components"))?;
         insert_components(&mut tx, entry).await?;
         insert_participants(&mut tx, entry).await?;
+        insert_guests(&mut tx, entry.id, &entry.guest_groups).await?;
         tx.commit()
             .await
             .map_err(|error| repository_error("committing a meal plan update", error))?;
@@ -412,6 +528,7 @@ impl MealPlanRepository for PgMealPlanRepository {
             insert_consumption(&mut tx, record).await?;
         }
         replace_participants(&mut tx, entry.id, &entry.participants).await?;
+        replace_guests(&mut tx, entry.id, &entry.guest_groups).await?;
         let stock_outcomes = apply_stock_write(&mut tx, stock, OffsetDateTime::now_utc()).await?;
         tx.commit()
             .await
@@ -440,6 +557,7 @@ impl MealPlanRepository for PgMealPlanRepository {
         }
         persist_components(&mut tx, entry).await?;
         replace_participants(&mut tx, entry.id, &entry.participants).await?;
+        replace_guests(&mut tx, entry.id, &entry.guest_groups).await?;
         for record_id in delete_records {
             delete_consumption(&mut tx, *record_id).await?;
         }
@@ -468,6 +586,7 @@ impl MealPlanRepository for PgMealPlanRepository {
             return Ok(outcome);
         }
         replace_participants(&mut tx, entry.id, &entry.participants).await?;
+        replace_guests(&mut tx, entry.id, &entry.guest_groups).await?;
         tx.commit()
             .await
             .map_err(|error| repository_error("committing a participant update", error))?;
@@ -834,11 +953,12 @@ async fn insert_participants(
     entry: &MealPlanEntry,
 ) -> Result<()> {
     for participant in &entry.participants {
-        sqlx::query("INSERT INTO meal_plan_participant (id, entry_id, member_id, planned_on, slot, revision, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)")
+        sqlx::query("INSERT INTO meal_plan_participant (id, entry_id, member_id, planned_on, planned_time, slot, revision, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)")
             .bind(participant.id.as_uuid())
             .bind(entry.id.as_uuid())
             .bind(participant.member_id.as_uuid())
             .bind(entry.planned_on)
+            .bind(entry.planned_time)
             .bind(entry.slot.code())
             .bind(participant.revision.get())
             .bind(participant.created_at)
@@ -873,8 +993,8 @@ async fn replace_participants(
     entry_id: MealPlanEntryId,
     participants: &[MealParticipant],
 ) -> Result<()> {
-    let row: (Date, String) =
-        sqlx::query_as("SELECT planned_on, slot FROM meal_plan_entry WHERE id = $1")
+    let row: (Date, Option<Time>, String) =
+        sqlx::query_as("SELECT planned_on, planned_time, slot FROM meal_plan_entry WHERE id = $1")
             .bind(entry_id.as_uuid())
             .fetch_one(&mut **tx)
             .await
@@ -885,12 +1005,13 @@ async fn replace_participants(
         .await
         .map_err(|error| map_db_error(error, "clearing meal plan participants"))?;
     for participant in participants {
-        sqlx::query("INSERT INTO meal_plan_participant (id, entry_id, member_id, planned_on, slot, revision, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)")
+        sqlx::query("INSERT INTO meal_plan_participant (id, entry_id, member_id, planned_on, planned_time, slot, revision, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)")
             .bind(participant.id.as_uuid())
             .bind(entry_id.as_uuid())
             .bind(participant.member_id.as_uuid())
             .bind(row.0)
-            .bind(&row.1)
+            .bind(row.1)
+            .bind(&row.2)
             .bind(participant.revision.get())
             .bind(participant.created_at)
             .bind(participant.updated_at)
@@ -917,6 +1038,66 @@ async fn replace_participants(
         }
     }
     Ok(())
+}
+
+async fn insert_guests(
+    tx: &mut Transaction<'_, Postgres>,
+    entry_id: MealPlanEntryId,
+    groups: &[MealGuestGroup],
+) -> Result<()> {
+    for group in groups {
+        sqlx::query("INSERT INTO meal_guest_group (id, entry_id, guest_count, revision, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6)")
+            .bind(group.id.as_uuid())
+            .bind(entry_id.as_uuid())
+            .bind(group.count)
+            .bind(group.revision.get())
+            .bind(group.created_at)
+            .bind(group.updated_at)
+            .execute(&mut **tx)
+            .await
+            .map_err(|error| map_db_error(error, "creating meal guests"))?;
+        for allocation in &group.allocations {
+            let (kind, value, unit) = amount_bindings(&allocation.allocated);
+            let (confirmed_kind, confirmed_value, confirmed_unit) = allocation
+                .confirmed
+                .as_ref()
+                .map(amount_bindings)
+                .map_or((None, None, None), |(kind, value, unit)| {
+                    (Some(kind), Some(value), unit)
+                });
+            sqlx::query("INSERT INTO meal_guest_allocation (id, entry_id, guest_group_id, component_id, allocated_kind, allocated_value, allocated_unit, status, confirmed_kind, confirmed_value, confirmed_unit, resolved_by, resolved_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)")
+                .bind(allocation.id.as_uuid())
+                .bind(entry_id.as_uuid())
+                .bind(group.id.as_uuid())
+                .bind(allocation.component_id.as_uuid())
+                .bind(kind)
+                .bind(value)
+                .bind(unit)
+                .bind(allocation.status.code())
+                .bind(confirmed_kind)
+                .bind(confirmed_value)
+                .bind(confirmed_unit)
+                .bind(allocation.resolved_by.map(|id| id.as_uuid()))
+                .bind(allocation.resolved_at)
+                .execute(&mut **tx)
+                .await
+                .map_err(|error| map_db_error(error, "creating guest portions"))?;
+        }
+    }
+    Ok(())
+}
+
+async fn replace_guests(
+    tx: &mut Transaction<'_, Postgres>,
+    entry_id: MealPlanEntryId,
+    groups: &[MealGuestGroup],
+) -> Result<()> {
+    sqlx::query("DELETE FROM meal_guest_group WHERE entry_id = $1")
+        .bind(entry_id.as_uuid())
+        .execute(&mut **tx)
+        .await
+        .map_err(|error| map_db_error(error, "clearing meal guests"))?;
+    insert_guests(tx, entry_id, groups).await
 }
 
 async fn insert_consumption(

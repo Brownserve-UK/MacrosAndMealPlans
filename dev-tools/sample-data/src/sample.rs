@@ -7,12 +7,12 @@ use mmp_core::domain::{
     AccessScope, ActualMealPlanComponent, ConfirmMealPlanComponent, ConfirmMealPlanEntry,
     ConsumedAmount, ConsumptionRecordId, HouseholdMember, HouseholdMemberId, IngredientId,
     MealCategory, MealItemRef, MealPlanEntryId, MealPlanScope, MealPlanStatus, MealSlot,
-    NewConsumptionRecord, NewHouseholdMember, NewMealParticipant, NewMealParticipantAllocation,
-    NewMealPlanComponent, NewMealPlanEntry, NewNutritionTarget, NewProduct, NewRecipe,
-    NewRecipeComponent, NewRecipeInstruction, NewStockItem, NewUser, NutritionFacts,
-    NutritionGoals, OutcomeActor, Patch, ProductId, Provenance, Quantity, RecipeId, RecipePatch,
-    RecipeRequirement, Role, SetMealParticipants, SourceDate, SourceDateKind, StockLevel,
-    StorageLocation, Unit, User, UserId,
+    NewConsumptionRecord, NewHouseholdMember, NewMealGuestAllocation, NewMealGuestGroup,
+    NewMealParticipant, NewMealParticipantAllocation, NewMealPlanComponent, NewMealPlanEntry,
+    NewNutritionTarget, NewProduct, NewRecipe, NewRecipeComponent, NewRecipeInstruction,
+    NewStockItem, NewUser, NutritionFacts, NutritionGoals, OutcomeActor, Patch, ProductId,
+    Provenance, Quantity, RecipeId, RecipePatch, RecipeRequirement, Role, SourceDate,
+    SourceDateKind, StockLevel, StorageLocation, Unit, User, UserId,
 };
 use mmp_server::state::AppState;
 use rust_decimal::Decimal;
@@ -569,6 +569,7 @@ impl Loader<'_> {
             "chicken-and-rice",
             servings(4),
             &[(owner, 1), (manager, 1), (basic, 1)],
+            1,
         )
         .await?;
 
@@ -579,6 +580,7 @@ impl Loader<'_> {
             "chicken-and-rice",
             servings(3),
             &[(owner, 2), (manager, 1), (basic, 1)],
+            0,
         )
         .await?;
         Ok(())
@@ -591,6 +593,7 @@ impl Loader<'_> {
         recipe_key: &str,
         prepared: ConsumedAmount,
         allocations: &[(HouseholdMemberId, i64)],
+        guest_count: i32,
     ) -> anyhow::Result<()> {
         let id = meal_id(date, slot);
         if !matches!(
@@ -600,25 +603,7 @@ impl Loader<'_> {
             return Ok(());
         }
         self.report.meals_created += 1;
-        let view = self
-            .state
-            .meal_plan
-            .create_unchecked(NewMealPlanEntry {
-                id: Some(id),
-                scope: MealPlanScope::Household,
-                member_id: None,
-                planned_on: date,
-                planned_time: slot_time(slot),
-                slot,
-                components: vec![NewMealPlanComponent {
-                    id: None,
-                    item: MealItemRef::recipe(recipe_id(recipe_key)),
-                    amount: prepared,
-                }],
-                actor_id: self.actor.id,
-            })
-            .await?;
-        let component_id = view.components[0].component.id;
+        let component_id = mmp_core::domain::MealPlanComponentId::new();
         let participants = allocations
             .iter()
             .map(|(member_id, count)| NewMealParticipant {
@@ -632,14 +617,33 @@ impl Loader<'_> {
             .collect();
         self.state
             .meal_plan
-            .set_participants(
-                view.entry.id,
-                view.entry.revision,
-                SetMealParticipants {
-                    participants,
-                    actor_id: self.actor.id,
+            .create_unchecked(NewMealPlanEntry {
+                id: Some(id),
+                scope: MealPlanScope::Household,
+                member_id: None,
+                planned_on: date,
+                planned_time: slot_time(slot),
+                slot,
+                components: vec![NewMealPlanComponent {
+                    id: Some(component_id),
+                    item: MealItemRef::recipe(recipe_id(recipe_key)),
+                    amount: prepared,
+                }],
+                participants: Some(participants),
+                guest_groups: if guest_count > 0 {
+                    vec![NewMealGuestGroup {
+                        id: None,
+                        count: guest_count,
+                        allocations: vec![NewMealGuestAllocation {
+                            component_id,
+                            allocated: servings(1),
+                        }],
+                    }]
+                } else {
+                    Vec::new()
                 },
-            )
+                actor_id: self.actor.id,
+            })
             .await?;
         self.report.household_participants_created += allocations.len();
         Ok(())
@@ -714,6 +718,22 @@ impl Loader<'_> {
             .await?;
         self.ensure_meal(self.today, MealSlot::Snacks, Outcome::Planned)
             .await?;
+        self.ensure_timed_snack(
+            self.today,
+            "morning",
+            Time::from_hms(10, 0, 0).unwrap(),
+            "banana",
+            measured(1, Unit::Item),
+        )
+        .await?;
+        self.ensure_timed_snack(
+            self.today,
+            "afternoon",
+            Time::from_hms(14, 0, 0).unwrap(),
+            "mystery-snack",
+            measured(1, Unit::Item),
+        )
+        .await?;
 
         self.ensure_diary_entry(
             self.today,
@@ -749,6 +769,44 @@ impl Loader<'_> {
         Ok(())
     }
 
+    async fn ensure_timed_snack(
+        &mut self,
+        date: Date,
+        key: &str,
+        planned_time: Time,
+        product_key: &str,
+        amount: ConsumedAmount,
+    ) -> anyhow::Result<()> {
+        let id = snack_id(date, key);
+        if !matches!(
+            self.state.meal_plan.get(id).await,
+            Err(CoreError::NotFound { .. })
+        ) {
+            return Ok(());
+        }
+        self.report.meals_created += 1;
+        self.state
+            .meal_plan
+            .create_unchecked(NewMealPlanEntry {
+                id: Some(id),
+                scope: MealPlanScope::Member,
+                member_id: Some(self.member.id),
+                planned_on: date,
+                planned_time: Some(planned_time),
+                slot: MealSlot::Snacks,
+                components: vec![NewMealPlanComponent {
+                    id: None,
+                    item: MealItemRef::product(product_id(product_key)),
+                    amount,
+                }],
+                participants: None,
+                guest_groups: Vec::new(),
+                actor_id: self.actor.id,
+            })
+            .await?;
+        Ok(())
+    }
+
     async fn ensure_meal(
         &mut self,
         date: Date,
@@ -775,6 +833,8 @@ impl Loader<'_> {
                         planned_time: slot_time(slot),
                         slot,
                         components: components_for(slot),
+                        participants: None,
+                        guest_groups: Vec::new(),
                         actor_id: self.actor.id,
                     })
                     .await?
@@ -928,6 +988,8 @@ impl Loader<'_> {
                     item: MealItemRef::recipe(recipe_id(recipe_key)),
                     amount,
                 }],
+                participants: None,
+                guest_groups: Vec::new(),
                 actor_id: self.actor.id,
             })
             .await?;
@@ -1335,6 +1397,13 @@ fn recipe_specs() -> Vec<RecipeSpec> {
 
 fn meal_id(date: Date, slot: MealSlot) -> MealPlanEntryId {
     MealPlanEntryId::from_uuid(sample_uuid("meal-plan-entry", &format!("{date}:{slot}")))
+}
+
+fn snack_id(date: Date, key: &str) -> MealPlanEntryId {
+    MealPlanEntryId::from_uuid(sample_uuid(
+        "meal-plan-entry",
+        &format!("{date}:snacks:{key}"),
+    ))
 }
 
 fn slot_time(slot: MealSlot) -> Option<Time> {

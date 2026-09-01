@@ -8,6 +8,7 @@ import { HouseholdPage } from '../features/household/HouseholdPage';
 import { MemberPage } from '../features/household/MemberPage';
 import { MealPlanIndexRedirect } from '../features/meal-plan/MealPlanIndexRedirect';
 import { MealPlanPage, defaultDayFor } from '../features/meal-plan/MealPlanPage';
+import { PlannerPage } from '../features/meal-plan/PlannerPage';
 import { IngredientPage } from '../features/ingredients/IngredientPage';
 import { IngredientsPage } from '../features/ingredients/IngredientsPage';
 import { ProductPage } from '../features/products/ProductPage';
@@ -79,7 +80,7 @@ const plannerDayRoute = createRoute({
   path: '/planner/$weekStart/$day',
   component: function ViewPlanner() {
     const { weekStart, day } = plannerDayRoute.useParams();
-    return <MealPlanPage weekStart={weekStart} day={day} workspace="planner" />;
+    return <PlannerPage weekStart={weekStart} day={day} />;
   },
 });
 
