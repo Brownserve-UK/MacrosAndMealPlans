@@ -562,9 +562,9 @@ impl Loader<'_> {
         let basic = HouseholdMemberId::from_uuid(sample_uuid("household-member", "basic-user"));
         let owner = self.member.id;
 
-        let saturday = self.week_start + Duration::days(5);
+        let thursday = self.week_start + Duration::days(3);
         self.ensure_household_meal(
-            saturday,
+            thursday,
             MealSlot::Lunch,
             "chicken-and-rice",
             servings(4),
@@ -573,16 +573,44 @@ impl Loader<'_> {
         )
         .await?;
 
-        let thursday = self.week_start + Duration::days(3);
+        let friday = self.week_start + Duration::days(4);
+        self.ensure_personal_meal(friday, MealSlot::Lunch, owner, "self-catered")
+            .await?;
         self.ensure_household_meal(
-            thursday,
+            friday,
             MealSlot::Lunch,
             "chicken-and-rice",
-            servings(3),
-            &[(owner, 2), (manager, 1), (basic, 1)],
+            servings(2),
+            &[(manager, 1), (basic, 1)],
             0,
         )
         .await?;
+
+        let saturday = self.week_start + Duration::days(5);
+        self.ensure_household_meal(
+            saturday,
+            MealSlot::Lunch,
+            "chicken-and-rice",
+            servings(3),
+            &[(owner, 1), (manager, 1), (basic, 1)],
+            0,
+        )
+        .await?;
+        self.ensure_opt_out_with_own_meal(saturday, MealSlot::Lunch, owner)
+            .await?;
+
+        let sunday = self.week_start + Duration::days(6);
+        self.ensure_household_meal(
+            sunday,
+            MealSlot::Lunch,
+            "chicken-and-rice",
+            servings(4),
+            &[(owner, 1), (manager, 1), (basic, 1)],
+            2,
+        )
+        .await?;
+        self.ensure_opt_out_with_own_meal(sunday, MealSlot::Lunch, basic)
+            .await?;
 
         let next_wed = self.week_start + Duration::weeks(1) + Duration::days(2);
         self.ensure_household_meal(
@@ -594,21 +622,7 @@ impl Loader<'_> {
             0,
         )
         .await?;
-        self.ensure_opt_out_with_own_meal(next_wed, MealSlot::Dinner, basic)
-            .await?;
 
-        let next_thu = self.week_start + Duration::weeks(1) + Duration::days(3);
-        self.ensure_personal_meal(next_thu, MealSlot::Dinner, owner, "self-catered")
-            .await?;
-        self.ensure_household_meal(
-            next_thu,
-            MealSlot::Dinner,
-            "chicken-and-rice",
-            servings(2),
-            &[(manager, 1), (basic, 1)],
-            0,
-        )
-        .await?;
         Ok(())
     }
 
