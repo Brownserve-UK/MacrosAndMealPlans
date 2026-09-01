@@ -8,16 +8,16 @@ use rust_decimal::Decimal;
 use crate::domain::{
     AllocationOutcome, ComponentPreparation, ConfirmMealPlanComponent, ConfirmMealPlanEntry,
     ConsumedAmount, ConsumedNutrition, ConsumptionRecord, ConsumptionRecordId, HouseholdMemberId,
-    MealGuestAllocation, MealGuestAllocationId, MealGuestGroup, MealItemRef, MealParticipant,
+    MealGuestAllocation, MealGuestGroup, MealItemRef, MealOptOut, MealParticipant,
     MealParticipantAllocation, MealParticipantAllocationId, MealParticipantId, MealPlanComponent,
     MealPlanComponentId, MealPlanComponentSnapshot, MealPlanEntry, MealPlanEntryId,
     MealPlanEntryPatch, MealPlanScope, MealPlanStatus, MealSlot, NUTRIENT_KEYS, NewMealGuestGroup,
     NewMealParticipant, NewMealPlanComponent, NewMealPlanEntry, NutritionFacts, NutritionGoals,
-    NutritionQuality, OutcomeActor, ParticipantStatus, Product, ProductId, Recipe, RecipeId,
-    RecipeRequirement, ReviewMealOutcomes, ReviewedMealOutcome, Revision, SetMealParticipants,
-    UserId, derive_component_status, derive_entry_status, derive_participant_status, nutrition_for,
-    preparation_for, recipe_nutrition, recipe_nutrition_for, resolve_on, sum_nutrition,
-    validate_components, validate_participants,
+    NutritionQuality, OutcomeActor, ParticipantStatus, Portioning, Product, ProductId, Recipe,
+    RecipeId, RecipeRequirement, RecipeVisibility, ReviewMealOutcomes, ReviewedMealOutcome,
+    Revision, SetMealParticipants, SlotAttendance, UserId, derive_component_status,
+    derive_participant_status, equal_split, nutrition_for, preparation_for, recipe_nutrition,
+    recipe_nutrition_for, resolve_on, sum_nutrition, validate_components, validate_participants,
 };
 use crate::domain::{StockEffectSource, StockOutcome};
 use crate::error::{CoreError, Result, ValidationErrors};
@@ -51,6 +51,7 @@ pub struct MealPlanComponentView {
     pub quality: NutritionQuality,
     pub consumption_record: Option<ConsumptionRecord>,
     pub preparation: ComponentPreparation,
+    pub status: MealPlanStatus,
     pub subject_status: MealPlanStatus,
 }
 
@@ -263,6 +264,11 @@ impl MealPlanService {
                 "A personal meal needs a household member.",
             ));
         }
+        if input.scope == MealPlanScope::Household && input.slot == MealSlot::Snacks {
+            return Err(CoreError::conflict(
+                "Snacks stay on your own planner. Household planning covers breakfast, lunch and dinner.",
+            ));
+        }
         if input.scope == MealPlanScope::Member {
             let owner = input.member_id.expect("personal meal owner checked");
             if !input.guest_groups.is_empty()
@@ -292,6 +298,15 @@ impl MealPlanService {
                 (None, members)
             }
         };
+
+        let mut portioning = input.portioning;
+        if input
+            .participants
+            .as_deref()
+            .is_some_and(has_explicit_allocations)
+        {
+            portioning = Portioning::Custom;
+        }
 
         let participants = if let Some(requested) = &input.participants {
             validate_participants(requested, &components)?;
@@ -347,19 +362,18 @@ impl MealPlanService {
             planned_on: input.planned_on,
             planned_time: input.planned_time,
             slot: input.slot,
-            status: MealPlanStatus::Planned,
+            portioning,
             components,
             participants,
             guest_groups,
+            opted_out: Vec::new(),
             created_by: input.actor_id,
             updated_by: input.actor_id,
-            resolved_by: None,
-            resolved_at: None,
             revision: Revision::INITIAL,
             created_at: now,
             updated_at: now,
         };
-        recompute_statuses(&mut entry);
+        apply_equal_portioning(&mut entry);
         self.plans.insert(&entry).await?;
         self.present(entry, &[], input.member_id).await
     }
@@ -372,7 +386,7 @@ impl MealPlanService {
     ) -> Result<MealPlanEntryView> {
         let mut entry = self.get_entry(id).await?;
         require_revision(id, expected, entry.revision)?;
-        require_planned(&entry)?;
+        require_editable(&entry)?;
         validate_participants(&input.participants, &entry.components)?;
         validate_guest_groups(&input.guest_groups, &entry.components)?;
         require_household_attendance(entry.scope, &input.participants, &input.guest_groups)?;
@@ -398,6 +412,11 @@ impl MealPlanService {
                 .iter()
                 .find(|existing| existing.member_id == new_participant.member_id);
             if previous.is_none() {
+                if entry.has_opted_out(new_participant.member_id) {
+                    return Err(CoreError::conflict(
+                        "This member has opted out of this meal. They can rejoin it from their own planner.",
+                    ));
+                }
                 self.ensure_slot_free(
                     new_participant.member_id,
                     entry.planned_on,
@@ -433,16 +452,159 @@ impl MealPlanService {
             .iter()
             .map(|group| merge_guest_group(&entry.guest_groups, group, now))
             .collect();
+        if has_explicit_allocations(&input.participants) {
+            entry.portioning = Portioning::Custom;
+        }
         entry.updated_by = input.actor_id;
         entry.updated_at = now;
         entry.revision = entry.revision.next();
-        recompute_statuses(&mut entry);
+        apply_equal_portioning(&mut entry);
         commit_outcome(
             self.plans.set_participants(&entry, expected).await?,
             id,
             expected,
         )?;
         self.get(id).await
+    }
+
+    pub async fn opt_out(
+        &self,
+        id: MealPlanEntryId,
+        expected: Revision,
+        actor_id: UserId,
+        member_id: HouseholdMemberId,
+    ) -> Result<MealPlanEntryView> {
+        let mut entry = self.get_entry(id).await?;
+        require_revision(id, expected, entry.revision)?;
+        if entry.scope != MealPlanScope::Household {
+            return Err(CoreError::conflict(
+                "You can only opt out of a household meal.",
+            ));
+        }
+        let Some(participant) = entry.participant_for(member_id) else {
+            if entry.has_opted_out(member_id) {
+                return self.get(id).await;
+            }
+            return Err(CoreError::conflict("You are not part of this meal."));
+        };
+        if participant
+            .allocations
+            .iter()
+            .any(|allocation| allocation.status.is_resolved())
+        {
+            return Err(CoreError::conflict(
+                "Reopen your portion in the food log before opting out.",
+            ));
+        }
+
+        let now = self.clock.now();
+        entry
+            .participants
+            .retain(|participant| participant.member_id != member_id);
+        entry.opted_out.push(MealOptOut {
+            member_id,
+            created_by: actor_id,
+            created_at: now,
+        });
+        entry.updated_by = actor_id;
+        entry.updated_at = now;
+        entry.revision = entry.revision.next();
+        apply_equal_portioning(&mut entry);
+        commit_outcome(
+            self.plans.set_participants(&entry, expected).await?,
+            id,
+            expected,
+        )?;
+        self.get(id).await
+    }
+
+    pub async fn opt_in(
+        &self,
+        id: MealPlanEntryId,
+        expected: Revision,
+        actor_id: UserId,
+        member_id: HouseholdMemberId,
+    ) -> Result<MealPlanEntryView> {
+        let mut entry = self.get_entry(id).await?;
+        require_revision(id, expected, entry.revision)?;
+        if entry.scope != MealPlanScope::Household {
+            return Err(CoreError::conflict(
+                "You can only opt in to a household meal.",
+            ));
+        }
+        if entry.participant_for(member_id).is_some() {
+            return self.get(id).await;
+        }
+        let member = self
+            .members
+            .get(member_id)
+            .await?
+            .ok_or_else(|| CoreError::not_found("household member", member_id))?;
+        if member.is_archived() {
+            return Err(CoreError::conflict("Archived members cannot join a meal."));
+        }
+        self.ensure_slot_free(
+            member_id,
+            entry.planned_on,
+            entry.slot,
+            entry.planned_time,
+            Some(entry.id),
+        )
+        .await?;
+
+        let now = self.clock.now();
+        entry
+            .opted_out
+            .retain(|opt_out| opt_out.member_id != member_id);
+        entry
+            .participants
+            .push(build_participant(member_id, &entry.components, now, false));
+        entry.updated_by = actor_id;
+        entry.updated_at = now;
+        entry.revision = entry.revision.next();
+        apply_equal_portioning(&mut entry);
+        commit_outcome(
+            self.plans.set_participants(&entry, expected).await?,
+            id,
+            expected,
+        )?;
+        self.get(id).await
+    }
+
+    pub async fn slot_attendance(
+        &self,
+        planned_on: Date,
+        slot: MealSlot,
+        exclude_entry: Option<MealPlanEntryId>,
+    ) -> Result<Vec<(HouseholdMemberId, SlotAttendance)>> {
+        let members = self.active_member_ids().await?;
+        let day = self.plans.list_all(planned_on, planned_on).await?;
+        let mut result = Vec::with_capacity(members.len());
+        for member_id in members {
+            let mut attendance = SlotAttendance::Available;
+            for entry in &day {
+                if entry.slot != slot || Some(entry.id) == exclude_entry {
+                    continue;
+                }
+                match entry.scope {
+                    MealPlanScope::Member if entry.member_id == Some(member_id) => {
+                        attendance = SlotAttendance::SelfCatering;
+                    }
+                    MealPlanScope::Household if entry.participant_for(member_id).is_some() => {
+                        attendance = SlotAttendance::Participating;
+                    }
+                    MealPlanScope::Household
+                        if entry.has_opted_out(member_id)
+                            && attendance == SlotAttendance::Available =>
+                    {
+                        attendance = SlotAttendance::OptedOut;
+                    }
+                    _ => {}
+                }
+            }
+            result.push((member_id, attendance));
+        }
+        Ok(result)
     }
 
     async fn active_member_ids(&self) -> Result<Vec<HouseholdMemberId>> {
@@ -484,6 +646,8 @@ impl MealPlanService {
                 entry.slot == slot
                     && (slot != MealSlot::Snacks || entry.planned_time == planned_time)
                     && Some(entry.id) != ignore_entry
+                    && !(entry.has_opted_out(member_id)
+                        && entry.participant_for(member_id).is_none())
             });
         if clash {
             let message = if slot == MealSlot::Snacks {
@@ -515,9 +679,12 @@ impl MealPlanService {
     ) -> Result<MealPlanEntryView> {
         let mut entry = self.get_entry(id).await?;
         require_revision(id, expected, entry.revision)?;
-        require_planned(&entry)?;
+        require_editable(&entry)?;
 
         let now = self.clock.now();
+        if let Some(portioning) = patch.portioning {
+            entry.portioning = portioning;
+        }
         if let Some(components) = patch.components {
             validate_components(&components)?;
             let existing_items = entry
@@ -533,6 +700,9 @@ impl MealPlanService {
         }
         if let Some(participants) = patch.participants {
             validate_participants(&participants, &entry.components)?;
+            if has_explicit_allocations(&participants) {
+                entry.portioning = Portioning::Custom;
+            }
             entry.participants = participants
                 .iter()
                 .map(|participant| {
@@ -560,6 +730,11 @@ impl MealPlanService {
         }
         if let Some(slot) = patch.slot {
             entry.slot = slot;
+        }
+        if entry.scope == MealPlanScope::Household && entry.slot == MealSlot::Snacks {
+            return Err(CoreError::conflict(
+                "Snacks stay on your own planner. Household planning covers breakfast, lunch and dinner.",
+            ));
         }
         if entry.scope == MealPlanScope::Member {
             let owner = entry.member_id.expect("personal meal owner");
@@ -596,7 +771,7 @@ impl MealPlanService {
         entry.updated_by = actor_id;
         entry.updated_at = now;
         entry.revision = entry.revision.next();
-        recompute_statuses(&mut entry);
+        apply_equal_portioning(&mut entry);
         commit_outcome(self.plans.update(&entry, expected).await?, id, expected)?;
         self.get(id).await
     }
@@ -698,7 +873,7 @@ impl MealPlanService {
             nutrition: planned.nutrition.facts,
             quality: planned.nutrition.quality,
         };
-        recompute_statuses(&mut entry);
+        apply_equal_portioning(&mut entry);
         let update = component_update(
             &entry,
             component_id,
@@ -769,7 +944,7 @@ impl MealPlanService {
             nutrition: planned.nutrition.facts,
             quality: planned.nutrition.quality,
         };
-        recompute_statuses(&mut entry);
+        apply_equal_portioning(&mut entry);
         let update = component_update(
             &entry,
             component_id,
@@ -831,7 +1006,7 @@ impl MealPlanService {
             None,
             None,
         );
-        recompute_statuses(&mut entry);
+        apply_equal_portioning(&mut entry);
         let still_eaten = component_still_eaten(&entry, component_id);
         let snapshot_op = if still_eaten {
             SnapshotOp::Keep
@@ -913,7 +1088,7 @@ impl MealPlanService {
         entry.updated_by = actor.actor_id;
         entry.updated_at = now;
         entry.revision = entry.revision.next();
-        recompute_statuses(&mut entry);
+        apply_equal_portioning(&mut entry);
         let (outcome, stock_outcomes) = self
             .plans
             .resolve(&entry, expected, &[], &StockWrite::default())
@@ -1015,7 +1190,7 @@ impl MealPlanService {
         entry.updated_by = input.actor_id;
         entry.updated_at = now;
         entry.revision = entry.revision.next();
-        recompute_statuses(&mut entry);
+        apply_equal_portioning(&mut entry);
         let write = StockWrite {
             deductions,
             releases: Vec::new(),
@@ -1171,7 +1346,7 @@ impl MealPlanService {
         entry.updated_by = input.actor_id;
         entry.updated_at = now;
         entry.revision = entry.revision.next();
-        recompute_statuses(&mut entry);
+        apply_equal_portioning(&mut entry);
         let write = StockWrite {
             deductions,
             releases: Vec::new(),
@@ -1235,7 +1410,7 @@ impl MealPlanService {
                     .any(|a| a.component_id == component.id && a.status == ParticipantStatus::Eaten)
             });
             if !still_eaten
-                && derive_component_status(component.id, &entry.participants)
+                && derive_component_status(component.id, &entry.participants, &entry.guest_groups)
                     == MealPlanStatus::Planned
             {
                 component.snapshot = None;
@@ -1264,7 +1439,7 @@ impl MealPlanService {
         entry.updated_by = actor.actor_id;
         entry.updated_at = now;
         entry.revision = entry.revision.next();
-        recompute_statuses(&mut entry);
+        apply_equal_portioning(&mut entry);
         let write = StockWrite {
             deductions: Vec::new(),
             releases,
@@ -1486,9 +1661,12 @@ impl MealPlanService {
         entry: &MealPlanEntry,
         requested: Option<HouseholdMemberId>,
     ) -> Result<HouseholdMemberId> {
-        entry.subject_or_owner(requested).ok_or_else(|| {
-            CoreError::conflict("This meal has no participant to record an outcome against.")
-        })
+        requested
+            .or(entry.member_id)
+            .or_else(|| entry.participants.first().map(|p| p.member_id))
+            .ok_or_else(|| {
+                CoreError::conflict("This meal has no participant to record an outcome against.")
+            })
     }
 
     async fn validate_component_items(
@@ -1521,7 +1699,10 @@ impl MealPlanService {
                         .recipes
                         .get(recipe_id)
                         .await?
-                        .filter(|recipe| recipe.owner_id == actor_id)
+                        .filter(|recipe| {
+                            recipe.owner_id == actor_id
+                                || recipe.visibility == RecipeVisibility::Shared
+                        })
                         .ok_or_else(|| CoreError::not_found(RECIPE, recipe_id))?;
                     if recipe.is_archived() && !archived_allowed.contains(&component.item) {
                         errors.push(
@@ -1608,7 +1789,9 @@ impl MealPlanService {
         records: &[ConsumptionRecord],
         requested_subject: Option<HouseholdMemberId>,
     ) -> Result<MealPlanEntryView> {
-        let subject = entry.subject_or_owner(requested_subject);
+        let subject = requested_subject
+            .or(entry.member_id)
+            .or_else(|| entry.participants.first().map(|p| p.member_id));
         let catalogue = self
             .catalogue_for(entry.components.iter().map(|component| component.item))
             .await?;
@@ -1681,7 +1864,7 @@ impl MealPlanService {
                         .find(|a| a.component_id == component.id)
                         .map(|a| participant_status_to_meal(a.status))
                 })
-                .unwrap_or(component.status);
+                .unwrap_or_else(|| entry.component_status(component.id));
 
             components.push(MealPlanComponentView {
                 component: component.clone(),
@@ -1690,6 +1873,7 @@ impl MealPlanService {
                 quality,
                 consumption_record: subject_record,
                 preparation,
+                status: entry.component_status(component.id),
                 subject_status,
             });
         }
@@ -1902,9 +2086,7 @@ fn merge_guest_group(
                     .find(|candidate| candidate.component_id == allocation.component_id)
             });
             MealGuestAllocation {
-                id: old
-                    .map(|value| value.id)
-                    .unwrap_or_else(MealGuestAllocationId::new),
+                id: old.map(|value| value.id).unwrap_or_default(),
                 component_id: allocation.component_id,
                 allocated: allocation.allocated,
                 status: old
@@ -1973,109 +2155,47 @@ fn participant_status_to_meal(status: ParticipantStatus) -> MealPlanStatus {
     }
 }
 
-fn recompute_statuses(entry: &mut MealPlanEntry) {
-    let participants = entry.participants.clone();
-    let guest_groups = entry.guest_groups.clone();
-    for component in &mut entry.components {
-        let status = {
-            let member_statuses = participants
-                .iter()
-                .flat_map(|participant| participant.allocations.iter())
-                .filter(|allocation| allocation.component_id == component.id)
-                .map(|allocation| allocation.status);
-            let guest_statuses = guest_groups
-                .iter()
-                .flat_map(|group| group.allocations.iter())
-                .filter(|allocation| allocation.component_id == component.id)
-                .map(|allocation| allocation.status);
-            let statuses: Vec<_> = member_statuses.chain(guest_statuses).collect();
-            if statuses.is_empty()
-                || statuses
+fn has_explicit_allocations(participants: &[NewMealParticipant]) -> bool {
+    participants
+        .iter()
+        .any(|participant| !participant.allocations.is_empty())
+}
+
+fn apply_equal_portioning(entry: &mut MealPlanEntry) {
+    if entry.portioning != Portioning::Equal {
+        return;
+    }
+    let guest_heads: usize = entry
+        .guest_groups
+        .iter()
+        .map(|group| group.count.max(0) as usize)
+        .sum();
+    let shares = entry.participants.len() + guest_heads;
+    if shares == 0 {
+        return;
+    }
+    let components = entry.components.clone();
+    for participant in &mut entry.participants {
+        for allocation in &mut participant.allocations {
+            if allocation.status == ParticipantStatus::Planned
+                && let Some(component) = components
                     .iter()
-                    .all(|status| *status == ParticipantStatus::Planned)
+                    .find(|component| component.id == allocation.component_id)
             {
-                MealPlanStatus::Planned
-            } else if statuses
-                .iter()
-                .any(|status| *status == ParticipantStatus::Planned)
-            {
-                MealPlanStatus::PartiallyResolved
-            } else if statuses
-                .iter()
-                .any(|status| *status == ParticipantStatus::Eaten)
-            {
-                MealPlanStatus::Eaten
-            } else {
-                MealPlanStatus::NotEaten
+                allocation.allocated = equal_split(&component.amount, shares);
             }
-        };
-        component.status = status;
-        if status == MealPlanStatus::Planned {
-            component.resolved_by = None;
-            component.resolved_at = None;
-        } else {
-            let resolved: Vec<&MealParticipantAllocation> = participants
-                .iter()
-                .flat_map(|participant| participant.allocations.iter())
-                .filter(|allocation| {
-                    allocation.component_id == component.id && allocation.status.is_resolved()
-                })
-                .collect();
-            component.resolved_by = resolved
-                .iter()
-                .find_map(|allocation| allocation.resolved_by);
-            component.resolved_at = resolved.iter().filter_map(|a| a.resolved_at).max();
-            if component.resolved_by.is_none() {
-                component.resolved_by = guest_groups
-                    .iter()
-                    .flat_map(|group| group.allocations.iter())
-                    .filter(|allocation| {
-                        allocation.component_id == component.id && allocation.status.is_resolved()
-                    })
-                    .find_map(|allocation| allocation.resolved_by);
-            }
-            component.resolved_at = component.resolved_at.max(
-                guest_groups
-                    .iter()
-                    .flat_map(|group| group.allocations.iter())
-                    .filter(|allocation| {
-                        allocation.component_id == component.id && allocation.status.is_resolved()
-                    })
-                    .filter_map(|allocation| allocation.resolved_at)
-                    .max(),
-            );
         }
     }
-    let entry_status = derive_entry_status(&participants, &entry.guest_groups);
-    entry.status = entry_status;
-    if entry_status == MealPlanStatus::Planned {
-        entry.resolved_by = None;
-        entry.resolved_at = None;
-    } else {
-        let resolved: Vec<&MealParticipantAllocation> = participants
-            .iter()
-            .flat_map(|participant| participant.allocations.iter())
-            .filter(|allocation| allocation.status.is_resolved())
-            .collect();
-        entry.resolved_by = resolved
-            .iter()
-            .find_map(|allocation| allocation.resolved_by);
-        entry.resolved_at = resolved.iter().filter_map(|a| a.resolved_at).max();
-        if entry.resolved_by.is_none() {
-            entry.resolved_by = guest_groups
-                .iter()
-                .flat_map(|group| group.allocations.iter())
-                .filter(|allocation| allocation.status.is_resolved())
-                .find_map(|allocation| allocation.resolved_by);
+    for group in &mut entry.guest_groups {
+        for allocation in &mut group.allocations {
+            if allocation.status == ParticipantStatus::Planned
+                && let Some(component) = components
+                    .iter()
+                    .find(|component| component.id == allocation.component_id)
+            {
+                allocation.allocated = equal_split(&component.amount, shares);
+            }
         }
-        entry.resolved_at = entry.resolved_at.max(
-            guest_groups
-                .iter()
-                .flat_map(|group| group.allocations.iter())
-                .filter(|allocation| allocation.status.is_resolved())
-                .filter_map(|allocation| allocation.resolved_at)
-                .max(),
-        );
     }
 }
 
@@ -2326,28 +2446,17 @@ fn pending_component_ids(
 }
 
 fn component_update<'a>(
-    entry: &MealPlanEntry,
+    _entry: &MealPlanEntry,
     component_id: MealPlanComponentId,
     snapshot: SnapshotOp<'a>,
     old_revision: Revision,
     actor_id: UserId,
     now: OffsetDateTime,
 ) -> MealPlanComponentUpdate<'a> {
-    let component = entry
-        .components
-        .iter()
-        .find(|component| component.id == component_id)
-        .expect("component present");
     MealPlanComponentUpdate {
         id: component_id,
-        status: component.status,
         snapshot,
-        resolved_by: component.resolved_by,
-        resolved_at: component.resolved_at,
         revision: old_revision.next(),
-        entry_status: entry.status,
-        entry_resolved_by: entry.resolved_by,
-        entry_resolved_at: entry.resolved_at,
         actor_id,
         now,
     }
@@ -2435,9 +2544,6 @@ fn make_components(input: Vec<NewMealPlanComponent>) -> Vec<MealPlanComponent> {
             amount: component.amount,
             position: i32::try_from(position).unwrap_or(i32::MAX),
             snapshot: None,
-            status: MealPlanStatus::Planned,
-            resolved_by: None,
-            resolved_at: None,
             revision: Revision::INITIAL,
             display_order: uuid::Uuid::now_v7(),
         })
@@ -2461,9 +2567,6 @@ fn merge_components(
                     amount: component.amount,
                     position: i32::try_from(position).unwrap_or(i32::MAX),
                     snapshot: None,
-                    status: MealPlanStatus::Planned,
-                    resolved_by: None,
-                    resolved_at: None,
                     revision: Revision::INITIAL,
                     display_order: uuid::Uuid::now_v7(),
                 };
@@ -2485,9 +2588,6 @@ fn merge_components(
                     amount: component.amount,
                     position: i32::try_from(position).unwrap_or(i32::MAX),
                     snapshot: None,
-                    status: MealPlanStatus::Planned,
-                    resolved_by: None,
-                    resolved_at: None,
                     revision: Revision::INITIAL,
                     display_order: uuid::Uuid::now_v7(),
                 };
@@ -2502,9 +2602,6 @@ fn merge_components(
                 amount: component.amount,
                 position,
                 snapshot: previous.snapshot.clone(),
-                status: previous.status,
-                resolved_by: previous.resolved_by,
-                resolved_at: previous.resolved_at,
                 revision: if changed {
                     previous.revision.next()
                 } else {
@@ -2562,12 +2659,21 @@ fn ensure_due(clock: &dyn Clock, planned_on: Date) -> Result<()> {
 }
 
 fn require_planned(entry: &MealPlanEntry) -> Result<()> {
-    if entry.status == MealPlanStatus::Planned {
+    if entry.status() == MealPlanStatus::Planned {
         Ok(())
     } else {
         Err(CoreError::conflict(
             "Resolved meal plans cannot be changed.",
         ))
+    }
+}
+
+fn require_editable(entry: &MealPlanEntry) -> Result<()> {
+    match entry.status() {
+        MealPlanStatus::Planned | MealPlanStatus::PartiallyResolved => Ok(()),
+        MealPlanStatus::Eaten | MealPlanStatus::NotEaten => Err(CoreError::conflict(
+            "This meal is fully resolved and cannot be changed.",
+        )),
     }
 }
 

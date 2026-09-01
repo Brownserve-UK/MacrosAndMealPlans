@@ -6,11 +6,11 @@ use mmp_core::Result;
 use mmp_core::domain::StockOutcome;
 use mmp_core::domain::{
     ConsumptionRecord, ConsumptionRecordId, MealGuestAllocation, MealGuestAllocationId,
-    MealGuestGroup, MealGuestGroupId, MealItemRef, MealParticipant, MealParticipantAllocation,
-    MealParticipantAllocationId, MealParticipantId, MealPlanComponent, MealPlanComponentId,
-    MealPlanComponentSnapshot, MealPlanEntry, MealPlanEntryId, MealPlanScope, MealPlanStatus,
-    MealSlot, NutritionFacts, NutritionQuality, ParticipantStatus, ProductId, RecipeId, Revision,
-    UserId,
+    MealGuestGroup, MealGuestGroupId, MealItemRef, MealOptOut, MealParticipant,
+    MealParticipantAllocation, MealParticipantAllocationId, MealParticipantId, MealPlanComponent,
+    MealPlanComponentId, MealPlanComponentSnapshot, MealPlanEntry, MealPlanEntryId, MealPlanScope,
+    MealSlot, NutritionFacts, NutritionQuality, ParticipantStatus, Portioning, ProductId, RecipeId,
+    Revision, UserId,
 };
 use mmp_core::ports::{
     MealPlanComponentUpdate, MealPlanQuery, MealPlanRepository, SnapshotOp, StockWrite,
@@ -39,11 +39,9 @@ struct EntryRow {
     planned_on: Date,
     planned_time: Option<Time>,
     slot: String,
-    status: String,
+    portioning: String,
     created_by: Uuid,
     updated_by: Uuid,
-    resolved_by: Option<Uuid>,
-    resolved_at: Option<OffsetDateTime>,
     revision: i64,
     created_at: OffsetDateTime,
     updated_at: OffsetDateTime,
@@ -74,9 +72,6 @@ struct ComponentRow {
     cholesterol_mg: Option<Decimal>,
     nutrition_extra: Option<Extra>,
     nutrition_quality: Option<String>,
-    status: String,
-    resolved_by: Option<Uuid>,
-    resolved_at: Option<OffsetDateTime>,
     revision: i64,
     display_order: Uuid,
 }
@@ -119,10 +114,6 @@ impl ComponentRow {
             amount: parse_amount(&self.amount_kind, self.amount_value, self.amount_unit)?,
             position: self.position,
             snapshot,
-            status: MealPlanStatus::from_str(&self.status)
-                .map_err(|_| bad_value("status", &self.status))?,
-            resolved_by: self.resolved_by.map(UserId::from),
-            resolved_at: self.resolved_at,
             revision: Revision::new(self.revision),
             display_order: self.display_order,
         })
@@ -151,6 +142,14 @@ struct AllocationRow {
     consumption_record_id: Option<Uuid>,
     resolved_by: Option<Uuid>,
     resolved_at: Option<OffsetDateTime>,
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct OptOutRow {
+    entry_id: Uuid,
+    member_id: Uuid,
+    created_by: Uuid,
+    created_at: OffsetDateTime,
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -227,6 +226,7 @@ fn assemble(
     components: Vec<MealPlanComponent>,
     participants: Vec<MealParticipant>,
     guest_groups: Vec<MealGuestGroup>,
+    opted_out: Vec<MealOptOut>,
 ) -> Result<MealPlanEntry> {
     let slot = MealSlot::from_str(&row.slot).map_err(|_| bad_value("slot", &row.slot))?;
     Ok(MealPlanEntry {
@@ -236,27 +236,27 @@ fn assemble(
         planned_on: row.planned_on,
         planned_time: row.planned_time,
         slot,
-        status: MealPlanStatus::from_str(&row.status)
-            .map_err(|_| bad_value("status", &row.status))?,
+        portioning: Portioning::from_str(&row.portioning)
+            .map_err(|_| bad_value("portioning", &row.portioning))?,
         components,
         participants,
         guest_groups,
+        opted_out,
         created_by: UserId::from(row.created_by),
         updated_by: UserId::from(row.updated_by),
-        resolved_by: row.resolved_by.map(UserId::from),
-        resolved_at: row.resolved_at,
         revision: Revision::new(row.revision),
         created_at: row.created_at,
         updated_at: row.updated_at,
     })
 }
 
-const GET_ENTRY: &str = "SELECT id, scope, member_id, planned_on, planned_time, slot, status, created_by, updated_by, resolved_by, resolved_at, revision, created_at, updated_at FROM meal_plan_entry WHERE id = $1";
-const LIST_ENTRIES: &str = "SELECT id, scope, member_id, planned_on, planned_time, slot, status, created_by, updated_by, resolved_by, resolved_at, revision, created_at, updated_at FROM meal_plan_entry WHERE (member_id = $1 OR ($4 AND EXISTS (SELECT 1 FROM meal_plan_participant p WHERE p.entry_id = meal_plan_entry.id AND p.member_id = $1))) AND planned_on >= $2 AND planned_on <= $3 ORDER BY planned_on, CASE slot WHEN 'breakfast' THEN 0 WHEN 'lunch' THEN 1 WHEN 'dinner' THEN 2 ELSE 3 END, planned_time NULLS LAST, created_at, id";
-const LIST_ALL_ENTRIES: &str = "SELECT id, scope, member_id, planned_on, planned_time, slot, status, created_by, updated_by, resolved_by, resolved_at, revision, created_at, updated_at FROM meal_plan_entry WHERE planned_on >= $1 AND planned_on <= $2 ORDER BY planned_on, CASE slot WHEN 'breakfast' THEN 0 WHEN 'lunch' THEN 1 WHEN 'dinner' THEN 2 ELSE 3 END, planned_time NULLS LAST, created_at, id";
-const LIST_COMPONENTS: &str = "SELECT id, entry_id, position, item_kind, product_id, recipe_id, amount_kind, amount_value, amount_unit, frozen_item_name, nutrition_basis_amount, nutrition_basis_unit, energy_kcal, protein_g, carbohydrate_g, sugar_g, fat_g, saturated_fat_g, fibre_g, salt_g, cholesterol_mg, nutrition_extra, nutrition_quality, status, resolved_by, resolved_at, revision, display_order FROM meal_plan_component WHERE entry_id = ANY($1) ORDER BY entry_id, position";
+const GET_ENTRY: &str = "SELECT id, scope, member_id, planned_on, planned_time, slot, portioning, created_by, updated_by, revision, created_at, updated_at FROM meal_plan_entry WHERE id = $1";
+const LIST_ENTRIES: &str = "SELECT id, scope, member_id, planned_on, planned_time, slot, portioning, created_by, updated_by, revision, created_at, updated_at FROM meal_plan_entry WHERE (member_id = $1 OR ($4 AND (EXISTS (SELECT 1 FROM meal_plan_participant p WHERE p.entry_id = meal_plan_entry.id AND p.member_id = $1) OR EXISTS (SELECT 1 FROM meal_plan_opt_out o WHERE o.entry_id = meal_plan_entry.id AND o.member_id = $1)))) AND planned_on >= $2 AND planned_on <= $3 ORDER BY planned_on, CASE slot WHEN 'breakfast' THEN 0 WHEN 'lunch' THEN 1 WHEN 'dinner' THEN 2 ELSE 3 END, planned_time NULLS LAST, created_at, id";
+const LIST_ALL_ENTRIES: &str = "SELECT id, scope, member_id, planned_on, planned_time, slot, portioning, created_by, updated_by, revision, created_at, updated_at FROM meal_plan_entry WHERE planned_on >= $1 AND planned_on <= $2 ORDER BY planned_on, CASE slot WHEN 'breakfast' THEN 0 WHEN 'lunch' THEN 1 WHEN 'dinner' THEN 2 ELSE 3 END, planned_time NULLS LAST, created_at, id";
+const LIST_COMPONENTS: &str = "SELECT id, entry_id, position, item_kind, product_id, recipe_id, amount_kind, amount_value, amount_unit, frozen_item_name, nutrition_basis_amount, nutrition_basis_unit, energy_kcal, protein_g, carbohydrate_g, sugar_g, fat_g, saturated_fat_g, fibre_g, salt_g, cholesterol_mg, nutrition_extra, nutrition_quality, revision, display_order FROM meal_plan_component WHERE entry_id = ANY($1) ORDER BY entry_id, position";
 const LIST_PARTICIPANTS: &str = "SELECT id, entry_id, member_id, revision, created_at, updated_at FROM meal_plan_participant WHERE entry_id = ANY($1) ORDER BY entry_id, created_at, id";
 const LIST_ALLOCATIONS: &str = "SELECT id, participant_id, component_id, allocated_kind, allocated_value, allocated_unit, status, consumption_record_id, resolved_by, resolved_at FROM meal_plan_participant_allocation WHERE participant_id = ANY($1)";
+const LIST_OPT_OUTS: &str = "SELECT entry_id, member_id, created_by, created_at FROM meal_plan_opt_out WHERE entry_id = ANY($1) ORDER BY entry_id, created_at";
 const LIST_GUEST_GROUPS: &str = "SELECT id, entry_id, guest_count, revision, created_at, updated_at FROM meal_guest_group WHERE entry_id = ANY($1) ORDER BY entry_id, created_at, id";
 const LIST_GUEST_ALLOCATIONS: &str = "SELECT id, guest_group_id, component_id, allocated_kind, allocated_value, allocated_unit, status, confirmed_kind, confirmed_value, confirmed_unit, resolved_by, resolved_at FROM meal_guest_allocation WHERE guest_group_id = ANY($1)";
 
@@ -337,6 +337,26 @@ impl PgMealPlanRepository {
         Ok(grouped)
     }
 
+    async fn opt_outs_for(&self, ids: &[Uuid]) -> Result<HashMap<Uuid, Vec<MealOptOut>>> {
+        if ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let rows: Vec<OptOutRow> = sqlx::query_as(LIST_OPT_OUTS)
+            .bind(ids)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|error| repository_error("loading meal opt-outs", error))?;
+        let mut grouped: HashMap<Uuid, Vec<MealOptOut>> = HashMap::new();
+        for row in rows {
+            grouped.entry(row.entry_id).or_default().push(MealOptOut {
+                member_id: row.member_id.into(),
+                created_by: UserId::from(row.created_by),
+                created_at: row.created_at,
+            });
+        }
+        Ok(grouped)
+    }
+
     async fn guests_for(&self, ids: &[Uuid]) -> Result<HashMap<Uuid, Vec<MealGuestGroup>>> {
         if ids.is_empty() {
             return Ok(HashMap::new());
@@ -386,6 +406,7 @@ impl PgMealPlanRepository {
         let mut components = self.components_for(&ids).await?;
         let mut participants = self.participants_for(&ids).await?;
         let mut guests = self.guests_for(&ids).await?;
+        let mut opt_outs = self.opt_outs_for(&ids).await?;
         rows.into_iter()
             .map(|row| {
                 let id = row.id;
@@ -394,6 +415,7 @@ impl PgMealPlanRepository {
                     components.remove(&id).unwrap_or_default(),
                     participants.remove(&id).unwrap_or_default(),
                     guests.remove(&id).unwrap_or_default(),
+                    opt_outs.remove(&id).unwrap_or_default(),
                 )
             })
             .collect()
@@ -446,6 +468,7 @@ impl MealPlanRepository for PgMealPlanRepository {
         insert_components(&mut tx, entry).await?;
         insert_participants(&mut tx, entry).await?;
         insert_guests(&mut tx, entry.id, &entry.guest_groups).await?;
+        insert_opt_outs(&mut tx, entry.id, &entry.opted_out).await?;
         tx.commit()
             .await
             .map_err(|error| repository_error("committing a meal plan entry", error))?;
@@ -483,6 +506,7 @@ impl MealPlanRepository for PgMealPlanRepository {
         insert_components(&mut tx, entry).await?;
         insert_participants(&mut tx, entry).await?;
         insert_guests(&mut tx, entry.id, &entry.guest_groups).await?;
+        sync_opt_outs(&mut tx, entry.id, &entry.opted_out).await?;
         tx.commit()
             .await
             .map_err(|error| repository_error("committing a meal plan update", error))?;
@@ -587,6 +611,7 @@ impl MealPlanRepository for PgMealPlanRepository {
         }
         replace_participants(&mut tx, entry.id, &entry.participants).await?;
         replace_guests(&mut tx, entry.id, &entry.guest_groups).await?;
+        sync_opt_outs(&mut tx, entry.id, &entry.opted_out).await?;
         tx.commit()
             .await
             .map_err(|error| repository_error("committing a participant update", error))?;
@@ -618,7 +643,7 @@ impl MealPlanRepository for PgMealPlanRepository {
             insert_consumption(&mut tx, record).await?;
         }
         replace_participants(&mut tx, entry_id, participants).await?;
-        update_entry_state(&mut tx, entry_id, component).await?;
+        bump_entry_revision(&mut tx, entry_id, component).await?;
         let stock_outcomes = apply_stock_write(&mut tx, stock, OffsetDateTime::now_utc()).await?;
         tx.commit()
             .await
@@ -651,7 +676,7 @@ impl MealPlanRepository for PgMealPlanRepository {
         if let Some(record_id) = delete_record {
             delete_consumption(&mut tx, record_id).await?;
         }
-        update_entry_state(&mut tx, entry_id, component).await?;
+        bump_entry_revision(&mut tx, entry_id, component).await?;
         let stock_outcomes = apply_stock_write(&mut tx, stock, OffsetDateTime::now_utc()).await?;
         tx.commit()
             .await
@@ -674,7 +699,7 @@ async fn delete_consumption(
 
 async fn insert_entry(tx: &mut Transaction<'_, Postgres>, entry: &MealPlanEntry) -> Result<()> {
     sqlx::query(
-        "INSERT INTO meal_plan_entry (id, scope, member_id, planned_on, planned_time, slot, status, created_by, updated_by, resolved_by, resolved_at, revision, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)",
+        "INSERT INTO meal_plan_entry (id, scope, member_id, planned_on, planned_time, slot, portioning, created_by, updated_by, revision, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
     )
     .bind(entry.id.as_uuid())
     .bind(entry.scope.code())
@@ -682,11 +707,9 @@ async fn insert_entry(tx: &mut Transaction<'_, Postgres>, entry: &MealPlanEntry)
     .bind(entry.planned_on)
     .bind(entry.planned_time)
     .bind(entry.slot.code())
-    .bind(entry.status.code())
+    .bind(entry.portioning.code())
     .bind(entry.created_by.as_uuid())
     .bind(entry.updated_by.as_uuid())
-    .bind(entry.resolved_by.map(|id| id.as_uuid()))
-    .bind(entry.resolved_at)
     .bind(entry.revision.get())
     .bind(entry.created_at)
     .bind(entry.updated_at)
@@ -702,16 +725,14 @@ async fn update_entry(
     expected: Revision,
 ) -> Result<UpdateOutcome> {
     let affected = sqlx::query(
-        "UPDATE meal_plan_entry SET planned_on = $2, planned_time = $3, slot = $4, status = $5, updated_by = $6, resolved_by = $7, resolved_at = $8, revision = $9, updated_at = $10 WHERE id = $1 AND revision = $11",
+        "UPDATE meal_plan_entry SET planned_on = $2, planned_time = $3, slot = $4, portioning = $5, updated_by = $6, revision = $7, updated_at = $8 WHERE id = $1 AND revision = $9",
     )
     .bind(entry.id.as_uuid())
     .bind(entry.planned_on)
     .bind(entry.planned_time)
     .bind(entry.slot.code())
-    .bind(entry.status.code())
+    .bind(entry.portioning.code())
     .bind(entry.updated_by.as_uuid())
-    .bind(entry.resolved_by.map(|id| id.as_uuid()))
-    .bind(entry.resolved_at)
     .bind(entry.revision.get())
     .bind(entry.updated_at)
     .bind(expected.get())
@@ -773,13 +794,10 @@ async fn update_component(
     let affected = match update.snapshot {
         SnapshotOp::Keep => {
             sqlx::query(
-                "UPDATE meal_plan_component SET status = $3, resolved_by = $4, resolved_at = $5, revision = $6 WHERE id = $1 AND entry_id = $2 AND revision = $7",
+                "UPDATE meal_plan_component SET revision = $3 WHERE id = $1 AND entry_id = $2 AND revision = $4",
             )
             .bind(update.id.as_uuid())
             .bind(entry_id.as_uuid())
-            .bind(update.status.code())
-            .bind(update.resolved_by.map(|id| id.as_uuid()))
-            .bind(update.resolved_at)
             .bind(update.revision.get())
             .bind(expected.get())
             .execute(&mut **tx)
@@ -787,13 +805,10 @@ async fn update_component(
         }
         SnapshotOp::Clear => {
             sqlx::query(
-                "UPDATE meal_plan_component SET status = $3, resolved_by = $4, resolved_at = $5, revision = $6, frozen_item_name = NULL, nutrition_basis_amount = NULL, nutrition_basis_unit = NULL, energy_kcal = NULL, protein_g = NULL, carbohydrate_g = NULL, sugar_g = NULL, fat_g = NULL, saturated_fat_g = NULL, fibre_g = NULL, salt_g = NULL, cholesterol_mg = NULL, nutrition_extra = NULL, nutrition_quality = NULL WHERE id = $1 AND entry_id = $2 AND revision = $7",
+                "UPDATE meal_plan_component SET revision = $3, frozen_item_name = NULL, nutrition_basis_amount = NULL, nutrition_basis_unit = NULL, energy_kcal = NULL, protein_g = NULL, carbohydrate_g = NULL, sugar_g = NULL, fat_g = NULL, saturated_fat_g = NULL, fibre_g = NULL, salt_g = NULL, cholesterol_mg = NULL, nutrition_extra = NULL, nutrition_quality = NULL WHERE id = $1 AND entry_id = $2 AND revision = $4",
             )
             .bind(update.id.as_uuid())
             .bind(entry_id.as_uuid())
-            .bind(update.status.code())
-            .bind(update.resolved_by.map(|id| id.as_uuid()))
-            .bind(update.resolved_at)
             .bind(update.revision.get())
             .bind(expected.get())
             .execute(&mut **tx)
@@ -802,13 +817,10 @@ async fn update_component(
         SnapshotOp::Set(snapshot) => {
             let nutrition = nutrition_bindings(&snapshot.nutrition);
             sqlx::query(
-                "UPDATE meal_plan_component SET status = $3, resolved_by = $4, resolved_at = $5, revision = $6, frozen_item_name = COALESCE(frozen_item_name, $7), nutrition_basis_amount = COALESCE(nutrition_basis_amount, $8), nutrition_basis_unit = COALESCE(nutrition_basis_unit, $9), energy_kcal = COALESCE(energy_kcal, $10), protein_g = COALESCE(protein_g, $11), carbohydrate_g = COALESCE(carbohydrate_g, $12), sugar_g = COALESCE(sugar_g, $13), fat_g = COALESCE(fat_g, $14), saturated_fat_g = COALESCE(saturated_fat_g, $15), fibre_g = COALESCE(fibre_g, $16), salt_g = COALESCE(salt_g, $17), cholesterol_mg = COALESCE(cholesterol_mg, $18), nutrition_extra = COALESCE(nutrition_extra, $19), nutrition_quality = COALESCE(nutrition_quality, $20) WHERE id = $1 AND entry_id = $2 AND revision = $21",
+                "UPDATE meal_plan_component SET revision = $3, frozen_item_name = COALESCE(frozen_item_name, $4), nutrition_basis_amount = COALESCE(nutrition_basis_amount, $5), nutrition_basis_unit = COALESCE(nutrition_basis_unit, $6), energy_kcal = COALESCE(energy_kcal, $7), protein_g = COALESCE(protein_g, $8), carbohydrate_g = COALESCE(carbohydrate_g, $9), sugar_g = COALESCE(sugar_g, $10), fat_g = COALESCE(fat_g, $11), saturated_fat_g = COALESCE(saturated_fat_g, $12), fibre_g = COALESCE(fibre_g, $13), salt_g = COALESCE(salt_g, $14), cholesterol_mg = COALESCE(cholesterol_mg, $15), nutrition_extra = COALESCE(nutrition_extra, $16), nutrition_quality = COALESCE(nutrition_quality, $17) WHERE id = $1 AND entry_id = $2 AND revision = $18",
             )
             .bind(update.id.as_uuid())
             .bind(entry_id.as_uuid())
-            .bind(update.status.code())
-            .bind(update.resolved_by.map(|id| id.as_uuid()))
-            .bind(update.resolved_at)
             .bind(update.revision.get())
             .bind(&snapshot.item_name)
             .bind(nutrition.basis_amount)
@@ -838,18 +850,15 @@ async fn update_component(
     }
 }
 
-async fn update_entry_state(
+async fn bump_entry_revision(
     tx: &mut Transaction<'_, Postgres>,
     entry_id: MealPlanEntryId,
     update: &MealPlanComponentUpdate<'_>,
 ) -> Result<()> {
     sqlx::query(
-        "UPDATE meal_plan_entry SET status = $2, resolved_by = $3, resolved_at = $4, updated_by = $5, updated_at = $6, revision = revision + 1 WHERE id = $1",
+        "UPDATE meal_plan_entry SET updated_by = $2, updated_at = $3, revision = revision + 1 WHERE id = $1",
     )
     .bind(entry_id.as_uuid())
-    .bind(update.entry_status.code())
-    .bind(update.entry_resolved_by.map(|id| id.as_uuid()))
-    .bind(update.entry_resolved_at)
     .bind(update.actor_id.as_uuid())
     .bind(update.now)
     .execute(&mut **tx)
@@ -865,7 +874,7 @@ async fn insert_components(
     for component in &entry.components {
         let (kind, value, unit) = amount_bindings(&component.amount);
         let (item_kind, item_product_id, item_recipe_id) = item_bindings(&component.item);
-        let mut query = sqlx::query("INSERT INTO meal_plan_component (id, entry_id, position, product_id, amount_kind, amount_value, amount_unit, status, resolved_by, resolved_at, revision, display_order, item_kind, recipe_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)")
+        sqlx::query("INSERT INTO meal_plan_component (id, entry_id, position, product_id, amount_kind, amount_value, amount_unit, revision, display_order, item_kind, recipe_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)")
             .bind(component.id.as_uuid())
             .bind(entry.id.as_uuid())
             .bind(component.position)
@@ -873,15 +882,10 @@ async fn insert_components(
             .bind(kind)
             .bind(value)
             .bind(unit)
-            .bind(component.status.code())
-            .bind(component.resolved_by.map(|id| id.as_uuid()))
-            .bind(component.resolved_at)
             .bind(component.revision.get())
             .bind(component.display_order)
             .bind(item_kind)
-            .bind(item_recipe_id);
-        let _ = &mut query;
-        query
+            .bind(item_recipe_id)
             .execute(&mut **tx)
             .await
             .map_err(|error| map_db_error(error, "creating a meal plan component"))?;
@@ -897,11 +901,8 @@ async fn persist_components(
     entry: &MealPlanEntry,
 ) -> Result<()> {
     for component in &entry.components {
-        sqlx::query("UPDATE meal_plan_component SET status = $2, resolved_by = $3, resolved_at = $4, revision = $5 WHERE id = $1")
+        sqlx::query("UPDATE meal_plan_component SET revision = $2 WHERE id = $1")
             .bind(component.id.as_uuid())
-            .bind(component.status.code())
-            .bind(component.resolved_by.map(|id| id.as_uuid()))
-            .bind(component.resolved_at)
             .bind(component.revision.get())
             .execute(&mut **tx)
             .await
@@ -966,24 +967,33 @@ async fn insert_participants(
             .execute(&mut **tx)
             .await
             .map_err(|error| map_db_error(error, "creating a meal plan participant"))?;
-        for allocation in &participant.allocations {
-            let (kind, value, unit) = amount_bindings(&allocation.allocated);
-            sqlx::query("INSERT INTO meal_plan_participant_allocation (id, entry_id, participant_id, component_id, allocated_kind, allocated_value, allocated_unit, status, consumption_record_id, resolved_by, resolved_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)")
-                .bind(allocation.id.as_uuid())
-                .bind(entry.id.as_uuid())
-                .bind(participant.id.as_uuid())
-                .bind(allocation.component_id.as_uuid())
-                .bind(kind)
-                .bind(value)
-                .bind(unit)
-                .bind(allocation.status.code())
-                .bind(allocation.consumption_record_id.map(|id| id.as_uuid()))
-                .bind(allocation.resolved_by.map(|id| id.as_uuid()))
-                .bind(allocation.resolved_at)
-                .execute(&mut **tx)
-                .await
-                .map_err(|error| map_db_error(error, "creating a participant allocation"))?;
-        }
+        insert_allocations(tx, entry.id, participant).await?;
+    }
+    Ok(())
+}
+
+async fn insert_allocations(
+    tx: &mut Transaction<'_, Postgres>,
+    entry_id: MealPlanEntryId,
+    participant: &MealParticipant,
+) -> Result<()> {
+    for allocation in &participant.allocations {
+        let (kind, value, unit) = amount_bindings(&allocation.allocated);
+        sqlx::query("INSERT INTO meal_plan_participant_allocation (id, entry_id, participant_id, component_id, allocated_kind, allocated_value, allocated_unit, status, consumption_record_id, resolved_by, resolved_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)")
+            .bind(allocation.id.as_uuid())
+            .bind(entry_id.as_uuid())
+            .bind(participant.id.as_uuid())
+            .bind(allocation.component_id.as_uuid())
+            .bind(kind)
+            .bind(value)
+            .bind(unit)
+            .bind(allocation.status.code())
+            .bind(allocation.consumption_record_id.map(|id| id.as_uuid()))
+            .bind(allocation.resolved_by.map(|id| id.as_uuid()))
+            .bind(allocation.resolved_at)
+            .execute(&mut **tx)
+            .await
+            .map_err(|error| map_db_error(error, "creating a participant allocation"))?;
     }
     Ok(())
 }
@@ -1018,26 +1028,41 @@ async fn replace_participants(
             .execute(&mut **tx)
             .await
             .map_err(|error| map_db_error(error, "creating a meal plan participant"))?;
-        for allocation in &participant.allocations {
-            let (kind, value, unit) = amount_bindings(&allocation.allocated);
-            sqlx::query("INSERT INTO meal_plan_participant_allocation (id, entry_id, participant_id, component_id, allocated_kind, allocated_value, allocated_unit, status, consumption_record_id, resolved_by, resolved_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)")
-                .bind(allocation.id.as_uuid())
-                .bind(entry_id.as_uuid())
-                .bind(participant.id.as_uuid())
-                .bind(allocation.component_id.as_uuid())
-                .bind(kind)
-                .bind(value)
-                .bind(unit)
-                .bind(allocation.status.code())
-                .bind(allocation.consumption_record_id.map(|id| id.as_uuid()))
-                .bind(allocation.resolved_by.map(|id| id.as_uuid()))
-                .bind(allocation.resolved_at)
-                .execute(&mut **tx)
-                .await
-                .map_err(|error| map_db_error(error, "creating a participant allocation"))?;
-        }
+        insert_allocations(tx, entry_id, participant).await?;
     }
     Ok(())
+}
+
+async fn insert_opt_outs(
+    tx: &mut Transaction<'_, Postgres>,
+    entry_id: MealPlanEntryId,
+    opt_outs: &[MealOptOut],
+) -> Result<()> {
+    for opt_out in opt_outs {
+        sqlx::query("INSERT INTO meal_plan_opt_out (id, entry_id, member_id, created_by, created_at) VALUES ($1, $2, $3, $4, $5)")
+            .bind(Uuid::now_v7())
+            .bind(entry_id.as_uuid())
+            .bind(opt_out.member_id.as_uuid())
+            .bind(opt_out.created_by.as_uuid())
+            .bind(opt_out.created_at)
+            .execute(&mut **tx)
+            .await
+            .map_err(|error| map_db_error(error, "recording a meal opt-out"))?;
+    }
+    Ok(())
+}
+
+async fn sync_opt_outs(
+    tx: &mut Transaction<'_, Postgres>,
+    entry_id: MealPlanEntryId,
+    opt_outs: &[MealOptOut],
+) -> Result<()> {
+    sqlx::query("DELETE FROM meal_plan_opt_out WHERE entry_id = $1")
+        .bind(entry_id.as_uuid())
+        .execute(&mut **tx)
+        .await
+        .map_err(|error| map_db_error(error, "clearing meal opt-outs"))?;
+    insert_opt_outs(tx, entry_id, opt_outs).await
 }
 
 async fn insert_guests(

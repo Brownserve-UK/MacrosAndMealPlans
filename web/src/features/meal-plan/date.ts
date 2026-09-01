@@ -15,6 +15,11 @@ export function parseIsoDate(iso: string): Date {
   return new Date(year, month - 1, day);
 }
 
+export function defaultDayFor(weekStart: string): string {
+  const today = todayIso();
+  return today >= weekStart && today <= addDays(weekStart, 6) ? today : weekStart;
+}
+
 export function startOfWeekIso(iso: string): string {
   const date = parseIsoDate(iso);
   const daysSinceMonday = (date.getDay() + 6) % 7;

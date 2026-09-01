@@ -583,6 +583,90 @@ impl Loader<'_> {
             0,
         )
         .await?;
+
+        let next_wed = self.week_start + Duration::weeks(1) + Duration::days(2);
+        self.ensure_household_meal(
+            next_wed,
+            MealSlot::Dinner,
+            "chicken-and-rice",
+            servings(3),
+            &[(owner, 1), (manager, 1), (basic, 1)],
+            0,
+        )
+        .await?;
+        self.ensure_opt_out_with_own_meal(next_wed, MealSlot::Dinner, basic)
+            .await?;
+
+        let next_thu = self.week_start + Duration::weeks(1) + Duration::days(3);
+        self.ensure_personal_meal(next_thu, MealSlot::Dinner, owner, "self-catered")
+            .await?;
+        self.ensure_household_meal(
+            next_thu,
+            MealSlot::Dinner,
+            "chicken-and-rice",
+            servings(2),
+            &[(manager, 1), (basic, 1)],
+            0,
+        )
+        .await?;
+        Ok(())
+    }
+
+    async fn ensure_opt_out_with_own_meal(
+        &mut self,
+        date: Date,
+        slot: MealSlot,
+        member_id: HouseholdMemberId,
+    ) -> anyhow::Result<()> {
+        let entry_id = meal_id(date, slot);
+        let view = self.state.meal_plan.get(entry_id).await?;
+        if view.entry.has_opted_out(member_id) {
+            return Ok(());
+        }
+        self.state
+            .meal_plan
+            .opt_out(entry_id, view.entry.revision, self.actor.id, member_id)
+            .await?;
+        self.report.household_participants_created =
+            self.report.household_participants_created.saturating_sub(1);
+        self.ensure_personal_meal(date, slot, member_id, "opted-out")
+            .await
+    }
+
+    async fn ensure_personal_meal(
+        &mut self,
+        date: Date,
+        slot: MealSlot,
+        member_id: HouseholdMemberId,
+        key: &str,
+    ) -> anyhow::Result<()> {
+        let id = MealPlanEntryId::from_uuid(sample_uuid(
+            "meal-plan-entry",
+            &format!("{date}:{slot}:member:{key}"),
+        ));
+        if !matches!(
+            self.state.meal_plan.get(id).await,
+            Err(CoreError::NotFound { .. })
+        ) {
+            return Ok(());
+        }
+        self.report.meals_created += 1;
+        self.state
+            .meal_plan
+            .create_unchecked(NewMealPlanEntry {
+                id: Some(id),
+                scope: MealPlanScope::Member,
+                member_id: Some(member_id),
+                planned_on: date,
+                planned_time: slot_time(slot),
+                slot,
+                portioning: mmp_core::domain::Portioning::Equal,
+                components: components_for(slot),
+                participants: None,
+                guest_groups: Vec::new(),
+                actor_id: self.actor.id,
+            })
+            .await?;
         Ok(())
     }
 
@@ -624,6 +708,7 @@ impl Loader<'_> {
                 planned_on: date,
                 planned_time: slot_time(slot),
                 slot,
+                portioning: mmp_core::domain::Portioning::Equal,
                 components: vec![NewMealPlanComponent {
                     id: Some(component_id),
                     item: MealItemRef::recipe(recipe_id(recipe_key)),
@@ -794,6 +879,7 @@ impl Loader<'_> {
                 planned_on: date,
                 planned_time: Some(planned_time),
                 slot: MealSlot::Snacks,
+                portioning: mmp_core::domain::Portioning::Equal,
                 components: vec![NewMealPlanComponent {
                     id: None,
                     item: MealItemRef::product(product_id(product_key)),
@@ -832,6 +918,7 @@ impl Loader<'_> {
                         planned_on: date,
                         planned_time: slot_time(slot),
                         slot,
+                        portioning: mmp_core::domain::Portioning::Equal,
                         components: components_for(slot),
                         participants: None,
                         guest_groups: Vec::new(),
@@ -848,10 +935,10 @@ impl Loader<'_> {
             Outcome::Eaten { .. } => MealPlanStatus::Eaten,
             Outcome::NotEaten => MealPlanStatus::NotEaten,
         };
-        if view.entry.status == desired {
+        if view.entry.status() == desired {
             return Ok(());
         }
-        if view.entry.status != MealPlanStatus::Planned {
+        if view.entry.status() != MealPlanStatus::Planned {
             view = self
                 .state
                 .meal_plan
@@ -983,6 +1070,7 @@ impl Loader<'_> {
                 planned_on: date,
                 planned_time: slot_time(slot),
                 slot,
+                portioning: mmp_core::domain::Portioning::Equal,
                 components: vec![NewMealPlanComponent {
                     id: None,
                     item: MealItemRef::recipe(recipe_id(recipe_key)),

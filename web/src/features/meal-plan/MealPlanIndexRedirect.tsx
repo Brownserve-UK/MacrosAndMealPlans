@@ -2,30 +2,39 @@ import { useNavigate } from '@tanstack/react-router';
 import { useEffect } from 'react';
 import { useAuth } from '../../auth/AuthProvider';
 import { EmptyState, Loading } from '../../components/States';
-import { startOfWeekIso, todayIso } from './date';
-import { defaultDayFor } from './MealPlanPage';
+import { defaultDayFor, startOfWeekIso, todayIso } from './date';
 
-export function MealPlanIndexRedirect({ workspace }: { workspace: 'today' | 'planner' }) {
+type IndexTarget = '/food-log' | '/planner' | '/household/planner';
+
+const LABELS: Record<IndexTarget, { loading: string; unavailable: string }> = {
+  '/food-log': { loading: 'Loading food log', unavailable: 'Food log unavailable' },
+  '/planner': { loading: 'Loading planner', unavailable: 'Meal planner unavailable' },
+  '/household/planner': { loading: 'Loading household planner', unavailable: 'Household planner unavailable' },
+};
+
+export function MealPlanIndexRedirect({ to }: { to: IndexTarget }) {
   const { principal } = useAuth();
   const navigate = useNavigate();
+  const needsMember = to !== '/household/planner';
 
   useEffect(() => {
-    if (!principal?.member_id) return;
+    if (needsMember && !principal?.member_id) return;
+    if (!principal) return;
     const weekStart = startOfWeekIso(todayIso());
     void navigate({
-      to: workspace === 'today' ? '/food-log/$weekStart/$day' : '/planner/$weekStart/$day',
+      to: `${to}/$weekStart/$day` as `${IndexTarget}/$weekStart/$day`,
       params: { weekStart, day: defaultDayFor(weekStart) },
       replace: true,
     });
-  }, [navigate, principal?.member_id, workspace]);
+  }, [navigate, needsMember, principal, to]);
 
-  if (!principal?.member_id) {
+  if (needsMember && !principal?.member_id) {
     return (
       <EmptyState
-        title={workspace === 'today' ? 'Food log unavailable' : 'Meal planner unavailable'}
+        title={LABELS[to].unavailable}
         description="Your account is not linked to an active household member."
       />
     );
   }
-  return <Loading label={workspace === 'today' ? 'Loading food log' : 'Loading meal planner'} />;
+  return <Loading label={LABELS[to].loading} />;
 }

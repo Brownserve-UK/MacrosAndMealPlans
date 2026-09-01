@@ -244,6 +244,7 @@ async fn planned(h: &Harness, components: Vec<NewMealPlanComponent>) -> MealPlan
             planned_on: date!(2026 - 08 - 25),
             planned_time: Some(time!(18:30)),
             slot: MealSlot::Dinner,
+            portioning: Portioning::Equal,
             components,
             participants: None,
             guest_groups: Vec::new(),
@@ -269,6 +270,7 @@ async fn a_member_has_one_main_meal_entry_per_day_and_slot() {
             planned_on: date!(2026 - 08 - 25),
             planned_time: Some(time!(19:00)),
             slot: MealSlot::Dinner,
+            portioning: Portioning::Equal,
             components: vec![measured(food.id, 50)],
             participants: None,
             guest_groups: Vec::new(),
@@ -294,6 +296,7 @@ async fn snacks_allow_distinct_timed_occurrences_and_one_untimed_occurrence() {
             planned_on: date!(2026 - 08 - 25),
             planned_time: Some(time!(20:30)),
             slot: MealSlot::Snacks,
+            portioning: Portioning::Equal,
             components: vec![measured(food.id, 100)],
             participants: None,
             guest_groups: Vec::new(),
@@ -327,6 +330,7 @@ async fn snacks_allow_distinct_timed_occurrences_and_one_untimed_occurrence() {
             planned_on: date!(2026 - 08 - 25),
             planned_time: Some(time!(20:30)),
             slot: MealSlot::Snacks,
+            portioning: Portioning::Equal,
             components: vec![measured(food.id, 50)],
             participants: None,
             guest_groups: Vec::new(),
@@ -345,6 +349,7 @@ async fn snacks_allow_distinct_timed_occurrences_and_one_untimed_occurrence() {
             planned_on: date!(2026 - 08 - 25),
             planned_time: Some(time!(20:30)),
             slot: MealSlot::Snacks,
+            portioning: Portioning::Equal,
             components: vec![measured(food.id, 25)],
             participants: None,
             guest_groups: Vec::new(),
@@ -362,6 +367,7 @@ async fn snacks_allow_distinct_timed_occurrences_and_one_untimed_occurrence() {
             planned_on: date!(2026 - 08 - 25),
             planned_time: None,
             slot: MealSlot::Snacks,
+            portioning: Portioning::Equal,
             components: vec![measured(food.id, 25)],
             participants: None,
             guest_groups: Vec::new(),
@@ -379,6 +385,7 @@ async fn snacks_allow_distinct_timed_occurrences_and_one_untimed_occurrence() {
             planned_on: date!(2026 - 08 - 25),
             planned_time: None,
             slot: MealSlot::Snacks,
+            portioning: Portioning::Equal,
             components: vec![measured(food.id, 25)],
             participants: None,
             guest_groups: Vec::new(),
@@ -490,7 +497,7 @@ async fn confirming_eaten_creates_one_linked_diary_record_per_component() {
         .await
         .unwrap();
 
-    assert_eq!(confirmed.entry.status, MealPlanStatus::Eaten);
+    assert_eq!(confirmed.entry.status(), MealPlanStatus::Eaten);
     assert_eq!(h.records.count(), 2);
     assert!(confirmed.components.iter().all(|component| {
         component.consumption_record.as_ref().is_some_and(|record| {
@@ -537,19 +544,10 @@ async fn confirming_one_component_does_not_resolve_its_siblings() {
         .await
         .unwrap();
 
-    assert_eq!(updated.entry.status, MealPlanStatus::PartiallyResolved);
-    assert_eq!(
-        updated.components[0].component.status,
-        MealPlanStatus::Planned
-    );
-    assert_eq!(
-        updated.components[1].component.status,
-        MealPlanStatus::Planned
-    );
-    assert_eq!(
-        updated.components[2].component.status,
-        MealPlanStatus::Eaten
-    );
+    assert_eq!(updated.entry.status(), MealPlanStatus::PartiallyResolved);
+    assert_eq!(updated.components[0].status, MealPlanStatus::Planned);
+    assert_eq!(updated.components[1].status, MealPlanStatus::Planned);
+    assert_eq!(updated.components[2].status, MealPlanStatus::Eaten);
     assert_eq!(h.records.count(), 1);
 
     let week = h
@@ -751,7 +749,7 @@ async fn marking_remaining_eaten_skips_an_item_marked_not_eaten() {
     let pending: Vec<_> = rejected
         .components
         .iter()
-        .filter(|component| component.component.status == MealPlanStatus::Planned)
+        .filter(|component| component.status == MealPlanStatus::Planned)
         .map(|component| ActualMealPlanComponent {
             component_id: component.component.id,
             amount: component.component.amount,
@@ -774,15 +772,12 @@ async fn marking_remaining_eaten_skips_an_item_marked_not_eaten() {
         .await
         .unwrap();
 
-    assert_eq!(resolved.entry.status, MealPlanStatus::PartiallyResolved);
-    assert_eq!(
-        resolved.components[0].component.status,
-        MealPlanStatus::NotEaten
-    );
+    assert_eq!(resolved.entry.status(), MealPlanStatus::PartiallyResolved);
+    assert_eq!(resolved.components[0].status, MealPlanStatus::NotEaten);
     assert!(
         resolved.components[1..]
             .iter()
-            .all(|component| component.component.status == MealPlanStatus::Eaten)
+            .all(|component| component.status == MealPlanStatus::Eaten)
     );
     assert_eq!(h.records.count(), 2);
 }
@@ -953,6 +948,7 @@ async fn an_archived_product_may_be_retained_but_not_newly_added() {
             planned_on: date!(2026 - 08 - 26),
             planned_time: None,
             slot: MealSlot::Lunch,
+            portioning: Portioning::Equal,
             components: vec![measured(food.id, 100)],
             participants: None,
             guest_groups: Vec::new(),
@@ -998,9 +994,7 @@ async fn reopening_an_eaten_entry_removes_its_diary_records() {
         .await
         .unwrap();
 
-    assert_eq!(reopened.entry.status, MealPlanStatus::Planned);
-    assert!(reopened.entry.resolved_by.is_none());
-    assert!(reopened.entry.resolved_at.is_none());
+    assert_eq!(reopened.entry.status(), MealPlanStatus::Planned);
     assert_eq!(h.records.count(), 0);
     assert!(reopened.components[0].consumption_record.is_none());
 }
@@ -1031,7 +1025,7 @@ async fn reopening_a_not_eaten_entry_returns_it_to_planned() {
         .await
         .unwrap();
 
-    assert_eq!(reopened.entry.status, MealPlanStatus::Planned);
+    assert_eq!(reopened.entry.status(), MealPlanStatus::Planned);
     let week = h
         .service
         .week(h.member_id, date!(2026 - 08 - 24))
@@ -1242,7 +1236,7 @@ async fn a_reopened_entry_can_be_edited_and_confirmed_again() {
         .await
         .unwrap();
 
-    assert_eq!(reconfirmed.entry.status, MealPlanStatus::Eaten);
+    assert_eq!(reconfirmed.entry.status(), MealPlanStatus::Eaten);
     assert_eq!(h.records.count(), 1);
 }
 
@@ -1260,6 +1254,7 @@ async fn date_policy_forbids_creating_a_plan_in_the_past() {
             planned_on: date!(2026 - 08 - 20),
             planned_time: None,
             slot: MealSlot::Dinner,
+            portioning: Portioning::Equal,
             components: vec![measured(food.id, 100)],
             participants: None,
             guest_groups: Vec::new(),
@@ -1283,6 +1278,7 @@ async fn date_policy_allows_a_one_day_grace_into_the_past() {
             planned_on: date!(2026 - 08 - 23),
             planned_time: None,
             slot: MealSlot::Dinner,
+            portioning: Portioning::Equal,
             components: vec![measured(food.id, 100)],
             participants: None,
             guest_groups: Vec::new(),
@@ -1329,6 +1325,7 @@ async fn date_policy_forbids_resolving_a_plan_that_is_not_yet_due() {
             planned_on: date!(2026 - 08 - 30),
             planned_time: None,
             slot: MealSlot::Dinner,
+            portioning: Portioning::Equal,
             components: vec![measured(food.id, 100)],
             participants: None,
             guest_groups: Vec::new(),
@@ -1583,6 +1580,7 @@ async fn planning_a_recipe_you_do_not_own_is_refused() {
             planned_on: date!(2026 - 08 - 25),
             planned_time: Some(time!(18:30)),
             slot: MealSlot::Dinner,
+            portioning: Portioning::Equal,
             components: vec![servings_of(curry.id, 1)],
             participants: None,
             guest_groups: Vec::new(),
@@ -1610,6 +1608,7 @@ async fn a_recipe_component_rejects_a_measured_amount() {
             planned_on: date!(2026 - 08 - 25),
             planned_time: Some(time!(18:30)),
             slot: MealSlot::Dinner,
+            portioning: Portioning::Equal,
             components: vec![NewMealPlanComponent {
                 id: None,
                 item: MealItemRef::recipe(curry.id),
@@ -1743,6 +1742,7 @@ async fn a_household_meal_defaults_to_every_member_when_enabled() {
             planned_on: date!(2026 - 08 - 25),
             planned_time: Some(time!(18:30)),
             slot: MealSlot::Dinner,
+            portioning: Portioning::Equal,
             components: vec![measured(food.id, 600)],
             participants: None,
             guest_groups: Vec::new(),
@@ -1848,7 +1848,7 @@ async fn a_participant_sees_only_their_own_share_and_outcome() {
         .unwrap();
 
     let after = h.service.get(with_taylor.entry.id).await.unwrap();
-    assert_eq!(after.entry.status, MealPlanStatus::PartiallyResolved);
+    assert_eq!(after.entry.status(), MealPlanStatus::PartiallyResolved);
     let taylor_participant = after
         .participants
         .iter()
@@ -1946,6 +1946,7 @@ async fn a_second_participant_confirming_does_not_draw_stock_again() {
             planned_on: date!(2026 - 08 - 25),
             planned_time: Some(time!(18:30)),
             slot: MealSlot::Dinner,
+            portioning: Portioning::Equal,
             components: vec![measured(chicken.id, 300)],
             participants: None,
             guest_groups: Vec::new(),
@@ -2142,4 +2143,380 @@ async fn a_confirmed_component_stops_counting_as_planned_stock_demand() {
         dgrams(200),
         "the meal is no longer future demand and the 200 g left is really free"
     );
+}
+
+async fn household_dinner(h: &Harness, product_id: ProductId, grams: i64) -> MealPlanEntryView {
+    h.service
+        .create(NewMealPlanEntry {
+            id: None,
+            scope: MealPlanScope::Household,
+            member_id: None,
+            planned_on: date!(2026 - 08 - 25),
+            planned_time: Some(time!(18:30)),
+            slot: MealSlot::Dinner,
+            portioning: Portioning::Equal,
+            components: vec![measured(product_id, grams)],
+            participants: None,
+            guest_groups: Vec::new(),
+            actor_id: h.actor_id,
+        })
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn opting_out_frees_the_slot_for_a_personal_meal() {
+    let h = harness();
+    h.settings.set_default_all_members_participate(true);
+    let food = product("Roast", 150);
+    h.products.seed(food.clone());
+    let household = household_dinner(&h, food.id, 900).await;
+
+    // The member cannot plan their own dinner while the household holds the slot.
+    let clash = h
+        .service
+        .create(NewMealPlanEntry {
+            id: None,
+            scope: MealPlanScope::Member,
+            member_id: Some(h.member_id),
+            planned_on: date!(2026 - 08 - 25),
+            planned_time: None,
+            slot: MealSlot::Dinner,
+            portioning: Portioning::Equal,
+            components: vec![measured(food.id, 100)],
+            participants: None,
+            guest_groups: Vec::new(),
+            actor_id: h.actor_id,
+        })
+        .await;
+    assert!(clash.is_err());
+
+    let after = h
+        .service
+        .opt_out(
+            household.entry.id,
+            household.entry.revision,
+            h.actor_id,
+            h.member_id,
+        )
+        .await
+        .unwrap();
+    assert!(after.entry.participant_for(h.member_id).is_none());
+    assert!(after.entry.has_opted_out(h.member_id));
+
+    // Now the slot is free and the personal meal is accepted.
+    h.service
+        .create(NewMealPlanEntry {
+            id: None,
+            scope: MealPlanScope::Member,
+            member_id: Some(h.member_id),
+            planned_on: date!(2026 - 08 - 25),
+            planned_time: None,
+            slot: MealSlot::Dinner,
+            portioning: Portioning::Equal,
+            components: vec![measured(food.id, 100)],
+            participants: None,
+            guest_groups: Vec::new(),
+            actor_id: h.actor_id,
+        })
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn opting_out_of_a_future_meal_is_allowed() {
+    let h = harness();
+    h.settings.set_default_all_members_participate(true);
+    let food = product("Pie", 150);
+    h.products.seed(food.clone());
+    let household = h
+        .service
+        .create(NewMealPlanEntry {
+            id: None,
+            scope: MealPlanScope::Household,
+            member_id: None,
+            planned_on: date!(2026 - 09 - 20),
+            planned_time: Some(time!(18:30)),
+            slot: MealSlot::Dinner,
+            portioning: Portioning::Equal,
+            components: vec![measured(food.id, 900)],
+            participants: None,
+            guest_groups: Vec::new(),
+            actor_id: h.actor_id,
+        })
+        .await
+        .unwrap();
+
+    // mark_not_eaten would be refused this far out; opt-out is not gated by ensure_due.
+    let after = h
+        .service
+        .opt_out(
+            household.entry.id,
+            household.entry.revision,
+            h.actor_id,
+            h.member_id,
+        )
+        .await
+        .unwrap();
+    assert!(after.entry.has_opted_out(h.member_id));
+}
+
+#[tokio::test]
+async fn opting_out_recalculates_leftovers_and_a_manager_cannot_re_add() {
+    let h = harness();
+    h.settings.set_default_all_members_participate(true);
+    let morgan = h.add_member("Morgan");
+    let taylor = h.add_member("Taylor");
+    let food = product("Chilli", 150);
+    h.products.seed(food.clone());
+    let household = household_dinner(&h, food.id, 900).await;
+    assert_eq!(household.entry.participants.len(), 3);
+
+    let after = h
+        .service
+        .opt_out(
+            household.entry.id,
+            household.entry.revision,
+            h.actor_id,
+            taylor,
+        )
+        .await
+        .unwrap();
+    assert_eq!(after.entry.participants.len(), 2);
+    // 900 g equal-split across the two who remain is 450 g each, allocated == prepared, no leftover.
+    let prep = &after.components[0].preparation;
+    assert_eq!(
+        prep.allocated,
+        Some(ConsumedAmount::Measure(Quantity::new(
+            Decimal::new(900, 0),
+            Unit::Gram
+        )))
+    );
+
+    // A manager re-adding the opted-out member through set_participants is refused.
+    let err = h
+        .service
+        .set_participants(
+            after.entry.id,
+            after.entry.revision,
+            crate::domain::SetMealParticipants {
+                actor_id: h.actor_id,
+                guest_groups: Vec::new(),
+                participants: vec![h.member_id, morgan, taylor]
+                    .into_iter()
+                    .map(|member_id| crate::domain::NewMealParticipant {
+                        id: None,
+                        member_id,
+                        allocations: Vec::new(),
+                    })
+                    .collect(),
+            },
+        )
+        .await;
+    assert!(err.is_err());
+}
+
+#[tokio::test]
+async fn opting_out_is_refused_once_the_portion_is_resolved() {
+    let h = harness();
+    h.settings.set_default_all_members_participate(true);
+    let food = product("Bake", 150);
+    h.products.seed(food.clone());
+    let household = household_dinner(&h, food.id, 300).await;
+    let component = household.components[0].component.clone();
+
+    h.service
+        .mark_component_eaten_unchecked(
+            household.entry.id,
+            component.id,
+            component.revision,
+            ConfirmMealPlanComponent {
+                consumed_on: date!(2026 - 08 - 25),
+                consumed_at: None,
+                amount: ConsumedAmount::Measure(Quantity::new(Decimal::new(300, 0), Unit::Gram)),
+                actor_id: h.actor_id,
+                subject_member_id: Some(h.member_id),
+            },
+        )
+        .await
+        .unwrap();
+
+    let current = h.service.get(household.entry.id).await.unwrap();
+    let err = h
+        .service
+        .opt_out(
+            current.entry.id,
+            current.entry.revision,
+            h.actor_id,
+            h.member_id,
+        )
+        .await;
+    assert!(err.is_err());
+}
+
+#[tokio::test]
+async fn a_household_meal_cannot_use_the_snacks_slot() {
+    let h = harness();
+    let food = product("Nuts", 150);
+    h.products.seed(food.clone());
+    let err = h
+        .service
+        .create(NewMealPlanEntry {
+            id: None,
+            scope: MealPlanScope::Household,
+            member_id: None,
+            planned_on: date!(2026 - 08 - 25),
+            planned_time: Some(time!(15:00)),
+            slot: MealSlot::Snacks,
+            portioning: Portioning::Equal,
+            components: vec![measured(food.id, 50)],
+            participants: Some(vec![crate::domain::NewMealParticipant {
+                id: None,
+                member_id: h.member_id,
+                allocations: Vec::new(),
+            }]),
+            guest_groups: Vec::new(),
+            actor_id: h.actor_id,
+        })
+        .await;
+    assert!(err.is_err());
+}
+
+#[tokio::test]
+async fn slot_attendance_marks_self_catering_and_opted_out_members() {
+    let h = harness();
+    h.settings.set_default_all_members_participate(true);
+    let morgan = h.add_member("Morgan");
+    let taylor = h.add_member("Taylor");
+    let food = product("Tart", 150);
+    h.products.seed(food.clone());
+
+    // Morgan self-caters that dinner slot before the household meal is planned.
+    h.service
+        .create(NewMealPlanEntry {
+            id: None,
+            scope: MealPlanScope::Member,
+            member_id: Some(morgan),
+            planned_on: date!(2026 - 08 - 25),
+            planned_time: None,
+            slot: MealSlot::Dinner,
+            portioning: Portioning::Equal,
+            components: vec![measured(food.id, 100)],
+            participants: None,
+            guest_groups: Vec::new(),
+            actor_id: h.actor_id,
+        })
+        .await
+        .unwrap();
+
+    // Default participation would have roped Morgan in, but their slot is taken, so
+    // creating the household meal with everyone must be requested explicitly and excludes them.
+    let household = h
+        .service
+        .create(NewMealPlanEntry {
+            id: None,
+            scope: MealPlanScope::Household,
+            member_id: None,
+            planned_on: date!(2026 - 08 - 25),
+            planned_time: Some(time!(18:30)),
+            slot: MealSlot::Dinner,
+            portioning: Portioning::Equal,
+            components: vec![measured(food.id, 600)],
+            participants: Some(
+                vec![h.member_id, taylor]
+                    .into_iter()
+                    .map(|member_id| crate::domain::NewMealParticipant {
+                        id: None,
+                        member_id,
+                        allocations: Vec::new(),
+                    })
+                    .collect(),
+            ),
+            guest_groups: Vec::new(),
+            actor_id: h.actor_id,
+        })
+        .await
+        .unwrap();
+
+    h.service
+        .opt_out(
+            household.entry.id,
+            household.entry.revision,
+            h.actor_id,
+            taylor,
+        )
+        .await
+        .unwrap();
+
+    let attendance = h
+        .service
+        .slot_attendance(date!(2026 - 08 - 25), MealSlot::Dinner, None)
+        .await
+        .unwrap();
+    let by_member: std::collections::HashMap<_, _> = attendance.into_iter().collect();
+    assert_eq!(
+        by_member[&morgan],
+        crate::domain::SlotAttendance::SelfCatering
+    );
+    assert_eq!(by_member[&taylor], crate::domain::SlotAttendance::OptedOut);
+    assert_eq!(
+        by_member[&h.member_id],
+        crate::domain::SlotAttendance::Participating
+    );
+}
+
+#[tokio::test]
+async fn one_member_resolving_does_not_freeze_the_meal_for_a_manager() {
+    let h = harness();
+    h.settings.set_default_all_members_participate(true);
+    let morgan = h.add_member("Morgan");
+    let food = product("Gratin", 150);
+    let extra = product("Salad", 20);
+    h.products.seed(food.clone());
+    h.products.seed(extra.clone());
+    let household = household_dinner(&h, food.id, 400).await;
+    let component = household.components[0].component.clone();
+
+    h.service
+        .mark_component_eaten_unchecked(
+            household.entry.id,
+            component.id,
+            component.revision,
+            ConfirmMealPlanComponent {
+                consumed_on: date!(2026 - 08 - 25),
+                consumed_at: None,
+                amount: ConsumedAmount::Measure(Quantity::new(Decimal::new(200, 0), Unit::Gram)),
+                actor_id: h.actor_id,
+                subject_member_id: Some(h.member_id),
+            },
+        )
+        .await
+        .unwrap();
+
+    let current = h.service.get(household.entry.id).await.unwrap();
+    assert_eq!(current.entry.status(), MealPlanStatus::PartiallyResolved);
+
+    // The manager can still add a second component while one member has eaten.
+    let updated = h
+        .service
+        .update(
+            current.entry.id,
+            current.entry.revision,
+            MealPlanEntryPatch {
+                components: Some(vec![
+                    NewMealPlanComponent {
+                        id: Some(component.id),
+                        item: component.item,
+                        amount: component.amount,
+                    },
+                    measured(extra.id, 120),
+                ]),
+                ..Default::default()
+            },
+            h.actor_id,
+        )
+        .await
+        .unwrap();
+    assert_eq!(updated.components.len(), 2);
+    assert!(morgan != h.member_id);
 }

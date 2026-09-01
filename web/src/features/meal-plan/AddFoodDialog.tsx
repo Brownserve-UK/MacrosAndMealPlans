@@ -1,5 +1,4 @@
 import CheckIcon from '@mui/icons-material/CheckCircleOutlineOutlined';
-import RadioButtonUncheckedIcon from '@mui/icons-material/RadioButtonUncheckedOutlined';
 import Alert from '@mui/material/Alert';
 import Button from '@mui/material/Button';
 import DialogActions from '@mui/material/DialogActions';
@@ -16,12 +15,11 @@ import { useState, type FormEvent } from 'react';
 import {
   ApiError,
   type Amount,
-  type MealPlanEntry,
   type MealSlot,
   type Product,
   type RecipeSummary,
 } from '../../api/client';
-import { useCreateConsumption, useCreateMealPlanEntry, useUpdateMealPlanEntry } from '../../api/queries';
+import { useCreateConsumption } from '../../api/queries';
 import { FormDialog } from '../../components/FormDialog';
 import {
   AmountFields,
@@ -36,13 +34,11 @@ import { ProductPicker } from './ProductPicker';
 import { RecipePicker } from './RecipePicker';
 import { labelForSlot, SLOTS } from './slots';
 
-type AddKind = 'planned' | 'eaten';
 type Source = 'product' | 'recipe';
 
 type ItemRef = { product_id: string } | { recipe_id: string };
 
 type EntryDraft = {
-  kind: AddKind;
   source: Source;
   product: Product | null;
   recipe: RecipeSummary | null;
@@ -54,15 +50,12 @@ type EntryDraft = {
 
 type AddedItem = {
   key: string;
-  kind: AddKind;
-  item: ItemRef;
   name: string;
   amount: Amount;
 };
 
-function emptyDraft(kind: AddKind, slot: MealSlot): EntryDraft {
+function emptyDraft(slot: MealSlot): EntryDraft {
   return {
-    kind,
     source: 'product',
     product: null,
     recipe: null,
@@ -103,12 +96,6 @@ function draftAmount(draft: EntryDraft): Amount | null {
   return draftToAmount(draft.amount);
 }
 
-function componentItem(component: MealPlanEntry['components'][number]): ItemRef {
-  return component.item_kind === 'recipe'
-    ? { recipe_id: component.recipe_id }
-    : { product_id: component.product_id };
-}
-
 function flattenComponentErrors(fields: Record<string, string>): Record<string, string> {
   return Object.fromEntries(
     Object.entries(fields).map(([field, message]) => [
@@ -124,30 +111,24 @@ export function AddFoodDialog({
   memberId,
   date,
   slot,
-  kind = 'eaten',
-  entry = null,
 }: {
   open: boolean;
   onClose: () => void;
   memberId: string;
   date: string;
   slot: MealSlot;
-  kind?: AddKind;
-  entry?: MealPlanEntry | null;
 }) {
   const createConsumption = useCreateConsumption();
-  const createPlan = useCreateMealPlanEntry();
-  const updatePlan = useUpdateMealPlanEntry();
-  const [draft, setDraft] = useState(() => emptyDraft(kind, slot));
+  const [draft, setDraft] = useState(() => emptyDraft(slot));
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [failure, setFailure] = useState<string | null>(null);
   const [added, setAdded] = useState<AddedItem[]>([]);
-  const busy = createConsumption.isPending || createPlan.isPending || updatePlan.isPending;
-  const slotLocked = Boolean(entry) || added.length > 0;
+  const busy = createConsumption.isPending;
+  const slotLocked = added.length > 0;
   const ready = draft.source === 'recipe' ? Boolean(draft.recipe) : Boolean(draft.product);
 
   function resetAndClose() {
-    setDraft(emptyDraft(kind, slot));
+    setDraft(emptyDraft(slot));
     setErrors({});
     setFailure(null);
     setAdded([]);
@@ -159,7 +140,7 @@ export function AddFoodDialog({
   }
 
   function setSource(source: Source) {
-    setDraft({ ...emptyDraft(draft.kind, draft.slot), source, time: draft.time });
+    setDraft({ ...emptyDraft(draft.slot), source, time: draft.time });
     setErrors({});
   }
 
@@ -176,18 +157,16 @@ export function AddFoodDialog({
     const name = draft.source === 'recipe' ? draft.recipe!.name : draft.product!.name;
 
     try {
-      if (draft.kind === 'eaten') {
-        await createConsumption.mutateAsync({
-          member_id: memberId,
-          ...item,
-          slot: draft.slot,
-          amount,
-          consumed_on: date,
-          consumed_at: draft.time ? combineDateTime(date, draft.time) : null,
-        });
-      }
-      setAdded([...added, { key: crypto.randomUUID(), kind: draft.kind, item, name, amount }]);
-      setDraft({ ...emptyDraft(draft.kind, draft.slot), source: draft.source });
+      await createConsumption.mutateAsync({
+        member_id: memberId,
+        ...item,
+        slot: draft.slot,
+        amount,
+        consumed_on: date,
+        consumed_at: draft.time ? combineDateTime(date, draft.time) : null,
+      });
+      setAdded([...added, { key: crypto.randomUUID(), name, amount }]);
+      setDraft({ ...emptyDraft(draft.slot), source: draft.source });
       setErrors({});
     } catch (caught) {
       if (caught instanceof ApiError) {
@@ -195,51 +174,15 @@ export function AddFoodDialog({
         if (Object.keys(fields).length > 0) setErrors(fields);
         else setFailure(caught.message);
       } else {
-        setFailure(draft.kind === 'planned' ? 'Could not add to the plan.' : 'Could not log the food.');
+        setFailure('Could not log the food.');
       }
-    }
-  }
-
-  async function finishPlan() {
-    if (kind !== 'planned' || added.length === 0) {
-      handleClose();
-      return;
-    }
-    setFailure(null);
-    try {
-      const components = added.map((entryItem) => ({ ...entryItem.item, amount: entryItem.amount }));
-      if (entry) {
-        await updatePlan.mutateAsync({
-          id: entry.id,
-          revision: entry.revision,
-          body: {
-            components: [
-              ...entry.components.map((component) => ({
-                id: component.id,
-                ...componentItem(component),
-                amount: component.amount,
-              })),
-              ...components,
-            ],
-          },
-        });
-      } else {
-        await createPlan.mutateAsync({
-          planned_on: date,
-          slot: draft.slot,
-          components,
-        });
-      }
-      resetAndClose();
-    } catch (caught) {
-      setFailure(caught instanceof ApiError ? caught.message : 'Could not add to the plan.');
     }
   }
 
   return (
     <FormDialog open={open} onClose={handleClose} maxWidth="sm" fullWidth>
       <form onSubmit={onSubmit}>
-        <DialogTitle sx={{ pb: 0.75 }}>{kind === 'planned' ? 'Add planned meal' : 'Add food'}</DialogTitle>
+        <DialogTitle sx={{ pb: 0.75 }}>Add food</DialogTitle>
         <DialogContent>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2.5 }}>
             {slotLocked ? `${labelForSlot(draft.slot)} · ` : ''}{formatFullDate(date)}
@@ -271,11 +214,7 @@ export function AddFoodDialog({
                     spacing={1}
                     sx={{ alignItems: 'center', py: 0.75 }}
                   >
-                    {entryItem.kind === 'eaten' ? (
-                      <CheckIcon fontSize="small" color="success" />
-                    ) : (
-                      <RadioButtonUncheckedIcon fontSize="small" color="disabled" />
-                    )}
+                    <CheckIcon fontSize="small" color="success" />
                     <Typography variant="body2" sx={{ flexGrow: 1 }}>
                       {entryItem.name}
                     </Typography>
@@ -320,15 +259,13 @@ export function AddFoodDialog({
               />
             )}
 
-            {draft.kind === 'eaten' ? (
-              <TextField
-                type="time"
-                label="Time eaten (optional)"
-                value={draft.time}
-                onChange={(event) => setDraft({ ...draft, time: event.target.value })}
-                slotProps={{ inputLabel: { shrink: true } }}
-              />
-            ) : null}
+            <TextField
+              type="time"
+              label="Time eaten (optional)"
+              value={draft.time}
+              onChange={(event) => setDraft({ ...draft, time: event.target.value })}
+              slotProps={{ inputLabel: { shrink: true } }}
+            />
 
             {draft.source === 'recipe' ? (
               <TextField
@@ -351,11 +288,11 @@ export function AddFoodDialog({
           </Stack>
         </DialogContent>
         <DialogActions>
-          <Button onClick={kind === 'planned' && added.length > 0 ? finishPlan : handleClose} disabled={busy}>
-            {kind === 'planned' && added.length > 0 ? 'Save meal' : added.length > 0 ? 'Done' : 'Cancel'}
+          <Button onClick={handleClose} disabled={busy}>
+            {added.length > 0 ? 'Done' : 'Cancel'}
           </Button>
           <Button type="submit" variant="contained" disabled={busy || !ready}>
-            {busy ? 'Adding…' : draft.kind === 'planned' ? 'Add to meal' : 'Add'}
+            {busy ? 'Adding…' : 'Add'}
           </Button>
         </DialogActions>
       </form>

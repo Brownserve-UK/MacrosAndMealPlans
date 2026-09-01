@@ -262,47 +262,52 @@ CREATE INDEX consumption_record_product ON consumption_record (product_id);
 
 CREATE TABLE meal_plan_entry (
     id            UUID PRIMARY KEY,
-    member_id     UUID NOT NULL REFERENCES household_member (id) ON DELETE CASCADE,
+    scope         TEXT NOT NULL DEFAULT 'member',
+    member_id     UUID REFERENCES household_member (id) ON DELETE CASCADE,
     planned_on    DATE NOT NULL,
     planned_time  TIME,
     slot          TEXT NOT NULL,
-    status        TEXT NOT NULL,
+    portioning    TEXT NOT NULL DEFAULT 'equal',
     created_by    UUID NOT NULL REFERENCES app_user (id) ON DELETE RESTRICT,
     updated_by    UUID NOT NULL REFERENCES app_user (id) ON DELETE RESTRICT,
-    resolved_by   UUID REFERENCES app_user (id) ON DELETE RESTRICT,
-    resolved_at   TIMESTAMPTZ,
     revision      BIGINT NOT NULL DEFAULT 1,
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
 
     CONSTRAINT meal_plan_entry_slot_valid
         CHECK (slot IN ('breakfast', 'lunch', 'dinner', 'snacks')),
-    CONSTRAINT meal_plan_entry_status_valid
-        CHECK (status IN ('planned', 'partially_resolved', 'eaten', 'not_eaten')),
-    CONSTRAINT meal_plan_entry_resolution_complete
-        CHECK ((status = 'planned') = (resolved_by IS NULL AND resolved_at IS NULL))
+    CONSTRAINT meal_plan_entry_scope_valid
+        CHECK (scope IN ('member', 'household')),
+    CONSTRAINT meal_plan_entry_portioning_valid
+        CHECK (portioning IN ('equal', 'custom')),
+    CONSTRAINT meal_plan_entry_owner_matches_scope
+        CHECK ((scope = 'member') = (member_id IS NOT NULL)),
+    CONSTRAINT meal_plan_entry_id_day_slot_unique
+        UNIQUE (id, planned_on, slot)
 );
 
 CREATE INDEX meal_plan_entry_member_day
     ON meal_plan_entry (member_id, planned_on, slot, planned_time);
 CREATE UNIQUE INDEX meal_plan_entry_member_day_slot_unique
     ON meal_plan_entry (member_id, planned_on, slot)
-    WHERE slot <> 'snacks';
+    WHERE member_id IS NOT NULL AND slot <> 'snacks';
 CREATE UNIQUE INDEX meal_plan_entry_member_day_snack_time_unique
     ON meal_plan_entry (member_id, planned_on, slot, planned_time) NULLS NOT DISTINCT
-    WHERE slot = 'snacks';
-CREATE INDEX meal_plan_entry_status_day
-    ON meal_plan_entry (status, planned_on);
+    WHERE member_id IS NOT NULL AND slot = 'snacks';
+CREATE INDEX meal_plan_entry_scope_day
+    ON meal_plan_entry (scope, planned_on);
 
 CREATE TABLE meal_plan_component (
     id            UUID PRIMARY KEY,
     entry_id      UUID NOT NULL REFERENCES meal_plan_entry (id) ON DELETE CASCADE,
     position      INTEGER NOT NULL,
-    product_id    UUID NOT NULL REFERENCES product (id) ON DELETE RESTRICT,
+    item_kind     TEXT NOT NULL DEFAULT 'product',
+    product_id    UUID REFERENCES product (id) ON DELETE RESTRICT,
+    recipe_id     UUID,
     amount_kind   TEXT NOT NULL,
     amount_value  NUMERIC(16, 4) NOT NULL,
     amount_unit   TEXT,
-    frozen_product_name TEXT,
+    frozen_item_name TEXT,
     nutrition_basis_amount  NUMERIC(16, 4),
     nutrition_basis_unit    TEXT,
     energy_kcal         NUMERIC(12, 3),
@@ -316,18 +321,18 @@ CREATE TABLE meal_plan_component (
     cholesterol_mg      NUMERIC(12, 3),
     nutrition_extra     JSONB,
     nutrition_quality   TEXT,
-    status          TEXT NOT NULL DEFAULT 'planned',
-    resolved_by     UUID REFERENCES app_user (id) ON DELETE RESTRICT,
-    resolved_at     TIMESTAMPTZ,
     revision        BIGINT NOT NULL DEFAULT 1,
     display_order   UUID NOT NULL,
 
     CONSTRAINT meal_plan_component_position_non_negative
         CHECK (position >= 0),
-    CONSTRAINT meal_plan_component_status_valid
-        CHECK (status IN ('planned', 'eaten', 'not_eaten')),
-    CONSTRAINT meal_plan_component_resolution_complete
-        CHECK ((status = 'planned') = (resolved_by IS NULL AND resolved_at IS NULL)),
+    CONSTRAINT meal_plan_component_item_kind_valid
+        CHECK (item_kind IN ('product', 'recipe')),
+    CONSTRAINT meal_plan_component_item_ref_exclusive
+        CHECK (
+            num_nonnulls(product_id, recipe_id) = 1
+            AND (item_kind = 'product') = (product_id IS NOT NULL)
+        ),
     CONSTRAINT meal_plan_component_amount_kind_valid
         CHECK (amount_kind IN ('measure', 'servings', 'packs')),
     CONSTRAINT meal_plan_component_amount_value_positive
@@ -344,9 +349,9 @@ CREATE TABLE meal_plan_component (
         CHECK (nutrition_basis_amount IS NULL OR nutrition_basis_amount > 0),
     CONSTRAINT meal_plan_component_snapshot_complete
         CHECK (
-            (frozen_product_name IS NULL AND nutrition_quality IS NULL AND nutrition_extra IS NULL)
+            (frozen_item_name IS NULL AND nutrition_quality IS NULL AND nutrition_extra IS NULL)
             OR
-            (frozen_product_name IS NOT NULL AND nutrition_quality IS NOT NULL AND nutrition_extra IS NOT NULL)
+            (frozen_item_name IS NOT NULL AND nutrition_quality IS NOT NULL AND nutrition_extra IS NOT NULL)
         ),
     CONSTRAINT meal_plan_component_extra_is_object
         CHECK (nutrition_extra IS NULL OR jsonb_typeof(nutrition_extra) = 'object'),
@@ -370,18 +375,20 @@ CREATE TABLE meal_plan_component (
         CHECK (salt_g IS NULL OR salt_g >= 0),
     CONSTRAINT meal_plan_component_cholesterol_non_negative
         CHECK (cholesterol_mg IS NULL OR cholesterol_mg >= 0),
-    UNIQUE (entry_id, position)
+    UNIQUE (entry_id, position),
+    UNIQUE (entry_id, id)
 );
 
 CREATE INDEX meal_plan_component_entry ON meal_plan_component (entry_id, position);
 CREATE INDEX meal_plan_component_product ON meal_plan_component (product_id);
+CREATE INDEX meal_plan_component_recipe ON meal_plan_component (recipe_id);
 
 ALTER TABLE consumption_record
     ADD COLUMN meal_plan_component_id UUID
         REFERENCES meal_plan_component (id) ON DELETE RESTRICT;
 
-CREATE UNIQUE INDEX consumption_record_meal_plan_component_unique
-    ON consumption_record (meal_plan_component_id)
+CREATE UNIQUE INDEX consumption_record_meal_plan_component_member_unique
+    ON consumption_record (meal_plan_component_id, member_id)
     WHERE meal_plan_component_id IS NOT NULL;
 
 CREATE TABLE nutrition_target (
@@ -598,21 +605,8 @@ CREATE TABLE recipe_photo (
 );
 
 ALTER TABLE meal_plan_component
-    RENAME COLUMN frozen_product_name TO frozen_item_name;
-
-ALTER TABLE meal_plan_component
-    ADD COLUMN item_kind TEXT NOT NULL DEFAULT 'product',
-    ADD COLUMN recipe_id UUID REFERENCES recipe (id) ON DELETE RESTRICT,
-    ALTER COLUMN product_id DROP NOT NULL,
-    ADD CONSTRAINT meal_plan_component_item_kind_valid
-        CHECK (item_kind IN ('product', 'recipe')),
-    ADD CONSTRAINT meal_plan_component_item_ref_exclusive
-        CHECK (
-            num_nonnulls(product_id, recipe_id) = 1
-            AND (item_kind = 'product') = (product_id IS NOT NULL)
-        );
-
-CREATE INDEX meal_plan_component_recipe ON meal_plan_component (recipe_id);
+    ADD CONSTRAINT meal_plan_component_recipe_id_fkey
+        FOREIGN KEY (recipe_id) REFERENCES recipe (id) ON DELETE RESTRICT;
 
 ALTER TABLE consumption_record
     ADD COLUMN item_kind TEXT NOT NULL DEFAULT 'product',
@@ -718,29 +712,6 @@ ALTER TABLE member_access_grant
     DROP CONSTRAINT member_access_grant_scope_valid,
     ADD CONSTRAINT member_access_grant_scope_valid
         CHECK (scope IN ('health_data', 'meal_plan'));
-
-ALTER TABLE meal_plan_entry
-    ADD COLUMN scope TEXT NOT NULL DEFAULT 'member',
-    ALTER COLUMN member_id DROP NOT NULL,
-    ADD CONSTRAINT meal_plan_entry_scope_valid
-        CHECK (scope IN ('member', 'household')),
-    ADD CONSTRAINT meal_plan_entry_owner_matches_scope
-        CHECK ((scope = 'member') = (member_id IS NOT NULL)),
-    ADD CONSTRAINT meal_plan_entry_id_day_slot_unique
-        UNIQUE (id, planned_on, slot);
-
-DROP INDEX meal_plan_entry_member_day_slot_unique;
-DROP INDEX meal_plan_entry_member_day_snack_time_unique;
-CREATE UNIQUE INDEX meal_plan_entry_member_day_slot_unique
-    ON meal_plan_entry (member_id, planned_on, slot)
-    WHERE member_id IS NOT NULL AND slot <> 'snacks';
-CREATE UNIQUE INDEX meal_plan_entry_member_day_snack_time_unique
-    ON meal_plan_entry (member_id, planned_on, slot, planned_time) NULLS NOT DISTINCT
-    WHERE member_id IS NOT NULL AND slot = 'snacks';
-
-ALTER TABLE meal_plan_component
-    ADD CONSTRAINT meal_plan_component_entry_id_unique
-        UNIQUE (entry_id, id);
 
 CREATE TABLE meal_plan_participant (
     id          UUID PRIMARY KEY,
@@ -879,31 +850,22 @@ CREATE TABLE meal_guest_allocation (
 CREATE INDEX meal_guest_allocation_group ON meal_guest_allocation (guest_group_id);
 CREATE INDEX meal_guest_allocation_component ON meal_guest_allocation (component_id);
 
-INSERT INTO meal_plan_participant (id, entry_id, member_id, planned_on, planned_time, slot, revision, created_at, updated_at)
-SELECT uuidv7(), e.id, e.member_id, e.planned_on, e.planned_time, e.slot, 1, e.created_at, e.updated_at
-FROM meal_plan_entry e
-WHERE e.member_id IS NOT NULL;
+-- 2026-09-01 - SB: opting out of a household meal is the member's own call. We drop their
+-- participant row (which frees the (member, date, slot) slot so they can plan their own food)
+-- and leave this marker so the household planner can show *why* they're gone rather than
+-- silently losing them.
+CREATE TABLE meal_plan_opt_out (
+    id          UUID PRIMARY KEY,
+    entry_id    UUID NOT NULL REFERENCES meal_plan_entry (id) ON DELETE CASCADE,
+    member_id   UUID NOT NULL REFERENCES household_member (id) ON DELETE CASCADE,
+    created_by  UUID NOT NULL REFERENCES app_user (id) ON DELETE RESTRICT,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
 
-INSERT INTO meal_plan_participant_allocation
-    (id, entry_id, participant_id, component_id,
-     allocated_kind, allocated_value, allocated_unit,
-     status, consumption_record_id, resolved_by, resolved_at)
-SELECT uuidv7(), c.entry_id, p.id, c.id,
-       c.amount_kind, c.amount_value, c.amount_unit,
-       c.status, cr.id, c.resolved_by, c.resolved_at
-FROM meal_plan_component c
-JOIN meal_plan_participant p ON p.entry_id = c.entry_id
-LEFT JOIN consumption_record cr ON cr.meal_plan_component_id = c.id;
+    CONSTRAINT meal_plan_opt_out_entry_member_unique UNIQUE (entry_id, member_id)
+);
 
-ALTER TABLE meal_plan_component
-    DROP CONSTRAINT meal_plan_component_status_valid,
-    ADD CONSTRAINT meal_plan_component_status_valid
-        CHECK (status IN ('planned', 'partially_resolved', 'eaten', 'not_eaten'));
-
-DROP INDEX consumption_record_meal_plan_component_unique;
-CREATE UNIQUE INDEX consumption_record_meal_plan_component_member_unique
-    ON consumption_record (meal_plan_component_id, member_id)
-    WHERE meal_plan_component_id IS NOT NULL;
+CREATE INDEX meal_plan_opt_out_entry ON meal_plan_opt_out (entry_id);
+CREATE INDEX meal_plan_opt_out_member ON meal_plan_opt_out (member_id);
 
 CREATE TABLE stock_effect (
     id                UUID PRIMARY KEY,

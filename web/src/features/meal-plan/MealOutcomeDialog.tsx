@@ -133,10 +133,7 @@ export function MealOutcomeDialog({ meal, onClose }: { meal: PlannerMeal; onClos
       <DialogTitle>{isSnack ? 'Record snack outcome' : 'Record meal outcome'}</DialogTitle>
       <DialogContent dividers>
         <Stack spacing={2.5}>
-          <Box>
-            <Typography variant="h3">{isSnack ? 'Did everyone have their snack as planned?' : 'Did everyone eat as planned?'}</Typography>
-            <Typography variant="body2" color="text.secondary">Everyone defaults to the planned portions. Only change the people whose {isSnack ? 'snack' : 'meal'} differed.</Typography>
-          </Box>
+          <Typography variant="h3">{isSnack ? 'Did everyone have their snack as planned?' : 'Did everyone eat as planned?'}</Typography>
           {error ? <Alert severity="error">{error}</Alert> : null}
           {pendingPeople.map((person) => (
             <Box key={person.member_id} sx={{ p: 2, border: '1px solid', borderColor: 'divider', borderRadius: 2 }}>

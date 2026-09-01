@@ -1,5 +1,6 @@
 import { createRootRoute, createRoute, createRouter, redirect } from '@tanstack/react-router';
 import { AppShell } from '../components/AppShell';
+import { RequirePermission } from '../components/RequirePermission';
 import { RouteError, RouteNotFound } from '../components/RouteStates';
 import { AccountsPage } from '../features/administration/AccountsPage';
 import { AdministrationPage } from '../features/administration/AdministrationPage';
@@ -7,8 +8,10 @@ import { MealTimesPage } from '../features/administration/MealTimesPage';
 import { HouseholdPage } from '../features/household/HouseholdPage';
 import { MemberPage } from '../features/household/MemberPage';
 import { MealPlanIndexRedirect } from '../features/meal-plan/MealPlanIndexRedirect';
-import { MealPlanPage, defaultDayFor } from '../features/meal-plan/MealPlanPage';
-import { PlannerPage } from '../features/meal-plan/PlannerPage';
+import { MealPlanPage } from '../features/meal-plan/MealPlanPage';
+import { MyPlannerPage } from '../features/meal-plan/MyPlannerPage';
+import { HouseholdPlannerPage } from '../features/meal-plan/HouseholdPlannerPage';
+import { defaultDayFor } from '../features/meal-plan/date';
 import { IngredientPage } from '../features/ingredients/IngredientPage';
 import { IngredientsPage } from '../features/ingredients/IngredientsPage';
 import { ProductPage } from '../features/products/ProductPage';
@@ -33,7 +36,7 @@ const indexRoute = createRoute({
 const foodLogIndexRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/food-log',
-  component: () => <MealPlanIndexRedirect workspace="today" />,
+  component: () => <MealPlanIndexRedirect to="/food-log" />,
 });
 
 const foodLogWeekRoute = createRoute({
@@ -53,14 +56,14 @@ const foodLogDayRoute = createRoute({
   path: '/food-log/$weekStart/$day',
   component: function ViewFoodLog() {
     const { weekStart, day } = foodLogDayRoute.useParams();
-    return <MealPlanPage weekStart={weekStart} day={day} workspace="today" />;
+    return <MealPlanPage weekStart={weekStart} day={day} />;
   },
 });
 
 const plannerIndexRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/planner',
-  component: () => <MealPlanIndexRedirect workspace="planner" />,
+  component: () => <MealPlanIndexRedirect to="/planner" />,
 });
 
 const plannerWeekRoute = createRoute({
@@ -80,7 +83,42 @@ const plannerDayRoute = createRoute({
   path: '/planner/$weekStart/$day',
   component: function ViewPlanner() {
     const { weekStart, day } = plannerDayRoute.useParams();
-    return <PlannerPage weekStart={weekStart} day={day} />;
+    return <MyPlannerPage weekStart={weekStart} day={day} />;
+  },
+});
+
+const householdPlannerIndexRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/household/planner',
+  component: () => (
+    <RequirePermission permission="household:write">
+      <MealPlanIndexRedirect to="/household/planner" />
+    </RequirePermission>
+  ),
+});
+
+const householdPlannerWeekRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/household/planner/$weekStart',
+  beforeLoad: ({ params }) => {
+    throw redirect({
+      to: '/household/planner/$weekStart/$day',
+      params: { weekStart: params.weekStart, day: defaultDayFor(params.weekStart) },
+      replace: true,
+    });
+  },
+});
+
+const householdPlannerDayRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/household/planner/$weekStart/$day',
+  component: function ViewHouseholdPlanner() {
+    const { weekStart, day } = householdPlannerDayRoute.useParams();
+    return (
+      <RequirePermission permission="household:write">
+        <HouseholdPlannerPage weekStart={weekStart} day={day} />
+      </RequirePermission>
+    );
   },
 });
 
@@ -206,6 +244,9 @@ const routeTree = rootRoute.addChildren([
   plannerIndexRoute,
   plannerWeekRoute,
   plannerDayRoute,
+  householdPlannerIndexRoute,
+  householdPlannerWeekRoute,
+  householdPlannerDayRoute,
   ingredientsRoute,
   ingredientRoute,
   productsRoute,

@@ -26,6 +26,33 @@ fn allocation(
     }
 }
 
+fn guest_alloc(
+    component_id: MealPlanComponentId,
+    allocated: ConsumedAmount,
+    status: ParticipantStatus,
+) -> MealGuestAllocation {
+    MealGuestAllocation {
+        id: MealGuestAllocationId::new(),
+        component_id,
+        allocated,
+        status,
+        confirmed: None,
+        resolved_by: None,
+        resolved_at: None,
+    }
+}
+
+fn guest_group(allocations: Vec<MealGuestAllocation>) -> MealGuestGroup {
+    MealGuestGroup {
+        id: MealGuestGroupId::new(),
+        count: 1,
+        allocations,
+        revision: Revision::INITIAL,
+        created_at: OffsetDateTime::UNIX_EPOCH,
+        updated_at: OffsetDateTime::UNIX_EPOCH,
+    }
+}
+
 fn participant(allocations: Vec<MealParticipantAllocation>) -> MealParticipant {
     MealParticipant {
         id: MealParticipantId::new(),
@@ -64,9 +91,6 @@ fn component(id: MealPlanComponentId, amount: ConsumedAmount) -> MealPlanCompone
         amount,
         position: 0,
         snapshot: None,
-        status: MealPlanStatus::Planned,
-        resolved_by: None,
-        resolved_at: None,
         revision: Revision::INITIAL,
         display_order: uuid::Uuid::nil(),
     }
@@ -278,7 +302,7 @@ fn component_status_rolls_up_across_participants() {
     )]);
     let pending = participant(vec![allocation(comp, servings(1))]);
     assert_eq!(
-        derive_component_status(comp, &[ate.clone(), pending]),
+        derive_component_status(comp, &[ate.clone(), pending], &[]),
         MealPlanStatus::PartiallyResolved
     );
 
@@ -287,9 +311,30 @@ fn component_status_rolls_up_across_participants() {
         ParticipantStatus::NotEaten,
     )]);
     assert_eq!(
-        derive_component_status(comp, &[ate, declined]),
+        derive_component_status(comp, &[ate.clone(), declined], &[]),
         MealPlanStatus::Eaten
     );
+
+    let pending_guest = guest_group(vec![guest_alloc(
+        comp,
+        servings(1),
+        ParticipantStatus::Planned,
+    )]);
+    assert_eq!(
+        derive_component_status(comp, &[ate], &[pending_guest]),
+        MealPlanStatus::PartiallyResolved
+    );
+}
+
+#[test]
+fn equal_split_divides_every_amount_kind() {
+    assert_eq!(equal_split(&servings(4), 4), servings(1));
+    assert_eq!(equal_split(&grams(500), 4), grams(125));
+    assert_eq!(
+        equal_split(&ConsumedAmount::Packs(Decimal::new(3, 0)), 2),
+        ConsumedAmount::Packs(Decimal::new(15, 1))
+    );
+    assert_eq!(equal_split(&servings(2), 0), servings(2));
 }
 
 #[test]

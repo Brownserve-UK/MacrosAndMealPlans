@@ -70,9 +70,9 @@ const UNIQUE_CONSTRAINTS: [(&str, &str, &str); 24] = [
     ),
     ("meal_plan_component_pkey", "meal plan component", "id"),
     (
-        "consumption_record_meal_plan_component_unique",
-        "consumption record",
-        "meal_plan_component_id",
+        "meal_plan_opt_out_entry_member_unique",
+        "meal plan opt-out",
+        "member",
     ),
     (
         "consumption_record_meal_plan_component_member_unique",

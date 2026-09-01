@@ -1786,6 +1786,105 @@ async fn the_planner_returns_meal_focused_data_and_reviews_household_outcomes() 
 }
 
 #[tokio::test]
+async fn a_member_opts_out_of_a_household_meal_and_rejoins_from_their_own_planner() {
+    let app = app().await;
+    let member_id = send(&app, Call::new("GET", "/api/v1/auth/me")).await.1["member_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let product = create_milk_product(&app).await;
+
+    let component_id = uuid::Uuid::now_v7();
+    let (status, entry, headers) = send(
+        &app,
+        Call::new("POST", "/api/v1/meal-plan-entries").body(json!({
+            "household": true,
+            "planned_on": "2026-08-25",
+            "planned_time": "18:30",
+            "slot": "dinner",
+            "components": [{"id": component_id, "product_id": product["id"], "amount": measured_amount(600.0)}],
+            "participants": [{"member_id": member_id, "allocations": []}]
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{entry}");
+    let entry_id = entry["id"].as_str().unwrap().to_owned();
+    assert_eq!(entry["participants"].as_array().unwrap().len(), 1);
+
+    let (status, opted_out, _) = send(
+        &app,
+        Call::new(
+            "POST",
+            format!("/api/v1/meal-plan-entries/{entry_id}/opt-out"),
+        )
+        .if_match(etag(&headers)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{opted_out}");
+    assert!(opted_out["participants"].as_array().unwrap().is_empty());
+    assert_eq!(opted_out["opted_out"][0]["member_id"], member_id);
+
+    // The opted-out household meal still surfaces on the member's own week so they can rejoin it.
+    let (status, week, _) = send(&app, Call::new("GET", "/api/v1/meal-plan/2026-08-24")).await;
+    assert_eq!(status, StatusCode::OK, "{week}");
+    let mine = week["days"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|day| day["entries"].as_array().unwrap())
+        .find(|candidate| candidate["id"] == entry_id.as_str());
+    assert_eq!(mine.unwrap()["opted_out"][0]["member_id"], member_id);
+
+    let revision = opted_out["revision"].as_i64().unwrap();
+    let (status, rejoined, _) = send(
+        &app,
+        Call::new(
+            "DELETE",
+            format!("/api/v1/meal-plan-entries/{entry_id}/opt-out"),
+        )
+        .if_match(revision),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{rejoined}");
+    assert_eq!(rejoined["participants"][0]["member_id"], member_id);
+    assert!(
+        rejoined
+            .get("opted_out")
+            .and_then(|value| value.as_array())
+            .is_none_or(|list| list.is_empty()),
+        "{rejoined}"
+    );
+}
+
+#[tokio::test]
+async fn the_household_planner_and_attendance_need_household_write() {
+    let app = app().await;
+    create_user(&app, "sam", &["basic_user"]).await;
+
+    let (status, _, _) = send(
+        &app,
+        Call::new("GET", "/api/v1/planner/2026-08-24").signed_in_as("sam"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    let (status, _, _) = send(
+        &app,
+        Call::new(
+            "GET",
+            "/api/v1/household/planner/attendance/2026-09-10/dinner",
+        )
+        .signed_in_as("sam"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    // The bootstrap admin holds household:write.
+    let (status, _, _) = send(&app, Call::new("GET", "/api/v1/planner/2026-08-24")).await;
+    assert_eq!(status, StatusCode::OK);
+}
+
+#[tokio::test]
 async fn household_meal_times_are_published_with_defaults_and_an_etag() {
     let app = app().await;
     let (status, body, headers) =

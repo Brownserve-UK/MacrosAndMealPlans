@@ -135,11 +135,82 @@ pub struct MealPlanComponent {
     pub amount: ConsumedAmount,
     pub position: i32,
     pub snapshot: Option<MealPlanComponentSnapshot>,
-    pub status: MealPlanStatus,
-    pub resolved_by: Option<UserId>,
-    pub resolved_at: Option<OffsetDateTime>,
     pub revision: Revision,
     pub display_order: Uuid,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum Portioning {
+    Equal,
+    Custom,
+}
+
+impl Portioning {
+    pub const ALL: [Portioning; 2] = [Portioning::Equal, Portioning::Custom];
+
+    pub const fn code(self) -> &'static str {
+        match self {
+            Portioning::Equal => "equal",
+            Portioning::Custom => "custom",
+        }
+    }
+}
+
+impl fmt::Display for Portioning {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.code())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("`{0}` is not a known portioning mode")]
+pub struct UnknownPortioning(pub String);
+
+impl FromStr for Portioning {
+    type Err = UnknownPortioning;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        Self::ALL
+            .into_iter()
+            .find(|mode| mode.code() == value)
+            .ok_or_else(|| UnknownPortioning(value.to_owned()))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct MealOptOut {
+    pub member_id: HouseholdMemberId,
+    pub created_by: UserId,
+    pub created_at: OffsetDateTime,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum SlotAttendance {
+    Participating,
+    OptedOut,
+    SelfCatering,
+    Available,
+}
+
+impl SlotAttendance {
+    pub const fn code(self) -> &'static str {
+        match self {
+            SlotAttendance::Participating => "participating",
+            SlotAttendance::OptedOut => "opted_out",
+            SlotAttendance::SelfCatering => "self_catering",
+            SlotAttendance::Available => "available",
+        }
+    }
+}
+
+impl fmt::Display for SlotAttendance {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.code())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -150,14 +221,13 @@ pub struct MealPlanEntry {
     pub planned_on: Date,
     pub planned_time: Option<Time>,
     pub slot: MealSlot,
-    pub status: MealPlanStatus,
+    pub portioning: Portioning,
     pub components: Vec<MealPlanComponent>,
     pub participants: Vec<MealParticipant>,
     pub guest_groups: Vec<MealGuestGroup>,
+    pub opted_out: Vec<MealOptOut>,
     pub created_by: UserId,
     pub updated_by: UserId,
-    pub resolved_by: Option<UserId>,
-    pub resolved_at: Option<OffsetDateTime>,
     pub revision: Revision,
     pub created_at: OffsetDateTime,
     pub updated_at: OffsetDateTime,
@@ -170,13 +240,18 @@ impl MealPlanEntry {
             .find(|participant| participant.member_id == member_id)
     }
 
-    pub fn subject_or_owner(
-        &self,
-        requested: Option<HouseholdMemberId>,
-    ) -> Option<HouseholdMemberId> {
-        requested
-            .or(self.member_id)
-            .or_else(|| self.participants.first().map(|p| p.member_id))
+    pub fn has_opted_out(&self, member_id: HouseholdMemberId) -> bool {
+        self.opted_out
+            .iter()
+            .any(|opt_out| opt_out.member_id == member_id)
+    }
+
+    pub fn status(&self) -> MealPlanStatus {
+        derive_entry_status(&self.participants, &self.guest_groups)
+    }
+
+    pub fn component_status(&self, component_id: MealPlanComponentId) -> MealPlanStatus {
+        derive_component_status(component_id, &self.participants, &self.guest_groups)
     }
 }
 
@@ -195,6 +270,7 @@ pub struct NewMealPlanEntry {
     pub planned_on: Date,
     pub planned_time: Option<Time>,
     pub slot: MealSlot,
+    pub portioning: Portioning,
     pub components: Vec<NewMealPlanComponent>,
     pub participants: Option<Vec<NewMealParticipant>>,
     pub guest_groups: Vec<NewMealGuestGroup>,
@@ -206,6 +282,7 @@ pub struct MealPlanEntryPatch {
     pub planned_on: Option<Date>,
     pub planned_time: Option<Option<Time>>,
     pub slot: Option<MealSlot>,
+    pub portioning: Option<Portioning>,
     pub components: Option<Vec<NewMealPlanComponent>>,
     pub participants: Option<Vec<NewMealParticipant>>,
     pub guest_groups: Option<Vec<NewMealGuestGroup>>,
@@ -613,14 +690,27 @@ pub fn derive_guest_status(group: &MealGuestGroup) -> MealPlanStatus {
 pub fn derive_component_status(
     component_id: MealPlanComponentId,
     participants: &[MealParticipant],
+    guest_groups: &[MealGuestGroup],
 ) -> MealPlanStatus {
     roll_up_status(
         participants
             .iter()
             .flat_map(|p| p.allocations.iter())
             .filter(|a| a.component_id == component_id)
-            .map(|a| a.status),
+            .map(|a| a.status)
+            .chain(
+                guest_groups
+                    .iter()
+                    .flat_map(|group| group.allocations.iter())
+                    .filter(|a| a.component_id == component_id)
+                    .map(|a| a.status),
+            ),
     )
+}
+
+pub fn equal_split(prepared: &ConsumedAmount, shares: usize) -> ConsumedAmount {
+    let shares = Decimal::from(shares.max(1) as u64);
+    amount_rebuild(prepared, prepared.value() / shares)
 }
 
 pub fn derive_entry_status(

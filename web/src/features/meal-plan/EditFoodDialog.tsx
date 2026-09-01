@@ -55,7 +55,6 @@ export function EditFoodDialog({
   slot,
   memberId,
   entry = null,
-  workspace = 'today',
 }: {
   open: boolean;
   onClose: () => void;
@@ -64,7 +63,6 @@ export function EditFoodDialog({
   slot: MealSlot;
   memberId: string;
   entry?: MealPlanEntry | null;
-  workspace?: 'today' | 'planner';
 }) {
   const isRecipe = item.item_kind === 'recipe';
   const productId = item.item_kind === 'product' ? item.product_id : '';
@@ -282,7 +280,7 @@ export function EditFoodDialog({
     );
   }
 
-  if (workspace === 'today' && item.status === 'planned' && item.kind === 'planned') {
+  if (item.status === 'planned' && item.kind === 'planned') {
     return (
       <FormDialog open={open} onClose={handleClose} maxWidth="sm" fullWidth>
         <DialogTitle>{item.item_name}</DialogTitle>
@@ -391,11 +389,9 @@ export function EditFoodDialog({
           <Stack direction="row" spacing={1}>
             {isPlanned && !linked ? (
               <>
-                {workspace === 'today' ? (
-                  <Button color="warning" onClick={onNotEaten} disabled={busy}>
-                    Not eaten
-                  </Button>
-                ) : null}
+                <Button color="warning" onClick={onNotEaten} disabled={busy}>
+                  Not eaten
+                </Button>
                 <Button color="error" onClick={onRemove} disabled={busy}>
                   Remove
                 </Button>

@@ -14,15 +14,22 @@ import Stack from '@mui/material/Stack';
 import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
 import { useMemo, useState } from 'react';
-import type { Amount, MealPlanScope, MealSlot, PlannerMeal, Product, RecipeSummary, Unit } from '../../api/client';
+import type { Amount, MealSlot, PlannerMeal, Product, RecipeSummary, Unit } from '../../api/client';
 import { ApiError } from '../../api/client';
-import { useCreateMealPlanEntry, useMembers, useUpdateMealPlanEntry } from '../../api/queries';
+import {
+  useCreateMealPlanEntry,
+  useHouseholdSlotAttendance,
+  useMembers,
+  useUpdateMealPlanEntry,
+} from '../../api/queries';
 import { useAuth } from '../../auth/AuthProvider';
 import { FormDialog } from '../../components/FormDialog';
 import { displayUnit } from '../../components/UnitSelect';
 import { ProductPicker } from './ProductPicker';
 import { RecipePicker } from './RecipePicker';
 import { SLOTS } from './slots';
+
+type EditorMode = 'member' | 'household';
 
 type FoodDraft = {
   componentId: string;
@@ -35,6 +42,7 @@ type FoodDraft = {
 type PortionValues = Record<string, string>;
 
 const UNITS: Unit[] = ['mg', 'g', 'kg', 'oz', 'lb', 'ml', 'l', 'tsp', 'tbsp', 'fl_oz', 'cup', 'item', 'piece', 'slice', 'clove', 'can', 'pack', 'bunch'];
+const HOUSEHOLD_SLOTS = SLOTS.filter((slot) => slot.value !== 'snacks');
 
 function amountValue(amount: Amount) {
   return String(amount.value);
@@ -67,28 +75,15 @@ function initialPortions(meal: PlannerMeal | null): PortionValues {
   const values: PortionValues = {};
   for (const person of meal.people) {
     for (const allocation of person.allocations) {
-      values[allocationKey(allocation.component_id, person.member_id)] = allocation.allocated.value;
+      values[allocationKey(allocation.component_id, person.member_id)] = String(allocation.allocated.value);
     }
   }
   for (const group of meal.guest_groups) {
     for (const allocation of group.allocations) {
-      values[allocationKey(allocation.component_id, 'guest')] = allocation.allocated.value;
+      values[allocationKey(allocation.component_id, 'guest')] = String(allocation.allocated.value);
     }
   }
   return values;
-}
-
-function hasCustomPortions(meal: PlannerMeal | null) {
-  if (!meal || meal.scope !== 'household') return false;
-  const diners = meal.people.length + meal.guest_groups.reduce((sum, group) => sum + group.count, 0);
-  return meal.foods.some((food) => {
-    const expected = food.amount.value / Math.max(diners, 1);
-    const values = [
-      ...meal.people.flatMap((person) => person.allocations.filter((allocation) => allocation.component_id === food.id).map((allocation) => Number(allocation.allocated.value))),
-      ...meal.guest_groups.flatMap((group) => group.allocations.filter((allocation) => allocation.component_id === food.id).map((allocation) => Number(allocation.allocated.value))),
-    ];
-    return values.some((value) => Math.abs(value - expected) > 0.0001);
-  });
 }
 
 export function MealEditorDialog({
@@ -97,48 +92,72 @@ export function MealEditorDialog({
   date,
   slot,
   meal,
+  mode,
 }: {
   open: boolean;
   onClose: () => void;
   date: string;
   slot: MealSlot;
   meal: PlannerMeal | null;
+  mode: EditorMode;
 }) {
   const { principal } = useAuth();
+  const household = mode === 'household';
   const members = useMembers({ include_archived: false, per_page: 200 });
   const create = useCreateMealPlanEntry();
   const update = useUpdateMealPlanEntry();
-  const canPlanHousehold = principal?.roles.some((role) => role === 'admin' || role === 'household_manager') ?? false;
   const [plannedOn, setPlannedOn] = useState(meal?.planned_on ?? date);
   const [plannedSlot, setPlannedSlot] = useState<MealSlot>(meal?.slot ?? slot);
   const [plannedTime, setPlannedTime] = useState(meal?.planned_time ?? '');
-  const [scope, setScope] = useState<MealPlanScope>(meal?.scope ?? 'member');
   const mealNoun = plannedSlot === 'snacks' ? 'snack' : 'meal';
   const [selectedMembers, setSelectedMembers] = useState<string[]>(
-    meal?.people.map((person) => person.member_id) ?? (principal?.member_id ? [principal.member_id] : []),
+    household
+      ? meal?.people.map((person) => person.member_id) ?? []
+      : principal?.member_id
+        ? [principal.member_id]
+        : [],
   );
   const [guestCount, setGuestCount] = useState(meal?.guest_groups.reduce((sum, group) => sum + group.count, 0) ?? 0);
   const [foods, setFoods] = useState<FoodDraft[]>(() => initialFoods(meal));
   const [product, setProduct] = useState<Product | null>(null);
   const [recipe, setRecipe] = useState<RecipeSummary | null>(null);
-  const [customPortions, setCustomPortions] = useState(() => hasCustomPortions(meal));
+  const [customPortions, setCustomPortions] = useState(() => meal?.portioning === 'custom');
   const [portions, setPortions] = useState<PortionValues>(() => initialPortions(meal));
   const [error, setError] = useState<string | null>(null);
   const busy = create.isPending || update.isPending;
 
+  const attendance = useHouseholdSlotAttendance(
+    household ? plannedOn : '',
+    household ? plannedSlot : '',
+    meal?.id,
+  );
+  const attendanceByMember = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const row of attendance.data ?? []) map.set(row.member_id, row.attendance);
+    return map;
+  }, [attendance.data]);
+
   const visibleMembers = useMemo(() => members.data?.items ?? [], [members.data]);
-  const diners = scope === 'household' ? selectedMembers.length + guestCount : 1;
+  const diners = household ? selectedMembers.length + guestCount : 1;
+
+  function memberBlockedReason(memberId: string): string | null {
+    if (meal?.people.some((person) => person.member_id === memberId)) return null;
+    const state = attendanceByMember.get(memberId);
+    if (state === 'self_catering') return 'Has own plan';
+    if (state === 'opted_out') return 'Opted out';
+    return null;
+  }
 
   function addProduct(next: Product | null) {
     setProduct(null);
     if (!next || foods.some((food) => food.itemKind === 'product' && food.itemId === next.id)) return;
     const food: FoodDraft = {
-        componentId: crypto.randomUUID(),
-        itemKind: 'product',
-        itemId: next.id,
-        name: next.name,
-        amount: { kind: 'measure', unit: next.nutrition.basis?.unit ?? next.package_quantity?.unit ?? 'g', value: next.nutrition.basis?.amount ?? 100 },
-      };
+      componentId: crypto.randomUUID(),
+      itemKind: 'product',
+      itemId: next.id,
+      name: next.name,
+      amount: { kind: 'measure', unit: next.nutrition.basis?.unit ?? next.package_quantity?.unit ?? 'g', value: next.nutrition.basis?.amount ?? 100 },
+    };
     setFoods((current) => [...current, food]);
     if (customPortions) initialiseFoodPortions(food);
   }
@@ -147,12 +166,12 @@ export function MealEditorDialog({
     setRecipe(null);
     if (!next || foods.some((food) => food.itemKind === 'recipe' && food.itemId === next.id)) return;
     const food: FoodDraft = {
-        componentId: crypto.randomUUID(),
-        itemKind: 'recipe',
-        itemId: next.id,
-        name: next.name,
-        amount: { kind: 'servings', value: 1 },
-      };
+      componentId: crypto.randomUUID(),
+      itemKind: 'recipe',
+      itemId: next.id,
+      name: next.name,
+      amount: { kind: 'servings', value: 1 },
+    };
     setFoods((current) => [...current, food]);
     if (customPortions) initialiseFoodPortions(food);
   }
@@ -192,11 +211,11 @@ export function MealEditorDialog({
       setError('Every food needs an amount greater than zero.');
       return;
     }
-    if (scope === 'household' && selectedMembers.length + guestCount === 0) {
+    if (household && selectedMembers.length + guestCount === 0) {
       setError('Choose at least one household member or guest.');
       return;
     }
-    if (scope === 'household' && customPortions) {
+    if (household && customPortions) {
       const invalid = foods.some((food) => {
         const memberTotal = selectedMembers.reduce((sum, memberId) => sum + (Number(portions[allocationKey(food.componentId, memberId)]) || 0), 0);
         const guestTotal = guestCount * (Number(portions[allocationKey(food.componentId, 'guest')]) || 0);
@@ -215,18 +234,18 @@ export function MealEditorDialog({
         : { item_kind: 'recipe' as const, recipe_id: food.itemId }),
       amount: food.amount,
     }));
-    const participants = scope === 'household'
+    const participants = household
       ? selectedMembers.map((memberId) => ({
           member_id: memberId,
-          allocations: foods.map((food) => ({
-            component_id: food.componentId,
-            amount: customPortions
-              ? { ...food.amount, value: Number(portions[allocationKey(food.componentId, memberId)]) || 0 }
-              : equalShare(food.amount, diners),
-          })),
+          allocations: customPortions
+            ? foods.map((food) => ({
+                component_id: food.componentId,
+                amount: { ...food.amount, value: Number(portions[allocationKey(food.componentId, memberId)]) || 0 },
+              }))
+            : [],
         }))
       : undefined;
-    const guestAllocations = scope === 'household' && guestCount > 0
+    const guestAllocations = household && guestCount > 0
       ? foods.map((food) => ({
           component_id: food.componentId,
           amount: customPortions
@@ -244,8 +263,9 @@ export function MealEditorDialog({
             planned_on: plannedOn,
             slot: plannedSlot,
             planned_time: plannedTime || null,
+            portioning: household ? (customPortions ? 'custom' : 'equal') : undefined,
             components,
-            ...(meal.scope === 'household' ? { participants, guest_count: guestCount, guest_allocations: guestAllocations } : {}),
+            ...(household ? { participants, guest_count: guestCount, guest_allocations: guestAllocations } : {}),
           },
         });
       } else {
@@ -253,10 +273,11 @@ export function MealEditorDialog({
           planned_on: plannedOn,
           slot: plannedSlot,
           planned_time: plannedTime || null,
-          household: scope === 'household',
+          household,
+          portioning: household ? (customPortions ? 'custom' : 'equal') : undefined,
           components,
           participants,
-          guest_count: scope === 'household' ? guestCount : 0,
+          guest_count: household ? guestCount : 0,
           guest_allocations: guestAllocations,
         });
       }
@@ -266,38 +287,42 @@ export function MealEditorDialog({
     }
   }
 
+  const slotOptions = household ? HOUSEHOLD_SLOTS : SLOTS;
+
   return (
     <FormDialog open={open} onClose={busy ? undefined : onClose} fullWidth maxWidth="md">
-      <DialogTitle>{meal ? `Edit ${mealNoun}` : `Plan ${mealNoun}`}</DialogTitle>
+      <DialogTitle>{meal ? `Edit ${mealNoun}` : household ? 'Plan household meal' : `Plan ${mealNoun}`}</DialogTitle>
       <DialogContent dividers>
         <Stack spacing={3}>
           {error ? <Alert severity="error">{error}</Alert> : null}
           <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
             <TextField label="Date" type="date" value={plannedOn} onChange={(event) => setPlannedOn(event.target.value)} fullWidth />
             <TextField select label="Meal" value={plannedSlot} onChange={(event) => setPlannedSlot(event.target.value as MealSlot)} fullWidth>
-              {SLOTS.map((option) => <MenuItem key={option.value} value={option.value}>{option.label}</MenuItem>)}
+              {slotOptions.map((option) => <MenuItem key={option.value} value={option.value}>{option.label}</MenuItem>)}
             </TextField>
             <TextField label="Time (optional)" type="time" value={plannedTime} onChange={(event) => setPlannedTime(event.target.value)} fullWidth />
           </Stack>
 
-          {!meal && canPlanHousehold ? (
-            <TextField select label={`Who is this ${mealNoun} for?`} value={scope} onChange={(event) => setScope(event.target.value as MealPlanScope)}>
-              <MenuItem value="member">Just me</MenuItem>
-              <MenuItem value="household">Household meal</MenuItem>
-            </TextField>
-          ) : null}
-
-          {scope === 'household' ? (
+          {household ? (
             <Box>
               <Typography variant="h3" sx={{ mb: 1 }}>Who is eating?</Typography>
               <Stack direction="row" sx={{ flexWrap: 'wrap', gap: 0.5 }}>
-                {visibleMembers.map((member) => (
-                  <FormControlLabel
-                    key={member.id}
-                    control={<Checkbox checked={selectedMembers.includes(member.id)} onChange={(_, checked) => setSelectedMembers((current) => checked ? [...current, member.id] : current.filter((id) => id !== member.id))} />}
-                    label={member.display_name}
-                  />
-                ))}
+                {visibleMembers.map((member) => {
+                  const blocked = memberBlockedReason(member.id);
+                  return (
+                    <FormControlLabel
+                      key={member.id}
+                      control={
+                        <Checkbox
+                          checked={selectedMembers.includes(member.id)}
+                          disabled={Boolean(blocked)}
+                          onChange={(_, checked) => setSelectedMembers((current) => checked ? [...current, member.id] : current.filter((id) => id !== member.id))}
+                        />
+                      }
+                      label={blocked ? `${member.display_name} (${blocked})` : member.display_name}
+                    />
+                  );
+                })}
               </Stack>
               <TextField
                 label="Guests"
@@ -312,13 +337,12 @@ export function MealEditorDialog({
 
           <Box>
             <Typography variant="h3" sx={{ mb: 0.5 }}>Food for the {mealNoun}</Typography>
-            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>Enter the total amount for everyone sharing the {mealNoun}.</Typography>
             <Stack spacing={2}>
               {foods.map((food) => (
                 <Stack key={food.componentId} direction={{ xs: 'column', sm: 'row' }} spacing={1.5} sx={{ alignItems: { sm: 'center' } }}>
                   <Typography sx={{ flex: 1, minWidth: 180 }}>{food.name}</Typography>
                   <TextField
-                    label={`Amount for ${mealNoun}`}
+                    label="Amount"
                     type="number"
                     value={amountValue(food.amount)}
                     onChange={(event) => setFoodAmount(food.componentId, withAmountValue(food.amount, event.target.value))}
@@ -340,12 +364,12 @@ export function MealEditorDialog({
             </Stack>
           </Box>
 
-          {scope === 'household' && diners > 0 && foods.length > 0 ? (
+          {household && diners > 0 && foods.length > 0 ? (
             <Box>
               <Stack direction="row" sx={{ alignItems: 'center', justifyContent: 'space-between' }}>
                 <Box>
                   <Typography variant="h3">Portions</Typography>
-                  <Typography variant="body2" color="text.secondary">{customPortions ? 'Custom portions' : 'Split equally between everyone'}</Typography>
+                  <Typography variant="body2" color="text.secondary">{customPortions ? 'Custom portions' : 'Split equally'}</Typography>
                 </Box>
                 {!customPortions ? <Button startIcon={<AddIcon />} onClick={enableCustomPortions}>Adjust portions</Button> : null}
               </Stack>

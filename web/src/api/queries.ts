@@ -489,6 +489,7 @@ export function useCreateConsumption() {
       unwrap(await client.POST('/api/v1/consumption', { body })),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['mealPlanWeek'] });
+      void qc.invalidateQueries({ queryKey: ['plannerWeek'] });
     },
   });
 }
@@ -509,6 +510,7 @@ export function useUpdateConsumption() {
       ),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['mealPlanWeek'] });
+      void qc.invalidateQueries({ queryKey: ['plannerWeek'] });
     },
   });
 }
@@ -524,19 +526,20 @@ export function useDeleteConsumption() {
       ),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['mealPlanWeek'] });
+      void qc.invalidateQueries({ queryKey: ['plannerWeek'] });
     },
   });
 }
 
 export const mealPlanKeys = {
-  week: (weekStart: string) => ['mealPlanWeek', weekStart] as const,
-  plannerWeek: (weekStart: string) => ['plannerWeek', weekStart] as const,
+  myWeek: (weekStart: string) => ['mealPlanWeek', weekStart] as const,
+  householdWeek: (weekStart: string) => ['plannerWeek', weekStart] as const,
   entry: (id: string) => ['mealPlanEntry', id] as const,
 };
 
 export function useMealPlanWeek(weekStart: string) {
   return useQuery({
-    queryKey: mealPlanKeys.week(weekStart),
+    queryKey: mealPlanKeys.myWeek(weekStart),
     enabled: Boolean(weekStart),
     queryFn: async () =>
       unwrap(
@@ -547,9 +550,9 @@ export function useMealPlanWeek(weekStart: string) {
   });
 }
 
-export function usePlannerWeek(weekStart: string) {
+export function useHouseholdPlannerWeek(weekStart: string) {
   return useQuery({
-    queryKey: mealPlanKeys.plannerWeek(weekStart),
+    queryKey: mealPlanKeys.householdWeek(weekStart),
     enabled: Boolean(weekStart),
     queryFn: async () =>
       unwrap(
@@ -698,6 +701,52 @@ export function useSetMealPlanParticipants() {
   });
 }
 
+export function useOptOutOfMeal() {
+  const invalidate = useMealPlanInvalidation();
+  return useMutation({
+    mutationFn: async (input: { id: string; revision: number }) =>
+      unwrap(
+        await client.POST('/api/v1/meal-plan-entries/{id}/opt-out', {
+          params: { path: { id: input.id }, header: ifMatch(input.revision) },
+        }),
+      ),
+    onSuccess: () => invalidate(),
+  });
+}
+
+export function useRejoinMeal() {
+  const invalidate = useMealPlanInvalidation();
+  return useMutation({
+    mutationFn: async (input: { id: string; revision: number }) =>
+      unwrap(
+        await client.DELETE('/api/v1/meal-plan-entries/{id}/opt-out', {
+          params: { path: { id: input.id }, header: ifMatch(input.revision) },
+        }),
+      ),
+    onSuccess: () => invalidate(),
+  });
+}
+
+export function useHouseholdSlotAttendance(
+  date: string,
+  slot: string,
+  excludeEntry?: string,
+) {
+  return useQuery({
+    queryKey: ['householdSlotAttendance', date, slot, excludeEntry ?? null],
+    enabled: Boolean(date && slot),
+    queryFn: async () =>
+      unwrap(
+        await client.GET('/api/v1/household/planner/attendance/{date}/{slot}', {
+          params: {
+            path: { date, slot },
+            query: excludeEntry ? { exclude_entry: excludeEntry } : {},
+          },
+        }),
+      ),
+  });
+}
+
 export function useReviewMealOutcomes() {
   const invalidate = useMealPlanInvalidation();
   return useMutation({
@@ -734,6 +783,7 @@ function useNutritionTargetInvalidation() {
   return (memberId: string) => {
     void qc.invalidateQueries({ queryKey: keys.nutritionTargets(memberId) });
     void qc.invalidateQueries({ queryKey: ['mealPlanWeek'] });
+    void qc.invalidateQueries({ queryKey: ['plannerWeek'] });
   };
 }
 

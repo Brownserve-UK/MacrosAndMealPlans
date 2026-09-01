@@ -1,4 +1,3 @@
-import AccessTimeIcon from '@mui/icons-material/AccessTimeOutlined';
 import AddIcon from '@mui/icons-material/AddOutlined';
 import CheckCircleIcon from '@mui/icons-material/CheckCircleOutlined';
 import ChevronRightIcon from '@mui/icons-material/ChevronRightOutlined';
@@ -12,9 +11,7 @@ import ButtonBase from '@mui/material/ButtonBase';
 import Chip from '@mui/material/Chip';
 import IconButton from '@mui/material/IconButton';
 import Paper from '@mui/material/Paper';
-import Popover from '@mui/material/Popover';
 import Stack from '@mui/material/Stack';
-import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
 import { useNavigate } from '@tanstack/react-router';
 import { useState } from 'react';
@@ -26,16 +23,14 @@ import {
   useMarkMealPlanEaten,
   useMeta,
   useReopenMealPlanComponent,
-  useUpdateMealPlanEntry,
 } from '../../api/queries';
 import { useAuth } from '../../auth/AuthProvider';
 import { InitialsAvatar } from '../../components/InitialsAvatar';
-import { ParticipantSummary } from './ParticipantSummary';
 import { PageHeader } from '../../components/PageHeader';
 import { ErrorState, Loading } from '../../components/States';
 import { MaybeNumber } from '../../components/Unknown';
 import { AddFoodDialog } from './AddFoodDialog';
-import { addDays, combineDateTime, extractTime, parseIsoDate, startOfWeekIso, todayIso } from './date';
+import { addDays, combineDateTime, defaultDayFor, extractTime, parseIsoDate, startOfWeekIso, todayIso } from './date';
 import { EditFoodDialog } from './EditFoodDialog';
 import { formatAmount } from './format';
 import { DayWeekNutrition } from './NutritionSummary';
@@ -43,13 +38,11 @@ import { SLOTS } from './slots';
 import { WeekNavigator } from './WeekNavigator';
 
 const DEFAULT_SLOT: MealSlot = SLOTS[0]?.value ?? 'breakfast';
-type MealWorkspace = 'today' | 'planner';
 
 type AddSelection = {
   key: string;
   date: string;
   slot: MealSlot;
-  entry: MealPlanEntry | null;
 };
 
 type EditSelection = {
@@ -60,11 +53,6 @@ type EditSelection = {
   entry: MealPlanEntry | null;
 };
 
-export function defaultDayFor(weekStart: string): string {
-  const today = todayIso();
-  return today >= weekStart && today <= addDays(weekStart, 6) ? today : weekStart;
-}
-
 function longDayName(date: string) {
   return parseIsoDate(date).toLocaleDateString('en-GB', {
     weekday: 'long',
@@ -73,9 +61,8 @@ function longDayName(date: string) {
   });
 }
 
-function displayedEnergy(items: MealItem[], workspace: MealWorkspace): number | null {
+function displayedEnergy(items: MealItem[]): number | null {
   const values = items
-    .filter((item) => workspace === 'today' || item.kind === 'planned')
     .filter((item) => item.status !== 'not_eaten')
     .map((item) => item.nutrition.energy_kcal)
     .filter((value): value is number => value != null);
@@ -89,7 +76,6 @@ function MealItemRow({
   onToggle,
   onOpen,
   unplanned,
-  passiveStatus,
 }: {
   item: MealItem;
   divided: boolean;
@@ -97,7 +83,6 @@ function MealItemRow({
   onToggle: (() => void) | null;
   onOpen: (() => void) | null;
   unplanned: boolean;
-  passiveStatus: boolean;
 }) {
   const detail = [
     item.consumed_at ? extractTime(item.consumed_at) : item.kind === 'logged' ? item.at : null,
@@ -140,7 +125,7 @@ function MealItemRow({
             <RadioButtonUncheckedIcon />
           )}
         </IconButton>
-      ) : passiveStatus ? null : (
+      ) : (
         <Box
           sx={{
             ml: { xs: 1, sm: 1.5 },
@@ -169,7 +154,6 @@ function MealItemRow({
           minWidth: 0,
           alignItems: 'center',
           gap: { xs: 1.5, sm: 2 },
-          pl: passiveStatus ? { xs: 2, sm: 2.5 } : 0,
           pr: { xs: 2, sm: 2.5 },
           py: 1.75,
           textAlign: 'left',
@@ -213,16 +197,6 @@ function MealItemRow({
             sx={{ display: { xs: 'none', sm: 'inline-flex' }, flexShrink: 0 }}
           />
         ) : null}
-        {passiveStatus ? (
-          <Box sx={{ display: 'flex', flexShrink: 0, width: { xs: 'auto', sm: '6rem' } }}>
-            <Chip
-              size="small"
-              variant="outlined"
-              color={item.status === 'eaten' ? 'success' : item.status === 'not_eaten' ? 'default' : 'info'}
-              label={item.status === 'eaten' ? 'Eaten' : item.status === 'not_eaten' ? 'Not eaten' : 'Planned'}
-            />
-          </Box>
-        ) : null}
         {item.status !== 'not_eaten' ? (
           <Box
             sx={{
@@ -244,95 +218,10 @@ function MealItemRow({
               </Typography>
             )}
           </Box>
-        ) : passiveStatus ? (
-          <Box aria-hidden sx={{ flexShrink: 0, width: { xs: 0, sm: '6rem' } }} />
         ) : null}
         <ChevronRightIcon sx={{ color: 'text.disabled', fontSize: 20, flexShrink: 0 }} />
       </ButtonBase>
     </Box>
-  );
-}
-
-function SlotTimeControl({ entry }: { entry: MealPlanEntry }) {
-  const update = useUpdateMealPlanEntry();
-  const [anchor, setAnchor] = useState<HTMLElement | null>(null);
-  const [value, setValue] = useState(entry.planned_time ?? '');
-  const editable = entry.status === 'planned';
-
-  if (!editable) {
-    return entry.planned_time ? (
-      <Typography variant="overline" color="text.secondary">
-        · {entry.planned_time}
-      </Typography>
-    ) : null;
-  }
-
-  function open(event: React.MouseEvent<HTMLElement>) {
-    setValue(entry.planned_time ?? '');
-    setAnchor(event.currentTarget);
-  }
-
-  async function save(next: string | null) {
-    const ok = await update
-      .mutateAsync({ id: entry.id, revision: entry.revision, body: { planned_time: next } })
-      .then(() => true, () => false);
-    if (ok) setAnchor(null);
-  }
-
-  return (
-    <>
-      <Button
-        size="small"
-        onClick={open}
-        startIcon={<AccessTimeIcon sx={{ fontSize: 15 }} />}
-        sx={{
-          minWidth: 0,
-          py: 0,
-          px: 0.5,
-          color: 'text.secondary',
-          textTransform: 'none',
-          fontWeight: 400,
-        }}
-      >
-        {entry.planned_time ?? 'Add time'}
-      </Button>
-      <Popover
-        open={Boolean(anchor)}
-        anchorEl={anchor}
-        onClose={() => setAnchor(null)}
-        anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
-      >
-        <Stack spacing={1.5} sx={{ p: 2, width: 220 }}>
-          <TextField
-            type="time"
-            label="Planned meal time"
-            value={value}
-            onChange={(event) => setValue(event.target.value)}
-            slotProps={{ inputLabel: { shrink: true } }}
-            autoFocus
-            fullWidth
-          />
-          <Stack direction="row" spacing={1} sx={{ justifyContent: 'space-between' }}>
-            <Button
-              size="small"
-              color="inherit"
-              disabled={!entry.planned_time || update.isPending}
-              onClick={() => void save(null)}
-            >
-              Clear
-            </Button>
-            <Button
-              size="small"
-              variant="contained"
-              disabled={!value || update.isPending}
-              onClick={() => void save(value)}
-            >
-              Save
-            </Button>
-          </Stack>
-        </Stack>
-      </Popover>
-    </>
   );
 }
 
@@ -346,7 +235,6 @@ function SlotSection({
   onOpen,
   onAdd,
   allowChanges,
-  workspace = 'today',
   onMarkRemaining,
   entries,
 }: {
@@ -359,18 +247,15 @@ function SlotSection({
   onOpen: (item: MealItem) => void;
   onAdd: (slot: MealSlot) => void;
   allowChanges: boolean;
-  workspace?: MealWorkspace;
   onMarkRemaining: (entryId: string, items: MealItem[]) => void;
   entries: MealPlanEntry[];
 }) {
-  const visibleItems = workspace === 'planner' ? items.filter((item) => item.kind === 'planned') : items;
   const slotEntry = entries.find((entry) => entry.slot === slot);
-  const allowsPlannedTime = slot !== 'snacks';
   const groups = new Map<string, MealItem[]>();
   const firstPlannedGroup = new Map<string, string>();
-  for (const item of visibleItems) {
+  for (const item of items) {
     const itemKey = item.kind === 'planned' ? item.component_id : item.record_id;
-    const groupKey = workspace === 'planner' && item.kind === 'planned' ? item.entry_id : `item:${itemKey}`;
+    const groupKey = `item:${itemKey}`;
     const group = groups.get(groupKey) ?? [];
     group.push(item);
     groups.set(groupKey, group);
@@ -385,9 +270,7 @@ function SlotSection({
           <Typography variant="overline" color="text.secondary">
             {label}
           </Typography>
-          {workspace === 'planner' && slotEntry && allowsPlannedTime ? (
-            <SlotTimeControl entry={slotEntry} />
-          ) : allowsPlannedTime && slotEntry?.planned_time ? (
+          {slot !== 'snacks' && slotEntry?.planned_time ? (
             <Typography variant="overline" color="text.secondary">
               · {slotEntry.planned_time}
             </Typography>
@@ -399,7 +282,7 @@ function SlotSection({
           </Typography>
         ) : null}
       </Stack>
-      {visibleItems.length === 0 ? (
+      {items.length === 0 ? (
         allowChanges ? (
           <Button
             fullWidth
@@ -415,7 +298,7 @@ function SlotSection({
               borderRadius: 2,
             }}
           >
-            {workspace === 'planner' ? 'Add planned food' : 'Add food'}
+            Add food
           </Button>
         ) : (
           <Paper variant="outlined" sx={{ px: 2, py: 1.5 }}>
@@ -427,11 +310,10 @@ function SlotSection({
           {Array.from(groups.entries()).map(([groupKey, group], groupIndex) => {
             const planned = group[0]?.kind === 'planned';
             const entryId = planned && group[0]?.kind === 'planned' ? group[0].entry_id : null;
-            const showPlannedHeader = entryId !== null &&
-              (workspace === 'planner' || firstPlannedGroup.get(entryId) === groupKey);
+            const showPlannedHeader = entryId !== null && firstPlannedGroup.get(entryId) === groupKey;
             const pending = entryId === null
               ? []
-              : visibleItems.filter(
+              : items.filter(
                   (item) => item.kind === 'planned' && item.entry_id === entryId && item.status === 'planned',
                 );
             return (
@@ -448,13 +330,7 @@ function SlotSection({
                     <Typography variant="caption" color="text.secondary">
                       Planned meal
                     </Typography>
-                    {workspace === 'planner' && entryId
-                      ? (() => {
-                          const groupEntry = entries.find((entry) => entry.id === entryId);
-                          return groupEntry ? <ParticipantSummary entry={groupEntry} /> : null;
-                        })()
-                      : null}
-                    {workspace === 'today' && allowChanges && pending.length > 0 && entryId ? (
+                    {allowChanges && pending.length > 0 && entryId ? (
                       <Button size="small" onClick={() => onMarkRemaining(entryId, pending)}>
                         Mark remaining eaten
                       </Button>
@@ -469,17 +345,9 @@ function SlotSection({
                       item={item}
                       divided={index > 0 || showPlannedHeader}
                       toggling={toggling === key}
-                      onToggle={allowChanges && workspace === 'today' && item.kind === 'planned' ? () => onToggle(item) : null}
-                      onOpen={
-                        allowChanges &&
-                        (item.kind === 'logged' ||
-                          (workspace === 'planner' && item.status === 'planned') ||
-                          (workspace === 'today' && item.kind === 'planned'))
-                          ? () => onOpen(item)
-                          : null
-                      }
+                      onToggle={allowChanges && item.kind === 'planned' ? () => onToggle(item) : null}
+                      onOpen={allowChanges ? () => onOpen(item) : null}
                       unplanned={item.kind === 'logged'}
-                      passiveStatus={workspace === 'planner'}
                     />
                   );
                 })}
@@ -493,7 +361,7 @@ function SlotSection({
               onClick={() => onAdd(slot)}
               sx={{ py: 1.25, borderTop: '1px solid', borderColor: 'divider', borderRadius: 0 }}
             >
-              {workspace === 'planner' ? 'Add planned food' : 'Add food'}
+              Add food
             </Button>
           ) : null}
         </Paper>
@@ -502,15 +370,7 @@ function SlotSection({
   );
 }
 
-export function MealPlanPage({
-  weekStart,
-  day,
-  workspace = 'today',
-}: {
-  weekStart: string;
-  day: string;
-  workspace?: MealWorkspace;
-}) {
+export function MealPlanPage({ weekStart, day }: { weekStart: string; day: string }) {
   const navigate = useNavigate();
   const { principal } = useAuth();
   const memberId = principal?.member_id ?? '';
@@ -531,14 +391,14 @@ export function MealPlanPage({
 
   function goToWeek(start: string) {
     void navigate({
-      to: workspace === 'today' ? '/food-log/$weekStart/$day' : '/planner/$weekStart/$day',
+      to: '/food-log/$weekStart/$day',
       params: { weekStart: start, day: defaultDayFor(start) },
     });
   }
 
   function goToDay(date: string) {
     void navigate({
-      to: workspace === 'today' ? '/food-log/$weekStart/$day' : '/planner/$weekStart/$day',
+      to: '/food-log/$weekStart/$day',
       params: { weekStart, day: date },
     });
   }
@@ -549,12 +409,7 @@ export function MealPlanPage({
 
   function addFood(slot: MealSlot) {
     if (!selectedDay) return;
-    const entry = workspace === 'planner'
-      ? selectedDay.entries.find(
-          (candidate) => candidate.slot === slot && candidate.status === 'planned',
-        ) ?? null
-      : null;
-    setAdding({ key: crypto.randomUUID(), date: selectedDay.date, slot, entry });
+    setAdding({ key: crypto.randomUUID(), date: selectedDay.date, slot });
   }
 
   function openItem(slot: MealSlot, item: MealItem) {
@@ -623,16 +478,16 @@ export function MealPlanPage({
   }
 
   const future = activeDate > todayIso();
-  const allowChanges = workspace === 'planner' || !future;
+  const allowChanges = !future;
 
   return (
     <Box>
       <PageHeader
-        title={workspace === 'today' ? 'Food log' : 'Planner'}
+        title="Food log"
         actions={
           selectedDay && allowChanges ? (
             <Button variant="contained" startIcon={<AddIcon />} onClick={() => addFood(DEFAULT_SLOT)}>
-              {workspace === 'planner' ? 'Add planned food' : 'Add food'}
+              Add food
             </Button>
           ) : null
         }
@@ -697,13 +552,12 @@ export function MealPlanPage({
                 slot={slotView.slot}
                 label={SLOTS.find((candidate) => candidate.value === slotView.slot)?.label ?? slotView.slot}
                 items={slotView.items}
-                kcal={displayedEnergy(slotView.items, workspace)}
+                kcal={displayedEnergy(slotView.items)}
                 toggling={toggling}
                 onToggle={toggleItem}
                 onOpen={(item) => openItem(slotView.slot, item)}
                 onAdd={addFood}
                 allowChanges={allowChanges}
-                workspace={workspace}
                 onMarkRemaining={markRemaining}
                 entries={selectedDay.entries}
               />
@@ -720,8 +574,6 @@ export function MealPlanPage({
           memberId={memberId}
           date={adding.date}
           slot={adding.slot}
-          kind={workspace === 'planner' ? 'planned' : 'eaten'}
-          entry={adding.entry}
         />
       ) : null}
 
@@ -735,7 +587,6 @@ export function MealPlanPage({
           slot={editing.slot}
           item={editing.item}
           entry={editing.entry}
-          workspace={workspace}
         />
       ) : null}
     </Box>

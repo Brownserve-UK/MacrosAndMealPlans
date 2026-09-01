@@ -35,7 +35,8 @@ export const DRAWER_WIDTH = 236;
 
 const NAV = [
   { to: '/food-log', label: 'Food log', icon: <MenuBookIcon fontSize="small" />, needs: undefined },
-  { to: '/planner', label: 'Planner', icon: <CalendarMonthIcon fontSize="small" />, needs: undefined },
+  { to: '/planner', label: 'My planner', icon: <CalendarMonthIcon fontSize="small" />, needs: undefined },
+  { to: '/household/planner', label: 'Household planner', icon: <CalendarMonthIcon fontSize="small" />, needs: 'household:write' },
   { to: '/ingredients', label: 'Ingredients', icon: <RestaurantIcon fontSize="small" />, needs: 'catalogue:read' },
   { to: '/products', label: 'Products', icon: <InventoryIcon fontSize="small" />, needs: 'catalogue:read' },
   { to: '/recipes', label: 'Recipes', icon: <RestaurantMenuIcon fontSize="small" />, needs: 'catalogue:read' },

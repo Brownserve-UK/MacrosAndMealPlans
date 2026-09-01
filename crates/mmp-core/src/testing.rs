@@ -851,10 +851,11 @@ impl MealPlanRepository for InMemoryMealPlanRepository {
             .filter(|entry| {
                 entry.member_id == Some(query.member_id)
                     || (query.include_participating
-                        && entry
+                        && (entry
                             .participants
                             .iter()
-                            .any(|participant| participant.member_id == query.member_id))
+                            .any(|participant| participant.member_id == query.member_id)
+                            || entry.has_opted_out(query.member_id)))
             })
             .filter(|entry| entry.planned_on >= query.from && entry.planned_on <= query.to)
             .cloned()
@@ -1119,9 +1120,6 @@ fn apply_component_update(
     component: &mut crate::domain::MealPlanComponent,
     update: &MealPlanComponentUpdate<'_>,
 ) {
-    component.status = update.status;
-    component.resolved_by = update.resolved_by;
-    component.resolved_at = update.resolved_at;
     component.revision = update.revision;
     match update.snapshot {
         SnapshotOp::Keep => {}
@@ -1135,9 +1133,6 @@ fn apply_component_update(
 }
 
 fn apply_entry_update(entry: &mut MealPlanEntry, update: &MealPlanComponentUpdate<'_>) {
-    entry.status = update.entry_status;
-    entry.resolved_by = update.entry_resolved_by;
-    entry.resolved_at = update.entry_resolved_at;
     entry.updated_by = update.actor_id;
     entry.updated_at = update.now;
     entry.revision = entry.revision.next();

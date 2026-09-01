@@ -268,48 +268,90 @@ impl StockService {
         let mut incomplete = false;
         let mut product_cache: HashMap<ProductId, Option<crate::domain::Product>> = HashMap::new();
 
+        let mut entries: Vec<crate::domain::MealPlanEntry> = Vec::new();
         for member in members.items {
-            let entries = self
-                .meal_plans
-                .list(&MealPlanQuery {
-                    member_id: member.id,
-                    from,
-                    to,
-                    include_participating: false,
-                })
-                .await?;
-            for entry in entries {
-                for component in &entry.components {
-                    if !component_is_future_demand(&entry, component.id) {
-                        continue;
+            entries.extend(
+                self.meal_plans
+                    .list(&MealPlanQuery {
+                        member_id: member.id,
+                        from,
+                        to,
+                        include_participating: false,
+                    })
+                    .await?,
+            );
+        }
+        entries.extend(
+            self.meal_plans
+                .list_all(from, to)
+                .await?
+                .into_iter()
+                .filter(|entry| entry.scope == crate::domain::MealPlanScope::Household),
+        );
+
+        for entry in entries {
+            let household = entry.scope == crate::domain::MealPlanScope::Household;
+            for component in &entry.components {
+                if !component_is_future_demand(&entry, component.id) {
+                    continue;
+                }
+                let Some(product_id) = component.item.product_id() else {
+                    incomplete = true;
+                    continue;
+                };
+                let product = match product_cache.get(&product_id) {
+                    Some(cached) => cached.clone(),
+                    None => {
+                        let loaded = self.products.get(product_id).await?;
+                        product_cache.insert(product_id, loaded.clone());
+                        loaded
                     }
-                    let Some(product_id) = component.item.product_id() else {
-                        incomplete = true;
-                        continue;
-                    };
-                    let product = match product_cache.get(&product_id) {
-                        Some(cached) => cached.clone(),
-                        None => {
-                            let loaded = self.products.get(product_id).await?;
-                            product_cache.insert(product_id, loaded.clone());
-                            loaded
-                        }
-                    };
-                    let Some(product) = product else {
-                        incomplete = true;
-                        continue;
-                    };
-                    match component.amount.resolve(&product) {
-                        Ok(quantity) => {
-                            add_demand(&mut demand, product_id, quantity, &mut incomplete)
-                        }
-                        Err(_) => incomplete = true,
-                    }
+                };
+                let Some(product) = product else {
+                    incomplete = true;
+                    continue;
+                };
+                let wanted = if household {
+                    demand_amount_for_household(&entry, component)
+                } else {
+                    component.amount
+                };
+                match wanted.resolve(&product) {
+                    Ok(quantity) => add_demand(&mut demand, product_id, quantity, &mut incomplete),
+                    Err(_) => incomplete = true,
                 }
             }
         }
         Ok((demand, incomplete))
     }
+}
+
+fn demand_amount_for_household(
+    entry: &crate::domain::MealPlanEntry,
+    component: &crate::domain::MealPlanComponent,
+) -> crate::domain::ConsumedAmount {
+    let mut allocations: Vec<crate::domain::ConsumedAmount> = entry
+        .participants
+        .iter()
+        .flat_map(|participant| participant.allocations.iter())
+        .filter(|allocation| allocation.component_id == component.id)
+        .map(|allocation| allocation.allocated)
+        .collect();
+    for group in &entry.guest_groups {
+        for allocation in group
+            .allocations
+            .iter()
+            .filter(|allocation| allocation.component_id == component.id)
+        {
+            for _ in 0..group.count.max(0) {
+                allocations.push(allocation.allocated);
+            }
+        }
+    }
+    if allocations.is_empty() {
+        return component.amount;
+    }
+    crate::domain::allocated_total(&component.amount, &allocations).unwrap_or(component.amount)
 }
 
 fn component_is_future_demand(

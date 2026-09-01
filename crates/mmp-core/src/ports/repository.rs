@@ -351,14 +351,8 @@ pub enum SnapshotOp<'a> {
 
 pub struct MealPlanComponentUpdate<'a> {
     pub id: MealPlanComponentId,
-    pub status: crate::domain::MealPlanStatus,
     pub snapshot: SnapshotOp<'a>,
-    pub resolved_by: Option<UserId>,
-    pub resolved_at: Option<time::OffsetDateTime>,
     pub revision: Revision,
-    pub entry_status: crate::domain::MealPlanStatus,
-    pub entry_resolved_by: Option<UserId>,
-    pub entry_resolved_at: Option<time::OffsetDateTime>,
     pub actor_id: UserId,
     pub now: time::OffsetDateTime,
 }

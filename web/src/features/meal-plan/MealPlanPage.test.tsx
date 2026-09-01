@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen, within } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError, type MealItem, type MealPlanEntry, type MealPlanWeek } from '../../api/client';
@@ -9,7 +9,6 @@ const mocks = vi.hoisted(() => ({
   markEaten: vi.fn(),
   markComponentEaten: vi.fn(),
   reopen: vi.fn(),
-  updateEntry: vi.fn(() => Promise.resolve({ member_id: 'member-1' })),
   navigate: vi.fn(),
 }));
 
@@ -90,9 +89,11 @@ const plannedEntry = {
   subject_member_id: 'member-1',
   participants: [],
   guest_groups: [],
+  opted_out: [],
   planned_on: DAY,
   planned_time: '08:30',
   slot: 'breakfast',
+  portioning: 'equal',
   status: 'planned',
   components: [],
   planned: nutrition,
@@ -102,13 +103,6 @@ const plannedEntry = {
   revision: 3,
   created_at: '2026-08-24T10:00:00Z',
   updated_at: '2026-08-24T10:00:00Z',
-} satisfies MealPlanEntry;
-
-const snackEntry = {
-  ...plannedEntry,
-  id: 'entry-snacks',
-  planned_time: '20:30',
-  slot: 'snacks',
 } satisfies MealPlanEntry;
 
 let breakfastItems: MealItem[] = [];
@@ -129,7 +123,7 @@ function week(): MealPlanWeek {
         : [{ slot: 'breakfast' as const, items: [], nutrition }, ...emptySlots];
     return {
       date: iso,
-      entries: iso === DAY ? [plannedEntry, snackEntry] : [],
+      entries: iso === DAY ? [plannedEntry] : [],
       slots,
       actual: nutrition,
       remaining_planned: nutrition,
@@ -161,18 +155,15 @@ vi.mock('../../api/queries', () => ({
   useMarkMealPlanEaten: () => ({ mutateAsync: mocks.markEaten }),
   useMarkMealPlanComponentEaten: () => ({ mutateAsync: mocks.markComponentEaten }),
   useReopenMealPlanComponent: () => ({ mutateAsync: mocks.reopen }),
-  useUpdateMealPlanEntry: () => ({ mutateAsync: mocks.updateEntry, isPending: false }),
-  useMembers: () => ({ data: { items: [] } }),
-  useSetMealPlanParticipants: () => ({ mutateAsync: vi.fn(), isPending: false }),
 }));
 
-function renderPage(workspace: 'today' | 'planner' = 'today') {
+function renderPage() {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
   render(
     <QueryClientProvider client={queryClient}>
-      <MealPlanPage weekStart={WEEK_START} day={DAY} workspace={workspace} />
+      <MealPlanPage weekStart={WEEK_START} day={DAY} />
     </QueryClientProvider>,
   );
 }
@@ -256,35 +247,8 @@ describe('MealPlanPage', () => {
     ).toBeInTheDocument();
   });
 
-  it('uses passive item statuses without progress counts in the planner', () => {
-    renderPage('planner');
-
-    expect(screen.queryByRole('button', { name: 'Mark Jumbo Oats eaten' })).not.toBeInTheDocument();
-    expect(screen.queryByText(/of \d+ resolved/)).not.toBeInTheDocument();
-    expect(screen.getAllByText('Planned')).toHaveLength(2);
-    expect(screen.getByRole('button', { name: '08:30' })).toBeInTheDocument();
-    expect(within(screen.getByRole('button', { name: 'Open Whole Milk' })).getByText('Eaten')).toBeInTheDocument();
-  });
-
-  it('edits the whole slot time from a single control in the planner', async () => {
-    const user = userEvent.setup();
-    renderPage('planner');
-
-    await user.click(screen.getByRole('button', { name: '08:30' }));
-    const field = screen.getByLabelText('Planned meal time');
-    await user.clear(field);
-    await user.type(field, '09:15');
-    await user.click(screen.getByRole('button', { name: 'Save' }));
-
-    expect(mocks.updateEntry).toHaveBeenCalledWith({
-      id: 'entry-1',
-      revision: 3,
-      body: { planned_time: '09:15' },
-    });
-  });
-
-  it('does not offer the slot time control in the food log', () => {
-    renderPage('today');
+  it('shows the planned slot time as read-only text', () => {
+    renderPage();
 
     expect(screen.queryByRole('button', { name: '08:30' })).not.toBeInTheDocument();
     expect(screen.getByText('· 08:30')).toBeInTheDocument();
