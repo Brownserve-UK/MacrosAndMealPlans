@@ -70,7 +70,7 @@ describe('HouseholdPlannerPage', () => {
 
   it('opens bulk outcome review', async () => {
     render(<HouseholdPlannerPage weekStart={WEEK_START} day={DAY} />);
-    await userEvent.setup().click(screen.getByRole('button', { name: 'Review outcomes' }));
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Record meal' }));
     expect(screen.getByText('Outcome review')).toBeInTheDocument();
   });
 });

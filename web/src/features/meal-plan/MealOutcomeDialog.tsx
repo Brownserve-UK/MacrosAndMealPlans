@@ -130,7 +130,7 @@ export function MealOutcomeDialog({ meal, onClose }: { meal: PlannerMeal; onClos
 
   return (
     <FormDialog open onClose={review.isPending ? undefined : onClose} fullWidth maxWidth="md">
-      <DialogTitle>{isSnack ? 'Record snack outcome' : 'Record meal outcome'}</DialogTitle>
+      <DialogTitle>{isSnack ? 'Record snack' : 'Record meal'}</DialogTitle>
       <DialogContent dividers>
         <Stack spacing={2.5}>
           <Typography variant="h3">{isSnack ? 'Did everyone have their snack as planned?' : 'Did everyone eat as planned?'}</Typography>
@@ -139,7 +139,7 @@ export function MealOutcomeDialog({ meal, onClose }: { meal: PlannerMeal; onClos
             <Box key={person.member_id} sx={{ p: 2, border: '1px solid', borderColor: 'divider', borderRadius: 2 }}>
               <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} sx={{ alignItems: { sm: 'center' }, justifyContent: 'space-between' }}>
                 <Typography sx={{ fontWeight: 600 }}>{person.display_name}</Typography>
-                <TextField select size="small" label="Outcome" value={results[person.member_id] ?? 'as_planned'} onChange={(event) => setResults((current) => ({ ...current, [person.member_id]: event.target.value as ResultKind }))} sx={{ minWidth: 190 }}>
+                <TextField select size="small" label="What happened?" value={results[person.member_id] ?? 'as_planned'} onChange={(event) => setResults((current) => ({ ...current, [person.member_id]: event.target.value as ResultKind }))} sx={{ minWidth: 190 }}>
                   <MenuItem value="as_planned">Ate as planned</MenuItem>
                   <MenuItem value="not_eaten">Did not eat</MenuItem>
                   <MenuItem value="changed">Ate a different amount</MenuItem>
@@ -159,7 +159,7 @@ export function MealOutcomeDialog({ meal, onClose }: { meal: PlannerMeal; onClos
                     {kind !== 'as_planned' && group.count > 1 ? (
                       <TextField label="Guests affected" type="number" size="small" value={guestExceptionCounts[group.id] ?? group.count} onChange={(event) => setGuestExceptionCounts((current) => ({ ...current, [group.id]: Number(event.target.value) || 1 }))} slotProps={{ htmlInput: { min: 1, max: group.count, step: 1 } }} sx={{ width: 150 }} />
                     ) : null}
-                    <TextField select size="small" label="Outcome" value={kind} onChange={(event) => setResults((current) => ({ ...current, [key]: event.target.value as ResultKind }))} sx={{ minWidth: 190 }}>
+                    <TextField select size="small" label="What happened?" value={kind} onChange={(event) => setResults((current) => ({ ...current, [key]: event.target.value as ResultKind }))} sx={{ minWidth: 190 }}>
                       <MenuItem value="as_planned">Ate as planned</MenuItem>
                       <MenuItem value="not_eaten">Did not eat</MenuItem>
                       <MenuItem value="changed">Ate a different amount</MenuItem>
@@ -170,7 +170,7 @@ export function MealOutcomeDialog({ meal, onClose }: { meal: PlannerMeal; onClos
               </Box>
             );
           })}
-          {pendingPeople.length === 0 && pendingGuests.length === 0 ? <Alert severity="info">There are no unresolved outcomes you can record for this {isSnack ? 'snack' : 'meal'}.</Alert> : null}
+          {pendingPeople.length === 0 && pendingGuests.length === 0 ? <Alert severity="info">This {isSnack ? 'snack' : 'meal'} has already been recorded.</Alert> : null}
         </Stack>
       </DialogContent>
       <DialogActions>

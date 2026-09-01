@@ -27,6 +27,7 @@ import { ErrorState, Loading } from '../../components/States';
 import { addDays, defaultDayFor, parseIsoDate, startOfWeekIso, todayIso } from './date';
 import { Fact, FactBar, MealCard } from './MealCard';
 import { MealEditorDialog } from './MealEditorDialog';
+import { MealSlotMenu } from './MealSlotMenu';
 import { DayWeekNutrition } from './NutritionSummary';
 import { EmptySlot, SlotSection } from './SlotSection';
 import { SnackSection } from './SnackSection';
@@ -209,11 +210,19 @@ export function MyPlannerPage({ weekStart, day }: { weekStart: string; day: stri
     setEditing({ key: crypto.randomUUID(), entry, slot });
   }
 
+  const headerChoices = [
+    ...MAIN_SLOTS.filter((slot) => !selectedDay?.entries.some((entry) => (
+      entry.slot === slot.value
+      && (entry.scope === 'member' || iParticipateIn(entry, memberId))
+    ))),
+    { value: 'snacks' as const, label: 'Snack' },
+  ];
+
   return (
     <Box>
       <PageHeader
         title="My planner"
-        actions={canPlan ? <Button variant="contained" startIcon={<AddIcon />} onClick={() => openEditor(null, 'dinner')}>Plan meal</Button> : null}
+        actions={canPlan ? <MealSlotMenu choices={headerChoices} onSelect={(slot) => openEditor(null, slot)} /> : null}
       />
       {error ? <Alert severity="error" onClose={() => setError(null)} sx={{ mb: 2 }}>{error}</Alert> : null}
       {week.data ? (

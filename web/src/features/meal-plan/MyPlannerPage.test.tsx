@@ -187,4 +187,35 @@ describe('MyPlannerPage', () => {
     expect(foods).toEqual(['Morning banana', 'Afternoon crackers', 'Anytime apple']);
     expect(snacks.getByText('No set time')).toBeInTheDocument();
   });
+
+  it('groups foods from one snack occurrence without an internal divider', () => {
+    const snack = snackEntry('s-none', null, 'Greek yoghurt');
+    const firstComponent = snack.components[0];
+    if (!firstComponent) throw new Error('Expected a snack component');
+    snack.components = [
+      firstComponent,
+      { ...firstComponent, id: 's-none-apple', item_name: 'Apples' },
+    ];
+    entries = [snack];
+
+    render(<MyPlannerPage weekStart={WEEK_START} day={DAY} />);
+
+    const occurrence = within(screen.getByRole('group', { name: 'Untimed snack' }));
+    expect(occurrence.getByText('Greek yoghurt')).toBeInTheDocument();
+    expect(occurrence.getByText('Apples')).toBeInTheDocument();
+    expect(occurrence.queryByRole('separator')).not.toBeInTheDocument();
+    expect(occurrence.getAllByRole('button', { name: 'Snack actions' })).toHaveLength(1);
+  });
+
+  it('offers only free main meals plus a snack from the page action', async () => {
+    entries = [baseEntry({ id: 'mine', scope: 'member', slot: 'dinner' })];
+    render(<MyPlannerPage weekStart={WEEK_START} day={DAY} />);
+
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Plan meal' }));
+
+    expect(screen.getByRole('menuitem', { name: 'Breakfast' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: 'Lunch' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: 'Snack' })).toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: 'Dinner' })).not.toBeInTheDocument();
+  });
 });

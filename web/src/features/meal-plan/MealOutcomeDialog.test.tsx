@@ -73,7 +73,7 @@ describe('MealOutcomeDialog', () => {
     renderDialog(mealWith({}));
     const user = userEvent.setup();
 
-    await user.click(screen.getByRole('combobox', { name: 'Outcome' }));
+    await user.click(screen.getByRole('combobox', { name: 'What happened?' }));
     await user.click(screen.getByRole('option', { name: 'Did not eat' }));
     await user.click(screen.getByRole('button', { name: 'Confirm meal' }));
 
@@ -92,7 +92,7 @@ describe('MealOutcomeDialog', () => {
         { member_id: 'm1', display_name: 'Alex', status: 'eaten', can_record: true, allocations: [{ component_id: 'c1', allocated: { kind: 'measure', value: '300', unit: 'g' }, status: 'eaten' }] },
       ],
     }));
-    expect(screen.getByText(/no unresolved outcomes/i)).toBeInTheDocument();
+    expect(screen.getByText(/already been recorded/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Confirm meal' })).toBeDisabled();
   });
 });

@@ -22,6 +22,7 @@ import { formatAmount } from './format';
 import { Fact, FactBar, MealCard } from './MealCard';
 import { MealEditorDialog } from './MealEditorDialog';
 import { MealOutcomeDialog } from './MealOutcomeDialog';
+import { MealSlotMenu } from './MealSlotMenu';
 import { EmptySlot, SlotSection } from './SlotSection';
 import { labelForSlot, MAIN_SLOTS } from './slots';
 import { WeekNavigator } from './WeekNavigator';
@@ -92,7 +93,7 @@ function HouseholdMealCard({
       warning={shortages.length > 0 ? `Not enough servings for ${shortages.map((food) => food.item_name).join(', ')}` : null}
       actions={
         <>
-          {canReview ? <Button variant="contained" size="small" onClick={onReview}>Review outcomes</Button> : null}
+          {canReview ? <Button variant="contained" size="small" onClick={onReview}>Record meal</Button> : null}
           {meal.capabilities.can_edit ? <Button size="small" onClick={onEdit}>Edit meal</Button> : null}
           {meal.capabilities.can_delete ? <Button size="small" color="error" onClick={onDelete}>Delete</Button> : null}
         </>
@@ -143,7 +144,7 @@ export function HouseholdPlannerPage({ weekStart, day }: { weekStart: string; da
     <Box>
       <PageHeader
         title="Household planner"
-        actions={canPlan ? <Button variant="contained" startIcon={<AddIcon />} onClick={() => openEditor(null, 'dinner')}>Plan meal</Button> : null}
+        actions={canPlan ? <MealSlotMenu choices={MAIN_SLOTS} onSelect={(slot) => openEditor(null, slot)} /> : null}
       />
       {error ? <Alert severity="error" onClose={() => setError(null)} sx={{ mb: 2 }}>{error}</Alert> : null}
       {week.data ? (

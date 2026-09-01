@@ -46,8 +46,8 @@ function SnackOccurrence({
   const close = () => setAnchor(null);
 
   return (
-    <Box>
-      <Stack divider={<Divider flexItem />}>
+    <Box role="group" aria-label={entry.planned_time ? `Snack at ${entry.planned_time}` : 'Untimed snack'}>
+      <Stack>
         {entry.components.map((component) => (
           <Stack
             key={component.id}
