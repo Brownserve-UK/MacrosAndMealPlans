@@ -83,6 +83,7 @@ fn app_with_web(dist: &std::path::Path) -> axum::Router {
         StockService::new(
             Arc::new(InMemoryStockRepository::new()),
             Arc::new(InMemoryProductRepository::new()),
+            Arc::new(InMemoryIngredientRepository::new()),
             Arc::new(InMemoryMealPlanRepository::default()),
             recipes_repo.clone(),
             Arc::new(InMemoryHouseholdMemberRepository::new()),
@@ -231,6 +232,7 @@ async fn without_a_web_build_the_api_still_works() {
         StockService::new(
             Arc::new(InMemoryStockRepository::new()),
             Arc::new(InMemoryProductRepository::new()),
+            Arc::new(InMemoryIngredientRepository::new()),
             Arc::new(InMemoryMealPlanRepository::default()),
             recipes_repo.clone(),
             Arc::new(InMemoryHouseholdMemberRepository::new()),

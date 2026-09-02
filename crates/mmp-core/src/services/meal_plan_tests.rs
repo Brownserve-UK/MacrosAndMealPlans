@@ -28,6 +28,7 @@ struct Harness {
     diary: DiaryService,
     targets: NutritionTargetService,
     products: InMemoryProductRepository,
+    ingredients: InMemoryIngredientRepository,
     recipes: InMemoryRecipeRepository,
     records: InMemoryConsumptionRecordRepository,
     members: InMemoryHouseholdMemberRepository,
@@ -129,6 +130,7 @@ fn harness() -> Harness {
         diary,
         targets,
         products,
+        ingredients,
         recipes,
         records,
         members,
@@ -2112,6 +2114,7 @@ async fn a_confirmed_component_stops_counting_as_planned_stock_demand() {
     let stock_service = crate::services::StockService::new(
         Arc::new(h.stock.clone()),
         Arc::new(h.products.clone()),
+        Arc::new(h.ingredients.clone()),
         Arc::new(h.plans.clone()),
         Arc::new(h.recipes.clone()),
         Arc::new(h.members.clone()),

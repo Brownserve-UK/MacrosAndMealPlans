@@ -24,6 +24,7 @@ import { ProfilePage } from '../features/profile/ProfilePage';
 import { StockPage } from '../features/stock/StockPage';
 import { StockItemPage } from '../features/stock/StockItemPage';
 import { ProductStockPage } from '../features/stock/ProductStockPage';
+import { IngredientStockPage } from '../features/stock/IngredientStockPage';
 
 const rootRoute = createRootRoute({ component: AppShell });
 
@@ -214,6 +215,15 @@ const productStockRoute = createRoute({
   },
 });
 
+const ingredientStockRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/stock/ingredients/$ingredientId',
+  component: function ViewIngredientStock() {
+    const { ingredientId } = ingredientStockRoute.useParams();
+    return <IngredientStockPage ingredientId={ingredientId} />;
+  },
+});
+
 const householdRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/household',
@@ -275,6 +285,7 @@ const routeTree = rootRoute.addChildren([
   editRecipeRoute,
   stockRoute,
   productStockRoute,
+  ingredientStockRoute,
   stockItemRoute,
   householdRoute,
   memberRoute,

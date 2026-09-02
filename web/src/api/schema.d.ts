@@ -1311,6 +1311,7 @@ export interface components {
             demand_gaps: components["schemas"]["DemandGapDto"][];
             /** Format: uuid */
             ingredient_id: string;
+            name: string;
         };
         IngredientDto: {
             /** Format: date-time */

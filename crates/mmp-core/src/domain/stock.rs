@@ -522,6 +522,7 @@ impl ProductAvailability {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct IngredientAvailability {
     pub ingredient_id: IngredientId,
+    pub name: String,
     pub availability: Availability,
     pub demand_gaps: Vec<DemandGap>,
 }

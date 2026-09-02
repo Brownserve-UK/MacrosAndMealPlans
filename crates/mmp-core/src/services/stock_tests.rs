@@ -13,14 +13,15 @@ use crate::domain::{
 use crate::ports::{FixedClock, MealPlanRepository, StockQuery};
 use crate::testing::{
     InMemoryHouseholdMemberRepository, InMemoryHouseholdSettingsRepository,
-    InMemoryMealPlanRepository, InMemoryProductRepository, InMemoryRecipeRepository,
-    InMemoryStockRepository,
+    InMemoryIngredientRepository, InMemoryMealPlanRepository, InMemoryProductRepository,
+    InMemoryRecipeRepository, InMemoryStockRepository,
 };
 
 struct Harness {
     service: StockService,
     stock: InMemoryStockRepository,
     products: InMemoryProductRepository,
+    ingredients: InMemoryIngredientRepository,
     recipes: InMemoryRecipeRepository,
     meal_plans: InMemoryMealPlanRepository,
     member_id: HouseholdMemberId,
@@ -30,6 +31,7 @@ struct Harness {
 fn harness() -> Harness {
     let stock = InMemoryStockRepository::new();
     let products = InMemoryProductRepository::new();
+    let ingredients = InMemoryIngredientRepository::new();
     let meal_plans = InMemoryMealPlanRepository::default();
     let recipes = InMemoryRecipeRepository::new();
     let members = InMemoryHouseholdMemberRepository::new();
@@ -48,6 +50,7 @@ fn harness() -> Harness {
     let service = StockService::new(
         Arc::new(stock.clone()),
         Arc::new(products.clone()),
+        Arc::new(ingredients.clone()),
         Arc::new(meal_plans.clone()),
         Arc::new(recipes.clone()),
         Arc::new(members),
@@ -58,6 +61,7 @@ fn harness() -> Harness {
         service,
         stock,
         products,
+        ingredients,
         recipes,
         meal_plans,
         member_id,
@@ -446,6 +450,20 @@ fn mapped(name: &str, ingredient_id: crate::domain::IngredientId) -> Product {
     p
 }
 
+fn seed_ingredient(h: &Harness, id: crate::domain::IngredientId, name: &str) {
+    let now = OffsetDateTime::UNIX_EPOCH;
+    h.ingredients.seed(crate::domain::Ingredient {
+        id,
+        name: name.to_owned(),
+        default_unit: Unit::Gram,
+        provenance: Provenance::local(),
+        revision: Revision::INITIAL,
+        created_at: now,
+        updated_at: now,
+        archived_at: None,
+    });
+}
+
 fn ingredient_line(
     ingredient_id: crate::domain::IngredientId,
     g: i64,
@@ -641,4 +659,187 @@ async fn an_ingredient_we_hold_no_stock_of_still_shows_its_demand() {
         .expect("demand with no stock is still reported");
     assert_eq!(ingredient.availability, Availability::Unknown);
     assert!(ingredient.demand_gaps.is_empty());
+}
+
+#[tokio::test]
+async fn an_ingredient_we_hold_with_nothing_planned_is_still_reported() {
+    let h = harness();
+    let milk = crate::domain::IngredientId::new();
+    seed_ingredient(&h, milk, "Whole Milk");
+    let a = mapped("Tesco Whole Milk", milk);
+    let b = mapped("Value Whole Milk", milk);
+    h.products.seed(a.clone());
+    h.products.seed(b.clone());
+    for (p, amount) in [(&a, 150), (&b, 600)] {
+        h.service
+            .create(
+                new_item(
+                    p.id,
+                    StockLevel::Exact {
+                        quantity: grams(amount),
+                    },
+                ),
+                h.actor_id,
+                None,
+            )
+            .await
+            .unwrap();
+    }
+
+    let report = h
+        .service
+        .availability_overview(date!(2026 - 08 - 24), date!(2026 - 08 - 31))
+        .await
+        .unwrap();
+
+    let ingredient = report
+        .ingredients
+        .iter()
+        .find(|row| row.ingredient_id == milk)
+        .expect("an ingredient we hold is reported even with no demand");
+    assert_eq!(ingredient.name, "Whole Milk");
+    let Availability::Quantified {
+        on_hand,
+        planned_demand,
+        unallocated,
+        ..
+    } = ingredient.availability
+    else {
+        panic!(
+            "expected a quantified pool, got {:?}",
+            ingredient.availability
+        );
+    };
+    assert_eq!(on_hand, grams(750));
+    assert_eq!(planned_demand, grams(0));
+    assert_eq!(unallocated, grams(750));
+    assert!(ingredient.demand_gaps.is_empty());
+}
+
+#[tokio::test]
+async fn a_pool_member_we_hold_no_stock_of_still_joins_the_pool() {
+    let h = harness();
+    let milk = crate::domain::IngredientId::new();
+    let held = mapped("Tesco Whole Milk", milk);
+    let empty = mapped("Value Whole Milk", milk);
+    h.products.seed(held.clone());
+    h.products.seed(empty.clone());
+    h.service
+        .create(
+            new_item(
+                held.id,
+                StockLevel::Exact {
+                    quantity: grams(150),
+                },
+            ),
+            h.actor_id,
+            None,
+        )
+        .await
+        .unwrap();
+
+    let report = h
+        .service
+        .availability_overview(date!(2026 - 08 - 24), date!(2026 - 08 - 31))
+        .await
+        .unwrap();
+
+    let ingredient = report
+        .ingredients
+        .iter()
+        .find(|row| row.ingredient_id == milk)
+        .expect("the pool is reported");
+    match &ingredient.availability {
+        Availability::Quantified { on_hand, .. } => assert_eq!(*on_hand, grams(150)),
+        other => panic!("expected a quantified pool, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn stock_of_an_unmapped_product_produces_no_ingredient_row() {
+    let h = harness();
+    let p = product();
+    h.products.seed(p.clone());
+    h.service
+        .create(
+            new_item(
+                p.id,
+                StockLevel::Exact {
+                    quantity: grams(400),
+                },
+            ),
+            h.actor_id,
+            None,
+        )
+        .await
+        .unwrap();
+
+    let report = h
+        .service
+        .availability_overview(date!(2026 - 08 - 24), date!(2026 - 08 - 31))
+        .await
+        .unwrap();
+
+    assert_eq!(report.products.len(), 1);
+    assert!(report.ingredients.is_empty());
+}
+
+#[tokio::test]
+async fn a_pools_demand_includes_meals_planned_directly_against_its_products() {
+    let h = harness();
+    let milk = crate::domain::IngredientId::new();
+    seed_ingredient(&h, milk, "Whole Milk");
+    let a = mapped("Tesco Whole Milk", milk);
+    let b = mapped("Value Whole Milk", milk);
+    h.products.seed(a.clone());
+    h.products.seed(b.clone());
+    for p in [&a, &b] {
+        h.service
+            .create(
+                new_item(
+                    p.id,
+                    StockLevel::Exact {
+                        quantity: grams(400),
+                    },
+                ),
+                h.actor_id,
+                None,
+            )
+            .await
+            .unwrap();
+    }
+
+    // 200 g wanted through the recipe's generic ingredient line...
+    let curry = seed_recipe(&h, 1, vec![ingredient_line(milk, 200)]);
+    plan_servings(&h, curry.id, 1).await;
+    // ...and 500 g planned straight onto one of the products.
+    plan_measured(&h, a.id, 500).await;
+
+    let report = h
+        .service
+        .availability_overview(date!(2026 - 08 - 24), date!(2026 - 08 - 31))
+        .await
+        .unwrap();
+
+    let ingredient = report
+        .ingredients
+        .iter()
+        .find(|row| row.ingredient_id == milk)
+        .expect("the pool is reported");
+    let Availability::Quantified {
+        on_hand,
+        planned_demand,
+        unallocated,
+        ..
+    } = ingredient.availability
+    else {
+        panic!(
+            "expected a quantified pool, got {:?}",
+            ingredient.availability
+        );
+    };
+    assert_eq!(on_hand, grams(800));
+    // The pool owes both, not just the 200 g asked for by name.
+    assert_eq!(planned_demand, grams(700));
+    assert_eq!(unallocated, grams(100));
 }

@@ -126,6 +126,7 @@ pub fn app_state(config: &Config, pool: &PgPool) -> AppState {
     let stock = StockService::new(
         Arc::new(PgStockRepository::new(pool.clone())),
         Arc::new(PgProductRepository::new(pool.clone())),
+        Arc::new(PgIngredientRepository::new(pool.clone())),
         Arc::new(PgMealPlanRepository::new(pool.clone())),
         recipes_repo,
         Arc::new(PgHouseholdMemberRepository::new(pool.clone())),

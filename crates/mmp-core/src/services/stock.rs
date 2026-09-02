@@ -14,9 +14,9 @@ use crate::domain::{
 };
 use crate::error::{CoreError, Result};
 use crate::ports::{
-    Clock, HouseholdMemberRepository, HouseholdSettingsRepository, MealPlanQuery,
-    MealPlanRepository, MemberQuery, PageRequest, Paginated, ProductRepository, RecipeRepository,
-    StockQuery, StockRepository, UpdateOutcome,
+    Clock, HouseholdMemberRepository, HouseholdSettingsRepository, IngredientRepository,
+    MealPlanQuery, MealPlanRepository, MemberQuery, PageRequest, Paginated, ProductRepository,
+    RecipeRepository, StockQuery, StockRepository, UpdateOutcome,
 };
 
 const STOCK_ITEM: &str = "stock item";
@@ -25,6 +25,7 @@ const STOCK_ITEM: &str = "stock item";
 pub struct StockService {
     stock: Arc<dyn StockRepository>,
     products: Arc<dyn ProductRepository>,
+    ingredients: Arc<dyn IngredientRepository>,
     meal_plans: Arc<dyn MealPlanRepository>,
     recipes: Arc<dyn RecipeRepository>,
     members: Arc<dyn HouseholdMemberRepository>,
@@ -33,9 +34,11 @@ pub struct StockService {
 }
 
 impl StockService {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         stock: Arc<dyn StockRepository>,
         products: Arc<dyn ProductRepository>,
+        ingredients: Arc<dyn IngredientRepository>,
         meal_plans: Arc<dyn MealPlanRepository>,
         recipes: Arc<dyn RecipeRepository>,
         members: Arc<dyn HouseholdMemberRepository>,
@@ -45,6 +48,7 @@ impl StockService {
         Self {
             stock,
             products,
+            ingredients,
             meal_plans,
             recipes,
             members,
@@ -233,7 +237,11 @@ impl StockService {
         to: Date,
     ) -> Result<AvailabilityReport> {
         let interpretation = self.settings.get().await?.missing_stock_interpretation;
-        let demand = self.planned_demand(from, to).await?;
+        let mut demand = self.planned_demand(from, to).await?;
+
+        if all_ingredients {
+            self.seed_pools_from_stock(&mut demand, product_ids).await?;
+        }
 
         let mut ingredient_ids: Vec<IngredientId> = demand
             .ingredients()
@@ -262,6 +270,14 @@ impl StockService {
             by_product.entry(item.product_id).or_default().push(item);
         }
 
+        let names: HashMap<IngredientId, String> = self
+            .ingredients
+            .get_many(&ingredient_ids)
+            .await?
+            .into_iter()
+            .map(|ingredient| (ingredient.id, ingredient.name))
+            .collect();
+
         let mut apportioned: HashMap<ProductId, Quantity> = HashMap::new();
         let mut ingredients = Vec::with_capacity(ingredient_ids.len());
         for ingredient_id in ingredient_ids {
@@ -286,10 +302,33 @@ impl StockService {
                 }
             }
 
+            let mut gaps = demand.gaps(&subject);
+            let mut pool_want = want;
+            for product_id in demand.pool(&ingredient_id) {
+                let Some(direct) = demand.quantity(&DemandSubject::product(*product_id)) else {
+                    continue;
+                };
+                match pool_want {
+                    None => pool_want = Some(direct),
+                    Some(running) => match direct.convert_to(running.unit) {
+                        Ok(converted) => {
+                            pool_want = Some(Quantity::new(
+                                running.amount + converted.amount,
+                                running.unit,
+                            ));
+                        }
+                        Err(_) => gaps.push(DemandGap::IncompatibleUnits),
+                    },
+                }
+            }
+            gaps.sort_unstable();
+            gaps.dedup();
+
             ingredients.push(IngredientAvailability {
                 ingredient_id,
-                availability: resolve_availability(&pool, want, interpretation),
-                demand_gaps: demand.gaps(&subject),
+                name: names.get(&ingredient_id).cloned().unwrap_or_default(),
+                availability: resolve_availability(&pool, pool_want, interpretation),
+                demand_gaps: gaps,
             });
         }
 
@@ -328,6 +367,32 @@ impl StockService {
             ingredients,
             demand_gaps: demand.loose_gaps(),
         })
+    }
+
+    async fn seed_pools_from_stock(
+        &self,
+        demand: &mut Demand,
+        product_ids: &[ProductId],
+    ) -> Result<()> {
+        let mut ingredient_ids: Vec<IngredientId> = self
+            .products
+            .get_many(product_ids)
+            .await?
+            .into_iter()
+            .filter_map(|product| product.mapped_ingredient_id)
+            .collect();
+        sort_dedup(&mut ingredient_ids, IngredientId::as_uuid);
+        if ingredient_ids.is_empty() {
+            return Ok(());
+        }
+
+        for (ingredient_id, products) in self.products.list_by_ingredient(&ingredient_ids).await? {
+            demand.ensure_pool(
+                ingredient_id,
+                products.into_iter().map(|product| product.id).collect(),
+            );
+        }
+        Ok(())
     }
 
     async fn planned_demand(&self, from: Date, to: Date) -> Result<Demand> {
@@ -503,6 +568,12 @@ impl Demand {
 
     fn loose_gaps(&self) -> Vec<DemandGap> {
         self.loose.iter().copied().collect()
+    }
+
+    fn ensure_pool(&mut self, ingredient_id: IngredientId, product_ids: Vec<ProductId>) {
+        let pool = self.pools.entry(ingredient_id).or_default();
+        pool.extend(product_ids);
+        sort_dedup(pool, ProductId::as_uuid);
     }
 
     fn pool(&self, ingredient_id: &IngredientId) -> &[ProductId] {

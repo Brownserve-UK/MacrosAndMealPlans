@@ -510,6 +510,7 @@ impl From<ProductAvailability> for ProductAvailabilityDto {
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct IngredientAvailabilityDto {
     pub ingredient_id: Uuid,
+    pub name: String,
     pub availability: AvailabilityDto,
     pub demand_gaps: Vec<DemandGapDto>,
 }
@@ -518,6 +519,7 @@ impl From<IngredientAvailability> for IngredientAvailabilityDto {
     fn from(value: IngredientAvailability) -> Self {
         Self {
             ingredient_id: value.ingredient_id.as_uuid(),
+            name: value.name,
             availability: value.availability.into(),
             demand_gaps: value.demand_gaps.into_iter().map(Into::into).collect(),
         }

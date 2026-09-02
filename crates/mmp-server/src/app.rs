@@ -108,6 +108,7 @@ pub fn stub_state() -> AppState {
         mmp_core::services::StockService::new(
             Arc::new(NoopStock),
             Arc::new(NoopProducts),
+            Arc::new(NoopIngredients),
             Arc::new(NoopMealPlans),
             Arc::new(NoopRecipes),
             Arc::new(NoopMembers),

@@ -54,6 +54,7 @@ async fn app() -> Router {
     let stock = StockService::new(
         Arc::new(stock_repo.clone()),
         Arc::new(products.clone()),
+        ingredients.clone(),
         Arc::new(meal_plans.clone()),
         recipes_repo.clone(),
         Arc::new(members.clone()),
@@ -3281,6 +3282,63 @@ async fn stock_availability_nets_off_planned_demand() {
     assert_eq!(row["on_hand"]["amount"], json!(1000.0));
     assert_eq!(row["planned_demand"]["amount"], json!(250.0));
     assert_eq!(row["unallocated"]["amount"], json!(750.0));
+}
+
+#[tokio::test]
+async fn stock_availability_pools_the_products_of_one_ingredient() {
+    let app = app().await;
+    let ingredient = create_ingredient(&app, "Whole milk").await;
+    let ingredient_id = ingredient["id"].as_str().unwrap().to_owned();
+
+    let mut product_ids = Vec::new();
+    for name in ["Tesco Whole Milk 1L", "Value Whole Milk 2L"] {
+        let (status, body, _) = send(
+            &app,
+            Call::new("POST", "/api/v1/products").body(json!({
+                "name": name,
+                "package_quantity": {"amount": 1000.0, "unit": "ml"},
+                "mapped_ingredient_id": ingredient_id,
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{body}");
+        product_ids.push(body["id"].as_str().unwrap().to_owned());
+    }
+
+    for (product_id, millilitres) in product_ids.iter().zip([150.0, 600.0]) {
+        send(
+            &app,
+            Call::new("POST", "/api/v1/stock").body(json!({
+                "product_id": product_id,
+                "level": {"mode": "exact", "quantity": {"amount": millilitres, "unit": "ml"}},
+                "storage_location": "chilled",
+            })),
+        )
+        .await;
+    }
+
+    let (status, rows, _) = send(
+        &app,
+        Call::new(
+            "GET",
+            "/api/v1/stock/availability?from=2026-08-20&to=2026-09-03",
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{rows}");
+
+    let ingredients = rows["ingredients"].as_array().unwrap();
+    let row = ingredients
+        .iter()
+        .find(|row| row["ingredient_id"] == json!(ingredient_id))
+        .unwrap_or_else(|| panic!("the ingredient we hold stock of is reported, got {rows}"));
+    assert_eq!(row["name"], json!("Whole milk"));
+    let availability = &row["availability"];
+    assert_eq!(availability["state"], "quantified");
+    assert_eq!(availability["on_hand"]["amount"], json!(750.0));
+    assert_eq!(availability["planned_demand"]["amount"], json!(0.0));
+    assert_eq!(availability["unallocated"]["amount"], json!(750.0));
+    assert_eq!(row["demand_gaps"], json!([]));
 }
 
 #[tokio::test]
