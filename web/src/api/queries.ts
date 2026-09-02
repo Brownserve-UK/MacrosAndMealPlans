@@ -535,7 +535,15 @@ export const mealPlanKeys = {
   myWeek: (weekStart: string) => ['mealPlanWeek', weekStart] as const,
   householdWeek: (weekStart: string) => ['plannerWeek', weekStart] as const,
   entry: (id: string) => ['mealPlanEntry', id] as const,
+  needsReview: () => ['mealPlanNeedsReview'] as const,
 };
+
+export function useNeedsReview() {
+  return useQuery({
+    queryKey: mealPlanKeys.needsReview(),
+    queryFn: async () => unwrap(await client.GET('/api/v1/meal-plan/needs-review', {})),
+  });
+}
 
 export function useMealPlanWeek(weekStart: string) {
   return useQuery({
@@ -569,6 +577,7 @@ function useMealPlanInvalidation() {
     void qc.invalidateQueries({ queryKey: ['mealPlanWeek'] });
     void qc.invalidateQueries({ queryKey: ['plannerWeek'] });
     void qc.invalidateQueries({ queryKey: ['householdSlotAttendance'] });
+    void qc.invalidateQueries({ queryKey: ['mealPlanNeedsReview'] });
   };
 }
 
@@ -624,6 +633,19 @@ export function useMarkMealPlanEaten() {
         await client.POST('/api/v1/meal-plan-entries/{id}/eaten', {
           params: { path: { id: input.id }, header: ifMatch(input.revision) },
           body: input.body,
+        }),
+      ),
+    onSuccess: () => invalidate(),
+  });
+}
+
+export function useMarkMealPlanNotEaten() {
+  const invalidate = useMealPlanInvalidation();
+  return useMutation({
+    mutationFn: async (input: { id: string; revision: number }) =>
+      unwrap(
+        await client.POST('/api/v1/meal-plan-entries/{id}/not-eaten', {
+          params: { path: { id: input.id }, header: ifMatch(input.revision) },
         }),
       ),
     onSuccess: () => invalidate(),

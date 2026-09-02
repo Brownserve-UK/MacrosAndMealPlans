@@ -261,7 +261,7 @@ fn participant_status_rolls_up_across_components() {
         allocation(two, servings(1)),
     ]);
     assert_eq!(
-        derive_participant_status(&all_pending),
+        derive_participant_status(&all_pending, Assumption::NONE),
         MealPlanStatus::Planned
     );
 
@@ -270,7 +270,7 @@ fn participant_status_rolls_up_across_components() {
         allocation(two, servings(1)),
     ]);
     assert_eq!(
-        derive_participant_status(&one_eaten),
+        derive_participant_status(&one_eaten, Assumption::NONE),
         MealPlanStatus::PartiallyResolved
     );
 
@@ -279,7 +279,7 @@ fn participant_status_rolls_up_across_components() {
         resolved(allocation(two, servings(1)), ParticipantStatus::NotEaten),
     ]);
     assert_eq!(
-        derive_participant_status(&eaten_and_declined),
+        derive_participant_status(&eaten_and_declined, Assumption::NONE),
         MealPlanStatus::Eaten
     );
 
@@ -288,7 +288,7 @@ fn participant_status_rolls_up_across_components() {
         resolved(allocation(two, servings(1)), ParticipantStatus::NotEaten),
     ]);
     assert_eq!(
-        derive_participant_status(&all_declined),
+        derive_participant_status(&all_declined, Assumption::NONE),
         MealPlanStatus::NotEaten
     );
 }
@@ -302,7 +302,7 @@ fn component_status_rolls_up_across_participants() {
     )]);
     let pending = participant(vec![allocation(comp, servings(1))]);
     assert_eq!(
-        derive_component_status(comp, &[ate.clone(), pending], &[]),
+        derive_component_status(comp, &[ate.clone(), pending], &[], Assumption::NONE),
         MealPlanStatus::PartiallyResolved
     );
 
@@ -311,7 +311,7 @@ fn component_status_rolls_up_across_participants() {
         ParticipantStatus::NotEaten,
     )]);
     assert_eq!(
-        derive_component_status(comp, &[ate.clone(), declined], &[]),
+        derive_component_status(comp, &[ate.clone(), declined], &[], Assumption::NONE),
         MealPlanStatus::Eaten
     );
 
@@ -321,7 +321,7 @@ fn component_status_rolls_up_across_participants() {
         ParticipantStatus::Planned,
     )]);
     assert_eq!(
-        derive_component_status(comp, &[ate], &[pending_guest]),
+        derive_component_status(comp, &[ate], &[pending_guest], Assumption::NONE),
         MealPlanStatus::PartiallyResolved
     );
 }
@@ -352,11 +352,11 @@ fn entry_is_resolved_only_when_every_participant_is() {
     let pending = participant(vec![allocation(comp, servings(1))]);
 
     assert_eq!(
-        derive_entry_status(&[ate.clone(), pending], &[]),
+        derive_entry_status(&[ate.clone(), pending], &[], Assumption::NONE),
         MealPlanStatus::PartiallyResolved
     );
     assert_eq!(
-        derive_entry_status(&[ate, declined], &[]),
+        derive_entry_status(&[ate, declined], &[], Assumption::NONE),
         MealPlanStatus::Eaten
     );
 }
@@ -429,4 +429,185 @@ fn participants_validate_against_the_meal_components() {
         }],
     }];
     assert!(validate_participants(&unknown_component, std::slice::from_ref(&comp)).is_err());
+}
+
+fn meal_times() -> MealTimes {
+    MealTimes {
+        breakfast: time::macros::time!(08:00),
+        lunch: time::macros::time!(12:30),
+        dinner: time::macros::time!(18:00),
+    }
+}
+
+fn at(date: time::Date, clock: time::Time) -> OffsetDateTime {
+    date.with_time(clock).assume_utc()
+}
+
+#[test]
+fn a_meal_is_assumed_once_its_own_planned_time_has_passed() {
+    let day = time::macros::date!(2026 - 09 - 02);
+
+    let before = Assumption::for_occurrence(
+        day,
+        Some(time::macros::time!(13:00)),
+        MealSlot::Lunch,
+        at(
+            time::macros::date!(2026 - 09 - 02),
+            time::macros::time!(12:59),
+        ),
+        &meal_times(),
+        true,
+    );
+    assert!(!before.assumed);
+
+    let after = Assumption::for_occurrence(
+        day,
+        Some(time::macros::time!(13:00)),
+        MealSlot::Lunch,
+        at(
+            time::macros::date!(2026 - 09 - 02),
+            time::macros::time!(13:01),
+        ),
+        &meal_times(),
+        true,
+    );
+    assert!(after.assumed);
+}
+
+#[test]
+fn a_meal_without_a_time_falls_back_to_the_household_slot_time() {
+    let day = time::macros::date!(2026 - 09 - 02);
+
+    let before = Assumption::for_occurrence(
+        day,
+        None,
+        MealSlot::Dinner,
+        at(
+            time::macros::date!(2026 - 09 - 02),
+            time::macros::time!(17:30),
+        ),
+        &meal_times(),
+        true,
+    );
+    assert!(!before.assumed);
+
+    let after = Assumption::for_occurrence(
+        day,
+        None,
+        MealSlot::Dinner,
+        at(
+            time::macros::date!(2026 - 09 - 02),
+            time::macros::time!(18:30),
+        ),
+        &meal_times(),
+        true,
+    );
+    assert!(after.assumed);
+}
+
+#[test]
+fn an_untimed_snack_is_only_assumed_once_its_day_is_over() {
+    let day = time::macros::date!(2026 - 09 - 02);
+
+    let same_day = Assumption::for_occurrence(
+        day,
+        None,
+        MealSlot::Snacks,
+        at(
+            time::macros::date!(2026 - 09 - 02),
+            time::macros::time!(23:00),
+        ),
+        &meal_times(),
+        true,
+    );
+    assert!(!same_day.assumed);
+
+    let next_day = Assumption::for_occurrence(
+        day,
+        None,
+        MealSlot::Snacks,
+        at(
+            time::macros::date!(2026 - 09 - 03),
+            time::macros::time!(00:01),
+        ),
+        &meal_times(),
+        true,
+    );
+    assert!(next_day.assumed);
+}
+
+#[test]
+fn turning_the_setting_off_stops_anything_being_assumed() {
+    let assumption = Assumption::for_occurrence(
+        time::macros::date!(2026 - 09 - 01),
+        Some(time::macros::time!(08:00)),
+        MealSlot::Breakfast,
+        at(
+            time::macros::date!(2026 - 09 - 02),
+            time::macros::time!(12:00),
+        ),
+        &meal_times(),
+        false,
+    );
+    assert!(!assumption.assumed);
+}
+
+#[test]
+fn an_unresolved_meal_reads_as_assumed_but_a_resolved_one_does_not() {
+    let comp = MealPlanComponentId::new();
+    let assumed = Assumption::new(true);
+
+    let pending = participant(vec![allocation(comp, servings(1))]);
+    assert_eq!(
+        derive_participant_status(&pending, assumed),
+        MealPlanStatus::Assumed
+    );
+    assert_eq!(
+        derive_entry_status(std::slice::from_ref(&pending), &[], assumed),
+        MealPlanStatus::Assumed
+    );
+
+    let ate = participant(vec![resolved(
+        allocation(comp, servings(1)),
+        ParticipantStatus::Eaten,
+    )]);
+    assert_eq!(
+        derive_participant_status(&ate, assumed),
+        MealPlanStatus::Eaten
+    );
+
+    let declined = participant(vec![resolved(
+        allocation(comp, servings(1)),
+        ParticipantStatus::NotEaten,
+    )]);
+    assert_eq!(
+        derive_participant_status(&declined, assumed),
+        MealPlanStatus::NotEaten
+    );
+}
+
+#[test]
+fn a_partly_resolved_meal_stays_partly_resolved_rather_than_assumed() {
+    let comp = MealPlanComponentId::new();
+    let assumed = Assumption::new(true);
+
+    let ate = participant(vec![resolved(
+        allocation(comp, servings(1)),
+        ParticipantStatus::Eaten,
+    )]);
+    let pending = participant(vec![allocation(comp, servings(1))]);
+
+    assert_eq!(
+        derive_entry_status(&[ate, pending], &[], assumed),
+        MealPlanStatus::PartiallyResolved
+    );
+}
+
+#[test]
+fn assumed_counts_as_unresolved_so_it_stays_editable() {
+    assert!(MealPlanStatus::Assumed.is_unresolved());
+    assert!(MealPlanStatus::Planned.is_unresolved());
+    assert!(!MealPlanStatus::Eaten.is_unresolved());
+    assert!(!MealPlanStatus::NotEaten.is_unresolved());
+    assert!(!MealPlanStatus::PartiallyResolved.is_unresolved());
 }

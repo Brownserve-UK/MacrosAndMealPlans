@@ -11,8 +11,8 @@ use crate::auth::Principal;
 use crate::dto::common::iso_date;
 use crate::dto::{
     CreateMealPlanEntryRequest, MarkMealPlanComponentEatenRequest, MarkMealPlanEatenRequest,
-    MealGuestGroupDto, MealPlanEntryDto, MealPlanWeekDto, PlannerCapabilitiesDto, PlannerFoodDto,
-    PlannerMealDto, PlannerPersonDto, PlannerWeekDto, ReviewMealOutcomesRequest,
+    MealGuestGroupDto, MealPlanEntryDto, MealPlanWeekDto, NeedsReviewDto, PlannerCapabilitiesDto,
+    PlannerFoodDto, PlannerMealDto, PlannerPersonDto, PlannerWeekDto, ReviewMealOutcomesRequest,
     SetMealPlanParticipantsRequest, UpdateMealPlanEntryRequest,
 };
 use crate::error::{ApiError, ApiResult};
@@ -35,6 +35,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(opt_out, opt_in))
         .routes(routes!(household_slot_attendance))
         .routes(routes!(review_outcomes))
+        .routes(routes!(needs_review))
 }
 
 fn entry_id(id: Uuid) -> MealPlanEntryId {
@@ -247,7 +248,7 @@ async fn get_planner_week(
         }
         let can_opt_out = false;
         let can_join = false;
-        let can_edit = view.entry.status() == mmp_core::domain::MealPlanStatus::Planned;
+        let can_edit = view.status.is_unresolved();
         let owner_name = None;
         let foods = view
             .components
@@ -269,7 +270,7 @@ async fn get_planner_week(
             planned_time: view.entry.planned_time,
             slot: view.entry.slot,
             portioning: view.entry.portioning,
-            status: view.entry.status(),
+            status: view.status,
             foods,
             people,
             guest_groups: view
@@ -277,7 +278,7 @@ async fn get_planner_week(
                 .guest_groups
                 .clone()
                 .into_iter()
-                .map(MealGuestGroupDto::from)
+                .map(|group| MealGuestGroupDto::build(group, view.assumption))
                 .collect(),
             opted_out: view
                 .entry
@@ -752,6 +753,27 @@ async fn household_slot_attendance(
         });
     }
     Ok(Json(out))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/meal-plan/needs-review",
+    operation_id = "getMealPlanNeedsReview",
+    responses((status = 200, body = NeedsReviewDto)),
+    tag = "meal-plan",
+    security(("basic" = []))
+)]
+async fn needs_review(
+    State(state): State<AppState>,
+    principal: Principal,
+) -> ApiResult<Json<NeedsReviewDto>> {
+    let member = personal_member(&state, &principal).await?;
+    let include_household = principal.has(mmp_core::domain::Permission::HouseholdWrite);
+    let review = state
+        .meal_plan
+        .needs_review(member, include_household)
+        .await?;
+    Ok(Json(review.into()))
 }
 
 #[derive(serde::Deserialize)]

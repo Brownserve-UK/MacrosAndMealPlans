@@ -40,6 +40,7 @@ export type MealGuestGroup = components['schemas']['MealGuestGroupDto'];
 export type MealItem = components['schemas']['MealItemDto'];
 export type MealItemSource = components['schemas']['MealItemSourceDto'];
 export type MealSlotView = components['schemas']['MealSlotViewDto'];
+export type NeedsReview = components['schemas']['NeedsReviewDto'];
 export type Meta = components['schemas']['MetaDto'];
 export type MealTimesSettings = components['schemas']['HouseholdSettingsDto'];
 export type Recipe = components['schemas']['RecipeDto'];

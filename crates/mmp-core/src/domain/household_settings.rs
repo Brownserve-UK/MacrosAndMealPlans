@@ -70,6 +70,7 @@ pub struct HouseholdSettings {
     pub meal_times: MealTimes,
     pub missing_stock_interpretation: MissingStockInterpretation,
     pub default_all_members_participate: bool,
+    pub assume_eaten_when_time_passes: bool,
     pub revision: Revision,
     pub created_at: OffsetDateTime,
     pub updated_at: OffsetDateTime,
@@ -82,6 +83,7 @@ pub struct HouseholdSettingsPatch {
     pub dinner_time: Option<Time>,
     pub missing_stock_interpretation: Option<MissingStockInterpretation>,
     pub default_all_members_participate: Option<bool>,
+    pub assume_eaten_when_time_passes: Option<bool>,
 }
 
 impl HouseholdSettingsPatch {
@@ -91,6 +93,7 @@ impl HouseholdSettingsPatch {
             && self.dinner_time.is_none()
             && self.missing_stock_interpretation.is_none()
             && self.default_all_members_participate.is_none()
+            && self.assume_eaten_when_time_passes.is_none()
     }
 
     pub fn apply(self, mut times: MealTimes) -> MealTimes {

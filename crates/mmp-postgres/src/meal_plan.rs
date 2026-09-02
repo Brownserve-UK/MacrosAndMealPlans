@@ -1132,11 +1132,12 @@ async fn insert_consumption(
     let (kind, value, unit) = amount_bindings(&record.amount);
     let (item_kind, item_product_id, item_recipe_id) = item_bindings(&record.item);
     let nutrition = nutrition_bindings(&record.nutrition);
-    sqlx::query("INSERT INTO consumption_record (id, member_id, product_id, recorded_by, meal_plan_component_id, slot, amount_kind, amount_value, amount_unit, consumed_on, consumed_at, nutrition_basis_amount, nutrition_basis_unit, energy_kcal, protein_g, carbohydrate_g, sugar_g, fat_g, saturated_fat_g, fibre_g, salt_g, cholesterol_mg, nutrition_extra, nutrition_quality, revision, created_at, updated_at, item_kind, recipe_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29)")
+    sqlx::query("INSERT INTO consumption_record (id, member_id, product_id, recorded_by, meal_plan_entry_id, meal_plan_component_id, slot, amount_kind, amount_value, amount_unit, consumed_on, consumed_at, nutrition_basis_amount, nutrition_basis_unit, energy_kcal, protein_g, carbohydrate_g, sugar_g, fat_g, saturated_fat_g, fibre_g, salt_g, cholesterol_mg, nutrition_extra, nutrition_quality, revision, created_at, updated_at, item_kind, recipe_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30)")
         .bind(record.id.as_uuid())
         .bind(record.member_id.as_uuid())
         .bind(item_product_id)
         .bind(record.recorded_by.map(|id| id.as_uuid()))
+        .bind(record.meal_plan_entry_id.map(|id| id.as_uuid()))
         .bind(record.meal_plan_component_id.map(|id| id.as_uuid()))
         .bind(record.slot.code())
         .bind(kind)

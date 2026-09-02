@@ -1,5 +1,6 @@
 import AddIcon from '@mui/icons-material/AddOutlined';
 import CheckCircleIcon from '@mui/icons-material/CheckCircleOutlined';
+import HelpIcon from '@mui/icons-material/HelpOutlineOutlined';
 import ChevronRightIcon from '@mui/icons-material/ChevronRightOutlined';
 import RadioButtonUncheckedIcon from '@mui/icons-material/RadioButtonUncheckedOutlined';
 import RemoveCircleOutlineIcon from '@mui/icons-material/RemoveCircleOutlineOutlined';
@@ -30,6 +31,7 @@ import { PageHeader } from '../../components/PageHeader';
 import { ErrorState, Loading } from '../../components/States';
 import { MaybeNumber } from '../../components/Unknown';
 import { AddFoodDialog } from './AddFoodDialog';
+import { AteSomethingElseDialog } from './AteSomethingElseDialog';
 import { addDays, combineDateTime, defaultDayFor, extractTime, parseIsoDate, startOfWeekIso, todayIso } from './date';
 import { EditFoodDialog } from './EditFoodDialog';
 import { formatAmount } from './format';
@@ -69,6 +71,19 @@ function displayedEnergy(items: MealItem[]): number | null {
   return values.length > 0 ? values.reduce((total, value) => total + value, 0) : null;
 }
 
+function StatusIcon({ status }: { status: MealItem['status'] }) {
+  if (status === 'eaten') return <CheckCircleIcon />;
+  if (status === 'not_eaten') return <RemoveCircleOutlineIcon />;
+  if (status === 'assumed') return <HelpIcon />;
+  return <RadioButtonUncheckedIcon />;
+}
+
+function statusColour(status: MealItem['status']) {
+  if (status === 'eaten') return 'success.main';
+  if (status === 'assumed') return 'warning.main';
+  return 'text.disabled';
+}
+
 function MealItemRow({
   item,
   divided,
@@ -106,24 +121,15 @@ function MealItemRow({
           aria-label={
             item.status === 'not_eaten'
               ? `Reopen ${item.item_name}`
-              : item.status === 'planned'
-                ? `Mark ${item.item_name} eaten`
-                : `Mark ${item.item_name} not eaten yet`
+              : item.status === 'eaten'
+                ? `Mark ${item.item_name} not eaten yet`
+                : `Mark ${item.item_name} eaten`
           }
           onClick={onToggle}
           disabled={toggling}
-          sx={{
-            ml: { xs: 1, sm: 1.5 },
-            color: item.status === 'eaten' ? 'success.main' : 'text.disabled',
-          }}
+          sx={{ ml: { xs: 1, sm: 1.5 }, color: statusColour(item.status) }}
         >
-          {item.status === 'eaten' ? (
-            <CheckCircleIcon />
-          ) : item.status === 'not_eaten' ? (
-            <RemoveCircleOutlineIcon />
-          ) : (
-            <RadioButtonUncheckedIcon />
-          )}
+          <StatusIcon status={item.status} />
         </IconButton>
       ) : (
         <Box
@@ -131,17 +137,11 @@ function MealItemRow({
             ml: { xs: 1, sm: 1.5 },
             p: 1,
             display: 'flex',
-            color: item.status === 'eaten' ? 'success.main' : 'text.disabled',
+            color: statusColour(item.status),
           }}
           aria-hidden
         >
-          {item.status === 'eaten' ? (
-            <CheckCircleIcon />
-          ) : item.status === 'not_eaten' ? (
-            <RemoveCircleOutlineIcon />
-          ) : (
-            <RadioButtonUncheckedIcon />
-          )}
+          <StatusIcon status={item.status} />
         </Box>
       )}
       <ButtonBase
@@ -176,6 +176,9 @@ function MealItemRow({
           >
             {item.item_name}
           </Typography>
+          {item.status === 'assumed' ? (
+            <Chip size="small" variant="outlined" color="warning" label="Assumed" sx={{ width: 'fit-content' }} />
+          ) : null}
           {unplanned ? (
             <Chip size="small" variant="outlined" color="warning" label="Unplanned" sx={{ width: 'fit-content' }} />
           ) : null}
@@ -236,6 +239,7 @@ function SlotSection({
   onAdd,
   allowChanges,
   onMarkRemaining,
+  onAteSomethingElse,
   entries,
 }: {
   slot: MealSlot;
@@ -248,6 +252,7 @@ function SlotSection({
   onAdd: (slot: MealSlot) => void;
   allowChanges: boolean;
   onMarkRemaining: (entryId: string, items: MealItem[]) => void;
+  onAteSomethingElse: (entryId: string) => void;
   entries: MealPlanEntry[];
 }) {
   const slotEntry = entries.find((entry) => entry.slot === slot);
@@ -318,7 +323,10 @@ function SlotSection({
             const pending = entryId === null
               ? []
               : items.filter(
-                  (item) => item.kind === 'planned' && item.entry_id === entryId && item.status === 'planned',
+                  (item) =>
+                    item.kind === 'planned'
+                    && item.entry_id === entryId
+                    && (item.status === 'planned' || item.status === 'assumed'),
                 );
             return (
               <Box
@@ -335,9 +343,16 @@ function SlotSection({
                       Planned meal
                     </Typography>
                     {allowChanges && pending.length > 0 && entryId ? (
-                      <Button size="small" onClick={() => onMarkRemaining(entryId, pending)}>
-                        Mark remaining eaten
-                      </Button>
+                      <Stack direction="row" spacing={1}>
+                        <Button size="small" onClick={() => onMarkRemaining(entryId, pending)}>
+                          Mark remaining eaten
+                        </Button>
+                        {pending.some((candidate) => candidate.status === 'assumed') ? (
+                          <Button size="small" onClick={() => onAteSomethingElse(entryId)}>
+                            Ate something else
+                          </Button>
+                        ) : null}
+                      </Stack>
                     ) : null}
                   </Stack>
                 ) : null}
@@ -386,6 +401,7 @@ export function MealPlanPage({ weekStart, day }: { weekStart: string; day: strin
   const [toggling, setToggling] = useState<string | null>(null);
   const [stockNotice, setStockNotice] = useState<string[]>([]);
   const [toggleError, setToggleError] = useState<string | null>(null);
+  const [replacing, setReplacing] = useState<string | null>(null);
   const markEaten = useMarkMealPlanEaten();
   const markComponentEaten = useMarkMealPlanComponentEaten();
   const reopenComponent = useReopenMealPlanComponent();
@@ -429,7 +445,7 @@ export function MealPlanPage({ weekStart, day }: { weekStart: string; day: strin
     const key = item.component_id;
     setToggling(key);
     try {
-      if (item.status === 'planned') {
+      if (item.status === 'planned' || item.status === 'assumed') {
         const updated = await markComponentEaten.mutateAsync({
           id: item.entry_id,
           componentId: item.component_id,
@@ -563,6 +579,7 @@ export function MealPlanPage({ weekStart, day }: { weekStart: string; day: strin
                 onAdd={addFood}
                 allowChanges={allowChanges}
                 onMarkRemaining={markRemaining}
+                onAteSomethingElse={setReplacing}
                 entries={selectedDay.entries}
               />
             ))}
@@ -578,6 +595,17 @@ export function MealPlanPage({ weekStart, day }: { weekStart: string; day: strin
           memberId={memberId}
           date={adding.date}
           slot={adding.slot}
+        />
+      ) : null}
+
+      {replacing && selectedDay ? (
+        <AteSomethingElseDialog
+          open
+          onClose={() => setReplacing(null)}
+          entryId={replacing}
+          revision={selectedDay.entries.find((entry) => entry.id === replacing)?.revision ?? 0}
+          memberId={memberId}
+          consumedOn={activeDate}
         />
       ) : null}
 

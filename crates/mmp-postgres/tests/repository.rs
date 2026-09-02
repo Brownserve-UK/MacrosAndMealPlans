@@ -2,15 +2,15 @@
 
 use mmp_core::CoreError;
 use mmp_core::domain::{
-    AccessScope, CatalogueOrigin, ConsumedAmount, ConsumptionRecord, ConsumptionRecordId,
-    HouseholdMember, HouseholdMemberId, Ingredient, IngredientId, MealCategory,
-    MealGuestAllocation, MealGuestAllocationId, MealGuestGroup, MealGuestGroupId, MealItemRef,
-    MealParticipant, MealParticipantAllocation, MealParticipantAllocationId, MealParticipantId,
-    MealPlanComponent, MealPlanComponentId, MealPlanComponentSnapshot, MealPlanEntry,
-    MealPlanEntryId, MealPlanScope, MealPlanStatus, MealSlot, MemberAccessGrant, NewStockEvent,
-    NutritionFacts, NutritionGoals, NutritionQuality, NutritionTarget, NutritionTargetId,
-    ParticipantStatus, Portioning, Product, ProductId, Provenance, Quantity, Recipe,
-    RecipeComponent, RecipeComponentId, RecipeId, RecipeInstruction, RecipeInstructionId,
+    AccessScope, Assumption, CatalogueOrigin, ConsumedAmount, ConsumptionRecord,
+    ConsumptionRecordId, HouseholdMember, HouseholdMemberId, Ingredient, IngredientId,
+    MealCategory, MealGuestAllocation, MealGuestAllocationId, MealGuestGroup, MealGuestGroupId,
+    MealItemRef, MealParticipant, MealParticipantAllocation, MealParticipantAllocationId,
+    MealParticipantId, MealPlanComponent, MealPlanComponentId, MealPlanComponentSnapshot,
+    MealPlanEntry, MealPlanEntryId, MealPlanScope, MealPlanStatus, MealSlot, MemberAccessGrant,
+    NewStockEvent, NutritionFacts, NutritionGoals, NutritionQuality, NutritionTarget,
+    NutritionTargetId, ParticipantStatus, Portioning, Product, ProductId, Provenance, Quantity,
+    Recipe, RecipeComponent, RecipeComponentId, RecipeId, RecipeInstruction, RecipeInstructionId,
     RecipePhoto, RecipePhotoDerivatives, RecipeRequirement, RecipeVisibility, Revision, Role,
     StockEventKind, StockItemId, StockLevel, StorageLocation, Unit, User, UserId,
 };
@@ -1488,7 +1488,7 @@ async fn resolving_a_meal_freezes_components_and_links_consumption(pool: PgPool)
     assert_eq!(outcome, UpdateOutcome::Updated);
     let loaded = plans.get(original.id).await.unwrap().unwrap();
     assert_eq!(loaded, resolved);
-    assert_eq!(loaded.status(), MealPlanStatus::Eaten);
+    assert_eq!(loaded.status(Assumption::NONE), MealPlanStatus::Eaten);
 
     let loaded_record = consumption.get(record.id).await.unwrap().unwrap();
     assert_eq!(loaded_record.meal_plan_entry_id, Some(original.id));
@@ -1574,11 +1574,11 @@ async fn resolving_and_reopening_one_component_preserves_its_sibling(pool: PgPoo
 
     let partially_resolved = plans.get(original.id).await.unwrap().unwrap();
     assert_eq!(
-        partially_resolved.status(),
+        partially_resolved.status(Assumption::NONE),
         MealPlanStatus::PartiallyResolved
     );
     assert_eq!(
-        partially_resolved.component_status(component_id),
+        partially_resolved.component_status(component_id, Assumption::NONE),
         MealPlanStatus::Eaten
     );
     assert!(partially_resolved.components[0].snapshot.is_some());
@@ -1619,9 +1619,9 @@ async fn resolving_and_reopening_one_component_preserves_its_sibling(pool: PgPoo
     assert_eq!(outcome, UpdateOutcome::Updated);
 
     let reopened = plans.get(original.id).await.unwrap().unwrap();
-    assert_eq!(reopened.status(), MealPlanStatus::Planned);
+    assert_eq!(reopened.status(Assumption::NONE), MealPlanStatus::Planned);
     assert_eq!(
-        reopened.component_status(component_id),
+        reopened.component_status(component_id, Assumption::NONE),
         MealPlanStatus::Planned
     );
     assert_eq!(reopened.components[0].snapshot, None);
@@ -1726,9 +1726,9 @@ async fn reopening_a_component_removes_its_linked_record_without_tripping_the_al
 
     assert!(consumption.get(record.id).await.unwrap().is_none());
     let reopened = plans.get(original.id).await.unwrap().unwrap();
-    assert_eq!(reopened.status(), MealPlanStatus::Planned);
+    assert_eq!(reopened.status(Assumption::NONE), MealPlanStatus::Planned);
     assert_eq!(
-        reopened.component_status(component_id),
+        reopened.component_status(component_id, Assumption::NONE),
         MealPlanStatus::Planned
     );
     assert_eq!(

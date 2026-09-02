@@ -6,18 +6,19 @@ use time::{Date, Duration, OffsetDateTime, Time};
 use rust_decimal::Decimal;
 
 use crate::domain::{
-    AllocationOutcome, ComponentPreparation, ConfirmMealPlanComponent, ConfirmMealPlanEntry,
-    ConsumedAmount, ConsumedNutrition, ConsumptionRecord, ConsumptionRecordId, HouseholdMemberId,
-    MealGuestAllocation, MealGuestGroup, MealItemRef, MealOptOut, MealParticipant,
-    MealParticipantAllocation, MealParticipantAllocationId, MealParticipantId, MealPlanComponent,
-    MealPlanComponentId, MealPlanComponentSnapshot, MealPlanEntry, MealPlanEntryId,
-    MealPlanEntryPatch, MealPlanScope, MealPlanStatus, MealSlot, NUTRIENT_KEYS, NewMealGuestGroup,
-    NewMealParticipant, NewMealPlanComponent, NewMealPlanEntry, NutritionFacts, NutritionGoals,
-    NutritionQuality, OutcomeActor, ParticipantStatus, Portioning, Product, ProductId, Recipe,
-    RecipeId, RecipeRequirement, RecipeVisibility, ReviewMealOutcomes, ReviewedMealOutcome,
-    Revision, SetMealParticipants, SlotAttendance, UserId, derive_component_status,
-    derive_participant_status, equal_split, nutrition_for, preparation_for, recipe_nutrition,
-    recipe_nutrition_for, resolve_on, sum_nutrition, validate_components, validate_participants,
+    AllocationOutcome, Assumption, AssumptionRules, ComponentPreparation, ConfirmMealPlanComponent,
+    ConfirmMealPlanEntry, ConsumedAmount, ConsumedNutrition, ConsumptionRecord,
+    ConsumptionRecordId, HouseholdMemberId, MealGuestAllocation, MealGuestGroup, MealItemRef,
+    MealOptOut, MealParticipant, MealParticipantAllocation, MealParticipantAllocationId,
+    MealParticipantId, MealPlanComponent, MealPlanComponentId, MealPlanComponentSnapshot,
+    MealPlanEntry, MealPlanEntryId, MealPlanEntryPatch, MealPlanScope, MealPlanStatus, MealSlot,
+    NUTRIENT_KEYS, NewMealGuestGroup, NewMealParticipant, NewMealPlanComponent, NewMealPlanEntry,
+    NutritionFacts, NutritionGoals, NutritionQuality, OutcomeActor, ParticipantStatus, Portioning,
+    Product, ProductId, Recipe, RecipeId, RecipeRequirement, RecipeVisibility, ReplacementItem,
+    ReviewMealOutcomes, ReviewedMealOutcome, Revision, SetMealParticipants, SlotAttendance, UserId,
+    derive_component_status, derive_participant_status, equal_split, nutrition_for,
+    preparation_for, recipe_nutrition, recipe_nutrition_for, resolve_on, sum_nutrition,
+    validate_components, validate_participants,
 };
 use crate::domain::{StockEffectSource, StockOutcome};
 use crate::error::{CoreError, Result, ValidationErrors};
@@ -29,7 +30,11 @@ use crate::ports::{
 };
 
 use super::fulfilment::RecipeFulfilments;
-use super::stock_effects::{StockAffected, component_release, name_outcomes, product_deduction};
+use super::stock_effects::{
+    StockAffected, component_release, name_outcomes, product_deduction, record_deduction,
+};
+
+const REVIEW_LOOKBACK_DAYS: i64 = 90;
 
 const MEAL_PLAN_ENTRY: &str = "meal plan entry";
 const MEAL_PLAN_COMPONENT: &str = "meal plan component";
@@ -65,6 +70,12 @@ pub struct MealParticipantView {
 }
 
 #[derive(Debug, Clone)]
+pub struct NeedsReview {
+    pub personal: Vec<MealPlanEntryView>,
+    pub household: Vec<MealPlanEntryView>,
+}
+
+#[derive(Debug, Clone)]
 pub struct MealPlanEntryView {
     pub entry: MealPlanEntry,
     pub subject_member_id: Option<HouseholdMemberId>,
@@ -73,6 +84,9 @@ pub struct MealPlanEntryView {
     pub planned: NutritionSummary,
     pub actual: Option<NutritionSummary>,
     pub needs_attention: bool,
+    pub assumption: Assumption,
+    pub status: MealPlanStatus,
+    pub subject_status: MealPlanStatus,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1229,8 +1243,21 @@ impl MealPlanService {
             return Err(CoreError::conflict("Choose at least one person."));
         }
         self.freeze(&mut entry).await?;
+        let replacement_items: Vec<MealItemRef> = input
+            .members
+            .iter()
+            .flat_map(|reviewed| replacements_for(&reviewed.outcome))
+            .map(|replacement| replacement.item)
+            .collect();
+        self.validate_replacement_items(&replacement_items).await?;
         let catalogue = self
-            .catalogue_for(entry.components.iter().map(|component| component.item))
+            .catalogue_for(
+                entry
+                    .components
+                    .iter()
+                    .map(|component| component.item)
+                    .chain(replacement_items.iter().copied()),
+            )
             .await?;
         let now = self.clock.now();
         let mut records = Vec::new();
@@ -1308,6 +1335,39 @@ impl MealPlanService {
                         Some(now),
                     );
                 }
+            }
+
+            for replacement in replacements_for(&reviewed.outcome) {
+                let scaled = catalogue.resolve(replacement.item, &replacement.amount);
+                if !scaled.resolvable {
+                    let mut errors = ValidationErrors::new();
+                    errors.push(
+                        format!("members.{}.replacements", reviewed.member_id),
+                        "We cannot work out this food's nutrition",
+                    );
+                    return Err(errors.into());
+                }
+                let record = ConsumptionRecord {
+                    id: Default::default(),
+                    member_id: reviewed.member_id,
+                    item: replacement.item,
+                    recorded_by: Some(input.actor_id),
+                    meal_plan_entry_id: Some(entry.id),
+                    meal_plan_component_id: None,
+                    slot: entry.slot,
+                    amount: replacement.amount,
+                    consumed_on: input.consumed_on,
+                    consumed_at: input.consumed_at,
+                    nutrition: scaled.nutrition.facts,
+                    quality: scaled.nutrition.quality,
+                    revision: Revision::INITIAL,
+                    created_at: now,
+                    updated_at: now,
+                };
+                if let Some(deduction) = self.record_deduction_for(&catalogue, &record) {
+                    deductions.push(deduction);
+                }
+                records.push(record);
             }
         }
 
@@ -1413,8 +1473,12 @@ impl MealPlanService {
                     .any(|a| a.component_id == component.id && a.status == ParticipantStatus::Eaten)
             });
             if !still_eaten
-                && derive_component_status(component.id, &entry.participants, &entry.guest_groups)
-                    == MealPlanStatus::Planned
+                && derive_component_status(
+                    component.id,
+                    &entry.participants,
+                    &entry.guest_groups,
+                    Assumption::NONE,
+                ) == MealPlanStatus::Planned
             {
                 component.snapshot = None;
             }
@@ -1491,6 +1555,39 @@ impl MealPlanService {
         )
     }
 
+    fn record_deduction_for(
+        &self,
+        catalogue: &ItemCatalogue,
+        record: &ConsumptionRecord,
+    ) -> Option<StockDeduction> {
+        let MealItemRef::Product { product_id } = record.item else {
+            return None;
+        };
+        let product = catalogue.products.get(&product_id)?;
+        let label = product.name.clone();
+        record_deduction(record, product, label)
+    }
+
+    async fn validate_replacement_items(&self, items: &[MealItemRef]) -> Result<()> {
+        for item in items {
+            match *item {
+                MealItemRef::Product { product_id } => {
+                    self.products
+                        .get(product_id)
+                        .await?
+                        .ok_or_else(|| CoreError::not_found(PRODUCT, product_id))?;
+                }
+                MealItemRef::Recipe { recipe_id } => {
+                    self.recipes
+                        .get(recipe_id)
+                        .await?
+                        .ok_or_else(|| CoreError::not_found(RECIPE, recipe_id))?;
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn component_release(
         &self,
         catalogue: &ItemCatalogue,
@@ -1546,6 +1643,7 @@ impl MealPlanService {
             }
         }
 
+        let rules = self.assumption_rules().await?;
         let mut presented_by_date: BTreeMap<Date, Vec<MealPlanEntryView>> = BTreeMap::new();
         let mut items_by_slot: HashMap<(Date, MealSlot), Vec<(MealItemOrder, MealItem)>> =
             HashMap::new();
@@ -1555,7 +1653,9 @@ impl MealPlanService {
                 .map(Vec::as_slice)
                 .unwrap_or(&[]);
             let date = entry.planned_on;
-            let view = self.present(entry, linked, Some(member_id)).await?;
+            let view = self
+                .present_with(&rules, entry, linked, Some(member_id))
+                .await?;
             for (item_date, order, item) in items_for_entry(&view) {
                 let bucket = (item_date, view.entry.slot);
                 items_by_slot.entry(bucket).or_default().push((order, item));
@@ -1644,12 +1744,69 @@ impl MealPlanService {
     pub async fn planner_entries(&self, week_start: Date) -> Result<Vec<MealPlanEntryView>> {
         let week_end = week_start + Duration::days(6);
         let entries = self.plans.list_all(week_start, week_end).await?;
+        let rules = self.assumption_rules().await?;
         let mut views = Vec::with_capacity(entries.len());
         for entry in entries {
             let records = self.records_for_entry(entry.id).await?;
-            views.push(self.present(entry, &records, None).await?);
+            views.push(self.present_with(&rules, entry, &records, None).await?);
         }
         Ok(views)
+    }
+
+    pub async fn needs_review(
+        &self,
+        member_id: HouseholdMemberId,
+        include_household: bool,
+    ) -> Result<NeedsReview> {
+        let rules = self.assumption_rules().await?;
+        let today = rules.now.date();
+        let from = today - Duration::days(REVIEW_LOOKBACK_DAYS);
+
+        let mut personal = Vec::new();
+        for entry in self
+            .plans
+            .list(&MealPlanQuery {
+                member_id,
+                from,
+                to: today,
+                include_participating: true,
+            })
+            .await?
+        {
+            let records = self.records_for_entry(entry.id).await?;
+            let view = self
+                .present_with(&rules, entry, &records, Some(member_id))
+                .await?;
+            if view.subject_status == MealPlanStatus::Assumed {
+                personal.push(view);
+            }
+        }
+
+        let mut household = Vec::new();
+        if include_household {
+            for entry in self
+                .plans
+                .list_all(from, today)
+                .await?
+                .into_iter()
+                .filter(|entry| entry.scope == MealPlanScope::Household)
+            {
+                let records = self.records_for_entry(entry.id).await?;
+                let view = self.present_with(&rules, entry, &records, None).await?;
+                if view.status == MealPlanStatus::Assumed
+                    || (view.status == MealPlanStatus::PartiallyResolved && view.assumption.assumed)
+                {
+                    household.push(view);
+                }
+            }
+        }
+
+        personal.sort_by_key(|view| (view.entry.planned_on, view.entry.slot.order()));
+        household.sort_by_key(|view| (view.entry.planned_on, view.entry.slot.order()));
+        Ok(NeedsReview {
+            personal,
+            household,
+        })
     }
 
     async fn get_entry(&self, id: MealPlanEntryId) -> Result<MealPlanEntry> {
@@ -1792,9 +1949,22 @@ impl MealPlanService {
         records: &[ConsumptionRecord],
         requested_subject: Option<HouseholdMemberId>,
     ) -> Result<MealPlanEntryView> {
+        let rules = self.assumption_rules().await?;
+        self.present_with(&rules, entry, records, requested_subject)
+            .await
+    }
+
+    async fn present_with(
+        &self,
+        rules: &AssumptionRules,
+        entry: MealPlanEntry,
+        records: &[ConsumptionRecord],
+        requested_subject: Option<HouseholdMemberId>,
+    ) -> Result<MealPlanEntryView> {
         let subject = requested_subject
             .or(entry.member_id)
             .or_else(|| entry.participants.first().map(|p| p.member_id));
+        let assumption = rules.for_entry(&entry);
         let catalogue = self
             .catalogue_for(entry.components.iter().map(|component| component.item))
             .await?;
@@ -1865,9 +2035,9 @@ impl MealPlanService {
                         .allocations
                         .iter()
                         .find(|a| a.component_id == component.id)
-                        .map(|a| participant_status_to_meal(a.status))
+                        .map(|a| participant_status_to_meal(a.status, assumption))
                 })
-                .unwrap_or_else(|| entry.component_status(component.id));
+                .unwrap_or_else(|| entry.component_status(component.id, assumption));
 
             components.push(MealPlanComponentView {
                 component: component.clone(),
@@ -1876,7 +2046,7 @@ impl MealPlanService {
                 quality,
                 consumption_record: subject_record,
                 preparation,
-                status: entry.component_status(component.id),
+                status: entry.component_status(component.id, assumption),
                 subject_status,
             });
         }
@@ -1901,7 +2071,7 @@ impl MealPlanService {
             participant_views.push(MealParticipantView {
                 member_id: participant.member_id,
                 display_name,
-                status: derive_participant_status(participant),
+                status: derive_participant_status(participant, assumption),
                 allocations: participant.allocations.clone(),
                 nutrition: summary(participant_records.into_iter()),
             });
@@ -1910,7 +2080,7 @@ impl MealPlanService {
         let planned = summary_components(
             components
                 .iter()
-                .filter(|component| component.subject_status == MealPlanStatus::Planned),
+                .filter(|component| component.subject_status.is_unresolved()),
         );
         let subject_records: Vec<&ConsumptionRecord> = subject
             .map(|member| {
@@ -1926,6 +2096,12 @@ impl MealPlanService {
             Some(summary(subject_records.into_iter()))
         };
 
+        let status = entry.status(assumption);
+        let subject_status = subject
+            .and_then(|member| entry.participant_for(member))
+            .map(|participant| derive_participant_status(participant, assumption))
+            .unwrap_or(status);
+
         Ok(MealPlanEntryView {
             entry,
             subject_member_id: subject,
@@ -1934,6 +2110,18 @@ impl MealPlanService {
             planned,
             actual,
             needs_attention,
+            assumption,
+            status,
+            subject_status,
+        })
+    }
+
+    async fn assumption_rules(&self) -> Result<AssumptionRules> {
+        let settings = self.settings.get().await?;
+        Ok(AssumptionRules {
+            now: self.clock.now(),
+            meal_times: settings.meal_times,
+            enabled: settings.assume_eaten_when_time_passes,
         })
     }
 
@@ -2150,9 +2338,15 @@ fn sync_allocations(
     }
 }
 
-fn participant_status_to_meal(status: ParticipantStatus) -> MealPlanStatus {
+fn participant_status_to_meal(status: ParticipantStatus, assumption: Assumption) -> MealPlanStatus {
     match status {
-        ParticipantStatus::Planned => MealPlanStatus::Planned,
+        ParticipantStatus::Planned => {
+            if assumption.assumed {
+                MealPlanStatus::Assumed
+            } else {
+                MealPlanStatus::Planned
+            }
+        }
         ParticipantStatus::Eaten => MealPlanStatus::Eaten,
         ParticipantStatus::NotEaten => MealPlanStatus::NotEaten,
     }
@@ -2295,9 +2489,21 @@ fn actual_components_for_member(
             .filter(|allocation| pending.contains(&allocation.component_id))
             .map(|allocation| (allocation.component_id, allocation.allocated))
             .collect()),
-        ReviewedMealOutcome::Changed(components) => {
-            validate_reviewed_components(components, entry, pending)
+        ReviewedMealOutcome::Changed(changed) => {
+            if changed.is_empty() {
+                return Err(CoreError::conflict(
+                    "Choose what was eaten, or record the meal as not eaten.",
+                ));
+            }
+            validate_reviewed_components(&changed.components, entry, pending)
         }
+    }
+}
+
+fn replacements_for(outcome: &ReviewedMealOutcome) -> &[ReplacementItem] {
+    match outcome {
+        ReviewedMealOutcome::Changed(changed) => &changed.replacements,
+        _ => &[],
     }
 }
 
@@ -2395,8 +2601,13 @@ fn build_guest_results(
                     .map(|allocation| (allocation.component_id, allocation.allocated))
                     .collect(),
                 ReviewedMealOutcome::NotEaten => HashMap::new(),
-                ReviewedMealOutcome::Changed(components) => {
-                    validate_reviewed_components(components, entry, &pending)?
+                ReviewedMealOutcome::Changed(changed) => {
+                    if !changed.replacements.is_empty() {
+                        return Err(CoreError::conflict(
+                            "Guests cannot have different food recorded against them.",
+                        ));
+                    }
+                    validate_reviewed_components(&changed.components, entry, &pending)?
                 }
             };
             results.push(MealGuestGroup {
@@ -2662,7 +2873,7 @@ fn ensure_due(clock: &dyn Clock, planned_on: Date) -> Result<()> {
 }
 
 fn require_planned(entry: &MealPlanEntry) -> Result<()> {
-    if entry.status() == MealPlanStatus::Planned {
+    if entry.status(Assumption::NONE) == MealPlanStatus::Planned {
         Ok(())
     } else {
         Err(CoreError::conflict(
@@ -2672,8 +2883,10 @@ fn require_planned(entry: &MealPlanEntry) -> Result<()> {
 }
 
 fn require_editable(entry: &MealPlanEntry) -> Result<()> {
-    match entry.status() {
-        MealPlanStatus::Planned | MealPlanStatus::PartiallyResolved => Ok(()),
+    match entry.status(Assumption::NONE) {
+        MealPlanStatus::Planned | MealPlanStatus::Assumed | MealPlanStatus::PartiallyResolved => {
+            Ok(())
+        }
         MealPlanStatus::Eaten | MealPlanStatus::NotEaten => Err(CoreError::conflict(
             "This meal is fully resolved and cannot be changed.",
         )),
@@ -2879,7 +3092,7 @@ fn summary<'a>(records: impl Iterator<Item = &'a ConsumptionRecord>) -> Nutritio
 fn summary_from_views<'a>(views: impl Iterator<Item = &'a MealPlanEntryView>) -> NutritionSummary {
     let components: Vec<_> = views
         .flat_map(|view| view.components.iter())
-        .filter(|component| component.subject_status == MealPlanStatus::Planned)
+        .filter(|component| component.subject_status.is_unresolved())
         .collect();
     NutritionSummary {
         nutrition: sum_nutrition(components.iter().map(|component| &component.nutrition)),

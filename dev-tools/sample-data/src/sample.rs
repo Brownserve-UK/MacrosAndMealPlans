@@ -4,10 +4,10 @@ use std::str::FromStr;
 use anyhow::{Context, bail};
 use mmp_core::CoreError;
 use mmp_core::domain::{
-    AccessScope, ActualMealPlanComponent, ConfirmMealPlanComponent, ConfirmMealPlanEntry,
-    ConsumedAmount, ConsumptionRecordId, HouseholdMember, HouseholdMemberId, IngredientId,
-    MealCategory, MealItemRef, MealPlanEntryId, MealPlanScope, MealPlanStatus, MealSlot,
-    NewConsumptionRecord, NewHouseholdMember, NewMealGuestAllocation, NewMealGuestGroup,
+    AccessScope, ActualMealPlanComponent, Assumption, ConfirmMealPlanComponent,
+    ConfirmMealPlanEntry, ConsumedAmount, ConsumptionRecordId, HouseholdMember, HouseholdMemberId,
+    IngredientId, MealCategory, MealItemRef, MealPlanEntryId, MealPlanScope, MealPlanStatus,
+    MealSlot, NewConsumptionRecord, NewHouseholdMember, NewMealGuestAllocation, NewMealGuestGroup,
     NewMealParticipant, NewMealParticipantAllocation, NewMealPlanComponent, NewMealPlanEntry,
     NewNutritionTarget, NewProduct, NewRecipe, NewRecipeComponent, NewRecipeInstruction,
     NewStockItem, NewUser, NutritionFacts, NutritionGoals, OutcomeActor, Patch, ProductId,
@@ -554,7 +554,91 @@ impl Loader<'_> {
 
         self.load_previous_partial_week().await?;
         self.load_current_partial_week().await?;
-        self.load_household_meals().await
+        self.load_household_meals().await?;
+        self.load_assumed_meals().await
+    }
+
+    async fn load_assumed_meals(&mut self) -> anyhow::Result<()> {
+        let manager = HouseholdMemberId::from_uuid(sample_uuid("household-member", "manager"));
+        let basic = HouseholdMemberId::from_uuid(sample_uuid("household-member", "basic-user"));
+
+        self.ensure_timed_snack(
+            self.today - Duration::days(3),
+            "assumed-recent",
+            Time::from_hms(15, 30, 0).unwrap(),
+            "banana",
+            measured(1, Unit::Item),
+        )
+        .await?;
+
+        self.ensure_timed_snack(
+            self.today - Duration::days(10),
+            "assumed-old",
+            Time::from_hms(15, 30, 0).unwrap(),
+            "banana",
+            measured(1, Unit::Item),
+        )
+        .await?;
+
+        self.ensure_household_meal_at(
+            self.today - Duration::days(2),
+            MealSlot::Dinner,
+            Some("assumed"),
+            Time::from_hms(18, 0, 0).ok(),
+            "chicken-and-rice",
+            servings(2),
+            &[(manager, 1), (basic, 1)],
+            0,
+        )
+        .await?;
+
+        self.ensure_household_meal_at(
+            self.today - Duration::days(5),
+            MealSlot::Dinner,
+            Some("assumed-partly"),
+            Time::from_hms(18, 0, 0).ok(),
+            "chicken-and-rice",
+            servings(2),
+            &[(manager, 1), (basic, 1)],
+            0,
+        )
+        .await?;
+        self.confirm_one_participant(self.today - Duration::days(5), "assumed-partly", manager)
+            .await
+    }
+
+    async fn confirm_one_participant(
+        &mut self,
+        date: Date,
+        key: &str,
+        member_id: HouseholdMemberId,
+    ) -> anyhow::Result<()> {
+        let id = MealPlanEntryId::from_uuid(sample_uuid(
+            "meal-plan-entry",
+            &format!("{date}:{}:household:{key}", MealSlot::Dinner),
+        ));
+        let view = self.state.meal_plan.get(id).await?;
+        if view.entry.status(Assumption::NONE) != MealPlanStatus::Planned {
+            return Ok(());
+        }
+        self.state
+            .meal_plan
+            .review_outcomes_unchecked(
+                id,
+                view.entry.revision,
+                mmp_core::domain::ReviewMealOutcomes {
+                    consumed_on: date,
+                    consumed_at: None,
+                    members: vec![mmp_core::domain::ReviewedMemberOutcome {
+                        member_id,
+                        outcome: mmp_core::domain::ReviewedMealOutcome::AsPlanned,
+                    }],
+                    guests: Vec::new(),
+                    actor_id: self.actor.id,
+                },
+            )
+            .await?;
+        Ok(())
     }
 
     async fn load_household_meals(&mut self) -> anyhow::Result<()> {
@@ -993,10 +1077,10 @@ impl Loader<'_> {
             Outcome::Eaten { .. } => MealPlanStatus::Eaten,
             Outcome::NotEaten => MealPlanStatus::NotEaten,
         };
-        if view.entry.status() == desired {
+        if view.entry.status(Assumption::NONE) == desired {
             return Ok(());
         }
-        if view.entry.status() != MealPlanStatus::Planned {
+        if view.entry.status(Assumption::NONE) != MealPlanStatus::Planned {
             view = self
                 .state
                 .meal_plan

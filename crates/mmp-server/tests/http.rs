@@ -1916,6 +1916,57 @@ async fn a_household_manager_can_change_a_meal_time() {
 }
 
 #[tokio::test]
+async fn the_assumed_eaten_setting_round_trips() {
+    let app = app().await;
+    let (_, body, _) = send(&app, Call::new("GET", "/api/v1/household/meal-times")).await;
+    let before = body["assume_eaten_when_time_passes"].as_bool().unwrap();
+
+    let (status, body, _) = send(
+        &app,
+        Call::new("PUT", "/api/v1/household/meal-times")
+            .if_match(1)
+            .body(json!({ "assume_eaten_when_time_passes": !before })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["assume_eaten_when_time_passes"], json!(!before));
+
+    let (_, reread, _) = send(&app, Call::new("GET", "/api/v1/household/meal-times")).await;
+    assert_eq!(reread["assume_eaten_when_time_passes"], json!(!before));
+}
+
+#[tokio::test]
+async fn needs_review_only_shows_the_household_section_with_household_write() {
+    let app = app().await;
+    let member = create_member(&app, "Sam").await;
+    let user = create_user(&app, "sam", &["basic_user"]).await;
+    send(
+        &app,
+        Call::new(
+            "PUT",
+            format!("/api/v1/members/{}/account", member["id"].as_str().unwrap()),
+        )
+        .if_match(member["revision"].as_i64().unwrap())
+        .body(json!({"user_id": user["id"]})),
+    )
+    .await;
+
+    let (status, body, _) = send(
+        &app,
+        Call::new("GET", "/api/v1/meal-plan/needs-review").signed_in_as("sam"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body["personal"].is_array());
+    assert_eq!(body["household"], json!([]));
+
+    // The bootstrap admin holds household:write, so it gets the household section too.
+    let (status, body, _) = send(&app, Call::new("GET", "/api/v1/meal-plan/needs-review")).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body["household"].is_array());
+}
+
+#[tokio::test]
 async fn a_stale_meal_times_revision_conflicts() {
     let app = app().await;
     let (status, _, _) = send(

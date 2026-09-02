@@ -221,6 +221,7 @@ impl mmp_core::ports::HouseholdSettingsRepository for NoopHouseholdSettings {
             },
             missing_stock_interpretation: mmp_core::domain::MissingStockInterpretation::Unknown,
             default_all_members_participate: true,
+            assume_eaten_when_time_passes: true,
             revision: mmp_core::domain::Revision::INITIAL,
             created_at: time::OffsetDateTime::UNIX_EPOCH,
             updated_at: time::OffsetDateTime::UNIX_EPOCH,

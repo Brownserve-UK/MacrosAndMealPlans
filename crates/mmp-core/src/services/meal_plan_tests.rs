@@ -6,12 +6,13 @@ use time::macros::{date, datetime, time};
 
 use super::*;
 use crate::domain::{
-    ActualMealPlanComponent, ConfirmMealPlanComponent, ConsumedAmount, HouseholdMember,
-    HouseholdMemberId, MealItemRef, MealPlanEntryPatch, MealPlanScope, MealPlanStatus, MealSlot,
-    NewConsumptionRecord, NewMealPlanComponent, NewMealPlanEntry, NewNutritionTarget,
-    NutritionFacts, NutritionGoals, NutritionQuality, OutcomeActor, Product, ProductId, Provenance,
-    Quantity, Recipe, RecipeComponent, RecipeId, RecipeVisibility, Revision, StockItem, StockLevel,
-    StorageLocation, Unit, UserId,
+    ActualMealPlanComponent, ChangedMealOutcome, ConfirmMealPlanComponent, ConsumedAmount,
+    HouseholdMember, HouseholdMemberId, MealItemRef, MealPlanEntryPatch, MealPlanScope,
+    MealPlanStatus, MealSlot, NewConsumptionRecord, NewMealPlanComponent, NewMealPlanEntry,
+    NewNutritionTarget, NutritionFacts, NutritionGoals, NutritionQuality, OutcomeActor, Product,
+    ProductId, Provenance, Quantity, Recipe, RecipeComponent, RecipeId, RecipeVisibility,
+    ReplacementItem, ReviewedMemberOutcome, Revision, StockItem, StockLevel, StorageLocation, Unit,
+    UserId,
 };
 use crate::ports::{FixedClock, StockRepository};
 use crate::services::{DiaryService, NutritionTargetService};
@@ -497,7 +498,7 @@ async fn confirming_eaten_creates_one_linked_diary_record_per_component() {
         .await
         .unwrap();
 
-    assert_eq!(confirmed.entry.status(), MealPlanStatus::Eaten);
+    assert_eq!(confirmed.status, MealPlanStatus::Eaten);
     assert_eq!(h.records.count(), 2);
     assert!(confirmed.components.iter().all(|component| {
         component.consumption_record.as_ref().is_some_and(|record| {
@@ -544,7 +545,7 @@ async fn confirming_one_component_does_not_resolve_its_siblings() {
         .await
         .unwrap();
 
-    assert_eq!(updated.entry.status(), MealPlanStatus::PartiallyResolved);
+    assert_eq!(updated.status, MealPlanStatus::PartiallyResolved);
     assert_eq!(updated.components[0].status, MealPlanStatus::Planned);
     assert_eq!(updated.components[1].status, MealPlanStatus::Planned);
     assert_eq!(updated.components[2].status, MealPlanStatus::Eaten);
@@ -772,7 +773,7 @@ async fn marking_remaining_eaten_skips_an_item_marked_not_eaten() {
         .await
         .unwrap();
 
-    assert_eq!(resolved.entry.status(), MealPlanStatus::PartiallyResolved);
+    assert_eq!(resolved.status, MealPlanStatus::PartiallyResolved);
     assert_eq!(resolved.components[0].status, MealPlanStatus::NotEaten);
     assert!(
         resolved.components[1..]
@@ -994,7 +995,7 @@ async fn reopening_an_eaten_entry_removes_its_diary_records() {
         .await
         .unwrap();
 
-    assert_eq!(reopened.entry.status(), MealPlanStatus::Planned);
+    assert_eq!(reopened.status, MealPlanStatus::Planned);
     assert_eq!(h.records.count(), 0);
     assert!(reopened.components[0].consumption_record.is_none());
 }
@@ -1025,7 +1026,7 @@ async fn reopening_a_not_eaten_entry_returns_it_to_planned() {
         .await
         .unwrap();
 
-    assert_eq!(reopened.entry.status(), MealPlanStatus::Planned);
+    assert_eq!(reopened.status, MealPlanStatus::Planned);
     let week = h
         .service
         .week(h.member_id, date!(2026 - 08 - 24))
@@ -1236,7 +1237,7 @@ async fn a_reopened_entry_can_be_edited_and_confirmed_again() {
         .await
         .unwrap();
 
-    assert_eq!(reconfirmed.entry.status(), MealPlanStatus::Eaten);
+    assert_eq!(reconfirmed.status, MealPlanStatus::Eaten);
     assert_eq!(h.records.count(), 1);
 }
 
@@ -1848,7 +1849,7 @@ async fn a_participant_sees_only_their_own_share_and_outcome() {
         .unwrap();
 
     let after = h.service.get(with_taylor.entry.id).await.unwrap();
-    assert_eq!(after.entry.status(), MealPlanStatus::PartiallyResolved);
+    assert_eq!(after.status, MealPlanStatus::PartiallyResolved);
     let taylor_participant = after
         .participants
         .iter()
@@ -2506,7 +2507,7 @@ async fn one_member_resolving_does_not_freeze_the_meal_for_a_manager() {
         .unwrap();
 
     let current = h.service.get(household.entry.id).await.unwrap();
-    assert_eq!(current.entry.status(), MealPlanStatus::PartiallyResolved);
+    assert_eq!(current.status, MealPlanStatus::PartiallyResolved);
 
     // The manager can still add a second component while one member has eaten.
     let updated = h
@@ -2531,4 +2532,374 @@ async fn one_member_resolving_does_not_freeze_the_meal_for_a_manager() {
         .unwrap();
     assert_eq!(updated.components.len(), 2);
     assert!(morgan != h.member_id);
+}
+
+async fn planned_at(
+    h: &Harness,
+    on: time::Date,
+    at: Option<time::Time>,
+    slot: MealSlot,
+    components: Vec<NewMealPlanComponent>,
+) -> MealPlanEntryView {
+    h.service
+        .create_unchecked(NewMealPlanEntry {
+            id: None,
+            scope: MealPlanScope::Member,
+            member_id: Some(h.member_id),
+            planned_on: on,
+            planned_time: at,
+            slot,
+            portioning: Portioning::Equal,
+            components,
+            participants: None,
+            guest_groups: Vec::new(),
+            actor_id: h.actor_id,
+        })
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn a_meal_whose_time_has_passed_reads_as_assumed() {
+    let h = harness();
+    h.settings.set_assume_eaten_when_time_passes(true);
+    let food = product("Porridge", 150);
+    h.products.seed(food.clone());
+
+    let entry = planned_at(
+        &h,
+        date!(2026 - 08 - 24),
+        Some(time!(08:00)),
+        MealSlot::Breakfast,
+        vec![measured(food.id, 100)],
+    )
+    .await;
+
+    let view = h.service.get(entry.entry.id).await.unwrap();
+    assert_eq!(view.status, MealPlanStatus::Assumed);
+    assert_eq!(view.subject_status, MealPlanStatus::Assumed);
+    assert!(
+        view.components
+            .iter()
+            .all(|component| component.subject_status == MealPlanStatus::Assumed)
+    );
+}
+
+#[tokio::test]
+async fn a_meal_still_to_come_stays_planned() {
+    let h = harness();
+    h.settings.set_assume_eaten_when_time_passes(true);
+    let food = product("Stew", 150);
+    h.products.seed(food.clone());
+
+    let entry = planned_at(
+        &h,
+        date!(2026 - 08 - 24),
+        Some(time!(18:00)),
+        MealSlot::Dinner,
+        vec![measured(food.id, 100)],
+    )
+    .await;
+
+    let view = h.service.get(entry.entry.id).await.unwrap();
+    assert_eq!(view.status, MealPlanStatus::Planned);
+}
+
+#[tokio::test]
+async fn turning_the_household_setting_off_returns_everything_to_planned() {
+    let h = harness();
+    h.settings.set_assume_eaten_when_time_passes(true);
+    let food = product("Porridge", 150);
+    h.products.seed(food.clone());
+
+    let entry = planned_at(
+        &h,
+        date!(2026 - 08 - 24),
+        Some(time!(08:00)),
+        MealSlot::Breakfast,
+        vec![measured(food.id, 100)],
+    )
+    .await;
+    assert_eq!(
+        h.service.get(entry.entry.id).await.unwrap().status,
+        MealPlanStatus::Assumed
+    );
+
+    h.settings.set_assume_eaten_when_time_passes(false);
+    assert_eq!(
+        h.service.get(entry.entry.id).await.unwrap().status,
+        MealPlanStatus::Planned
+    );
+}
+
+#[tokio::test]
+async fn an_assumed_meal_can_still_be_edited() {
+    let h = harness();
+    h.settings.set_assume_eaten_when_time_passes(true);
+    let food = product("Porridge", 150);
+    let extra = product("Honey", 300);
+    h.products.seed(food.clone());
+    h.products.seed(extra.clone());
+
+    let entry = planned_at(
+        &h,
+        date!(2026 - 08 - 24),
+        Some(time!(08:00)),
+        MealSlot::Breakfast,
+        vec![measured(food.id, 100)],
+    )
+    .await;
+    assert_eq!(
+        h.service.get(entry.entry.id).await.unwrap().status,
+        MealPlanStatus::Assumed
+    );
+
+    let updated = h
+        .service
+        .update(
+            entry.entry.id,
+            entry.entry.revision,
+            MealPlanEntryPatch {
+                components: Some(vec![measured(food.id, 100), measured(extra.id, 20)]),
+                ..Default::default()
+            },
+            h.actor_id,
+        )
+        .await
+        .unwrap();
+    assert_eq!(updated.components.len(), 2);
+}
+
+#[tokio::test]
+async fn confirming_an_assumed_meal_records_it_as_eaten() {
+    let h = harness();
+    h.settings.set_assume_eaten_when_time_passes(true);
+    let food = product("Porridge", 150);
+    h.products.seed(food.clone());
+
+    let entry = planned_at(
+        &h,
+        date!(2026 - 08 - 24),
+        Some(time!(08:00)),
+        MealSlot::Breakfast,
+        vec![measured(food.id, 100)],
+    )
+    .await;
+
+    let confirmed = h
+        .service
+        .mark_eaten(
+            entry.entry.id,
+            entry.entry.revision,
+            ConfirmMealPlanEntry {
+                consumed_on: date!(2026 - 08 - 24),
+                consumed_at: None,
+                components: entry
+                    .components
+                    .iter()
+                    .map(|component| ActualMealPlanComponent {
+                        component_id: component.component.id,
+                        amount: component.component.amount,
+                    })
+                    .collect(),
+                actor_id: h.actor_id,
+                subject_member_id: None,
+            },
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(confirmed.status, MealPlanStatus::Eaten);
+    assert_eq!(h.records.count(), 1);
+}
+
+#[tokio::test]
+async fn rejecting_an_assumed_meal_creates_no_record() {
+    let h = harness();
+    h.settings.set_assume_eaten_when_time_passes(true);
+    let food = product("Porridge", 150);
+    h.products.seed(food.clone());
+
+    let entry = planned_at(
+        &h,
+        date!(2026 - 08 - 24),
+        Some(time!(08:00)),
+        MealSlot::Breakfast,
+        vec![measured(food.id, 100)],
+    )
+    .await;
+
+    let rejected = h
+        .service
+        .mark_not_eaten(
+            entry.entry.id,
+            entry.entry.revision,
+            OutcomeActor::own(h.actor_id),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(rejected.status, MealPlanStatus::NotEaten);
+    assert_eq!(h.records.count(), 0);
+}
+
+#[tokio::test]
+async fn recording_different_food_links_it_to_the_meal_it_replaced() {
+    let h = harness();
+    h.settings.set_assume_eaten_when_time_passes(true);
+    let planned_food = product("Porridge", 150);
+    let actual_food = product("Bacon Sandwich", 450);
+    h.products.seed(planned_food.clone());
+    h.products.seed(actual_food.clone());
+
+    let entry = planned_at(
+        &h,
+        date!(2026 - 08 - 24),
+        Some(time!(08:00)),
+        MealSlot::Breakfast,
+        vec![measured(planned_food.id, 100)],
+    )
+    .await;
+
+    let reviewed = h
+        .service
+        .review_outcomes(
+            entry.entry.id,
+            entry.entry.revision,
+            ReviewMealOutcomes {
+                consumed_on: date!(2026 - 08 - 24),
+                consumed_at: None,
+                members: vec![ReviewedMemberOutcome {
+                    member_id: h.member_id,
+                    outcome: ReviewedMealOutcome::Changed(ChangedMealOutcome {
+                        components: Vec::new(),
+                        replacements: vec![ReplacementItem {
+                            item: MealItemRef::product(actual_food.id),
+                            amount: ConsumedAmount::Measure(Quantity::new(
+                                Decimal::new(200, 0),
+                                Unit::Gram,
+                            )),
+                        }],
+                    }),
+                }],
+                guests: Vec::new(),
+                actor_id: h.actor_id,
+            },
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(h.records.count(), 1);
+    let records = h
+        .records
+        .list_for_meal_plan_entry(entry.entry.id)
+        .await
+        .unwrap();
+    assert_eq!(records.len(), 1);
+    let record = &records[0];
+    assert_eq!(record.item, MealItemRef::product(actual_food.id));
+    assert_eq!(record.meal_plan_entry_id, Some(entry.entry.id));
+    assert_eq!(record.meal_plan_component_id, None);
+
+    assert_eq!(reviewed.value.status, MealPlanStatus::NotEaten);
+    assert!(
+        reviewed
+            .value
+            .entry
+            .participants
+            .iter()
+            .flat_map(|participant| participant.allocations.iter())
+            .all(|allocation| allocation.status == ParticipantStatus::NotEaten)
+    );
+}
+
+#[tokio::test]
+async fn a_changed_outcome_with_nothing_in_it_is_rejected() {
+    let h = harness();
+    let food = product("Porridge", 150);
+    h.products.seed(food.clone());
+
+    let entry = planned_at(
+        &h,
+        date!(2026 - 08 - 24),
+        Some(time!(08:00)),
+        MealSlot::Breakfast,
+        vec![measured(food.id, 100)],
+    )
+    .await;
+
+    let error = h
+        .service
+        .review_outcomes(
+            entry.entry.id,
+            entry.entry.revision,
+            ReviewMealOutcomes {
+                consumed_on: date!(2026 - 08 - 24),
+                consumed_at: None,
+                members: vec![ReviewedMemberOutcome {
+                    member_id: h.member_id,
+                    outcome: ReviewedMealOutcome::Changed(ChangedMealOutcome::default()),
+                }],
+                guests: Vec::new(),
+                actor_id: h.actor_id,
+            },
+        )
+        .await;
+    assert!(error.is_err());
+}
+
+#[tokio::test]
+async fn needs_review_lists_unresolved_assumptions_oldest_first() {
+    let h = harness();
+    h.settings.set_assume_eaten_when_time_passes(true);
+    let food = product("Porridge", 150);
+    h.products.seed(food.clone());
+
+    let older = planned_at(
+        &h,
+        date!(2026 - 08 - 20),
+        Some(time!(08:00)),
+        MealSlot::Breakfast,
+        vec![measured(food.id, 100)],
+    )
+    .await;
+    let newer = planned_at(
+        &h,
+        date!(2026 - 08 - 22),
+        Some(time!(08:00)),
+        MealSlot::Breakfast,
+        vec![measured(food.id, 100)],
+    )
+    .await;
+    planned_at(
+        &h,
+        date!(2026 - 08 - 24),
+        Some(time!(18:00)),
+        MealSlot::Dinner,
+        vec![measured(food.id, 100)],
+    )
+    .await;
+
+    let review = h.service.needs_review(h.member_id, false).await.unwrap();
+    let ids: Vec<_> = review.personal.iter().map(|view| view.entry.id).collect();
+    assert_eq!(ids, vec![older.entry.id, newer.entry.id]);
+    assert!(review.household.is_empty());
+}
+
+#[tokio::test]
+async fn needs_review_is_empty_when_assumptions_are_switched_off() {
+    let h = harness();
+    let food = product("Porridge", 150);
+    h.products.seed(food.clone());
+    planned_at(
+        &h,
+        date!(2026 - 08 - 20),
+        Some(time!(08:00)),
+        MealSlot::Breakfast,
+        vec![measured(food.id, 100)],
+    )
+    .await;
+
+    let review = h.service.needs_review(h.member_id, true).await.unwrap();
+    assert!(review.personal.is_empty());
 }

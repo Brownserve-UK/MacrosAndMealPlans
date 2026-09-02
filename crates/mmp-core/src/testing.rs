@@ -1254,6 +1254,7 @@ impl InMemoryHouseholdSettingsRepository {
                 },
                 missing_stock_interpretation: MissingStockInterpretation::Unknown,
                 default_all_members_participate: false,
+                assume_eaten_when_time_passes: false,
                 revision: Revision::INITIAL,
                 created_at: time::OffsetDateTime::UNIX_EPOCH,
                 updated_at: time::OffsetDateTime::UNIX_EPOCH,
@@ -1265,6 +1266,14 @@ impl InMemoryHouseholdSettingsRepository {
 impl InMemoryHouseholdSettingsRepository {
     pub fn set_default_all_members_participate(&self, value: bool) {
         self.row.lock().unwrap().default_all_members_participate = value;
+    }
+
+    pub fn set_assume_eaten_when_time_passes(&self, value: bool) {
+        self.row.lock().unwrap().assume_eaten_when_time_passes = value;
+    }
+
+    pub fn set_meal_times(&self, meal_times: MealTimes) {
+        self.row.lock().unwrap().meal_times = meal_times;
     }
 }
 

@@ -1,14 +1,15 @@
 use mmp_core::domain::{
-    ActualMealPlanComponent, ComponentPreparation, ConfirmMealPlanComponent, ConfirmMealPlanEntry,
-    MealGuestGroup, MealItemRef, MealOptOut, MealParticipantAllocation, MealPlanEntryPatch,
-    MealPlanScope, MealPlanStatus, MealSlot, NewMealGuestAllocation, NewMealGuestGroup,
-    NewMealParticipant, NewMealParticipantAllocation, NewMealPlanComponent, NewMealPlanEntry,
-    ParticipantStatus, Patch, Portioning, ReviewMealOutcomes, ReviewedGuestOutcome,
-    ReviewedMealOutcome, ReviewedMemberOutcome, SetMealParticipants, SlotAttendance,
+    ActualMealPlanComponent, ChangedMealOutcome, ComponentPreparation, ConfirmMealPlanComponent,
+    ConfirmMealPlanEntry, MealGuestGroup, MealItemRef, MealOptOut, MealParticipantAllocation,
+    MealPlanEntryPatch, MealPlanScope, MealPlanStatus, MealSlot, NewMealGuestAllocation,
+    NewMealGuestGroup, NewMealParticipant, NewMealParticipantAllocation, NewMealPlanComponent,
+    NewMealPlanEntry, ParticipantStatus, Patch, Portioning, ReplacementItem, ReviewMealOutcomes,
+    ReviewedGuestOutcome, ReviewedMealOutcome, ReviewedMemberOutcome, SetMealParticipants,
+    SlotAttendance,
 };
 use mmp_core::services::{
     MealItem, MealItemSource, MealParticipantView, MealPlanComponentView, MealPlanDay,
-    MealPlanEntryView, MealPlanWeek, MealSlotView, NutritionSummary, StockAffected,
+    MealPlanEntryView, MealPlanWeek, MealSlotView, NeedsReview, NutritionSummary, StockAffected,
 };
 use serde::{Deserialize, Serialize};
 use time::{Date, OffsetDateTime, Time};
@@ -190,9 +191,9 @@ pub struct MealGuestGroupDto {
     pub allocations: Vec<MealParticipantAllocationDto>,
 }
 
-impl From<MealGuestGroup> for MealGuestGroupDto {
-    fn from(value: MealGuestGroup) -> Self {
-        let status = mmp_core::domain::derive_guest_status(&value);
+impl MealGuestGroupDto {
+    pub fn build(value: MealGuestGroup, assumption: mmp_core::domain::Assumption) -> Self {
+        let status = mmp_core::domain::derive_guest_status(&value, assumption);
         Self {
             id: value.id.as_uuid(),
             count: value.count,
@@ -260,6 +261,21 @@ impl From<MealPlanComponentView> for MealPlanComponentDto {
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct NeedsReviewDto {
+    pub personal: Vec<MealPlanEntryDto>,
+    pub household: Vec<MealPlanEntryDto>,
+}
+
+impl From<NeedsReview> for NeedsReviewDto {
+    fn from(value: NeedsReview) -> Self {
+        Self {
+            personal: value.personal.into_iter().map(Into::into).collect(),
+            household: value.household.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct MealPlanEntryDto {
     pub id: Uuid,
     pub scope: MealPlanScope,
@@ -311,13 +327,13 @@ impl From<MealPlanEntryView> for MealPlanEntryDto {
                 .guest_groups
                 .iter()
                 .cloned()
-                .map(Into::into)
+                .map(|group| MealGuestGroupDto::build(group, value.assumption))
                 .collect(),
             planned_on: value.entry.planned_on,
             planned_time: value.entry.planned_time,
             slot: value.entry.slot,
             portioning: value.entry.portioning,
-            status: value.entry.status(),
+            status: value.status,
             components: value.components.into_iter().map(Into::into).collect(),
             planned: value.planned.into(),
             actual: value.actual.map(Into::into),
@@ -805,7 +821,16 @@ pub enum ReviewedMealOutcomeRequest {
     NotEaten,
     Changed {
         components: Vec<ActualMealPlanComponentRequest>,
+        #[serde(default)]
+        replacements: Vec<ReplacementItemRequest>,
     },
+}
+
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+pub struct ReplacementItemRequest {
+    #[serde(flatten)]
+    pub item: MealItemRefDto,
+    pub amount: AmountDto,
 }
 
 impl ReviewedMealOutcomeRequest {
@@ -813,15 +838,25 @@ impl ReviewedMealOutcomeRequest {
         match self {
             Self::AsPlanned => ReviewedMealOutcome::AsPlanned,
             Self::NotEaten => ReviewedMealOutcome::NotEaten,
-            Self::Changed { components } => ReviewedMealOutcome::Changed(
-                components
+            Self::Changed {
+                components,
+                replacements,
+            } => ReviewedMealOutcome::Changed(ChangedMealOutcome {
+                components: components
                     .into_iter()
                     .map(|component| ActualMealPlanComponent {
                         component_id: component.component_id.into(),
                         amount: component.amount.into(),
                     })
                     .collect(),
-            ),
+                replacements: replacements
+                    .into_iter()
+                    .map(|replacement| ReplacementItem {
+                        item: replacement.item.into(),
+                        amount: replacement.amount.into(),
+                    })
+                    .collect(),
+            }),
         }
     }
 }

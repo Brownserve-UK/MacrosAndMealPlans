@@ -58,6 +58,7 @@ function statusChip(entry: MealPlanEntry) {
   if (entry.status === 'eaten') return <Chip size="small" color="success" label="Eaten" />;
   if (entry.status === 'not_eaten') return <Chip size="small" label="Not eaten" />;
   if (entry.status === 'partially_resolved') return <Chip size="small" label="Partly recorded" />;
+  if (entry.status === 'assumed') return <Chip size="small" color="warning" variant="outlined" label="Assumed" />;
   return null;
 }
 
@@ -79,7 +80,7 @@ function OwnMealCard({
   const plannedValue = kcal != null
     ? `${itemCount} ${itemCount === 1 ? 'item' : 'items'} · ${Math.round(kcal)} kcal`
     : `${itemCount} ${itemCount === 1 ? 'item' : 'items'}`;
-  const editable = canPlan && entry.status === 'planned';
+  const editable = canPlan && (entry.status === 'planned' || entry.status === 'assumed');
 
   return (
     <MealCard
@@ -118,7 +119,9 @@ function HouseholdHeldCard({
   busy: boolean;
   onOptOut: () => void;
 }) {
-  const canOptOut = !myPortionResolved(entry, memberId) && entry.status === 'planned';
+  const canOptOut =
+    !myPortionResolved(entry, memberId)
+    && (entry.status === 'planned' || entry.status === 'assumed');
   return (
     <MealCard
       header={

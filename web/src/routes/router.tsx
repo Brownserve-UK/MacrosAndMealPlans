@@ -10,6 +10,7 @@ import { MemberPage } from '../features/household/MemberPage';
 import { MealPlanIndexRedirect } from '../features/meal-plan/MealPlanIndexRedirect';
 import { MealPlanPage } from '../features/meal-plan/MealPlanPage';
 import { MyPlannerPage } from '../features/meal-plan/MyPlannerPage';
+import { NeedsReviewPage } from '../features/meal-plan/NeedsReviewPage';
 import { HouseholdPlannerPage } from '../features/meal-plan/HouseholdPlannerPage';
 import { defaultDayFor } from '../features/meal-plan/date';
 import { IngredientPage } from '../features/ingredients/IngredientPage';
@@ -120,6 +121,12 @@ const householdPlannerDayRoute = createRoute({
       </RequirePermission>
     );
   },
+});
+
+const needsReviewRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/needs-review',
+  component: NeedsReviewPage,
 });
 
 const ingredientsRoute = createRoute({
@@ -247,6 +254,7 @@ const routeTree = rootRoute.addChildren([
   householdPlannerIndexRoute,
   householdPlannerWeekRoute,
   householdPlannerDayRoute,
+  needsReviewRoute,
   ingredientsRoute,
   ingredientRoute,
   productsRoute,

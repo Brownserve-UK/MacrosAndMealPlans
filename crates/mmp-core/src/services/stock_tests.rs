@@ -86,12 +86,16 @@ fn grams(value: i64) -> Quantity {
 }
 
 async fn plan_measured(h: &Harness, product_id: ProductId, g: i64) {
+    plan_measured_on(h, product_id, g, date!(2026 - 08 - 25)).await
+}
+
+async fn plan_measured_on(h: &Harness, product_id: ProductId, g: i64, on: time::Date) {
     let now = OffsetDateTime::UNIX_EPOCH;
     let entry = MealPlanEntry {
         id: crate::domain::MealPlanEntryId::new(),
         scope: crate::domain::MealPlanScope::Member,
         member_id: Some(h.member_id),
-        planned_on: date!(2026 - 08 - 25),
+        planned_on: on,
         planned_time: None,
         slot: MealSlot::Dinner,
         portioning: crate::domain::Portioning::Equal,
@@ -382,4 +386,43 @@ async fn updating_a_quantity_bumps_revision_and_records_an_event() {
         .await
         .unwrap();
     assert_eq!(listed.items.len(), 1);
+}
+
+#[tokio::test]
+async fn a_planned_meal_keeps_holding_stock_after_its_time_has_passed() {
+    let h = harness();
+    let p = product();
+    h.products.seed(p.clone());
+    h.service
+        .create(
+            new_item(
+                p.id,
+                StockLevel::Exact {
+                    quantity: grams(1000),
+                },
+            ),
+            h.actor_id,
+            None,
+        )
+        .await
+        .unwrap();
+    plan_measured_on(&h, p.id, 250, date!(2026 - 08 - 20)).await;
+
+    let result = h
+        .service
+        .availability(&[p.id], date!(2026 - 08 - 18), date!(2026 - 08 - 31))
+        .await
+        .unwrap();
+
+    match &result[0].availability {
+        Availability::Quantified {
+            planned_demand,
+            unallocated,
+            ..
+        } => {
+            assert_eq!(*planned_demand, grams(250));
+            assert_eq!(*unallocated, grams(750));
+        }
+        other => panic!("expected a quantified availability, got {other:?}"),
+    }
 }

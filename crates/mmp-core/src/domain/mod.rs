@@ -40,17 +40,18 @@ pub use ingredient::{
 };
 pub use meal_item::{MealItemRef, UnknownMealItemRef};
 pub use meal_plan::{
-    ActualMealPlanComponent, AllocationOutcome, ComponentPreparation, ConfirmMealPlanComponent,
-    ConfirmMealPlanEntry, MealGuestAllocation, MealGuestGroup, MealOptOut, MealParticipant,
-    MealParticipantAllocation, MealPlanComponent, MealPlanComponentSnapshot, MealPlanEntry,
-    MealPlanEntryPatch, MealPlanScope, MealPlanStatus, MealSlot, NewMealGuestAllocation,
-    NewMealGuestGroup, NewMealParticipant, NewMealParticipantAllocation, NewMealPlanComponent,
-    NewMealPlanEntry, OutcomeActor, ParticipantStatus, Portioning, ReviewMealOutcomes,
-    ReviewedGuestOutcome, ReviewedMealOutcome, ReviewedMemberOutcome, SetMealParticipants,
-    SlotAttendance, UnknownMealPlanScope, UnknownMealPlanStatus, UnknownMealSlot,
-    UnknownParticipantStatus, UnknownPortioning, allocated_total, derive_component_status,
-    derive_entry_status, derive_guest_status, derive_participant_status, effective_consumption,
-    equal_split, preparation_for, validate_components, validate_participants,
+    ActualMealPlanComponent, AllocationOutcome, Assumption, AssumptionRules, ChangedMealOutcome,
+    ComponentPreparation, ConfirmMealPlanComponent, ConfirmMealPlanEntry, MealGuestAllocation,
+    MealGuestGroup, MealOptOut, MealParticipant, MealParticipantAllocation, MealPlanComponent,
+    MealPlanComponentSnapshot, MealPlanEntry, MealPlanEntryPatch, MealPlanScope, MealPlanStatus,
+    MealSlot, NewMealGuestAllocation, NewMealGuestGroup, NewMealParticipant,
+    NewMealParticipantAllocation, NewMealPlanComponent, NewMealPlanEntry, OutcomeActor,
+    ParticipantStatus, Portioning, ReplacementItem, ReviewMealOutcomes, ReviewedGuestOutcome,
+    ReviewedMealOutcome, ReviewedMemberOutcome, SetMealParticipants, SlotAttendance,
+    UnknownMealPlanScope, UnknownMealPlanStatus, UnknownMealSlot, UnknownParticipantStatus,
+    UnknownPortioning, allocated_total, derive_component_status, derive_entry_status,
+    derive_guest_status, derive_participant_status, effective_consumption, equal_split,
+    preparation_for, validate_components, validate_participants,
 };
 pub use nutrition::NutritionFacts;
 pub use nutrition_target::{

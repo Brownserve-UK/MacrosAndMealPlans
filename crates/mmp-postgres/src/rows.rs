@@ -335,6 +335,7 @@ pub struct HouseholdSettingsRow {
     pub dinner_time: Time,
     pub missing_stock_interpretation: String,
     pub default_all_members_participate: bool,
+    pub assume_eaten_when_time_passes: bool,
     pub revision: i64,
     pub created_at: OffsetDateTime,
     pub updated_at: OffsetDateTime,
@@ -360,6 +361,7 @@ impl TryFrom<HouseholdSettingsRow> for HouseholdSettings {
                 )
             })?,
             default_all_members_participate: row.default_all_members_participate,
+            assume_eaten_when_time_passes: row.assume_eaten_when_time_passes,
             revision: Revision::new(row.revision),
             created_at: row.created_at,
             updated_at: row.updated_at,

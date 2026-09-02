@@ -57,6 +57,7 @@ function HouseholdMealCard({
   const line = preparationLine(meal);
   const canReview = meal.people.some((person) => person.can_record && person.allocations.some((a) => a.status === 'planned'))
     || (meal.capabilities.can_record_guests && meal.guest_groups.some((group) => group.allocations.some((a) => a.status === 'planned')));
+  const assumed = meal.status === 'assumed';
 
   return (
     <MealCard
@@ -68,6 +69,7 @@ function HouseholdMealCard({
               <Fact icon={<PeopleIcon fontSize="small" />} label="Eating" value={diners === 1 ? '1 person' : `${diners} people`} />
             </FactBar>
             {meal.status === 'eaten' ? <Chip size="small" color="success" label="Recorded" /> : null}
+            {assumed ? <Chip size="small" color="warning" variant="outlined" label="Assumed" /> : null}
             {meal.status === 'partially_resolved' ? <Chip size="small" label="Partly recorded" /> : null}
           </Stack>
           {(meal.people.length > 0 || meal.opted_out.length > 0 || guests > 0) ? (

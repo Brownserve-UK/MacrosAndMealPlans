@@ -26,6 +26,7 @@ function statusChip(entry: MealPlanEntry) {
   if (entry.status === 'eaten') return <Chip size="small" color="success" label="Eaten" />;
   if (entry.status === 'not_eaten') return <Chip size="small" label="Not eaten" />;
   if (entry.status === 'partially_resolved') return <Chip size="small" label="Partly recorded" />;
+  if (entry.status === 'assumed') return <Chip size="small" color="warning" variant="outlined" label="Assumed" />;
   return null;
 }
 

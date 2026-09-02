@@ -54,10 +54,12 @@ function EditMealTimes({
   const [conflict, setConflict] = useState<ApiError | null>(null);
   const [saved, setSaved] = useState(false);
   const [defaultAll, setDefaultAll] = useState(settings.default_all_members_participate);
+  const [assumeEaten, setAssumeEaten] = useState(settings.assume_eaten_when_time_passes);
 
   const dirty =
     SLOTS.some(({ key }) => times[key] !== settings[key]) ||
-    defaultAll !== settings.default_all_members_participate;
+    defaultAll !== settings.default_all_members_participate ||
+    assumeEaten !== settings.assume_eaten_when_time_passes;
 
   async function onSubmit(event: FormEvent) {
     event.preventDefault();
@@ -68,6 +70,9 @@ function EditMealTimes({
     }
     if (defaultAll !== settings.default_all_members_participate) {
       body.default_all_members_participate = defaultAll;
+    }
+    if (assumeEaten !== settings.assume_eaten_when_time_passes) {
+      body.assume_eaten_when_time_passes = assumeEaten;
     }
     try {
       await update.mutateAsync({ revision: settings.revision, body });
@@ -125,6 +130,17 @@ function EditMealTimes({
                 />
               }
               label="Add everyone to new household meals"
+            />
+
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={assumeEaten}
+                  onChange={(event) => setAssumeEaten(event.target.checked)}
+                  disabled={!canManage}
+                />
+              }
+              label="Assume meals were eaten once their time passes"
             />
 
             {canManage ? (

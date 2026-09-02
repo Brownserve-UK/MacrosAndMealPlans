@@ -73,6 +73,13 @@ const loggedItem: MealItem = {
   revision: 1,
 };
 
+const assumedItem: MealItem = {
+  ...plannedItem,
+  component_id: 'component-assumed',
+  status: 'assumed',
+  item_name: 'Assumed Porridge',
+};
+
 const latteItem: MealItem = {
   ...plannedItem,
   component_id: 'component-latte',
@@ -268,5 +275,36 @@ describe('MealPlanPage', () => {
       'Open Protein Shake',
       'Open Latte',
     ]);
+  });
+});
+
+describe('MealPlanPage assumed meals', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    breakfastItems = [assumedItem];
+  });
+
+  it('marks an assumed item so it reads differently from a plain planned one', () => {
+    renderPage();
+
+    expect(screen.getByText('Assumed Porridge')).toBeInTheDocument();
+    expect(screen.getByText('Assumed')).toBeInTheDocument();
+  });
+
+  it('confirms an assumed item through the normal eaten path', async () => {
+    mocks.markComponentEaten.mockResolvedValue({});
+    renderPage();
+    const user = userEvent.setup();
+
+    await user.click(screen.getByRole('button', { name: 'Mark Assumed Porridge eaten' }));
+
+    expect(mocks.markComponentEaten).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'entry-1', componentId: 'component-assumed' }),
+    );
+  });
+
+  it('offers the different-food action only while something is assumed', async () => {
+    renderPage();
+    expect(screen.getByRole('button', { name: 'Ate something else' })).toBeInTheDocument();
   });
 });

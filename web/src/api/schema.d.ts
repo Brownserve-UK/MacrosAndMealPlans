@@ -388,6 +388,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/meal-plan/needs-review": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getMealPlanNeedsReview"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/meal-plan/{week_start}": {
         parameters: {
             query?: never;
@@ -1262,6 +1278,7 @@ export interface components {
             updated_at: string;
         };
         HouseholdSettingsDto: components["schemas"]["MealTimesDto"] & {
+            assume_eaten_when_time_passes: boolean;
             /** Format: date-time */
             created_at: string;
             default_all_members_participate: boolean;
@@ -1484,7 +1501,7 @@ export interface components {
         /** @enum {string} */
         MealPlanScope: "member" | "household";
         /** @enum {string} */
-        MealPlanStatus: "planned" | "partially_resolved" | "eaten" | "not_eaten";
+        MealPlanStatus: "planned" | "assumed" | "partially_resolved" | "eaten" | "not_eaten";
         MealPlanWeekDto: {
             actual: components["schemas"]["NutritionSummaryDto"];
             days: components["schemas"]["MealPlanDayDto"][];
@@ -1543,6 +1560,10 @@ export interface components {
         };
         /** @enum {string} */
         MissingStockInterpretationDto: "absent" | "unknown";
+        NeedsReviewDto: {
+            household: components["schemas"]["MealPlanEntryDto"][];
+            personal: components["schemas"]["MealPlanEntryDto"][];
+        };
         NutritionDto: {
             basis?: null | components["schemas"]["QuantityDto"];
             /** Format: double */
@@ -1924,6 +1945,9 @@ export interface components {
         };
         /** @enum {string} */
         RecipeVisibility: "private" | "shared";
+        ReplacementItemRequest: components["schemas"]["MealItemRefDto"] & {
+            amount: components["schemas"]["AmountDto"];
+        };
         ResolveComponentRequest: {
             /** Format: uuid */
             ingredient_id: string;
@@ -1957,6 +1981,7 @@ export interface components {
             result: "not_eaten";
         } | {
             components: components["schemas"]["ActualMealPlanComponentRequest"][];
+            replacements?: components["schemas"]["ReplacementItemRequest"][];
             /** @enum {string} */
             result: "changed";
         };
@@ -2127,6 +2152,7 @@ export interface components {
             slot?: null | components["schemas"]["MealSlot"];
         };
         UpdateMealTimesRequest: {
+            assume_eaten_when_time_passes?: boolean | null;
             /** @example 08:00 */
             breakfast?: string | null;
             default_all_members_participate?: boolean | null;
@@ -3241,6 +3267,25 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MealPlanEntryDto"];
+                };
+            };
+        };
+    };
+    getMealPlanNeedsReview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NeedsReviewDto"];
                 };
             };
         };

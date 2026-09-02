@@ -921,3 +921,15 @@ ALTER TABLE stock_event
                               'observed', 'moved', 'mode_changed', 'archived')),
     ADD CONSTRAINT stock_event_source_kind_valid
         CHECK (source_kind IS NULL OR source_kind IN ('meal_plan_component', 'consumption_record'));
+
+ALTER TABLE household_settings
+    ADD COLUMN assume_eaten_when_time_passes BOOLEAN NOT NULL DEFAULT TRUE;
+
+ALTER TABLE consumption_record
+    ADD COLUMN meal_plan_entry_id UUID REFERENCES meal_plan_entry (id) ON DELETE RESTRICT,
+    ADD CONSTRAINT consumption_record_component_needs_entry
+        CHECK (meal_plan_component_id IS NULL OR meal_plan_entry_id IS NOT NULL);
+
+CREATE INDEX consumption_record_meal_plan_entry
+    ON consumption_record (meal_plan_entry_id)
+    WHERE meal_plan_entry_id IS NOT NULL;

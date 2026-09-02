@@ -9,8 +9,8 @@ use rust_decimal::Decimal;
 use super::{
     ConsumedAmount, ConsumptionRecordId, HouseholdMemberId, MealGuestAllocationId,
     MealGuestGroupId, MealItemRef, MealParticipantAllocationId, MealParticipantId,
-    MealPlanComponentId, MealPlanEntryId, NutritionFacts, NutritionQuality, Quantity, Revision,
-    UserId,
+    MealPlanComponentId, MealPlanEntryId, MealTimes, NutritionFacts, NutritionQuality, Quantity,
+    Revision, UserId,
 };
 use crate::error::ValidationErrors;
 
@@ -77,14 +77,16 @@ impl FromStr for MealSlot {
 #[serde(rename_all = "snake_case")]
 pub enum MealPlanStatus {
     Planned,
+    Assumed,
     PartiallyResolved,
     Eaten,
     NotEaten,
 }
 
 impl MealPlanStatus {
-    pub const ALL: [MealPlanStatus; 4] = [
+    pub const ALL: [MealPlanStatus; 5] = [
         MealPlanStatus::Planned,
+        MealPlanStatus::Assumed,
         MealPlanStatus::PartiallyResolved,
         MealPlanStatus::Eaten,
         MealPlanStatus::NotEaten,
@@ -93,10 +95,15 @@ impl MealPlanStatus {
     pub const fn code(self) -> &'static str {
         match self {
             MealPlanStatus::Planned => "planned",
+            MealPlanStatus::Assumed => "assumed",
             MealPlanStatus::PartiallyResolved => "partially_resolved",
             MealPlanStatus::Eaten => "eaten",
             MealPlanStatus::NotEaten => "not_eaten",
         }
+    }
+
+    pub const fn is_unresolved(self) -> bool {
+        matches!(self, MealPlanStatus::Planned | MealPlanStatus::Assumed)
     }
 }
 
@@ -213,6 +220,97 @@ impl fmt::Display for SlotAttendance {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Assumption {
+    pub assumed: bool,
+}
+
+impl Assumption {
+    pub const NONE: Assumption = Assumption { assumed: false };
+
+    pub const fn new(assumed: bool) -> Self {
+        Self { assumed }
+    }
+
+    pub fn for_entry(
+        entry: &MealPlanEntry,
+        now: OffsetDateTime,
+        meal_times: &MealTimes,
+        enabled: bool,
+    ) -> Self {
+        Self::for_occurrence(
+            entry.planned_on,
+            entry.planned_time,
+            entry.slot,
+            now,
+            meal_times,
+            enabled,
+        )
+    }
+
+    pub fn for_occurrence(
+        planned_on: Date,
+        planned_time: Option<Time>,
+        slot: MealSlot,
+        now: OffsetDateTime,
+        meal_times: &MealTimes,
+        enabled: bool,
+    ) -> Self {
+        if !enabled {
+            return Self::NONE;
+        }
+        let at = planned_time
+            .or_else(|| meal_times.for_slot(slot))
+            .unwrap_or(Time::MAX);
+        Self::new(planned_on.with_time(at).assume_utc() <= now)
+    }
+
+    fn pending(self) -> MealPlanStatus {
+        if self.assumed {
+            MealPlanStatus::Assumed
+        } else {
+            MealPlanStatus::Planned
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AssumptionRules {
+    pub now: OffsetDateTime,
+    pub meal_times: MealTimes,
+    pub enabled: bool,
+}
+
+impl AssumptionRules {
+    pub fn disabled(now: OffsetDateTime, meal_times: MealTimes) -> Self {
+        Self {
+            now,
+            meal_times,
+            enabled: false,
+        }
+    }
+
+    pub fn for_entry(&self, entry: &MealPlanEntry) -> Assumption {
+        Assumption::for_entry(entry, self.now, &self.meal_times, self.enabled)
+    }
+
+    pub fn for_occurrence(
+        &self,
+        planned_on: Date,
+        planned_time: Option<Time>,
+        slot: MealSlot,
+    ) -> Assumption {
+        Assumption::for_occurrence(
+            planned_on,
+            planned_time,
+            slot,
+            self.now,
+            &self.meal_times,
+            self.enabled,
+        )
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct MealPlanEntry {
     pub id: MealPlanEntryId,
@@ -246,12 +344,21 @@ impl MealPlanEntry {
             .any(|opt_out| opt_out.member_id == member_id)
     }
 
-    pub fn status(&self) -> MealPlanStatus {
-        derive_entry_status(&self.participants, &self.guest_groups)
+    pub fn status(&self, assumption: Assumption) -> MealPlanStatus {
+        derive_entry_status(&self.participants, &self.guest_groups, assumption)
     }
 
-    pub fn component_status(&self, component_id: MealPlanComponentId) -> MealPlanStatus {
-        derive_component_status(component_id, &self.participants, &self.guest_groups)
+    pub fn component_status(
+        &self,
+        component_id: MealPlanComponentId,
+        assumption: Assumption,
+    ) -> MealPlanStatus {
+        derive_component_status(
+            component_id,
+            &self.participants,
+            &self.guest_groups,
+            assumption,
+        )
     }
 }
 
@@ -319,10 +426,28 @@ pub struct ConfirmMealPlanEntry {
 }
 
 #[derive(Debug, Clone)]
+pub struct ReplacementItem {
+    pub item: MealItemRef,
+    pub amount: ConsumedAmount,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ChangedMealOutcome {
+    pub components: Vec<ActualMealPlanComponent>,
+    pub replacements: Vec<ReplacementItem>,
+}
+
+impl ChangedMealOutcome {
+    pub fn is_empty(&self) -> bool {
+        self.components.is_empty() && self.replacements.is_empty()
+    }
+}
+
+#[derive(Debug, Clone)]
 pub enum ReviewedMealOutcome {
     AsPlanned,
     NotEaten,
-    Changed(Vec<ActualMealPlanComponent>),
+    Changed(ChangedMealOutcome),
 }
 
 #[derive(Debug, Clone)]
@@ -651,7 +776,10 @@ pub fn preparation_for(
     }
 }
 
-fn roll_up_status(statuses: impl IntoIterator<Item = ParticipantStatus>) -> MealPlanStatus {
+fn roll_up_status(
+    statuses: impl IntoIterator<Item = ParticipantStatus>,
+    assumption: Assumption,
+) -> MealPlanStatus {
     let mut any = false;
     let mut any_pending = false;
     let mut any_resolved = false;
@@ -669,7 +797,7 @@ fn roll_up_status(statuses: impl IntoIterator<Item = ParticipantStatus>) -> Meal
     }
 
     if !any || (any_pending && !any_resolved) {
-        MealPlanStatus::Planned
+        assumption.pending()
     } else if any_pending {
         MealPlanStatus::PartiallyResolved
     } else if any_eaten {
@@ -679,18 +807,25 @@ fn roll_up_status(statuses: impl IntoIterator<Item = ParticipantStatus>) -> Meal
     }
 }
 
-pub fn derive_participant_status(participant: &MealParticipant) -> MealPlanStatus {
-    roll_up_status(participant.allocations.iter().map(|a| a.status))
+pub fn derive_participant_status(
+    participant: &MealParticipant,
+    assumption: Assumption,
+) -> MealPlanStatus {
+    roll_up_status(participant.allocations.iter().map(|a| a.status), assumption)
 }
 
-pub fn derive_guest_status(group: &MealGuestGroup) -> MealPlanStatus {
-    roll_up_status(group.allocations.iter().map(|allocation| allocation.status))
+pub fn derive_guest_status(group: &MealGuestGroup, assumption: Assumption) -> MealPlanStatus {
+    roll_up_status(
+        group.allocations.iter().map(|allocation| allocation.status),
+        assumption,
+    )
 }
 
 pub fn derive_component_status(
     component_id: MealPlanComponentId,
     participants: &[MealParticipant],
     guest_groups: &[MealGuestGroup],
+    assumption: Assumption,
 ) -> MealPlanStatus {
     roll_up_status(
         participants
@@ -705,6 +840,7 @@ pub fn derive_component_status(
                     .filter(|a| a.component_id == component_id)
                     .map(|a| a.status),
             ),
+        assumption,
     )
 }
 
@@ -716,6 +852,7 @@ pub fn equal_split(prepared: &ConsumedAmount, shares: usize) -> ConsumedAmount {
 pub fn derive_entry_status(
     participants: &[MealParticipant],
     guest_groups: &[MealGuestGroup],
+    assumption: Assumption,
 ) -> MealPlanStatus {
     let mut any = false;
     let mut any_pending = false;
@@ -747,7 +884,7 @@ pub fn derive_entry_status(
     }
 
     if !any || (any_pending && !any_resolved) {
-        return MealPlanStatus::Planned;
+        return assumption.pending();
     }
     if any_pending {
         return MealPlanStatus::PartiallyResolved;
@@ -769,6 +906,7 @@ pub fn derive_entry_status(
                             .filter(|allocation| allocation.component_id == component_id)
                             .map(|allocation| allocation.status),
                     ),
+                assumption,
             )
         })
         .collect();

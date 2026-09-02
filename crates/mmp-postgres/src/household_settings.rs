@@ -8,8 +8,8 @@ use crate::error::{map_db_error, repository_error};
 use crate::rows::HouseholdSettingsRow;
 
 const GET: &str = "SELECT breakfast_time, lunch_time, dinner_time, missing_stock_interpretation, \
-     default_all_members_participate, revision, created_at, updated_at \
-     FROM household_settings WHERE singleton";
+     default_all_members_participate, assume_eaten_when_time_passes, revision, created_at, \
+     updated_at FROM household_settings WHERE singleton";
 const CURRENT_REVISION: &str = "SELECT revision FROM household_settings WHERE singleton";
 
 pub struct PgHouseholdSettingsRepository {
@@ -49,14 +49,16 @@ impl HouseholdSettingsRepository for PgHouseholdSettingsRepository {
                  breakfast_time = $1, lunch_time = $2, dinner_time = $3,
                  missing_stock_interpretation = $4,
                  default_all_members_participate = $5,
-                 revision = $6, updated_at = $7
-             WHERE singleton AND revision = $8",
+                 assume_eaten_when_time_passes = $6,
+                 revision = $7, updated_at = $8
+             WHERE singleton AND revision = $9",
         )
         .bind(times.breakfast)
         .bind(times.lunch)
         .bind(times.dinner)
         .bind(settings.missing_stock_interpretation.code())
         .bind(settings.default_all_members_participate)
+        .bind(settings.assume_eaten_when_time_passes)
         .bind(settings.revision.get())
         .bind(settings.updated_at)
         .bind(expected.get())

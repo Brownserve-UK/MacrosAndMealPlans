@@ -280,12 +280,14 @@ export function EditFoodDialog({
     );
   }
 
-  if (item.status === 'planned' && item.kind === 'planned') {
+  if ((item.status === 'planned' || item.status === 'assumed') && item.kind === 'planned') {
     return (
       <FormDialog open={open} onClose={handleClose} maxWidth="sm" fullWidth>
         <DialogTitle>{item.item_name}</DialogTitle>
         <DialogContent>
-          <Typography color="text.secondary">This item is still planned.</Typography>
+          <Typography color="text.secondary">
+            {item.status === 'assumed' ? 'Its time has passed. Did you eat it?' : 'This item is still planned.'}
+          </Typography>
         </DialogContent>
         <DialogActions sx={{ justifyContent: 'space-between', px: 3, pb: 2 }}>
           <Button color="warning" onClick={onNotEaten} disabled={busy}>

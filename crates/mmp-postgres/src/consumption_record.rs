@@ -16,7 +16,7 @@ use crate::stock::apply_stock_write;
 
 macro_rules! columns {
     () => {
-        "c.id, c.member_id, c.item_kind, c.product_id, c.recipe_id, c.recorded_by, mpc.entry_id AS meal_plan_entry_id, c.meal_plan_component_id, c.slot, c.amount_kind, c.amount_value, c.amount_unit, c.consumed_on, c.consumed_at, c.nutrition_basis_amount, c.nutrition_basis_unit, c.energy_kcal, c.protein_g, c.carbohydrate_g, c.sugar_g, c.fat_g, c.saturated_fat_g, c.fibre_g, c.salt_g, c.cholesterol_mg, c.nutrition_extra, c.nutrition_quality, c.revision, c.created_at, c.updated_at"
+        "c.id, c.member_id, c.item_kind, c.product_id, c.recipe_id, c.recorded_by, c.meal_plan_entry_id, c.meal_plan_component_id, c.slot, c.amount_kind, c.amount_value, c.amount_unit, c.consumed_on, c.consumed_at, c.nutrition_basis_amount, c.nutrition_basis_unit, c.energy_kcal, c.protein_g, c.carbohydrate_g, c.sugar_g, c.fat_g, c.saturated_fat_g, c.fibre_g, c.salt_g, c.cholesterol_mg, c.nutrition_extra, c.nutrition_quality, c.revision, c.created_at, c.updated_at"
     };
 }
 
@@ -31,35 +31,35 @@ macro_rules! filter {
 const GET_BY_ID: &str = concat!(
     "SELECT ",
     columns!(),
-    " FROM consumption_record c LEFT JOIN meal_plan_component mpc ON mpc.id = c.meal_plan_component_id WHERE c.id = $1"
+    " FROM consumption_record c WHERE c.id = $1"
 );
 const COUNT: &str = concat!("SELECT count(*) FROM consumption_record c", filter!());
 const LIST_ASC: &str = concat!(
     "SELECT ",
     columns!(),
-    " FROM consumption_record c LEFT JOIN meal_plan_component mpc ON mpc.id = c.meal_plan_component_id",
+    " FROM consumption_record c",
     filter!(),
     " ORDER BY c.created_at ASC, c.id ASC LIMIT $4 OFFSET $5"
 );
 const LIST_DESC: &str = concat!(
     "SELECT ",
     columns!(),
-    " FROM consumption_record c LEFT JOIN meal_plan_component mpc ON mpc.id = c.meal_plan_component_id",
+    " FROM consumption_record c",
     filter!(),
     " ORDER BY c.created_at DESC, c.id DESC LIMIT $4 OFFSET $5"
 );
 const LIST_PERIOD: &str = concat!(
     "SELECT ",
     columns!(),
-    " FROM consumption_record c LEFT JOIN meal_plan_component mpc ON mpc.id = c.meal_plan_component_id ",
+    " FROM consumption_record c ",
     "WHERE c.member_id = $1 AND c.consumed_on >= $2 AND c.consumed_on <= $3 ",
     "ORDER BY c.created_at ASC, c.id ASC"
 );
 const LIST_FOR_MEAL_PLAN_ENTRY: &str = concat!(
     "SELECT ",
     columns!(),
-    " FROM consumption_record c JOIN meal_plan_component mpc ON mpc.id = c.meal_plan_component_id ",
-    "WHERE mpc.entry_id = $1 ORDER BY c.created_at ASC, c.id ASC"
+    " FROM consumption_record c ",
+    "WHERE c.meal_plan_entry_id = $1 ORDER BY c.created_at ASC, c.id ASC"
 );
 const CURRENT_REVISION: &str = "SELECT revision FROM consumption_record WHERE id = $1";
 
@@ -159,7 +159,8 @@ impl ConsumptionRecordRepository for PgConsumptionRecordRepository {
             .map_err(|e| repository_error("starting a consumption insert", e))?;
         sqlx::query(
             "INSERT INTO consumption_record (
-                 id, member_id, product_id, recorded_by, meal_plan_component_id, slot,
+                 id, member_id, product_id, recorded_by, meal_plan_entry_id,
+                 meal_plan_component_id, slot,
                  amount_kind, amount_value, amount_unit,
                  consumed_on, consumed_at,
                  nutrition_basis_amount, nutrition_basis_unit,
@@ -169,21 +170,23 @@ impl ConsumptionRecordRepository for PgConsumptionRecordRepository {
                  revision, created_at, updated_at,
                  item_kind, recipe_id
              ) VALUES (
-                 $1, $2, $3, $4, $5, $6,
-                 $7, $8, $9,
-                 $10, $11,
-                 $12, $13,
-                 $14, $15, $16, $17, $18,
-                 $19, $20, $21, $22, $23,
-                 $24,
-                 $25, $26, $27,
-                 $28, $29
+                 $1, $2, $3, $4, $5,
+                 $6, $7,
+                 $8, $9, $10,
+                 $11, $12,
+                 $13, $14,
+                 $15, $16, $17, $18, $19,
+                 $20, $21, $22, $23, $24,
+                 $25,
+                 $26, $27, $28,
+                 $29, $30
              )",
         )
         .bind(record.id.as_uuid())
         .bind(record.member_id.as_uuid())
         .bind(item_product_id)
         .bind(record.recorded_by.map(|id| id.as_uuid()))
+        .bind(record.meal_plan_entry_id.map(|id| id.as_uuid()))
         .bind(record.meal_plan_component_id.map(|id| id.as_uuid()))
         .bind(record.slot.code())
         .bind(amount_kind)
