@@ -872,6 +872,7 @@ CREATE TABLE stock_effect (
 
     source_kind       TEXT NOT NULL,
     source_id         UUID NOT NULL,
+    source_detail_id  UUID,
 
     stock_item_id     UUID NOT NULL REFERENCES stock_item (id) ON DELETE RESTRICT,
     product_id        UUID NOT NULL REFERENCES product (id) ON DELETE RESTRICT,
@@ -905,7 +906,8 @@ CREATE TABLE stock_effect (
 );
 
 CREATE UNIQUE INDEX stock_effect_active_source_item_unique
-    ON stock_effect (source_kind, source_id, stock_item_id)
+    ON stock_effect (source_kind, source_id, source_detail_id, stock_item_id)
+    NULLS NOT DISTINCT
     WHERE state = 'applied';
 CREATE INDEX stock_effect_source ON stock_effect (source_kind, source_id);
 CREATE INDEX stock_effect_item ON stock_effect (stock_item_id);

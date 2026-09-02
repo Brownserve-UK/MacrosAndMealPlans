@@ -1,7 +1,8 @@
 use mmp_core::domain::{
-    Availability, Confidence, NewStockItem, Patch, ProductAvailability, Shortfall, SourceDate,
-    SourceDateKind, StockEvent, StockItem, StockItemId, StockItemPatch, StockLevel, StockOutcome,
-    StorageLocation, TrackingMode, Unit, UsabilityDeadline,
+    Availability, AvailabilityReport, Confidence, DemandGap, DemandSubject, IngredientAvailability,
+    NewStockItem, Patch, ProductAvailability, Shortfall, SourceDate, SourceDateKind, StockEvent,
+    StockItem, StockItemId, StockItemPatch, StockLevel, StockOutcome, StorageLocation,
+    TrackingMode, Unit, UsabilityDeadline,
 };
 use mmp_core::services::StockOutcomeView;
 use rust_decimal::Decimal;
@@ -359,9 +360,53 @@ pub struct StockOutcomesResponse {
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum DemandSubjectDto {
+    Product { product_id: Uuid },
+    Ingredient { ingredient_id: Uuid },
+}
+
+impl From<DemandSubject> for DemandSubjectDto {
+    fn from(value: DemandSubject) -> Self {
+        match value {
+            DemandSubject::Product { product_id } => Self::Product {
+                product_id: product_id.as_uuid(),
+            },
+            DemandSubject::Ingredient { ingredient_id } => Self::Ingredient {
+                ingredient_id: ingredient_id.as_uuid(),
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum DemandGapDto {
+    UnresolvedRecipeLine,
+    IngredientHasNoProducts,
+    RecipeMissing,
+    ProductMissing,
+    AmountUnresolvable,
+    IncompatibleUnits,
+}
+
+impl From<DemandGap> for DemandGapDto {
+    fn from(value: DemandGap) -> Self {
+        match value {
+            DemandGap::UnresolvedRecipeLine => Self::UnresolvedRecipeLine,
+            DemandGap::IngredientHasNoProducts => Self::IngredientHasNoProducts,
+            DemandGap::RecipeMissing => Self::RecipeMissing,
+            DemandGap::ProductMissing => Self::ProductMissing,
+            DemandGap::AmountUnresolvable => Self::AmountUnresolvable,
+            DemandGap::IncompatibleUnits => Self::IncompatibleUnits,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct StockOutcomeDto {
-    pub product_id: Uuid,
-    pub product_name: String,
+    pub subject: DemandSubjectDto,
+    pub name: String,
     pub wanted: QuantityDto,
     pub deducted: QuantityDto,
     pub shortfall: ShortfallDto,
@@ -371,8 +416,8 @@ pub struct StockOutcomeDto {
 impl From<StockOutcomeView> for StockOutcomeDto {
     fn from(value: StockOutcomeView) -> Self {
         Self {
-            product_id: value.product_id.as_uuid(),
-            product_name: value.product_name,
+            subject: value.subject.into(),
+            name: value.name,
             wanted: value.wanted.into(),
             deducted: value.deducted.into(),
             shortfall: value.shortfall.into(),
@@ -384,8 +429,8 @@ impl From<StockOutcomeView> for StockOutcomeDto {
 impl From<StockOutcome> for StockOutcomeDto {
     fn from(value: StockOutcome) -> Self {
         Self {
-            product_id: value.product_id.as_uuid(),
-            product_name: String::new(),
+            subject: value.subject.into(),
+            name: String::new(),
             wanted: value.wanted.into(),
             deducted: value.deducted.into(),
             shortfall: value.shortfall.into(),
@@ -449,7 +494,7 @@ impl From<Availability> for AvailabilityDto {
 pub struct ProductAvailabilityDto {
     pub product_id: Uuid,
     pub availability: AvailabilityDto,
-    pub demand_incomplete: bool,
+    pub demand_gaps: Vec<DemandGapDto>,
 }
 
 impl From<ProductAvailability> for ProductAvailabilityDto {
@@ -457,7 +502,41 @@ impl From<ProductAvailability> for ProductAvailabilityDto {
         Self {
             product_id: value.product_id.as_uuid(),
             availability: value.availability.into(),
-            demand_incomplete: value.demand_incomplete,
+            demand_gaps: value.demand_gaps.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct IngredientAvailabilityDto {
+    pub ingredient_id: Uuid,
+    pub availability: AvailabilityDto,
+    pub demand_gaps: Vec<DemandGapDto>,
+}
+
+impl From<IngredientAvailability> for IngredientAvailabilityDto {
+    fn from(value: IngredientAvailability) -> Self {
+        Self {
+            ingredient_id: value.ingredient_id.as_uuid(),
+            availability: value.availability.into(),
+            demand_gaps: value.demand_gaps.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct AvailabilityReportDto {
+    pub products: Vec<ProductAvailabilityDto>,
+    pub ingredients: Vec<IngredientAvailabilityDto>,
+    pub demand_gaps: Vec<DemandGapDto>,
+}
+
+impl From<AvailabilityReport> for AvailabilityReportDto {
+    fn from(value: AvailabilityReport) -> Self {
+        Self {
+            products: value.products.into_iter().map(Into::into).collect(),
+            ingredients: value.ingredients.into_iter().map(Into::into).collect(),
+            demand_gaps: value.demand_gaps.into_iter().map(Into::into).collect(),
         }
     }
 }

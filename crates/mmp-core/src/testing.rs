@@ -18,7 +18,7 @@ use crate::error::{CoreError, Result};
 use crate::ports::{
     AccessGrantRepository, ConsumptionQuery, ConsumptionRecordRepository,
     HouseholdMemberRepository, HouseholdSettingsRepository, IngredientQuery, IngredientRepository,
-    MealPlanComponentUpdate, MealPlanQuery, MealPlanRepository, MemberQuery,
+    IngredientSort, MealPlanComponentUpdate, MealPlanQuery, MealPlanRepository, MemberQuery,
     NutritionTargetRepository, Paginated, ProductQuery, ProductRepository, RecipeQuery,
     RecipeRepository, SnapshotOp, SortDirection, StockQuery, StockRepository, StockWrite,
     UpdateOutcome, UserQuery, UserRepository,
@@ -75,12 +75,21 @@ fn matches(haystack: &str, needle: &str) -> bool {
 }
 
 fn paginate<T: Clone>(
-    mut items: Vec<T>,
+    items: Vec<T>,
     query_page: crate::ports::PageRequest,
     sort: SortDirection,
     key: impl Fn(&T) -> String,
 ) -> Paginated<T> {
-    items.sort_by_key(|item| key(item).to_lowercase());
+    paginate_by(items, query_page, sort, |item| key(item).to_lowercase())
+}
+
+fn paginate_by<T: Clone, K: Ord>(
+    mut items: Vec<T>,
+    query_page: crate::ports::PageRequest,
+    sort: SortDirection,
+    key: impl Fn(&T) -> K,
+) -> Paginated<T> {
+    items.sort_by_cached_key(&key);
     if sort == SortDirection::Descending {
         items.reverse();
     }
@@ -112,6 +121,21 @@ impl InMemoryIngredientRepository {
 
     pub fn link_products(&self, products: &InMemoryProductRepository) {
         *self.products.lock().unwrap() = Some(products.clone());
+    }
+
+    fn product_counts(&self) -> HashMap<IngredientId, i64> {
+        let guard = self.products.lock().unwrap();
+        let Some(products) = guard.as_ref() else {
+            return HashMap::new();
+        };
+        let rows = products.rows.lock().unwrap();
+        let mut counts: HashMap<IngredientId, i64> = HashMap::new();
+        for product in rows.values().filter(|p| !p.is_archived()) {
+            if let Some(id) = product.mapped_ingredient_id {
+                *counts.entry(id).or_default() += 1;
+            }
+        }
+        counts
     }
 }
 
@@ -172,7 +196,23 @@ impl IngredientRepository for InMemoryIngredientRepository {
             })
             .cloned()
             .collect();
-        Ok(paginate(items, query.page, query.sort, |i| i.name.clone()))
+        drop(rows);
+
+        Ok(match query.sort_by {
+            IngredientSort::Name => paginate(items, query.page, query.sort, |i| i.name.clone()),
+            IngredientSort::Created => paginate_by(items, query.page, query.sort, |i| {
+                (i.created_at, i.name.to_lowercase())
+            }),
+            IngredientSort::ProductCount => {
+                let counts = self.product_counts();
+                paginate_by(items, query.page, query.sort, |i| {
+                    (
+                        counts.get(&i.id).copied().unwrap_or(0),
+                        std::cmp::Reverse(i.name.to_lowercase()),
+                    )
+                })
+            }
+        })
     }
 
     async fn insert(&self, ingredient: &Ingredient) -> Result<()> {
@@ -1486,10 +1526,10 @@ impl InMemoryStockRepository {
                 .cloned()
                 .collect();
             let mut unresolved = false;
-            let mut product_id = None;
+            let mut subject = None;
             let mut unit = Unit::Gram;
             for effect in targets {
-                product_id = Some(effect.product_id);
+                subject = Some(crate::domain::DemandSubject::product(effect.product_id));
                 unit = effect.applied_unit;
                 let item = self
                     .rows
@@ -1551,9 +1591,9 @@ impl InMemoryStockRepository {
                     }
                 }
             }
-            if unresolved && let Some(product_id) = product_id {
+            if unresolved && let Some(subject) = subject {
                 outcomes.push(StockOutcome {
-                    product_id,
+                    subject,
                     wanted: Quantity::new(rust_decimal::Decimal::ZERO, unit),
                     deducted: Quantity::new(rust_decimal::Decimal::ZERO, unit),
                     shortfall: Shortfall::Covered,
@@ -1566,7 +1606,7 @@ impl InMemoryStockRepository {
             let items: Vec<StockItem> = {
                 let rows = self.rows.lock().unwrap();
                 rows.values()
-                    .filter(|item| item.product_id == deduction.product_id)
+                    .filter(|item| deduction.target.product_ids.contains(&item.product_id))
                     .cloned()
                     .collect()
             };
@@ -1582,6 +1622,7 @@ impl InMemoryStockRepository {
                     e.state == StockEffectState::Applied
                         && e.source_kind == deduction.source_kind
                         && e.source_id == deduction.source_id
+                        && e.source_detail_id == deduction.source_detail_id
                         && e.stock_item_id == take.stock_item_id
                 });
                 if already {
@@ -1623,8 +1664,9 @@ impl InMemoryStockRepository {
                     id: crate::domain::StockEffectId::new(),
                     source_kind: deduction.source_kind,
                     source_id: deduction.source_id,
+                    source_detail_id: deduction.source_detail_id,
                     stock_item_id: take.stock_item_id,
-                    product_id: deduction.product_id,
+                    product_id: item.product_id,
                     state: StockEffectState::Applied,
                     applied_mode: item.tracking_mode(),
                     applied_unit: take.requested.unit,
@@ -1644,7 +1686,7 @@ impl InMemoryStockRepository {
 
             if !matches!(shortfall, Shortfall::Covered) {
                 outcomes.push(StockOutcome {
-                    product_id: deduction.product_id,
+                    subject: deduction.target.subject,
                     wanted: deduction.want,
                     deducted: Quantity::new(deducted, deduction.want.unit),
                     shortfall,

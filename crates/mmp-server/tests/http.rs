@@ -55,6 +55,7 @@ async fn app() -> Router {
         Arc::new(stock_repo.clone()),
         Arc::new(products.clone()),
         Arc::new(meal_plans.clone()),
+        recipes_repo.clone(),
         Arc::new(members.clone()),
         Arc::new(settings_repo.clone()),
         clock.clone(),
@@ -76,13 +77,15 @@ async fn app() -> Router {
         DiaryService::new(
             Arc::new(consumption.clone()),
             Arc::new(products.clone()),
+            ingredients.clone(),
             recipes_repo.clone(),
             clock.clone(),
         ),
         MealPlanService::new(
             Arc::new(meal_plans),
             Arc::new(products),
-            recipes_repo,
+            ingredients.clone(),
+            recipes_repo.clone(),
             Arc::new(consumption),
             Arc::new(targets.clone()),
             Arc::new(members.clone()),
@@ -2149,7 +2152,7 @@ async fn confirming_a_planned_component_draws_stock_and_warns_on_a_shortfall() {
     assert_eq!(status, StatusCode::OK, "{updated}");
     let outcomes = updated["stock_outcomes"].as_array().unwrap();
     assert_eq!(outcomes.len(), 1, "{updated}");
-    assert_eq!(outcomes[0]["product_name"], "Chicken breast");
+    assert_eq!(outcomes[0]["name"], "Chicken breast");
     assert_eq!(outcomes[0]["shortfall"]["state"], "short");
 
     let stock = send(&app, Call::new("GET", "/api/v1/stock")).await.1;
@@ -3273,7 +3276,7 @@ async fn stock_availability_nets_off_planned_demand() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{rows}");
-    let row = &rows[0]["availability"];
+    let row = &rows["products"][0]["availability"];
     assert_eq!(row["state"], "quantified");
     assert_eq!(row["on_hand"]["amount"], json!(1000.0));
     assert_eq!(row["planned_demand"]["amount"], json!(250.0));

@@ -21,7 +21,11 @@ use utoipa::{Modify, OpenApi};
         (name = "recipes", description = "Reusable multi-component recipes with derived nutrition"),
         (name = "stock", description = "Physical household stock and its availability against plans"),
     ),
-    components(schemas(crate::dto::SortDirectionDto, crate::dto::AmountKindDto)),
+    components(schemas(
+        crate::dto::SortDirectionDto,
+        crate::dto::IngredientSortDto,
+        crate::dto::AmountKindDto
+    )),
     modifiers(&SecurityAddon)
 )]
 pub struct ApiDoc;

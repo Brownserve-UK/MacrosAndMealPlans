@@ -5,11 +5,11 @@ use time::Date;
 
 use super::{PageRequest, Paginated};
 use crate::domain::{
-    AccessScope, CatalogueOrigin, ConsumptionRecord, ConsumptionRecordId, HouseholdMember,
-    HouseholdMemberId, HouseholdSettings, Ingredient, IngredientId, MealParticipant,
-    MealPlanComponentId, MealPlanComponentSnapshot, MealPlanEntry, MealPlanEntryId,
-    MemberAccessGrant, NewStockEvent, NutritionTarget, NutritionTargetId, Product, ProductId,
-    Quantity, Recipe, RecipeId, RecipePhoto, RecipeSummary, Revision, Role, StockEffect,
+    AccessScope, CatalogueOrigin, ConsumptionRecord, ConsumptionRecordId, DeductionTarget,
+    HouseholdMember, HouseholdMemberId, HouseholdSettings, Ingredient, IngredientId,
+    MealParticipant, MealPlanComponentId, MealPlanComponentSnapshot, MealPlanEntry,
+    MealPlanEntryId, MemberAccessGrant, NewStockEvent, NutritionTarget, NutritionTargetId, Product,
+    ProductId, Quantity, Recipe, RecipeId, RecipePhoto, RecipeSummary, Revision, Role, StockEffect,
     StockEffectSource, StockEvent, StockItem, StockItemId, StockOutcome, User, UserId,
 };
 use crate::error::Result;
@@ -28,6 +28,14 @@ pub enum UpdateOutcome {
     NotFound,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum IngredientSort {
+    #[default]
+    Name,
+    Created,
+    ProductCount,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct IngredientQuery {
     pub search: Option<String>,
@@ -35,6 +43,7 @@ pub struct IngredientQuery {
     pub needs_products: Option<bool>,
     pub include_archived: bool,
     pub page: PageRequest,
+    pub sort_by: IngredientSort,
     pub sort: SortDirection,
 }
 
@@ -219,7 +228,8 @@ pub trait ProductRepository: Send + Sync + 'static {
 pub struct StockDeduction {
     pub source_kind: StockEffectSource,
     pub source_id: uuid::Uuid,
-    pub product_id: ProductId,
+    pub source_detail_id: Option<uuid::Uuid>,
+    pub target: DeductionTarget,
     pub want: Quantity,
     pub actor_user_id: Option<UserId>,
     pub subject_member_id: Option<HouseholdMemberId>,

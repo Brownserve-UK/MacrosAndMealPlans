@@ -8,19 +8,19 @@ function amount(quantity: { amount: number; unit: string }): string {
 
 export function describeStockOutcome(outcome: StockOutcome): string {
   if (outcome.unresolved_release) {
-    return `${outcome.product_name}: some stock could not be put back automatically because the item's tracking has changed.`;
+    return `${outcome.name}: some stock could not be put back automatically because the item's tracking has changed.`;
   }
   const shortfall = outcome.shortfall;
   if (shortfall.state === 'short') {
     if (shortfall.confidence === 'estimated') {
-      return `${outcome.product_name} may not have covered ${amount(shortfall.amount)} — its level is an estimate.`;
+      return `${outcome.name} may not have covered ${amount(shortfall.amount)} — its level is an estimate.`;
     }
-    return `Only ${amount(outcome.deducted)} of ${outcome.product_name} was in stock, so ${amount(shortfall.amount)} is unaccounted for.`;
+    return `Only ${amount(outcome.deducted)} of ${outcome.name} was in stock, so ${amount(shortfall.amount)} is unaccounted for.`;
   }
   if (shortfall.state === 'indeterminate') {
-    return `Some ${outcome.product_name} is measured in a unit we cannot compare, so we cannot tell whether ${amount(shortfall.amount)} was covered.`;
+    return `Some ${outcome.name} is measured in a unit we cannot compare, so we cannot tell whether ${amount(shortfall.amount)} was covered.`;
   }
-  return `${outcome.product_name}: stock adjusted.`;
+  return `${outcome.name}: stock adjusted.`;
 }
 
 export function collectStockOutcomes(

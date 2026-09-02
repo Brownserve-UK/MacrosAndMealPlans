@@ -1,11 +1,14 @@
 import AddIcon from '@mui/icons-material/AddOutlined';
 import Button from '@mui/material/Button';
 import Chip from '@mui/material/Chip';
+import MenuItem from '@mui/material/MenuItem';
 import Pagination from '@mui/material/Pagination';
 import Stack from '@mui/material/Stack';
+import TextField from '@mui/material/TextField';
 import { Link } from '@tanstack/react-router';
 import { useState } from 'react';
 import type { components } from '../../api/schema';
+import type { IngredientListParams } from '../../api/queries';
 import { useIngredients } from '../../api/queries';
 import { RecordListShell, RecordRow } from '../../components/RecordList';
 import { PageHeader } from '../../components/PageHeader';
@@ -16,6 +19,21 @@ import { NewIngredientDialog } from './NewIngredientDialog';
 type Item = components['schemas']['IngredientListItemDto'];
 
 type Filter = 'all' | 'needs_products' | 'archived';
+
+type SortKey = 'name' | 'created' | 'product_count';
+
+type SortOption = {
+  value: SortKey;
+  label: string;
+  sort_by: IngredientListParams['sort_by'];
+  sort: IngredientListParams['sort'];
+};
+
+const SORTS = [
+  { value: 'name', label: 'A-Z', sort_by: 'name', sort: 'asc' },
+  { value: 'created', label: 'Date added', sort_by: 'created', sort: 'desc' },
+  { value: 'product_count', label: 'Product count', sort_by: 'product_count', sort: 'desc' },
+] as const satisfies readonly SortOption[];
 
 const PER_PAGE = 25;
 
@@ -28,14 +46,18 @@ function describe(item: Item): string {
 export function IngredientsPage() {
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<Filter>('all');
+  const [sort, setSort] = useState<SortKey>('name');
   const [page, setPage] = useState(1);
   const [addOpen, setAddOpen] = useState(false);
 
   const debounced = useDebounced(search, 300);
+  const chosen = SORTS.find((option) => option.value === sort) ?? SORTS[0];
   const query = useIngredients({
     q: debounced || undefined,
     needs_products: filter === 'needs_products' || undefined,
     include_archived: filter === 'archived' || undefined,
+    sort_by: chosen.sort_by,
+    sort: chosen.sort,
     page,
     per_page: PER_PAGE,
   });
@@ -64,7 +86,11 @@ export function IngredientsPage() {
         }}
       />
 
-      <Stack direction="row" spacing={1} sx={{ mb: 2.5, flexWrap: 'wrap', gap: 1 }}>
+      <Stack
+        direction="row"
+        spacing={1}
+        sx={{ mb: 2.5, flexWrap: 'wrap', gap: 1, alignItems: 'center' }}
+      >
         {(
           [
             ['all', 'All'],
@@ -83,6 +109,24 @@ export function IngredientsPage() {
             color={filter === value ? 'primary' : 'default'}
           />
         ))}
+
+        <TextField
+          select
+          size="small"
+          label="Sort"
+          value={sort}
+          onChange={(event) => {
+            setSort(event.target.value as SortKey);
+            setPage(1);
+          }}
+          sx={{ ml: 'auto', minWidth: 168 }}
+        >
+          {SORTS.map((option) => (
+            <MenuItem key={option.value} value={option.value}>
+              {option.label}
+            </MenuItem>
+          ))}
+        </TextField>
       </Stack>
 
       {query.isError ? (

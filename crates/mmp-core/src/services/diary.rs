@@ -5,17 +5,19 @@ use time::{Date, Duration};
 use crate::domain::{
     ConsumedAmount, ConsumedNutrition, ConsumptionRecord, ConsumptionRecordId,
     ConsumptionRecordPatch, HouseholdMemberId, MealItemRef, NewConsumptionRecord, NutritionFacts,
-    NutritionQuality, Product, ProductId, Recipe, RecipeId, Revision, nutrition_for,
-    recipe_nutrition, recipe_nutrition_for, sum_nutrition,
+    NutritionQuality, Product, ProductId, Recipe, RecipeId, RecipeRequirement, Revision,
+    StockEffectSource, nutrition_for, recipe_nutrition, recipe_nutrition_for, sum_nutrition,
 };
 use crate::error::{CoreError, Result, ValidationErrors};
 use crate::ports::{
-    Clock, ConsumptionQuery, ConsumptionRecordRepository, PageRequest, ProductRepository,
-    RecipeRepository, StockWrite, UpdateOutcome,
+    Clock, ConsumptionQuery, ConsumptionRecordRepository, IngredientRepository, PageRequest,
+    ProductRepository, RecipeRepository, StockWrite, UpdateOutcome,
 };
 
-use super::fulfilment::RecipeFulfilments;
-use super::stock_effects::{StockAffected, name_outcomes, record_deduction, record_release};
+use super::fulfilment::{RecipeFulfilments, expand_recipe};
+use super::stock_effects::{
+    StockAffected, name_outcomes, record_deduction, record_release, requirement_deduction,
+};
 
 const CONSUMPTION_RECORD: &str = "consumption record";
 const PRODUCT: &str = "product";
@@ -47,6 +49,7 @@ pub struct DiaryDay {
 pub struct DiaryService {
     records: Arc<dyn ConsumptionRecordRepository>,
     products: Arc<dyn ProductRepository>,
+    ingredients: Arc<dyn IngredientRepository>,
     recipes: Arc<dyn RecipeRepository>,
     clock: Arc<dyn Clock>,
 }
@@ -55,12 +58,14 @@ impl DiaryService {
     pub fn new(
         records: Arc<dyn ConsumptionRecordRepository>,
         products: Arc<dyn ProductRepository>,
+        ingredients: Arc<dyn IngredientRepository>,
         recipes: Arc<dyn RecipeRepository>,
         clock: Arc<dyn Clock>,
     ) -> Self {
         Self {
             records,
             products,
+            ingredients,
             recipes,
             clock,
         }
@@ -102,29 +107,61 @@ impl DiaryService {
         };
 
         let write = StockWrite {
-            deductions: self.deduction_for(&record).await?.into_iter().collect(),
+            deductions: self.deductions_for(&record).await?,
             releases: Vec::new(),
         };
         let outcomes = self.records.insert(&record, &write).await?;
         Ok(StockAffected::new(
             record,
-            name_outcomes(&*self.products, outcomes).await?,
+            name_outcomes(&*self.products, &*self.ingredients, outcomes).await?,
         ))
     }
 
-    async fn deduction_for(
+    async fn deductions_for(
         &self,
         record: &ConsumptionRecord,
-    ) -> Result<Option<crate::ports::StockDeduction>> {
+    ) -> Result<Vec<crate::ports::StockDeduction>> {
         if record.meal_plan_component_id.is_some() {
-            return Ok(None);
+            return Ok(Vec::new());
         }
-        let MealItemRef::Product { product_id } = record.item else {
-            return Ok(None);
-        };
-        let product = self.get_product(product_id).await?;
-        let label = format!("Logged food \u{2014} {}", product.name);
-        Ok(record_deduction(record, &product, label))
+        match record.item {
+            MealItemRef::Product { product_id } => {
+                let product = self.get_product(product_id).await?;
+                let label = format!("Logged food \u{2014} {}", product.name);
+                Ok(record_deduction(record, &product, label)
+                    .into_iter()
+                    .collect())
+            }
+            MealItemRef::Recipe { recipe_id } => {
+                let recipe = self.get_recipe(recipe_id, None).await?;
+                let ConsumedAmount::Servings(servings) = record.amount else {
+                    return Ok(Vec::new());
+                };
+                let requirements: Vec<&RecipeRequirement> = recipe
+                    .components
+                    .iter()
+                    .map(|component| &component.requirement)
+                    .collect();
+                let fulfilments = RecipeFulfilments::load(&*self.products, &requirements).await?;
+                let label = format!("Logged food \u{2014} {}", recipe.name);
+                Ok(expand_recipe(&recipe, servings, &fulfilments)
+                    .wants
+                    .into_iter()
+                    .map(|want| {
+                        requirement_deduction(
+                            StockEffectSource::ConsumptionRecord,
+                            record.id.as_uuid(),
+                            want.recipe_component_id.as_uuid(),
+                            want.target,
+                            want.want,
+                            label.clone(),
+                            record.recorded_by,
+                            Some(record.member_id),
+                        )
+                    })
+                    .collect())
+            }
+        }
     }
 
     pub async fn get(&self, id: ConsumptionRecordId) -> Result<ConsumptionRecord> {
@@ -178,22 +215,20 @@ impl DiaryService {
         current.updated_at = self.clock.now();
 
         let mut write = StockWrite::default();
-        if amount_changing
-            && current.meal_plan_component_id.is_none()
-            && let MealItemRef::Product { product_id } = current.item
-        {
-            let product = self.get_product(product_id).await?;
-            let label = format!("Logged food \u{2014} {}", product.name);
-            write.releases.push(record_release(&current, label.clone()));
-            if let Some(deduction) = record_deduction(&current, &product, label) {
-                write.deductions.push(deduction);
+        if amount_changing && current.meal_plan_component_id.is_none() {
+            let deductions = self.deductions_for(&current).await?;
+            if !deductions.is_empty() {
+                write
+                    .releases
+                    .push(record_release(&current, self.log_label(&current).await?));
+                write.deductions = deductions;
             }
         }
 
         let outcomes = self.commit(&current, expected, &write).await?;
         Ok(StockAffected::new(
             current,
-            name_outcomes(&*self.products, outcomes).await?,
+            name_outcomes(&*self.products, &*self.ingredients, outcomes).await?,
         ))
     }
 
@@ -211,19 +246,15 @@ impl DiaryService {
         }
 
         let mut write = StockWrite::default();
-        if let MealItemRef::Product { product_id } = current.item {
-            let product = self.get_product(product_id).await?;
-            write.releases.push(record_release(
-                &current,
-                format!("Logged food \u{2014} {}", product.name),
-            ));
-        }
+        write
+            .releases
+            .push(record_release(&current, self.log_label(&current).await?));
 
         let (outcome, stock_outcomes) = self.records.delete(id, expected, &write).await?;
         match outcome {
             UpdateOutcome::Updated => Ok(StockAffected::new(
                 (),
-                name_outcomes(&*self.products, stock_outcomes).await?,
+                name_outcomes(&*self.products, &*self.ingredients, stock_outcomes).await?,
             )),
             UpdateOutcome::RevisionMismatch { actual } => Err(CoreError::RevisionMismatch {
                 resource: CONSUMPTION_RECORD,
@@ -261,6 +292,14 @@ impl DiaryService {
             entries,
             totals,
         })
+    }
+
+    async fn log_label(&self, record: &ConsumptionRecord) -> Result<String> {
+        let name = match record.item {
+            MealItemRef::Product { product_id } => self.get_product(product_id).await?.name,
+            MealItemRef::Recipe { recipe_id } => self.get_recipe(recipe_id, None).await?.name,
+        };
+        Ok(format!("Logged food \u{2014} {name}"))
     }
 
     async fn get_product(&self, id: ProductId) -> Result<Product> {

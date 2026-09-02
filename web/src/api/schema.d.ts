@@ -1073,6 +1073,11 @@ export interface components {
             /** @enum {string} */
             state: "absent";
         };
+        AvailabilityReportDto: {
+            demand_gaps: components["schemas"]["DemandGapDto"][];
+            ingredients: components["schemas"]["IngredientAvailabilityDto"][];
+            products: components["schemas"]["ProductAvailabilityDto"][];
+        };
         /** @enum {string} */
         CatalogueOrigin: "seeded" | "local" | "external";
         /** @enum {string} */
@@ -1231,6 +1236,19 @@ export interface components {
             /** Format: int64 */
             unknown_count: number;
         };
+        /** @enum {string} */
+        DemandGapDto: "unresolved_recipe_line" | "ingredient_has_no_products" | "recipe_missing" | "product_missing" | "amount_unresolvable" | "incompatible_units";
+        DemandSubjectDto: {
+            /** @enum {string} */
+            kind: "product";
+            /** Format: uuid */
+            product_id: string;
+        } | {
+            /** Format: uuid */
+            ingredient_id: string;
+            /** @enum {string} */
+            kind: "ingredient";
+        };
         DiaryDayDto: {
             /**
              * Format: date
@@ -1288,6 +1306,12 @@ export interface components {
             /** Format: date-time */
             updated_at: string;
         };
+        IngredientAvailabilityDto: {
+            availability: components["schemas"]["AvailabilityDto"];
+            demand_gaps: components["schemas"]["DemandGapDto"][];
+            /** Format: uuid */
+            ingredient_id: string;
+        };
         IngredientDto: {
             /** Format: date-time */
             archived_at?: string | null;
@@ -1317,6 +1341,8 @@ export interface components {
         IngredientPage: components["schemas"]["PageMeta"] & {
             items: components["schemas"]["IngredientListItemDto"][];
         };
+        /** @enum {string} */
+        IngredientSortDto: "name" | "created" | "product_count";
         ItemRefRequest: {
             /** Format: uuid */
             product_id: string;
@@ -1742,7 +1768,7 @@ export interface components {
         };
         ProductAvailabilityDto: {
             availability: components["schemas"]["AvailabilityDto"];
-            demand_incomplete: boolean;
+            demand_gaps: components["schemas"]["DemandGapDto"][];
             /** Format: uuid */
             product_id: string;
         };
@@ -2095,10 +2121,9 @@ export interface components {
         };
         StockOutcomeDto: {
             deducted: components["schemas"]["QuantityDto"];
-            /** Format: uuid */
-            product_id: string;
-            product_name: string;
+            name: string;
             shortfall: components["schemas"]["ShortfallDto"];
+            subject: components["schemas"]["DemandSubjectDto"];
             unresolved_release: boolean;
             wanted: components["schemas"]["QuantityDto"];
         };
@@ -2703,6 +2728,7 @@ export interface operations {
                 include_archived?: boolean;
                 page?: number;
                 per_page?: number;
+                sort_by?: components["schemas"]["IngredientSortDto"];
                 sort?: components["schemas"]["SortDirectionDto"];
             };
             header?: never;
@@ -4809,13 +4835,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Availability per product, netting off planned demand */
+            /** @description Availability per product and per ingredient, netting off planned demand */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ProductAvailabilityDto"][];
+                    "application/json": components["schemas"]["AvailabilityReportDto"];
                 };
             };
         };

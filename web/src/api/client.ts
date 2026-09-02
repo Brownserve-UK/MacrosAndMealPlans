@@ -57,7 +57,10 @@ export type StockEvent = components['schemas']['StockEventDto'];
 export type StorageLocation = components['schemas']['StorageLocationDto'];
 export type TrackingMode = components['schemas']['TrackingModeDto'];
 export type ProductAvailability = components['schemas']['ProductAvailabilityDto'];
+export type IngredientAvailability = components['schemas']['IngredientAvailabilityDto'];
+export type AvailabilityReport = components['schemas']['AvailabilityReportDto'];
 export type Availability = components['schemas']['AvailabilityDto'];
+export type DemandGap = components['schemas']['DemandGapDto'];
 
 const CREDENTIAL_KEY = 'mmp.credential';
 

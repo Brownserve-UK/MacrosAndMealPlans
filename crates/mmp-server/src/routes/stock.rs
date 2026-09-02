@@ -9,8 +9,8 @@ use uuid::Uuid;
 
 use crate::auth::{Permission, Principal};
 use crate::dto::{
-    CreateStockItemRequest, PageMeta, ProductAvailabilityDto, StockAvailabilityQuery,
-    StockEventDto, StockItemDto, StockListQuery, StockPage, UpdateStockItemRequest, stock_item_id,
+    AvailabilityReportDto, CreateStockItemRequest, PageMeta, StockAvailabilityQuery, StockEventDto,
+    StockItemDto, StockListQuery, StockPage, UpdateStockItemRequest, stock_item_id,
 };
 use crate::error::ApiResult;
 use crate::http::{Created, IfMatch, Tagged};
@@ -210,8 +210,9 @@ async fn events(
     path = "/api/v1/stock/availability",
     params(StockAvailabilityQuery),
     operation_id = "getStockAvailability",
-    responses((status = 200, description = "Availability per product, netting off planned demand",
-        body = Vec<ProductAvailabilityDto>)),
+    responses((status = 200,
+        description = "Availability per product and per ingredient, netting off planned demand",
+        body = AvailabilityReportDto)),
     tag = "stock",
     security(("basic" = []))
 )]
@@ -219,13 +220,13 @@ async fn availability(
     State(state): State<AppState>,
     principal: Principal,
     Query(query): Query<StockAvailabilityQuery>,
-) -> ApiResult<Json<Vec<ProductAvailabilityDto>>> {
+) -> ApiResult<Json<AvailabilityReportDto>> {
     principal.require(Permission::StockRead)?;
     let today = OffsetDateTime::now_utc().date();
     let from = query.from.unwrap_or(today);
     let to = query.to.unwrap_or(today + Duration::days(14));
 
-    let rows = match query.product_id {
+    let report = match query.product_id {
         Some(id) => {
             state
                 .stock
@@ -234,5 +235,5 @@ async fn availability(
         }
         None => state.stock.availability_overview(from, to).await?,
     };
-    Ok(Json(rows.into_iter().map(Into::into).collect()))
+    Ok(Json(report.into()))
 }

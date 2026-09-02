@@ -6,8 +6,8 @@ type StockOutcome = components['schemas']['StockOutcomeDto'];
 
 function outcome(over: Partial<StockOutcome>): StockOutcome {
   return {
-    product_id: 'p1',
-    product_name: 'Chicken Breast',
+    subject: { kind: 'product', product_id: 'p1' },
+    name: 'Chicken Breast',
     wanted: { amount: 300, unit: 'g' },
     deducted: { amount: 300, unit: 'g' },
     shortfall: { state: 'covered' },

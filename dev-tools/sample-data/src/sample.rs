@@ -12,7 +12,7 @@ use mmp_core::domain::{
     NewNutritionTarget, NewProduct, NewRecipe, NewRecipeComponent, NewRecipeInstruction,
     NewStockItem, NewUser, NutritionFacts, NutritionGoals, OutcomeActor, Patch, ProductId,
     Provenance, Quantity, RecipeId, RecipePatch, RecipeRequirement, Role, SourceDate,
-    SourceDateKind, StockLevel, StorageLocation, Unit, User, UserId,
+    SourceDateKind, StockLevel, StorageLocation, Unit, UsabilityDeadline, User, UserId,
 };
 use mmp_server::state::AppState;
 use rust_decimal::Decimal;
@@ -555,7 +555,81 @@ impl Loader<'_> {
         self.load_previous_partial_week().await?;
         self.load_current_partial_week().await?;
         self.load_household_meals().await?;
-        self.load_assumed_meals().await
+        self.load_assumed_meals().await?;
+        self.load_pooled_ingredient_demand().await
+    }
+
+    async fn load_pooled_ingredient_demand(&mut self) -> anyhow::Result<()> {
+        let milk = [
+            ("whole-milk", 150, 2_i64, "nearly empty, use this one first"),
+            ("whole-milk-value", 600, 9, "the big bottle, still sealed"),
+        ];
+        for (key, millilitres, days, note) in milk {
+            let product = product_id(key);
+            if self
+                .state
+                .stock
+                .list(&mmp_core::ports::StockQuery {
+                    product_id: Some(product),
+                    ..Default::default()
+                })
+                .await?
+                .items
+                .iter()
+                .any(|item| item.note.as_deref() == Some(note))
+            {
+                continue;
+            }
+            self.state
+                .stock
+                .create(
+                    NewStockItem {
+                        product_id: product,
+                        level: StockLevel::Exact {
+                            quantity: quantity(millilitres, Unit::Millilitre),
+                        },
+                        storage_location: StorageLocation::Chilled,
+                        source_date: None,
+                        usability_deadline: Some(UsabilityDeadline {
+                            date: self.today + Duration::days(days),
+                            basis: Some("printed on the bottle".to_owned()),
+                        }),
+                        note: Some(note.to_owned()),
+                    },
+                    self.actor.id,
+                    Some(self.member.id),
+                )
+                .await?;
+            self.report.stock_items_created += 1;
+        }
+
+        let date = self.today + Duration::days(5);
+        let id = meal_id(date, MealSlot::Breakfast);
+        if self.state.meal_plan.get(id).await.is_ok() {
+            return Ok(());
+        }
+        self.state
+            .meal_plan
+            .create_unchecked(NewMealPlanEntry {
+                id: Some(id),
+                scope: MealPlanScope::Member,
+                member_id: Some(self.member.id),
+                planned_on: date,
+                planned_time: slot_time(MealSlot::Breakfast),
+                slot: MealSlot::Breakfast,
+                portioning: mmp_core::domain::Portioning::Equal,
+                components: vec![NewMealPlanComponent {
+                    id: None,
+                    item: MealItemRef::recipe(recipe_id("porridge")),
+                    amount: servings(2),
+                }],
+                participants: None,
+                guest_groups: Vec::new(),
+                actor_id: self.actor.id,
+            })
+            .await?;
+        self.report.meals_created += 1;
+        Ok(())
     }
 
     async fn load_assumed_meals(&mut self) -> anyhow::Result<()> {

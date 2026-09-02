@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use mmp_core::Result;
 use mmp_core::domain::{Ingredient, IngredientId, Revision};
 use mmp_core::ports::{
-    IngredientQuery, IngredientRepository, Paginated, SortDirection, UpdateOutcome,
+    IngredientQuery, IngredientRepository, IngredientSort, Paginated, SortDirection, UpdateOutcome,
 };
 use sqlx::PgPool;
 
@@ -38,21 +38,41 @@ const GET_BY_SEED_KEY: &str = concat!(
     columns!(),
     " FROM ingredient WHERE seed_key = $1"
 );
+macro_rules! product_count {
+    () => {
+        "(SELECT count(*) FROM product \
+          WHERE product.mapped_ingredient_id = ingredient.id \
+            AND product.archived_at IS NULL)"
+    };
+}
+
+macro_rules! list {
+    ($order:expr) => {
+        concat!(
+            "SELECT ",
+            columns!(),
+            " FROM ingredient",
+            filter!(),
+            " ORDER BY ",
+            $order,
+            " LIMIT $5 OFFSET $6"
+        )
+    };
+}
+
 const COUNT: &str = concat!("SELECT count(*) FROM ingredient", filter!());
-const LIST_ASC: &str = concat!(
-    "SELECT ",
-    columns!(),
-    " FROM ingredient",
-    filter!(),
-    " ORDER BY CASE WHEN $3::text IS NULL THEN 0 ELSE similarity(name, $3) END DESC, lower(name) ASC LIMIT $5 OFFSET $6"
-);
-const LIST_DESC: &str = concat!(
-    "SELECT ",
-    columns!(),
-    " FROM ingredient",
-    filter!(),
-    " ORDER BY CASE WHEN $3::text IS NULL THEN 0 ELSE similarity(name, $3) END DESC, lower(name) DESC LIMIT $5 OFFSET $6"
-);
+const LIST_NAME_ASC: &str = list!(concat!(
+    "CASE WHEN $3::text IS NULL THEN 0 ELSE similarity(name, $3) END DESC",
+    ", lower(name) ASC"
+));
+const LIST_NAME_DESC: &str = list!(concat!(
+    "CASE WHEN $3::text IS NULL THEN 0 ELSE similarity(name, $3) END DESC",
+    ", lower(name) DESC"
+));
+const LIST_CREATED_ASC: &str = list!("created_at ASC, lower(name) ASC");
+const LIST_CREATED_DESC: &str = list!("created_at DESC, lower(name) ASC");
+const LIST_COUNT_ASC: &str = list!(concat!(product_count!(), " ASC, lower(name) ASC"));
+const LIST_COUNT_DESC: &str = list!(concat!(product_count!(), " DESC, lower(name) ASC"));
 const CURRENT_REVISION: &str = "SELECT revision FROM ingredient WHERE id = $1";
 
 pub struct PgIngredientRepository {
@@ -97,9 +117,13 @@ impl IngredientRepository for PgIngredientRepository {
     async fn list(&self, query: &IngredientQuery) -> Result<Paginated<Ingredient>> {
         let origin = query.origin.map(|o| o.code());
         let search = query.search.as_deref();
-        let list_sql = match query.sort {
-            SortDirection::Ascending => LIST_ASC,
-            SortDirection::Descending => LIST_DESC,
+        let list_sql = match (query.sort_by, query.sort) {
+            (IngredientSort::Name, SortDirection::Ascending) => LIST_NAME_ASC,
+            (IngredientSort::Name, SortDirection::Descending) => LIST_NAME_DESC,
+            (IngredientSort::Created, SortDirection::Ascending) => LIST_CREATED_ASC,
+            (IngredientSort::Created, SortDirection::Descending) => LIST_CREATED_DESC,
+            (IngredientSort::ProductCount, SortDirection::Ascending) => LIST_COUNT_ASC,
+            (IngredientSort::ProductCount, SortDirection::Descending) => LIST_COUNT_DESC,
         };
 
         let total: (i64,) = sqlx::query_as(COUNT)

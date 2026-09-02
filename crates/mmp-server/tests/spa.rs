@@ -41,16 +41,17 @@ fn app_with_web(dist: &std::path::Path) -> axum::Router {
     let products = InMemoryProductRepository::new();
     let consumption = InMemoryConsumptionRecordRepository::new();
     let targets = InMemoryNutritionTargetRepository::new();
+    let ingredients = Arc::new(InMemoryIngredientRepository::new());
     let recipes_repo = Arc::new(InMemoryRecipeRepository::new());
     let recipes = RecipeService::new(
         recipes_repo.clone(),
         Arc::new(products.clone()),
-        Arc::new(InMemoryIngredientRepository::new()),
+        ingredients.clone(),
         Arc::new(SystemClock),
     );
     let state = AppState::new(
         CatalogueService::new(
-            Arc::new(InMemoryIngredientRepository::new()),
+            ingredients.clone(),
             Arc::new(products.clone()),
             Arc::new(SystemClock),
         ),
@@ -62,13 +63,15 @@ fn app_with_web(dist: &std::path::Path) -> axum::Router {
         DiaryService::new(
             Arc::new(consumption.clone()),
             Arc::new(products.clone()),
+            ingredients.clone(),
             recipes_repo.clone(),
             Arc::new(SystemClock),
         ),
         MealPlanService::new(
             Arc::new(InMemoryMealPlanRepository::new(consumption.clone())),
             Arc::new(products),
-            recipes_repo,
+            ingredients.clone(),
+            recipes_repo.clone(),
             Arc::new(consumption),
             Arc::new(targets.clone()),
             Arc::new(InMemoryHouseholdMemberRepository::new()),
@@ -81,6 +84,7 @@ fn app_with_web(dist: &std::path::Path) -> axum::Router {
             Arc::new(InMemoryStockRepository::new()),
             Arc::new(InMemoryProductRepository::new()),
             Arc::new(InMemoryMealPlanRepository::default()),
+            recipes_repo.clone(),
             Arc::new(InMemoryHouseholdMemberRepository::new()),
             Arc::new(InMemoryHouseholdSettingsRepository::new()),
             Arc::new(SystemClock),
@@ -185,16 +189,17 @@ async fn without_a_web_build_the_api_still_works() {
     let products = InMemoryProductRepository::new();
     let consumption = InMemoryConsumptionRecordRepository::new();
     let targets = InMemoryNutritionTargetRepository::new();
+    let ingredients = Arc::new(InMemoryIngredientRepository::new());
     let recipes_repo = Arc::new(InMemoryRecipeRepository::new());
     let recipes = RecipeService::new(
         recipes_repo.clone(),
         Arc::new(products.clone()),
-        Arc::new(InMemoryIngredientRepository::new()),
+        ingredients.clone(),
         Arc::new(SystemClock),
     );
     let state = AppState::new(
         CatalogueService::new(
-            Arc::new(InMemoryIngredientRepository::new()),
+            ingredients.clone(),
             Arc::new(products.clone()),
             Arc::new(SystemClock),
         ),
@@ -206,13 +211,15 @@ async fn without_a_web_build_the_api_still_works() {
         DiaryService::new(
             Arc::new(consumption.clone()),
             Arc::new(products.clone()),
+            ingredients.clone(),
             recipes_repo.clone(),
             Arc::new(SystemClock),
         ),
         MealPlanService::new(
             Arc::new(InMemoryMealPlanRepository::new(consumption.clone())),
             Arc::new(products),
-            recipes_repo,
+            ingredients.clone(),
+            recipes_repo.clone(),
             Arc::new(consumption),
             Arc::new(targets.clone()),
             Arc::new(InMemoryHouseholdMemberRepository::new()),
@@ -225,6 +232,7 @@ async fn without_a_web_build_the_api_still_works() {
             Arc::new(InMemoryStockRepository::new()),
             Arc::new(InMemoryProductRepository::new()),
             Arc::new(InMemoryMealPlanRepository::default()),
+            recipes_repo.clone(),
             Arc::new(InMemoryHouseholdMemberRepository::new()),
             Arc::new(InMemoryHouseholdSettingsRepository::new()),
             Arc::new(SystemClock),

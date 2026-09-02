@@ -5,7 +5,7 @@ pub use clock::{Clock, FixedClock, SystemClock};
 pub use repository::{
     AccessGrantRepository, ConsumptionQuery, ConsumptionRecordRepository,
     HouseholdMemberRepository, HouseholdSettingsRepository, IngredientQuery, IngredientRepository,
-    MealPlanComponentUpdate, MealPlanQuery, MealPlanRepository, MemberQuery,
+    IngredientSort, MealPlanComponentUpdate, MealPlanQuery, MealPlanRepository, MemberQuery,
     NutritionTargetRepository, ProductQuery, ProductRepository, RecipeQuery, RecipeRepository,
     SnapshotOp, SortDirection, StockDeduction, StockQuery, StockRelease, StockRepository,
     StockWrite, UpdateOutcome, UserQuery, UserRepository,

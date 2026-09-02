@@ -14,13 +14,14 @@ use mmp_core::domain::{
     RecipePhoto, RecipePhotoDerivatives, RecipeRequirement, RecipeVisibility, Revision, Role,
     StockEventKind, StockItemId, StockLevel, StorageLocation, Unit, User, UserId,
 };
+use mmp_core::domain::{DeductionTarget, StockEffectSource};
 use mmp_core::ports::{
     AccessGrantRepository, ConsumptionQuery, ConsumptionRecordRepository,
     HouseholdMemberRepository, HouseholdSettingsRepository, IngredientQuery, IngredientRepository,
-    MealPlanComponentUpdate, MealPlanQuery, MealPlanRepository, MemberQuery,
+    IngredientSort, MealPlanComponentUpdate, MealPlanQuery, MealPlanRepository, MemberQuery,
     NutritionTargetRepository, PageRequest, ProductQuery, ProductRepository, RecipeQuery,
-    RecipeRepository, SnapshotOp, SortDirection, StockQuery, StockRepository, StockWrite,
-    UpdateOutcome, UserRepository,
+    RecipeRepository, SnapshotOp, SortDirection, StockDeduction, StockQuery, StockRepository,
+    StockWrite, UpdateOutcome, UserRepository,
 };
 
 fn no_stock() -> StockWrite {
@@ -2828,4 +2829,203 @@ async fn a_stale_stock_update_is_refused(pool: PgPool) {
 
     let events = repo.list_events(item.id).await.unwrap();
     assert_eq!(events.len(), 1, "a refused update must not write an event");
+}
+
+fn stock_item_of(product_id: ProductId, millilitres: i64) -> mmp_core::domain::StockItem {
+    let now = OffsetDateTime::now_utc();
+    mmp_core::domain::StockItem {
+        id: StockItemId::new(),
+        product_id,
+        level: StockLevel::Exact {
+            quantity: Quantity::new(Decimal::new(millilitres, 0), Unit::Millilitre),
+        },
+        storage_location: StorageLocation::Chilled,
+        source_date: None,
+        usability_deadline: None,
+        note: None,
+        revision: Revision::INITIAL,
+        created_at: now,
+        updated_at: now,
+        archived_at: None,
+    }
+}
+
+fn millilitres(value: i64) -> Quantity {
+    Quantity::new(Decimal::new(value, 0), Unit::Millilitre)
+}
+
+fn level_of(item: &mmp_core::domain::StockItem) -> Decimal {
+    match item.level {
+        StockLevel::Exact { quantity } => quantity.amount,
+        _ => panic!("expected an exact level"),
+    }
+}
+
+#[sqlx::test]
+async fn a_pooled_deduction_draws_across_every_product_in_the_pool(pool: PgPool) {
+    let users = PgUserRepository::new(pool.clone());
+    let actor = user("stockkeeper", vec![Role::Admin]);
+    users.insert(&actor).await.unwrap();
+    let (member_id, first_product) = seed_member_and_product(&pool).await;
+
+    let ingredients = PgIngredientRepository::new(pool.clone());
+    let milk = ingredient("Whole Milk");
+    ingredients.insert(&milk).await.unwrap();
+
+    let products = PgProductRepository::new(pool.clone());
+    let mut second_product = product("Sainsbury's Whole Milk");
+    second_product.mapped_ingredient_id = Some(milk.id);
+    products.insert(&second_product).await.unwrap();
+
+    let stock = PgStockRepository::new(pool.clone());
+    let a = stock_item_of(first_product, 400);
+    let b = stock_item_of(second_product.id, 400);
+    for item in [&a, &b] {
+        stock
+            .insert(item, &added_event(actor.id, member_id))
+            .await
+            .unwrap();
+    }
+
+    let record = consumption_record(member_id, first_product);
+    let write = StockWrite {
+        deductions: vec![StockDeduction {
+            source_kind: StockEffectSource::ConsumptionRecord,
+            source_id: record.id.as_uuid(),
+            source_detail_id: None,
+            target: DeductionTarget::pool(milk.id, vec![first_product, second_product.id]),
+            want: millilitres(600),
+            actor_user_id: Some(actor.id),
+            subject_member_id: Some(member_id),
+            source_label: "Cup of tea".to_owned(),
+        }],
+        releases: Vec::new(),
+    };
+
+    let outcomes = PgConsumptionRecordRepository::new(pool.clone())
+        .insert(&record, &write)
+        .await
+        .unwrap();
+
+    assert!(outcomes.is_empty(), "800 ml covers a 600 ml want");
+    let mut drawn = Decimal::ZERO;
+    for id in [a.id, b.id] {
+        let after = stock.get(id).await.unwrap().unwrap();
+        drawn += Decimal::new(400, 0) - level_of(&after);
+    }
+    assert_eq!(drawn, Decimal::new(600, 0));
+}
+
+#[sqlx::test]
+async fn two_draws_from_one_source_can_share_a_stock_item(pool: PgPool) {
+    let users = PgUserRepository::new(pool.clone());
+    let actor = user("stockkeeper", vec![Role::Admin]);
+    users.insert(&actor).await.unwrap();
+    let (member_id, product_id) = seed_member_and_product(&pool).await;
+
+    let stock = PgStockRepository::new(pool.clone());
+    let item = stock_item_of(product_id, 1000);
+    stock
+        .insert(&item, &added_event(actor.id, member_id))
+        .await
+        .unwrap();
+
+    // This is a recipe that both pins a product and asks for its ingredient: two lines, one source,
+    // and both land on the same bottle. Without the detail id the second insert is swallowed as a
+    // duplicate and we quietly under-deduct.
+    let record = consumption_record(member_id, product_id);
+    let line_a = Uuid::now_v7();
+    let line_b = Uuid::now_v7();
+    let deduction = |detail: Uuid, want: i64| StockDeduction {
+        source_kind: StockEffectSource::ConsumptionRecord,
+        source_id: record.id.as_uuid(),
+        source_detail_id: Some(detail),
+        target: DeductionTarget::product(product_id),
+        want: millilitres(want),
+        actor_user_id: Some(actor.id),
+        subject_member_id: Some(member_id),
+        source_label: "Milky pudding".to_owned(),
+    };
+    let write = StockWrite {
+        deductions: vec![deduction(line_a, 200), deduction(line_b, 150)],
+        releases: Vec::new(),
+    };
+
+    let records = PgConsumptionRecordRepository::new(pool.clone());
+    records.insert(&record, &write).await.unwrap();
+
+    let after = stock.get(item.id).await.unwrap().unwrap();
+    assert_eq!(level_of(&after), Decimal::new(650, 0));
+
+    let effects = stock
+        .effects_for_source(StockEffectSource::ConsumptionRecord, record.id.as_uuid())
+        .await
+        .unwrap();
+    assert_eq!(effects.len(), 2);
+}
+
+#[sqlx::test]
+async fn ingredients_sort_by_date_added_and_by_product_count(pool: PgPool) {
+    let ingredients = PgIngredientRepository::new(pool.clone());
+    let products = PgProductRepository::new(pool);
+
+    let now = OffsetDateTime::now_utc();
+    let mut oldest = ingredient("Coriander");
+    oldest.created_at = now - time::Duration::days(3);
+    let mut middle = ingredient("Whole Milk");
+    middle.created_at = now - time::Duration::days(2);
+    let mut newest = ingredient("Plain Flour");
+    newest.created_at = now - time::Duration::days(1);
+    for row in [&oldest, &middle, &newest] {
+        ingredients.insert(row).await.unwrap();
+    }
+
+    for (name, ingredient_id) in [
+        ("Tesco Whole Milk", middle.id),
+        ("Sainsbury's Whole Milk", middle.id),
+        ("Tesco Plain Flour", newest.id),
+    ] {
+        let mut row = product(name);
+        row.mapped_ingredient_id = Some(ingredient_id);
+        products.insert(&row).await.unwrap();
+    }
+
+    let mut archived = product("Discontinued Milk");
+    archived.mapped_ingredient_id = Some(middle.id);
+    archived.archived_at = Some(now);
+    products.insert(&archived).await.unwrap();
+
+    let names = |page: &mmp_core::ports::Paginated<Ingredient>| -> Vec<String> {
+        page.items.iter().map(|i| i.name.clone()).collect()
+    };
+
+    let newest_first = ingredients
+        .list(&IngredientQuery {
+            sort_by: IngredientSort::Created,
+            sort: SortDirection::Descending,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        names(&newest_first),
+        ["Plain Flour", "Whole Milk", "Coriander"]
+    );
+
+    let most_products = ingredients
+        .list(&IngredientQuery {
+            sort_by: IngredientSort::ProductCount,
+            sort: SortDirection::Descending,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        names(&most_products),
+        ["Whole Milk", "Plain Flour", "Coriander"],
+        "the archived product must not count towards Whole Milk"
+    );
+
+    let a_to_z = ingredients.list(&IngredientQuery::default()).await.unwrap();
+    assert_eq!(names(&a_to_z), ["Coriander", "Plain Flour", "Whole Milk"]);
 }

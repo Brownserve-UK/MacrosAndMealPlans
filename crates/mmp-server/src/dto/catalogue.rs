@@ -294,7 +294,26 @@ pub struct IngredientListQuery {
     pub include_archived: Option<bool>,
     pub page: Option<u32>,
     pub per_page: Option<u32>,
+    pub sort_by: Option<IngredientSortDto>,
     pub sort: Option<SortDirectionDto>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum IngredientSortDto {
+    Name,
+    Created,
+    ProductCount,
+}
+
+impl From<IngredientSortDto> for mmp_core::ports::IngredientSort {
+    fn from(value: IngredientSortDto) -> Self {
+        match value {
+            IngredientSortDto::Name => Self::Name,
+            IngredientSortDto::Created => Self::Created,
+            IngredientSortDto::ProductCount => Self::ProductCount,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Deserialize, IntoParams)]

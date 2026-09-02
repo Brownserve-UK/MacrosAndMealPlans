@@ -167,6 +167,7 @@ fn an_estimated_band_decrements_both_bounds_floors_at_zero_and_reverses_exactly(
 
     let after = item(applied.new_level);
     let effect = StockEffect {
+        source_detail_id: None,
         id: StockEffectId::new(),
         source_kind: StockEffectSource::MealPlanComponent,
         source_id: uuid::Uuid::now_v7(),
@@ -199,6 +200,7 @@ fn an_exact_take_floors_at_zero_and_reverses_to_the_amount_actually_removed() {
 
     let after = item(applied.new_level);
     let effect = StockEffect {
+        source_detail_id: None,
         id: StockEffectId::new(),
         source_kind: StockEffectSource::ConsumptionRecord,
         source_id: uuid::Uuid::now_v7(),
@@ -232,6 +234,7 @@ fn release_fails_when_the_tracking_mode_has_since_changed() {
         unit: Unit::Gram,
     });
     let effect = StockEffect {
+        source_detail_id: None,
         id: StockEffectId::new(),
         source_kind: StockEffectSource::MealPlanComponent,
         source_id: uuid::Uuid::now_v7(),

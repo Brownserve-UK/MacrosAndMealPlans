@@ -105,7 +105,7 @@ export function StockItemPage({ id }: { id: string }) {
   const canSeeHistory = principal?.permissions.includes('stock:history') ?? false;
 
   const availability =
-    (availabilityQuery.data ?? []).find((row) => row.product_id === current.product_id)
+    (availabilityQuery.data?.products ?? []).find((row) => row.product_id === current.product_id)
       ?.availability ?? null;
   const level = levelFor(availability);
   const siblings = (siblingsQuery.data?.items ?? []).filter((row) => row.id !== id);

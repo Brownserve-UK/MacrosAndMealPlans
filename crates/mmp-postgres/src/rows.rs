@@ -508,6 +508,7 @@ pub struct StockEffectRow {
     pub id: Uuid,
     pub source_kind: String,
     pub source_id: Uuid,
+    pub source_detail_id: Option<Uuid>,
     pub stock_item_id: Uuid,
     pub product_id: Uuid,
     pub state: String,
@@ -532,6 +533,7 @@ impl TryFrom<StockEffectRow> for StockEffect {
             source_kind: StockEffectSource::from_str(&row.source_kind)
                 .map_err(|_| bad_value("source_kind", &row.source_kind))?,
             source_id: row.source_id,
+            source_detail_id: row.source_detail_id,
             stock_item_id: StockItemId::from(row.stock_item_id),
             product_id: ProductId::from(row.product_id),
             state: StockEffectState::from_str(&row.state)

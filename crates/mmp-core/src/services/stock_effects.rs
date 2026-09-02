@@ -2,16 +2,16 @@ use std::collections::HashMap;
 use std::ops::{Deref, DerefMut};
 
 use crate::domain::{
-    ConsumedAmount, ConsumptionRecord, HouseholdMemberId, Product, ProductId, Quantity, Shortfall,
-    StockEffectSource, StockOutcome, UserId,
+    ConsumedAmount, ConsumptionRecord, DeductionTarget, DemandSubject, HouseholdMemberId,
+    IngredientId, Product, ProductId, Quantity, Shortfall, StockEffectSource, StockOutcome, UserId,
 };
 use crate::error::Result;
-use crate::ports::{ProductRepository, StockDeduction, StockRelease};
+use crate::ports::{IngredientRepository, ProductRepository, StockDeduction, StockRelease};
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct StockOutcomeView {
-    pub product_id: ProductId,
-    pub product_name: String,
+    pub subject: DemandSubject,
+    pub name: String,
     pub wanted: Quantity,
     pub deducted: Quantity,
     pub shortfall: Shortfall,
@@ -69,12 +69,36 @@ pub fn product_deduction(
     Some(StockDeduction {
         source_kind,
         source_id,
-        product_id: product.id,
+        source_detail_id: None,
+        target: DeductionTarget::product(product.id),
         want,
         actor_user_id: actor,
         subject_member_id: subject,
         source_label,
     })
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn requirement_deduction(
+    source_kind: StockEffectSource,
+    source_id: uuid::Uuid,
+    source_detail_id: uuid::Uuid,
+    target: DeductionTarget,
+    want: Quantity,
+    source_label: String,
+    actor: Option<UserId>,
+    subject: Option<HouseholdMemberId>,
+) -> StockDeduction {
+    StockDeduction {
+        source_kind,
+        source_id,
+        source_detail_id: Some(source_detail_id),
+        target,
+        want,
+        actor_user_id: actor,
+        subject_member_id: subject,
+        source_label,
+    }
 }
 
 pub fn component_release(
@@ -120,28 +144,52 @@ pub fn record_release(record: &ConsumptionRecord, source_label: String) -> Stock
 
 pub async fn name_outcomes(
     products: &dyn ProductRepository,
+    ingredients: &dyn IngredientRepository,
     outcomes: Vec<StockOutcome>,
 ) -> Result<Vec<StockOutcomeView>> {
     if outcomes.is_empty() {
         return Ok(Vec::new());
     }
-    let mut ids: Vec<ProductId> = outcomes.iter().map(|o| o.product_id).collect();
-    ids.sort_unstable_by_key(|id| id.as_uuid());
-    ids.dedup();
-    let names: HashMap<ProductId, String> = products
-        .get_many(&ids)
+    let mut product_ids: Vec<ProductId> = outcomes
+        .iter()
+        .filter_map(|o| o.subject.product_id())
+        .collect();
+    product_ids.sort_unstable_by_key(|id| id.as_uuid());
+    product_ids.dedup();
+    let mut ingredient_ids: Vec<IngredientId> = outcomes
+        .iter()
+        .filter_map(|o| o.subject.ingredient_id())
+        .collect();
+    ingredient_ids.sort_unstable_by_key(|id| id.as_uuid());
+    ingredient_ids.dedup();
+
+    let product_names: HashMap<ProductId, String> = products
+        .get_many(&product_ids)
         .await?
         .into_iter()
         .map(|p| (p.id, p.name))
         .collect();
+    let ingredient_names: HashMap<IngredientId, String> = ingredients
+        .get_many(&ingredient_ids)
+        .await?
+        .into_iter()
+        .map(|i| (i.id, i.name))
+        .collect();
+
     Ok(outcomes
         .into_iter()
         .map(|o| StockOutcomeView {
-            product_id: o.product_id,
-            product_name: names
-                .get(&o.product_id)
-                .cloned()
-                .unwrap_or_else(|| "Unknown product".to_owned()),
+            subject: o.subject,
+            name: match o.subject {
+                DemandSubject::Product { product_id } => product_names
+                    .get(&product_id)
+                    .cloned()
+                    .unwrap_or_else(|| "Unknown product".to_owned()),
+                DemandSubject::Ingredient { ingredient_id } => ingredient_names
+                    .get(&ingredient_id)
+                    .cloned()
+                    .unwrap_or_else(|| "Unknown ingredient".to_owned()),
+            },
             wanted: o.wanted,
             deducted: o.deducted,
             shortfall: o.shortfall,

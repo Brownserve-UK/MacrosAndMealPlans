@@ -3,8 +3,10 @@ import Box from '@mui/material/Box';
 import Stack from '@mui/material/Stack';
 import Typography from '@mui/material/Typography';
 import { Link } from '@tanstack/react-router';
-import type { Availability, StockItem } from '../../api/client';
+import Chip from '@mui/material/Chip';
+import type { Availability, DemandGap, StockItem } from '../../api/client';
 import { InitialsAvatar } from '../../components/InitialsAvatar';
+import { gapLabel } from './demandGap';
 import { levelFor } from './stockLevel';
 
 export type StockGroup = {
@@ -12,6 +14,7 @@ export type StockGroup = {
   productName: string;
   items: StockItem[];
   availability: Availability | null;
+  gaps: DemandGap[];
 };
 
 export function groupSortDate(group: StockGroup): string | null {
@@ -29,6 +32,7 @@ function subtitle(items: StockItem[]): string {
 
 export function StockCard({ group }: { group: StockGroup }) {
   const level = levelFor(group.availability);
+  const gap = gapLabel(group.gaps);
   const target = group.items[0];
   if (!target) return null;
 
@@ -60,6 +64,15 @@ export function StockCard({ group }: { group: StockGroup }) {
           <Typography variant="caption" color="text.secondary" noWrap>
             {subtitle(group.items)}
           </Typography>
+          {gap && (
+            <Chip
+              size="small"
+              color="warning"
+              variant="outlined"
+              label={gap}
+              sx={{ alignSelf: 'flex-start', mt: 0.25 }}
+            />
+          )}
         </Stack>
 
         {level.figure ? (

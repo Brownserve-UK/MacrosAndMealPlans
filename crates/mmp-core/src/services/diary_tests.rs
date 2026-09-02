@@ -8,8 +8,8 @@ use crate::domain::{
 use crate::domain::{StockItem, StockItemId, StockLevel, StorageLocation};
 use crate::ports::{FixedClock, StockRepository};
 use crate::testing::{
-    InMemoryConsumptionRecordRepository, InMemoryProductRepository, InMemoryRecipeRepository,
-    InMemoryStockRepository,
+    InMemoryConsumptionRecordRepository, InMemoryIngredientRepository, InMemoryProductRepository,
+    InMemoryRecipeRepository, InMemoryStockRepository,
 };
 use rust_decimal::Decimal;
 use time::OffsetDateTime;
@@ -62,9 +62,11 @@ fn harness_at(now: OffsetDateTime) -> Harness {
     let records = InMemoryConsumptionRecordRepository::with_stock(stock.clone());
     let products = InMemoryProductRepository::new();
     let recipes = InMemoryRecipeRepository::new();
+    let ingredients = InMemoryIngredientRepository::new();
     let service = DiaryService::new(
         Arc::new(records.clone()),
         Arc::new(products.clone()),
+        Arc::new(ingredients.clone()),
         Arc::new(recipes.clone()),
         Arc::new(FixedClock::new(now)),
     );
@@ -665,7 +667,7 @@ async fn amending_a_planned_meals_record_does_not_move_stock() {
 }
 
 #[tokio::test]
-async fn an_ad_hoc_recipe_record_produces_no_stock_effect() {
+async fn an_ad_hoc_recipe_record_draws_its_ingredients_from_stock() {
     let h = harness();
     let product = seed_product(&h, known_nutrition());
     let member = HouseholdMemberId::new();
@@ -721,6 +723,7 @@ async fn an_ad_hoc_recipe_record_produces_no_stock_effect() {
         .await
         .unwrap();
 
+    // The recipe needs 200 g across 2 servings, so one serving draws 100 g and covers it cleanly.
     assert!(recorded.stock.is_empty());
-    assert_eq!(h.stock_grams(item).await, dgrams(500));
+    assert_eq!(h.stock_grams(item).await, dgrams(400));
 }

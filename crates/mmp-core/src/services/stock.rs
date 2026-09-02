@@ -1,19 +1,22 @@
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
 use rust_decimal::Decimal;
 use time::Date;
 
+use super::fulfilment::{RecipeFulfilments, RecipeWant, expand_recipe};
 use crate::domain::{
-    Availability, Confidence, HouseholdMemberId, MissingStockInterpretation, NewStockEvent,
-    NewStockItem, ProductAvailability, ProductId, Quantity, Revision, StockEvent, StockEventKind,
-    StockItem, StockItemId, StockItemPatch, UserId,
+    Availability, AvailabilityReport, Confidence, ConsumedAmount, DeductionPlan, DemandGap,
+    DemandSubject, HouseholdMemberId, IngredientAvailability, IngredientId, MealItemRef,
+    MissingStockInterpretation, NewStockEvent, NewStockItem, ProductAvailability, ProductId,
+    Quantity, Recipe, RecipeId, RecipeRequirement, Revision, StockEvent, StockEventKind, StockItem,
+    StockItemId, StockItemPatch, UserId, plan_deduction,
 };
 use crate::error::{CoreError, Result};
 use crate::ports::{
     Clock, HouseholdMemberRepository, HouseholdSettingsRepository, MealPlanQuery,
-    MealPlanRepository, MemberQuery, PageRequest, Paginated, ProductRepository, StockQuery,
-    StockRepository, UpdateOutcome,
+    MealPlanRepository, MemberQuery, PageRequest, Paginated, ProductRepository, RecipeRepository,
+    StockQuery, StockRepository, UpdateOutcome,
 };
 
 const STOCK_ITEM: &str = "stock item";
@@ -23,6 +26,7 @@ pub struct StockService {
     stock: Arc<dyn StockRepository>,
     products: Arc<dyn ProductRepository>,
     meal_plans: Arc<dyn MealPlanRepository>,
+    recipes: Arc<dyn RecipeRepository>,
     members: Arc<dyn HouseholdMemberRepository>,
     settings: Arc<dyn HouseholdSettingsRepository>,
     clock: Arc<dyn Clock>,
@@ -33,6 +37,7 @@ impl StockService {
         stock: Arc<dyn StockRepository>,
         products: Arc<dyn ProductRepository>,
         meal_plans: Arc<dyn MealPlanRepository>,
+        recipes: Arc<dyn RecipeRepository>,
         members: Arc<dyn HouseholdMemberRepository>,
         settings: Arc<dyn HouseholdSettingsRepository>,
         clock: Arc<dyn Clock>,
@@ -41,6 +46,7 @@ impl StockService {
             stock,
             products,
             meal_plans,
+            recipes,
             members,
             settings,
             clock,
@@ -196,11 +202,7 @@ impl StockService {
         Ok(current)
     }
 
-    pub async fn availability_overview(
-        &self,
-        from: Date,
-        to: Date,
-    ) -> Result<Vec<ProductAvailability>> {
+    pub async fn availability_overview(&self, from: Date, to: Date) -> Result<AvailabilityReport> {
         let all = self
             .stock
             .list(&StockQuery {
@@ -210,9 +212,8 @@ impl StockService {
             })
             .await?;
         let mut ids: Vec<ProductId> = all.items.iter().map(|item| item.product_id).collect();
-        ids.sort_unstable_by_key(|id| id.as_uuid());
-        ids.dedup();
-        self.availability(&ids, from, to).await
+        sort_dedup(&mut ids, ProductId::as_uuid);
+        self.report(&ids, true, from, to).await
     }
 
     pub async fn availability(
@@ -220,10 +221,39 @@ impl StockService {
         product_ids: &[ProductId],
         from: Date,
         to: Date,
-    ) -> Result<Vec<ProductAvailability>> {
-        let interpretation = self.settings.get().await?.missing_stock_interpretation;
-        let items = self.stock.list_for_products(product_ids).await?;
+    ) -> Result<AvailabilityReport> {
+        self.report(product_ids, false, from, to).await
+    }
 
+    async fn report(
+        &self,
+        product_ids: &[ProductId],
+        all_ingredients: bool,
+        from: Date,
+        to: Date,
+    ) -> Result<AvailabilityReport> {
+        let interpretation = self.settings.get().await?.missing_stock_interpretation;
+        let demand = self.planned_demand(from, to).await?;
+
+        let mut ingredient_ids: Vec<IngredientId> = demand
+            .ingredients()
+            .filter(|id| {
+                all_ingredients
+                    || demand
+                        .pool(id)
+                        .iter()
+                        .any(|product_id| product_ids.contains(product_id))
+            })
+            .collect();
+        sort_dedup(&mut ingredient_ids, IngredientId::as_uuid);
+
+        let mut wanted: Vec<ProductId> = product_ids.to_vec();
+        for ingredient_id in &ingredient_ids {
+            wanted.extend(demand.pool(ingredient_id).iter().copied());
+        }
+        sort_dedup(&mut wanted, ProductId::as_uuid);
+
+        let items = self.stock.list_for_products(&wanted).await?;
         let mut by_product: HashMap<ProductId, Vec<&StockItem>> = HashMap::new();
         for item in &items {
             if item.is_archived() {
@@ -232,29 +262,75 @@ impl StockService {
             by_product.entry(item.product_id).or_default().push(item);
         }
 
-        let (demand, demand_incomplete) = self.planned_demand(from, to).await?;
+        let mut apportioned: HashMap<ProductId, Quantity> = HashMap::new();
+        let mut ingredients = Vec::with_capacity(ingredient_ids.len());
+        for ingredient_id in ingredient_ids {
+            let subject = DemandSubject::ingredient(ingredient_id);
+            let pool: Vec<&StockItem> = demand
+                .pool(&ingredient_id)
+                .iter()
+                .filter_map(|product_id| by_product.get(product_id))
+                .flat_map(|items| items.iter().copied())
+                .collect();
+            let want = demand.quantity(&subject);
 
-        let mut out = Vec::with_capacity(product_ids.len());
+            let owned: Vec<StockItem> = pool.iter().map(|item| (*item).clone()).collect();
+            if let Some(want) = want
+                && let DeductionPlan::Planned { takes, .. } = plan_deduction(&owned, want)
+            {
+                for take in takes {
+                    let Some(item) = pool.iter().find(|item| item.id == take.stock_item_id) else {
+                        continue;
+                    };
+                    add_quantity(&mut apportioned, item.product_id, take.requested);
+                }
+            }
+
+            ingredients.push(IngredientAvailability {
+                ingredient_id,
+                availability: resolve_availability(&pool, want, interpretation),
+                demand_gaps: demand.gaps(&subject),
+            });
+        }
+
+        let mut products = Vec::with_capacity(product_ids.len());
         for &product_id in product_ids {
+            let subject = DemandSubject::product(product_id);
             let stock = by_product
                 .get(&product_id)
                 .map(Vec::as_slice)
                 .unwrap_or(&[]);
-            let want = demand.get(&product_id).copied();
-            out.push(ProductAvailability {
+            let mut gaps = demand.gaps(&subject);
+            let mut want = demand.quantity(&subject);
+            if let Some(share) = apportioned.get(&product_id).copied() {
+                match want {
+                    None => want = Some(share),
+                    Some(direct) => match share.convert_to(direct.unit) {
+                        Ok(converted) => {
+                            want =
+                                Some(Quantity::new(direct.amount + converted.amount, direct.unit));
+                        }
+                        Err(_) => gaps.push(DemandGap::IncompatibleUnits),
+                    },
+                }
+            }
+            gaps.sort_unstable();
+            gaps.dedup();
+            products.push(ProductAvailability {
                 product_id,
                 availability: resolve_availability(stock, want, interpretation),
-                demand_incomplete,
+                demand_gaps: gaps,
             });
         }
-        Ok(out)
+
+        Ok(AvailabilityReport {
+            products,
+            ingredients,
+            demand_gaps: demand.loose_gaps(),
+        })
     }
 
-    async fn planned_demand(
-        &self,
-        from: Date,
-        to: Date,
-    ) -> Result<(HashMap<ProductId, Quantity>, bool)> {
+    async fn planned_demand(&self, from: Date, to: Date) -> Result<Demand> {
         let members = self
             .members
             .list(&MemberQuery {
@@ -263,10 +339,6 @@ impl StockService {
                 ..Default::default()
             })
             .await?;
-
-        let mut demand: HashMap<ProductId, Quantity> = HashMap::new();
-        let mut incomplete = false;
-        let mut product_cache: HashMap<ProductId, Option<crate::domain::Product>> = HashMap::new();
 
         let mut entries: Vec<crate::domain::MealPlanEntry> = Vec::new();
         for member in members.items {
@@ -289,40 +361,180 @@ impl StockService {
                 .filter(|entry| entry.scope == crate::domain::MealPlanScope::Household),
         );
 
-        for entry in entries {
+        let mut recipe_ids: Vec<RecipeId> = entries
+            .iter()
+            .flat_map(|entry| entry.components.iter())
+            .filter_map(|component| component.item.recipe_id())
+            .collect();
+        sort_dedup(&mut recipe_ids, RecipeId::as_uuid);
+        let recipes: HashMap<RecipeId, Recipe> = self
+            .recipes
+            .get_many(&recipe_ids)
+            .await?
+            .into_iter()
+            .map(|recipe| (recipe.id, recipe))
+            .collect();
+        let requirements: Vec<&RecipeRequirement> = recipes
+            .values()
+            .flat_map(|recipe| recipe.components.iter())
+            .map(|component| &component.requirement)
+            .collect();
+        let fulfilments = RecipeFulfilments::load(&*self.products, &requirements).await?;
+
+        let mut demand = Demand::default();
+        let mut product_cache: HashMap<ProductId, Option<crate::domain::Product>> = HashMap::new();
+
+        for entry in &entries {
             let household = entry.scope == crate::domain::MealPlanScope::Household;
             for component in &entry.components {
-                if !component_is_future_demand(&entry, component.id) {
+                if !component_is_future_demand(entry, component.id) {
                     continue;
                 }
-                let Some(product_id) = component.item.product_id() else {
-                    incomplete = true;
-                    continue;
-                };
-                let product = match product_cache.get(&product_id) {
-                    Some(cached) => cached.clone(),
-                    None => {
-                        let loaded = self.products.get(product_id).await?;
-                        product_cache.insert(product_id, loaded.clone());
-                        loaded
-                    }
-                };
-                let Some(product) = product else {
-                    incomplete = true;
-                    continue;
-                };
                 let wanted = if household {
-                    demand_amount_for_household(&entry, component)
+                    demand_amount_for_household(entry, component)
                 } else {
                     component.amount
                 };
-                match wanted.resolve(&product) {
-                    Ok(quantity) => add_demand(&mut demand, product_id, quantity, &mut incomplete),
-                    Err(_) => incomplete = true,
+
+                match component.item {
+                    MealItemRef::Product { product_id } => {
+                        let subject = DemandSubject::product(product_id);
+                        let product = match product_cache.get(&product_id) {
+                            Some(cached) => cached.clone(),
+                            None => {
+                                let loaded = self.products.get(product_id).await?;
+                                product_cache.insert(product_id, loaded.clone());
+                                loaded
+                            }
+                        };
+                        let Some(product) = product else {
+                            demand.note_gap(subject, DemandGap::ProductMissing);
+                            continue;
+                        };
+                        match wanted.resolve(&product) {
+                            Ok(quantity) => demand.add(subject, quantity),
+                            Err(_) => demand.note_gap(subject, DemandGap::AmountUnresolvable),
+                        }
+                    }
+                    MealItemRef::Recipe { recipe_id } => {
+                        let Some(recipe) = recipes.get(&recipe_id) else {
+                            demand.note_loose(DemandGap::RecipeMissing);
+                            continue;
+                        };
+                        let ConsumedAmount::Servings(servings) = wanted else {
+                            demand.note_loose(DemandGap::AmountUnresolvable);
+                            continue;
+                        };
+                        let expansion = expand_recipe(recipe, servings, &fulfilments);
+                        for want in expansion.wants {
+                            demand.add_want(&want);
+                        }
+                        for (subject, gap) in expansion.subject_gaps {
+                            demand.note_gap(subject, gap);
+                        }
+                        for gap in expansion.loose_gaps {
+                            demand.note_loose(gap);
+                        }
+                    }
                 }
             }
         }
-        Ok((demand, incomplete))
+
+        Ok(demand)
+    }
+}
+
+#[derive(Default)]
+struct Demand {
+    quantities: HashMap<DemandSubject, Quantity>,
+    subject_gaps: HashMap<DemandSubject, BTreeSet<DemandGap>>,
+    loose: BTreeSet<DemandGap>,
+    pools: HashMap<IngredientId, Vec<ProductId>>,
+}
+
+impl Demand {
+    fn add(&mut self, subject: DemandSubject, quantity: Quantity) {
+        match self.quantities.get(&subject).copied() {
+            None => {
+                self.quantities.insert(subject, quantity);
+            }
+            Some(existing) => match quantity.convert_to(existing.unit) {
+                Ok(converted) => {
+                    self.quantities.insert(
+                        subject,
+                        Quantity::new(existing.amount + converted.amount, existing.unit),
+                    );
+                }
+                Err(_) => self.note_gap(subject, DemandGap::IncompatibleUnits),
+            },
+        }
+    }
+
+    fn add_want(&mut self, want: &RecipeWant) {
+        if let Some(ingredient_id) = want.target.subject.ingredient_id() {
+            self.pools
+                .entry(ingredient_id)
+                .or_insert_with(|| want.target.product_ids.clone());
+        }
+        self.add(want.target.subject, want.want);
+    }
+
+    fn note_gap(&mut self, subject: DemandSubject, gap: DemandGap) {
+        if let Some(ingredient_id) = subject.ingredient_id() {
+            self.pools.entry(ingredient_id).or_default();
+        }
+        self.subject_gaps.entry(subject).or_default().insert(gap);
+    }
+
+    fn note_loose(&mut self, gap: DemandGap) {
+        self.loose.insert(gap);
+    }
+
+    fn quantity(&self, subject: &DemandSubject) -> Option<Quantity> {
+        self.quantities.get(subject).copied()
+    }
+
+    fn gaps(&self, subject: &DemandSubject) -> Vec<DemandGap> {
+        self.subject_gaps
+            .get(subject)
+            .map(|gaps| gaps.iter().copied().collect())
+            .unwrap_or_default()
+    }
+
+    fn loose_gaps(&self) -> Vec<DemandGap> {
+        self.loose.iter().copied().collect()
+    }
+
+    fn pool(&self, ingredient_id: &IngredientId) -> &[ProductId] {
+        self.pools
+            .get(ingredient_id)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    }
+
+    fn ingredients(&self) -> impl Iterator<Item = IngredientId> + '_ {
+        self.pools.keys().copied()
+    }
+}
+
+fn sort_dedup<T: Copy, K: Ord>(ids: &mut Vec<T>, key: impl Fn(&T) -> K) {
+    ids.sort_unstable_by_key(&key);
+    ids.dedup_by_key(|id| key(id));
+}
+
+fn add_quantity(totals: &mut HashMap<ProductId, Quantity>, key: ProductId, quantity: Quantity) {
+    match totals.get(&key).copied() {
+        None => {
+            totals.insert(key, quantity);
+        }
+        Some(existing) => {
+            if let Ok(converted) = quantity.convert_to(existing.unit) {
+                totals.insert(
+                    key,
+                    Quantity::new(existing.amount + converted.amount, existing.unit),
+                );
+            }
+        }
     }
 }
 
@@ -372,28 +584,6 @@ fn component_is_future_demand(
         return false;
     }
     statuses.contains(&crate::domain::ParticipantStatus::Planned)
-}
-
-fn add_demand(
-    demand: &mut HashMap<ProductId, Quantity>,
-    product_id: ProductId,
-    quantity: Quantity,
-    incomplete: &mut bool,
-) {
-    match demand.get(&product_id).copied() {
-        None => {
-            demand.insert(product_id, quantity);
-        }
-        Some(existing) => match quantity.convert_to(existing.unit) {
-            Ok(converted) => {
-                demand.insert(
-                    product_id,
-                    Quantity::new(existing.amount + converted.amount, existing.unit),
-                );
-            }
-            Err(_) => *incomplete = true,
-        },
-    }
 }
 
 fn resolve_availability(

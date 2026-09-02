@@ -34,6 +34,7 @@ fn to_query(query: IngredientListQuery) -> IngredientQuery {
             query.page.unwrap_or(1),
             query.per_page.unwrap_or(PageRequest::DEFAULT_PER_PAGE),
         ),
+        sort_by: query.sort_by.map(Into::into).unwrap_or_default(),
         sort: query.sort.map(Into::into).unwrap_or_default(),
     }
 }

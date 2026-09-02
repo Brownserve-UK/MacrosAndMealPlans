@@ -24,14 +24,15 @@ use crate::domain::{StockEffectSource, StockOutcome};
 use crate::error::{CoreError, Result, ValidationErrors};
 use crate::ports::{
     Clock, ConsumptionRecordRepository, HouseholdMemberRepository, HouseholdSettingsRepository,
-    MealPlanComponentUpdate, MealPlanQuery, MealPlanRepository, MemberQuery,
+    IngredientRepository, MealPlanComponentUpdate, MealPlanQuery, MealPlanRepository, MemberQuery,
     NutritionTargetRepository, PageRequest, ProductRepository, RecipeRepository, SnapshotOp,
     StockDeduction, StockRelease, StockWrite, UpdateOutcome,
 };
 
-use super::fulfilment::RecipeFulfilments;
+use super::fulfilment::{RecipeFulfilments, RecipeWant, expand_recipe};
 use super::stock_effects::{
     StockAffected, component_release, name_outcomes, product_deduction, record_deduction,
+    requirement_deduction,
 };
 
 const REVIEW_LOOKBACK_DAYS: i64 = 90;
@@ -167,6 +168,8 @@ struct ResolvedItem {
 struct ItemCatalogue {
     products: HashMap<ProductId, Product>,
     recipes: HashMap<RecipeId, RecipeCard>,
+    definitions: HashMap<RecipeId, Recipe>,
+    fulfilments: RecipeFulfilments,
 }
 
 impl ItemCatalogue {
@@ -183,6 +186,16 @@ impl ItemCatalogue {
                 .map(|card| card.name.clone())
                 .unwrap_or_else(|| "Missing recipe".to_owned()),
         }
+    }
+
+    fn recipe_wants(&self, recipe_id: RecipeId, amount: &ConsumedAmount) -> Vec<RecipeWant> {
+        let Some(recipe) = self.definitions.get(&recipe_id) else {
+            return Vec::new();
+        };
+        let ConsumedAmount::Servings(servings) = *amount else {
+            return Vec::new();
+        };
+        expand_recipe(recipe, servings, &self.fulfilments).wants
     }
 
     fn resolve(&self, item: MealItemRef, amount: &ConsumedAmount) -> ResolvedItem {
@@ -234,6 +247,7 @@ fn recipe_card(recipe: &Recipe, fulfilments: &RecipeFulfilments) -> RecipeCard {
 pub struct MealPlanService {
     plans: Arc<dyn MealPlanRepository>,
     products: Arc<dyn ProductRepository>,
+    ingredients: Arc<dyn IngredientRepository>,
     recipes: Arc<dyn RecipeRepository>,
     consumption: Arc<dyn ConsumptionRecordRepository>,
     targets: Arc<dyn NutritionTargetRepository>,
@@ -247,6 +261,7 @@ impl MealPlanService {
     pub fn new(
         plans: Arc<dyn MealPlanRepository>,
         products: Arc<dyn ProductRepository>,
+        ingredients: Arc<dyn IngredientRepository>,
         recipes: Arc<dyn RecipeRepository>,
         consumption: Arc<dyn ConsumptionRecordRepository>,
         targets: Arc<dyn NutritionTargetRepository>,
@@ -257,6 +272,7 @@ impl MealPlanService {
         Self {
             plans,
             products,
+            ingredients,
             recipes,
             consumption,
             targets,
@@ -852,8 +868,6 @@ impl MealPlanService {
                     input.actor_id,
                     Some(subject),
                 )
-                .into_iter()
-                .collect()
             },
             releases: Vec::new(),
         };
@@ -1162,8 +1176,8 @@ impl MealPlanService {
                 );
                 return Err(errors.into());
             }
-            if !component_still_eaten(&entry, *component_id)
-                && let Some(deduction) = self.component_deduction(
+            if !component_still_eaten(&entry, *component_id) {
+                deductions.extend(self.component_deduction(
                     &catalogue,
                     &entry,
                     *component_id,
@@ -1171,9 +1185,7 @@ impl MealPlanService {
                     &component.amount,
                     input.actor_id,
                     Some(subject),
-                )
-            {
-                deductions.push(deduction);
+                ));
             }
             let record = ConsumptionRecord {
                 id: Default::default(),
@@ -1284,8 +1296,8 @@ impl MealPlanService {
                         );
                         return Err(errors.into());
                     }
-                    if !component_still_eaten(&entry, component_id)
-                        && let Some(deduction) = self.component_deduction(
+                    if !component_still_eaten(&entry, component_id) {
+                        deductions.extend(self.component_deduction(
                             &catalogue,
                             &entry,
                             component_id,
@@ -1293,9 +1305,7 @@ impl MealPlanService {
                             &component.amount,
                             input.actor_id,
                             Some(reviewed.member_id),
-                        )
-                    {
-                        deductions.push(deduction);
+                        ));
                     }
                     let record = ConsumptionRecord {
                         id: Default::default(),
@@ -1364,9 +1374,7 @@ impl MealPlanService {
                     created_at: now,
                     updated_at: now,
                 };
-                if let Some(deduction) = self.record_deduction_for(&catalogue, &record) {
-                    deductions.push(deduction);
-                }
+                deductions.extend(self.record_deduction_for(&catalogue, &record));
                 records.push(record);
             }
         }
@@ -1380,7 +1388,7 @@ impl MealPlanService {
                     && guest_deductions.insert(allocation.component_id)
                 {
                     let component = find_component(&entry, allocation.component_id)?.clone();
-                    if let Some(deduction) = self.component_deduction(
+                    deductions.extend(self.component_deduction(
                         &catalogue,
                         &entry,
                         component.id,
@@ -1388,9 +1396,7 @@ impl MealPlanService {
                         &component.amount,
                         input.actor_id,
                         None,
-                    ) {
-                        deductions.push(deduction);
-                    }
+                    ));
                 }
             }
         }
@@ -1525,10 +1531,11 @@ impl MealPlanService {
         outcomes: Vec<StockOutcome>,
     ) -> Result<StockAffected<MealPlanEntryView>> {
         let view = self.get(id).await?;
-        let named = name_outcomes(&*self.products, outcomes).await?;
+        let named = name_outcomes(&*self.products, &*self.ingredients, outcomes).await?;
         Ok(StockAffected::new(view, named))
     }
 
+    #[allow(clippy::too_many_arguments)]
     #[allow(clippy::too_many_arguments)]
     fn component_deduction(
         &self,
@@ -1539,33 +1546,81 @@ impl MealPlanService {
         amount: &ConsumedAmount,
         actor: UserId,
         subject: Option<HouseholdMemberId>,
-    ) -> Option<StockDeduction> {
-        let MealItemRef::Product { product_id } = item else {
-            return None;
-        };
-        let product = catalogue.products.get(&product_id)?;
-        product_deduction(
-            StockEffectSource::MealPlanComponent,
-            component_id.as_uuid(),
-            product,
-            amount,
-            stock_source_label(entry, &product.name),
-            Some(actor),
-            subject,
-        )
+    ) -> Vec<StockDeduction> {
+        match item {
+            MealItemRef::Product { product_id } => {
+                let Some(product) = catalogue.products.get(&product_id) else {
+                    return Vec::new();
+                };
+                product_deduction(
+                    StockEffectSource::MealPlanComponent,
+                    component_id.as_uuid(),
+                    product,
+                    amount,
+                    stock_source_label(entry, &product.name),
+                    Some(actor),
+                    subject,
+                )
+                .into_iter()
+                .collect()
+            }
+            MealItemRef::Recipe { recipe_id } => {
+                let label = catalogue.name_of(item);
+                catalogue
+                    .recipe_wants(recipe_id, amount)
+                    .into_iter()
+                    .map(|want| {
+                        requirement_deduction(
+                            StockEffectSource::MealPlanComponent,
+                            component_id.as_uuid(),
+                            want.recipe_component_id.as_uuid(),
+                            want.target,
+                            want.want,
+                            stock_source_label(entry, &label),
+                            Some(actor),
+                            subject,
+                        )
+                    })
+                    .collect()
+            }
+        }
     }
 
     fn record_deduction_for(
         &self,
         catalogue: &ItemCatalogue,
         record: &ConsumptionRecord,
-    ) -> Option<StockDeduction> {
-        let MealItemRef::Product { product_id } = record.item else {
-            return None;
-        };
-        let product = catalogue.products.get(&product_id)?;
-        let label = product.name.clone();
-        record_deduction(record, product, label)
+    ) -> Vec<StockDeduction> {
+        match record.item {
+            MealItemRef::Product { product_id } => {
+                let Some(product) = catalogue.products.get(&product_id) else {
+                    return Vec::new();
+                };
+                let label = product.name.clone();
+                record_deduction(record, product, label)
+                    .into_iter()
+                    .collect()
+            }
+            MealItemRef::Recipe { recipe_id } => {
+                let label = catalogue.name_of(record.item);
+                catalogue
+                    .recipe_wants(recipe_id, &record.amount)
+                    .into_iter()
+                    .map(|want| {
+                        requirement_deduction(
+                            StockEffectSource::ConsumptionRecord,
+                            record.id.as_uuid(),
+                            want.recipe_component_id.as_uuid(),
+                            want.target,
+                            want.want,
+                            label.clone(),
+                            record.recorded_by,
+                            Some(record.member_id),
+                        )
+                    })
+                    .collect()
+            }
+        }
     }
 
     async fn validate_replacement_items(&self, items: &[MealItemRef]) -> Result<()> {
@@ -1935,12 +1990,21 @@ impl MealPlanService {
             .into_iter()
             .map(|product| (product.id, product))
             .collect();
-        let recipes: HashMap<RecipeId, RecipeCard> = recipes
+        let cards: HashMap<RecipeId, RecipeCard> = recipes
+            .iter()
+            .map(|recipe| (recipe.id, recipe_card(recipe, &fulfilments)))
+            .collect();
+        let definitions: HashMap<RecipeId, Recipe> = recipes
             .into_iter()
-            .map(|recipe| (recipe.id, recipe_card(&recipe, &fulfilments)))
+            .map(|recipe| (recipe.id, recipe))
             .collect();
 
-        Ok(ItemCatalogue { products, recipes })
+        Ok(ItemCatalogue {
+            products,
+            recipes: cards,
+            definitions,
+            fulfilments,
+        })
     }
 
     async fn present(

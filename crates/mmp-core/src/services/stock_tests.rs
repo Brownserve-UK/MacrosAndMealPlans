@@ -6,20 +6,22 @@ use time::macros::{date, datetime};
 
 use super::*;
 use crate::domain::{
-    Availability, Confidence, ConsumedAmount, HouseholdMember, HouseholdMemberId, MealItemRef,
-    MealPlanComponent, MealPlanEntry, MealSlot, NewStockItem, Product, ProductId, Provenance,
-    Quantity, Revision, StockLevel, StorageLocation, Unit, UserId,
+    Availability, Confidence, ConsumedAmount, DemandGap, HouseholdMember, HouseholdMemberId,
+    MealItemRef, MealPlanComponent, MealPlanEntry, MealSlot, NewStockItem, Product, ProductId,
+    Provenance, Quantity, Revision, StockLevel, StorageLocation, Unit, UserId,
 };
 use crate::ports::{FixedClock, MealPlanRepository, StockQuery};
 use crate::testing::{
     InMemoryHouseholdMemberRepository, InMemoryHouseholdSettingsRepository,
-    InMemoryMealPlanRepository, InMemoryProductRepository, InMemoryStockRepository,
+    InMemoryMealPlanRepository, InMemoryProductRepository, InMemoryRecipeRepository,
+    InMemoryStockRepository,
 };
 
 struct Harness {
     service: StockService,
     stock: InMemoryStockRepository,
     products: InMemoryProductRepository,
+    recipes: InMemoryRecipeRepository,
     meal_plans: InMemoryMealPlanRepository,
     member_id: HouseholdMemberId,
     actor_id: UserId,
@@ -29,6 +31,7 @@ fn harness() -> Harness {
     let stock = InMemoryStockRepository::new();
     let products = InMemoryProductRepository::new();
     let meal_plans = InMemoryMealPlanRepository::default();
+    let recipes = InMemoryRecipeRepository::new();
     let members = InMemoryHouseholdMemberRepository::new();
     let settings = InMemoryHouseholdSettingsRepository::new();
     let member_id = HouseholdMemberId::new();
@@ -46,6 +49,7 @@ fn harness() -> Harness {
         Arc::new(stock.clone()),
         Arc::new(products.clone()),
         Arc::new(meal_plans.clone()),
+        Arc::new(recipes.clone()),
         Arc::new(members),
         Arc::new(settings),
         Arc::new(FixedClock::new(datetime!(2026-08-24 09:00 UTC))),
@@ -54,6 +58,7 @@ fn harness() -> Harness {
         service,
         stock,
         products,
+        recipes,
         meal_plans,
         member_id,
         actor_id: UserId::new(),
@@ -188,7 +193,7 @@ async fn planned_demand_reduces_available_stock() {
         .await
         .unwrap();
 
-    match &result[0].availability {
+    match &result.products[0].availability {
         Availability::Quantified {
             on_hand,
             planned_demand,
@@ -231,7 +236,7 @@ async fn estimated_stock_uses_its_lower_bound() {
         .await
         .unwrap();
 
-    match &result[0].availability {
+    match &result.products[0].availability {
         Availability::Quantified {
             on_hand,
             confidence,
@@ -261,8 +266,11 @@ async fn a_not_tracked_item_is_assumed_available_and_never_short() {
         .await
         .unwrap();
 
-    assert_eq!(result[0].availability, Availability::AssumedAvailable);
-    assert!(!result[0].availability.is_short());
+    assert_eq!(
+        result.products[0].availability,
+        Availability::AssumedAvailable
+    );
+    assert!(!result.products[0].availability.is_short());
 }
 
 #[tokio::test]
@@ -277,11 +285,11 @@ async fn a_product_with_no_stock_record_is_unknown_by_default() {
         .await
         .unwrap();
 
-    assert_eq!(result[0].availability, Availability::Unknown);
+    assert_eq!(result.products[0].availability, Availability::Unknown);
 }
 
 #[tokio::test]
-async fn a_recipe_component_in_the_horizon_marks_demand_incomplete() {
+async fn a_planned_recipe_we_cannot_load_leaves_demand_incomplete() {
     let h = harness();
     let p = product();
     h.products.seed(p.clone());
@@ -334,7 +342,10 @@ async fn a_recipe_component_in_the_horizon_marks_demand_incomplete() {
         .await
         .unwrap();
 
-    assert!(result[0].demand_incomplete);
+    // The recipe id points at nothing, so there is no ingredient to blame: the gap has to travel
+    // at the report level rather than on a row.
+    assert_eq!(result.demand_gaps, vec![DemandGap::RecipeMissing]);
+    assert!(result.products[0].demand_gaps.is_empty());
 }
 
 #[tokio::test]
@@ -414,7 +425,7 @@ async fn a_planned_meal_keeps_holding_stock_after_its_time_has_passed() {
         .await
         .unwrap();
 
-    match &result[0].availability {
+    match &result.products[0].availability {
         Availability::Quantified {
             planned_demand,
             unallocated,
@@ -425,4 +436,209 @@ async fn a_planned_meal_keeps_holding_stock_after_its_time_has_passed() {
         }
         other => panic!("expected a quantified availability, got {other:?}"),
     }
+}
+
+fn mapped(name: &str, ingredient_id: crate::domain::IngredientId) -> Product {
+    let mut p = product();
+    p.id = ProductId::new();
+    p.name = name.to_owned();
+    p.mapped_ingredient_id = Some(ingredient_id);
+    p
+}
+
+fn ingredient_line(
+    ingredient_id: crate::domain::IngredientId,
+    g: i64,
+) -> crate::domain::RecipeComponent {
+    crate::domain::RecipeComponent {
+        id: crate::domain::RecipeComponentId::new(),
+        requirement: crate::domain::RecipeRequirement::Ingredient { ingredient_id },
+        source_text: None,
+        amount: ConsumedAmount::Measure(grams(g)),
+        position: 0,
+    }
+}
+
+fn seed_recipe(
+    h: &Harness,
+    servings: i32,
+    lines: Vec<crate::domain::RecipeComponent>,
+) -> crate::domain::Recipe {
+    let now = OffsetDateTime::UNIX_EPOCH;
+    let recipe = crate::domain::Recipe {
+        id: crate::domain::RecipeId::new(),
+        name: "Curry".to_owned(),
+        description: None,
+        notes: None,
+        preparation_minutes: None,
+        cooking_minutes: None,
+        servings,
+        components: lines,
+        instructions: Vec::new(),
+        meal_categories: Vec::new(),
+        country_categories: Vec::new(),
+        tags: Vec::new(),
+        photo_version: None,
+        owner_id: h.actor_id,
+        visibility: crate::domain::RecipeVisibility::Private,
+        created_by: h.actor_id,
+        updated_by: h.actor_id,
+        revision: Revision::INITIAL,
+        created_at: now,
+        updated_at: now,
+        archived_at: None,
+    };
+    h.recipes.seed(recipe.clone());
+    recipe
+}
+
+async fn plan_servings(h: &Harness, recipe_id: crate::domain::RecipeId, servings: i64) {
+    let now = OffsetDateTime::UNIX_EPOCH;
+    let entry = MealPlanEntry {
+        id: crate::domain::MealPlanEntryId::new(),
+        scope: crate::domain::MealPlanScope::Member,
+        member_id: Some(h.member_id),
+        planned_on: date!(2026 - 08 - 25),
+        planned_time: None,
+        slot: MealSlot::Dinner,
+        portioning: crate::domain::Portioning::Equal,
+        components: vec![MealPlanComponent {
+            id: crate::domain::MealPlanComponentId::new(),
+            item: MealItemRef::recipe(recipe_id),
+            amount: ConsumedAmount::Servings(Decimal::new(servings, 0)),
+            position: 0,
+            snapshot: None,
+            revision: Revision::INITIAL,
+            display_order: uuid::Uuid::nil(),
+        }],
+        participants: Vec::new(),
+        guest_groups: Vec::new(),
+        opted_out: Vec::new(),
+        created_by: h.actor_id,
+        updated_by: h.actor_id,
+        revision: Revision::INITIAL,
+        created_at: now,
+        updated_at: now,
+    };
+    h.meal_plans.insert(&entry).await.unwrap();
+}
+
+#[tokio::test]
+async fn a_planned_recipe_ingredient_counts_demand_across_its_whole_product_pool() {
+    let h = harness();
+    let rice = crate::domain::IngredientId::new();
+    let a = mapped("Tesco Basmati", rice);
+    let b = mapped("Sainsbury's Basmati", rice);
+    h.products.seed(a.clone());
+    h.products.seed(b.clone());
+    for p in [&a, &b] {
+        h.service
+            .create(
+                new_item(
+                    p.id,
+                    StockLevel::Exact {
+                        quantity: grams(300),
+                    },
+                ),
+                h.actor_id,
+                None,
+            )
+            .await
+            .unwrap();
+    }
+
+    // 400 g over 4 servings, two servings planned, so the pool owes 200 g.
+    let curry = seed_recipe(&h, 4, vec![ingredient_line(rice, 400)]);
+    plan_servings(&h, curry.id, 2).await;
+
+    let report = h
+        .service
+        .availability_overview(date!(2026 - 08 - 24), date!(2026 - 08 - 31))
+        .await
+        .unwrap();
+
+    assert!(report.demand_gaps.is_empty());
+    let ingredient = report
+        .ingredients
+        .iter()
+        .find(|row| row.ingredient_id == rice)
+        .expect("the pooled ingredient is reported");
+    let Availability::Quantified {
+        on_hand,
+        planned_demand,
+        unallocated,
+        ..
+    } = ingredient.availability
+    else {
+        panic!(
+            "expected a quantified pool, got {:?}",
+            ingredient.availability
+        );
+    };
+    assert_eq!(on_hand, grams(600));
+    assert_eq!(planned_demand, grams(200));
+    assert_eq!(unallocated, grams(400));
+
+    // And the product rows carry the same 200 g between them rather than double-counting it.
+    let per_product: Decimal = report
+        .products
+        .iter()
+        .filter_map(|row| match row.availability {
+            Availability::Quantified { planned_demand, .. } => Some(planned_demand.amount),
+            _ => None,
+        })
+        .sum();
+    assert_eq!(per_product, Decimal::new(200, 0));
+}
+
+#[tokio::test]
+async fn an_ingredient_with_no_mapped_products_reports_a_gap_rather_than_being_satisfied() {
+    let h = harness();
+    let rice = crate::domain::IngredientId::new();
+    let curry = seed_recipe(&h, 1, vec![ingredient_line(rice, 100)]);
+    plan_servings(&h, curry.id, 1).await;
+
+    let report = h
+        .service
+        .availability_overview(date!(2026 - 08 - 24), date!(2026 - 08 - 31))
+        .await
+        .unwrap();
+
+    let ingredient = report
+        .ingredients
+        .iter()
+        .find(|row| row.ingredient_id == rice)
+        .expect("the unmappable ingredient still gets a row");
+    assert_eq!(
+        ingredient.demand_gaps,
+        vec![DemandGap::IngredientHasNoProducts]
+    );
+    assert!(ingredient.demand_incomplete());
+}
+
+#[tokio::test]
+async fn an_ingredient_we_hold_no_stock_of_still_shows_its_demand() {
+    let h = harness();
+    let rice = crate::domain::IngredientId::new();
+    let a = mapped("Tesco Basmati", rice);
+    h.products.seed(a.clone());
+    // Deliberately no stock item: the product rows cannot express this, only the ingredient row can.
+
+    let curry = seed_recipe(&h, 1, vec![ingredient_line(rice, 250)]);
+    plan_servings(&h, curry.id, 1).await;
+
+    let report = h
+        .service
+        .availability_overview(date!(2026 - 08 - 24), date!(2026 - 08 - 31))
+        .await
+        .unwrap();
+
+    assert!(report.products.is_empty());
+    let ingredient = report
+        .ingredients
+        .iter()
+        .find(|row| row.ingredient_id == rice)
+        .expect("demand with no stock is still reported");
+    assert_eq!(ingredient.availability, Availability::Unknown);
+    assert!(ingredient.demand_gaps.is_empty());
 }

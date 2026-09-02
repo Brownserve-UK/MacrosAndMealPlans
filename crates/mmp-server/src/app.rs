@@ -82,12 +82,14 @@ pub fn stub_state() -> AppState {
         mmp_core::services::DiaryService::new(
             consumption.clone(),
             products.clone(),
+            Arc::new(NoopIngredients),
             Arc::new(NoopRecipes),
             Arc::new(SystemClock),
         ),
         mmp_core::services::MealPlanService::new(
             Arc::new(NoopMealPlans),
             products,
+            Arc::new(NoopIngredients),
             Arc::new(NoopRecipes),
             consumption,
             targets.clone(),
@@ -106,6 +108,7 @@ pub fn stub_state() -> AppState {
             Arc::new(NoopStock),
             Arc::new(NoopProducts),
             Arc::new(NoopMealPlans),
+            Arc::new(NoopRecipes),
             Arc::new(NoopMembers),
             Arc::new(NoopHouseholdSettings),
             Arc::new(SystemClock),

@@ -5,8 +5,8 @@ use rust_decimal::Decimal;
 use time::{Date, OffsetDateTime};
 
 use super::{
-    HouseholdMemberId, Patch, ProductId, Quantity, Revision, StockEffectId, StockEventId,
-    StockItemId, Unit, UserId,
+    HouseholdMemberId, IngredientId, Patch, ProductId, Quantity, Revision, StockEffectId,
+    StockEventId, StockItemId, Unit, UserId,
 };
 use crate::error::{Result, ValidationErrors};
 
@@ -405,11 +405,131 @@ impl Availability {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum DemandSubject {
+    Product { product_id: ProductId },
+    Ingredient { ingredient_id: IngredientId },
+}
+
+impl DemandSubject {
+    pub const fn product(product_id: ProductId) -> Self {
+        DemandSubject::Product { product_id }
+    }
+
+    pub const fn ingredient(ingredient_id: IngredientId) -> Self {
+        DemandSubject::Ingredient { ingredient_id }
+    }
+
+    pub const fn product_id(&self) -> Option<ProductId> {
+        match self {
+            DemandSubject::Product { product_id } => Some(*product_id),
+            DemandSubject::Ingredient { .. } => None,
+        }
+    }
+
+    pub const fn ingredient_id(&self) -> Option<IngredientId> {
+        match self {
+            DemandSubject::Ingredient { ingredient_id } => Some(*ingredient_id),
+            DemandSubject::Product { .. } => None,
+        }
+    }
+}
+
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum DemandGap {
+    UnresolvedRecipeLine,
+    IngredientHasNoProducts,
+    RecipeMissing,
+    ProductMissing,
+    AmountUnresolvable,
+    IncompatibleUnits,
+}
+
+impl DemandGap {
+    pub const ALL: [DemandGap; 6] = [
+        DemandGap::UnresolvedRecipeLine,
+        DemandGap::IngredientHasNoProducts,
+        DemandGap::RecipeMissing,
+        DemandGap::ProductMissing,
+        DemandGap::AmountUnresolvable,
+        DemandGap::IncompatibleUnits,
+    ];
+
+    pub const fn code(&self) -> &'static str {
+        match self {
+            DemandGap::UnresolvedRecipeLine => "unresolved_recipe_line",
+            DemandGap::IngredientHasNoProducts => "ingredient_has_no_products",
+            DemandGap::RecipeMissing => "recipe_missing",
+            DemandGap::ProductMissing => "product_missing",
+            DemandGap::AmountUnresolvable => "amount_unresolvable",
+            DemandGap::IncompatibleUnits => "incompatible_units",
+        }
+    }
+}
+
+impl fmt::Display for DemandGap {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.code())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct AvailabilityReport {
+    pub products: Vec<ProductAvailability>,
+    pub ingredients: Vec<IngredientAvailability>,
+    pub demand_gaps: Vec<DemandGap>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeductionTarget {
+    pub subject: DemandSubject,
+    pub product_ids: Vec<ProductId>,
+}
+
+impl DeductionTarget {
+    pub fn product(product_id: ProductId) -> Self {
+        Self {
+            subject: DemandSubject::product(product_id),
+            product_ids: vec![product_id],
+        }
+    }
+
+    pub fn pool(ingredient_id: IngredientId, product_ids: Vec<ProductId>) -> Self {
+        Self {
+            subject: DemandSubject::ingredient(ingredient_id),
+            product_ids,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ProductAvailability {
     pub product_id: ProductId,
     pub availability: Availability,
-    pub demand_incomplete: bool,
+    pub demand_gaps: Vec<DemandGap>,
+}
+
+impl ProductAvailability {
+    pub fn demand_incomplete(&self) -> bool {
+        !self.demand_gaps.is_empty()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct IngredientAvailability {
+    pub ingredient_id: IngredientId,
+    pub availability: Availability,
+    pub demand_gaps: Vec<DemandGap>,
+}
+
+impl IngredientAvailability {
+    pub fn demand_incomplete(&self) -> bool {
+        !self.demand_gaps.is_empty()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -504,6 +624,7 @@ pub struct StockEffect {
     pub id: StockEffectId,
     pub source_kind: StockEffectSource,
     pub source_id: uuid::Uuid,
+    pub source_detail_id: Option<uuid::Uuid>,
     pub stock_item_id: StockItemId,
     pub product_id: ProductId,
     pub state: StockEffectState,
@@ -578,7 +699,7 @@ pub enum ReleasePlan {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct StockOutcome {
-    pub product_id: ProductId,
+    pub subject: DemandSubject,
     pub wanted: Quantity,
     pub deducted: Quantity,
     pub shortfall: Shortfall,

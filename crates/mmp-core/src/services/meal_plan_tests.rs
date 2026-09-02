@@ -18,7 +18,7 @@ use crate::ports::{FixedClock, StockRepository};
 use crate::services::{DiaryService, NutritionTargetService};
 use crate::testing::{
     InMemoryConsumptionRecordRepository, InMemoryHouseholdMemberRepository,
-    InMemoryHouseholdSettingsRepository, InMemoryMealPlanRepository,
+    InMemoryHouseholdSettingsRepository, InMemoryIngredientRepository, InMemoryMealPlanRepository,
     InMemoryNutritionTargetRepository, InMemoryProductRepository, InMemoryRecipeRepository,
     InMemoryStockRepository,
 };
@@ -86,6 +86,7 @@ impl Harness {
 
 fn harness() -> Harness {
     let products = InMemoryProductRepository::new();
+    let ingredients = InMemoryIngredientRepository::new();
     let recipes = InMemoryRecipeRepository::new();
     let stock = InMemoryStockRepository::new();
     let records = InMemoryConsumptionRecordRepository::with_stock(stock.clone());
@@ -107,6 +108,7 @@ fn harness() -> Harness {
     let service = MealPlanService::new(
         Arc::new(plans.clone()),
         Arc::new(products.clone()),
+        Arc::new(ingredients.clone()),
         Arc::new(recipes.clone()),
         Arc::new(records.clone()),
         Arc::new(target_repo.clone()),
@@ -117,6 +119,7 @@ fn harness() -> Harness {
     let diary = DiaryService::new(
         Arc::new(records.clone()),
         Arc::new(products.clone()),
+        Arc::new(ingredients.clone()),
         Arc::new(recipes.clone()),
         clock.clone(),
     );
@@ -2064,7 +2067,7 @@ async fn a_short_confirmation_floors_stock_at_zero_and_warns() {
     assert_eq!(h.stock_grams(item).await, dgrams(0));
     assert_eq!(outcome.stock.len(), 1);
     let warning = &outcome.stock[0];
-    assert_eq!(warning.product_name, "Chicken");
+    assert_eq!(warning.name, "Chicken");
     assert!(matches!(
         warning.shortfall,
         crate::domain::Shortfall::Short { .. }
@@ -2072,7 +2075,7 @@ async fn a_short_confirmation_floors_stock_at_zero_and_warns() {
 }
 
 #[tokio::test]
-async fn a_recipe_component_draws_no_stock_and_raises_no_warning() {
+async fn a_recipe_component_draws_each_of_its_lines_from_stock() {
     let h = harness();
     let rice = product("Rice", 100);
     h.products.seed(rice.clone());
@@ -2091,8 +2094,9 @@ async fn a_recipe_component_draws_no_stock_and_raises_no_warning() {
     )
     .await;
 
+    // 400 g of rice yields 4 servings, so eating one serving takes a quarter of it.
     assert!(outcome.stock.is_empty());
-    assert_eq!(h.stock_grams(item).await, dgrams(500));
+    assert_eq!(h.stock_grams(item).await, dgrams(400));
 }
 
 #[tokio::test]
@@ -2109,6 +2113,7 @@ async fn a_confirmed_component_stops_counting_as_planned_stock_demand() {
         Arc::new(h.stock.clone()),
         Arc::new(h.products.clone()),
         Arc::new(h.plans.clone()),
+        Arc::new(h.recipes.clone()),
         Arc::new(h.members.clone()),
         Arc::new(h.settings.clone()),
         Arc::new(FixedClock::new(datetime!(2026-08-24 09:00 UTC))),
@@ -2118,7 +2123,9 @@ async fn a_confirmed_component_stops_counting_as_planned_stock_demand() {
         .availability(&[chicken.id], date!(2026 - 08 - 25), date!(2026 - 08 - 25))
         .await
         .unwrap();
-    let crate::domain::Availability::Quantified { unallocated, .. } = before[0].availability else {
+    let crate::domain::Availability::Quantified { unallocated, .. } =
+        before.products[0].availability
+    else {
         panic!("expected a quantified availability");
     };
     assert_eq!(unallocated.amount, dgrams(200));
@@ -2136,7 +2143,9 @@ async fn a_confirmed_component_stops_counting_as_planned_stock_demand() {
         .availability(&[chicken.id], date!(2026 - 08 - 25), date!(2026 - 08 - 25))
         .await
         .unwrap();
-    let crate::domain::Availability::Quantified { unallocated, .. } = after[0].availability else {
+    let crate::domain::Availability::Quantified { unallocated, .. } =
+        after.products[0].availability
+    else {
         panic!("expected a quantified availability");
     };
     assert_eq!(
@@ -2902,4 +2911,152 @@ async fn needs_review_is_empty_when_assumptions_are_switched_off() {
 
     let review = h.service.needs_review(h.member_id, true).await.unwrap();
     assert!(review.personal.is_empty());
+}
+
+fn ingredient_line(ingredient_id: crate::domain::IngredientId, grams: i64) -> RecipeComponent {
+    RecipeComponent {
+        id: crate::domain::RecipeComponentId::new(),
+        requirement: crate::domain::RecipeRequirement::Ingredient { ingredient_id },
+        source_text: None,
+        amount: ConsumedAmount::Measure(Quantity::new(Decimal::new(grams, 0), Unit::Gram)),
+        position: 0,
+    }
+}
+
+fn mapped_product(name: &str, ingredient_id: crate::domain::IngredientId) -> Product {
+    let mut product = product(name, 100);
+    product.mapped_ingredient_id = Some(ingredient_id);
+    product
+}
+
+fn dated_stock(
+    h: &Harness,
+    product_id: ProductId,
+    grams: i64,
+    use_by: time::Date,
+) -> crate::domain::StockItemId {
+    let item = StockItem {
+        id: crate::domain::StockItemId::new(),
+        product_id,
+        level: StockLevel::Exact {
+            quantity: Quantity::new(Decimal::new(grams, 0), Unit::Gram),
+        },
+        storage_location: StorageLocation::Chilled,
+        source_date: None,
+        usability_deadline: Some(crate::domain::UsabilityDeadline {
+            date: use_by,
+            basis: None,
+        }),
+        note: None,
+        revision: Revision::INITIAL,
+        created_at: OffsetDateTime::UNIX_EPOCH,
+        updated_at: OffsetDateTime::UNIX_EPOCH,
+        archived_at: None,
+    };
+    let id = item.id;
+    h.stock.seed(item);
+    id
+}
+
+#[tokio::test]
+async fn a_pooled_ingredient_draw_spans_two_products_in_use_by_order() {
+    let h = harness();
+    let rice_id = crate::domain::IngredientId::new();
+    let tesco = mapped_product("Tesco Basmati", rice_id);
+    let sains = mapped_product("Sainsbury's Basmati", rice_id);
+    h.products.seed(tesco.clone());
+    h.products.seed(sains.clone());
+    // The Tesco bag goes off first, so it should be emptied before the other is touched.
+    let older = dated_stock(&h, tesco.id, 60, date!(2026 - 08 - 26));
+    let newer = dated_stock(&h, sains.id, 200, date!(2026 - 09 - 30));
+
+    let curry = seed_recipe(&h, "Curry", 4, vec![ingredient_line(rice_id, 400)]).await;
+    let entry = planned(&h, vec![servings_of(curry.id, 1)]).await;
+    let component = entry.components[0].component.clone();
+
+    let outcome = confirm_component(
+        &h,
+        entry.entry.id,
+        component.id,
+        component.revision,
+        ConsumedAmount::Servings(Decimal::ONE),
+    )
+    .await;
+
+    assert!(
+        outcome.stock.is_empty(),
+        "100 g was available across the pool"
+    );
+    assert_eq!(h.stock_grams(older).await, dgrams(0));
+    assert_eq!(h.stock_grams(newer).await, dgrams(160));
+}
+
+#[tokio::test]
+async fn reopening_a_recipe_meal_returns_every_product_it_drew_from() {
+    let h = harness();
+    let rice_id = crate::domain::IngredientId::new();
+    let tesco = mapped_product("Tesco Basmati", rice_id);
+    let sains = mapped_product("Sainsbury's Basmati", rice_id);
+    h.products.seed(tesco.clone());
+    h.products.seed(sains.clone());
+    let older = dated_stock(&h, tesco.id, 60, date!(2026 - 08 - 26));
+    let newer = dated_stock(&h, sains.id, 200, date!(2026 - 09 - 30));
+
+    let curry = seed_recipe(&h, "Curry", 4, vec![ingredient_line(rice_id, 400)]).await;
+    let entry = planned(&h, vec![servings_of(curry.id, 1)]).await;
+    let component = entry.components[0].component.clone();
+
+    let after_eating = confirm_component(
+        &h,
+        entry.entry.id,
+        component.id,
+        component.revision,
+        ConsumedAmount::Servings(Decimal::ONE),
+    )
+    .await;
+
+    h.service
+        .reopen_component(
+            entry.entry.id,
+            component.id,
+            after_eating.value.components[0].component.revision,
+            OutcomeActor::own(h.actor_id),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(h.stock_grams(older).await, dgrams(60));
+    assert_eq!(h.stock_grams(newer).await, dgrams(200));
+}
+
+#[tokio::test]
+async fn a_recipe_pinning_a_product_and_needing_its_ingredient_draws_both() {
+    let h = harness();
+    let rice_id = crate::domain::IngredientId::new();
+    let tesco = mapped_product("Tesco Basmati", rice_id);
+    h.products.seed(tesco.clone());
+    let item = h.seed_stock_grams(tesco.id, 500);
+
+    // Both lines can reach the same bag of rice. Without a per-line discriminator in the ledger the
+    // second draw would be swallowed as a duplicate and we would quietly under-deduct.
+    let curry = seed_recipe(
+        &h,
+        "Curry",
+        1,
+        vec![recipe_line(tesco.id, 100), ingredient_line(rice_id, 50)],
+    )
+    .await;
+    let entry = planned(&h, vec![servings_of(curry.id, 1)]).await;
+    let component = entry.components[0].component.clone();
+
+    confirm_component(
+        &h,
+        entry.entry.id,
+        component.id,
+        component.revision,
+        ConsumedAmount::Servings(Decimal::ONE),
+    )
+    .await;
+
+    assert_eq!(h.stock_grams(item).await, dgrams(350));
 }

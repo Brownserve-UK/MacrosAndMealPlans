@@ -9,7 +9,7 @@ import type {
 } from './client';
 import type { components } from './schema';
 
-export type IngredientListParams = {
+type CatalogueListParams = {
   q?: string;
   origin?: components['schemas']['CatalogueOrigin'];
   needs_products?: boolean;
@@ -18,7 +18,12 @@ export type IngredientListParams = {
   per_page?: number;
 };
 
-export type ProductListParams = IngredientListParams & {
+export type IngredientListParams = CatalogueListParams & {
+  sort_by?: components['schemas']['IngredientSortDto'];
+  sort?: components['schemas']['SortDirectionDto'];
+};
+
+export type ProductListParams = CatalogueListParams & {
   barcode?: string;
   retailer?: string;
   mapped_ingredient_id?: string;

@@ -34,13 +34,32 @@ vi.mock('../../api/queries', () => ({
     },
   }),
   useStockAvailability: () => ({
-    data: [
-      { product_id: 'br', demand_incomplete: false, availability: quantified(120, 300, 'g') },
-      { product_id: 'mk', demand_incomplete: false, availability: quantified(300, 500, 'ml', 'estimated') },
-      { product_id: 'oa', demand_incomplete: false, availability: quantified(500, 160, 'g') },
-      { product_id: 'ck', demand_incomplete: false, availability: quantified(1050, 300, 'g') },
-      { product_id: 'ri', demand_incomplete: false, availability: { state: 'assumed_available' } },
-    ],
+    data: {
+      products: [
+        { product_id: 'br', demand_gaps: [], availability: quantified(120, 300, 'g') },
+        { product_id: 'mk', demand_gaps: [], availability: quantified(300, 500, 'ml', 'estimated') },
+        { product_id: 'oa', demand_gaps: [], availability: quantified(500, 160, 'g') },
+        { product_id: 'ck', demand_gaps: [], availability: quantified(1050, 300, 'g') },
+        { product_id: 'ri', demand_gaps: [], availability: { state: 'assumed_available' } },
+      ],
+      ingredients: [
+        {
+          ingredient_id: 'rice',
+          demand_gaps: ['ingredient_has_no_products'],
+          availability: { state: 'unknown' },
+        },
+        { ingredient_id: 'oats', demand_gaps: [], availability: quantified(500, 100, 'g') },
+      ],
+      demand_gaps: [],
+    },
+  }),
+  useIngredients: () => ({
+    data: {
+      items: [
+        { id: 'rice', name: 'Basmati Rice' },
+        { id: 'oats', name: 'Jumbo Oats' },
+      ],
+    },
   }),
   useProducts: () => ({
     data: {
@@ -121,5 +140,19 @@ describe('StockPage', () => {
       'stock-card-oa',
       'stock-card-mk',
     ]);
+  });
+
+  it('surfaces only the ingredients that need attention', () => {
+    renderPage();
+    const rice = screen.getByTestId('ingredient-shortage-rice');
+    expect(within(rice).getByText('Basmati Rice')).toBeInTheDocument();
+    expect(within(rice).getByText('No products for this ingredient')).toBeInTheDocument();
+    // Jumbo Oats has demand its pool covers, so it stays out of the way.
+    expect(screen.queryByTestId('ingredient-shortage-oats')).toBeNull();
+  });
+
+  it('no longer claims recipe meals are uncounted', () => {
+    renderPage();
+    expect(screen.queryByText(/aren't counted against stock yet/)).toBeNull();
   });
 });

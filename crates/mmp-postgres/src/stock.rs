@@ -205,7 +205,7 @@ pub(crate) async fn apply_stock_write(
 
     for release in &write.releases {
         let effect_rows: Vec<crate::rows::StockEffectRow> = sqlx::query_as(
-            "SELECT id, source_kind, source_id, stock_item_id, product_id, state, applied_mode, \
+            "SELECT id, source_kind, source_id, source_detail_id, stock_item_id, product_id, state, applied_mode, \
              applied_unit, exact_delta, low_delta, high_delta, requested_value, apply_event_id, \
              applied_at, released_at, note FROM stock_effect \
              WHERE source_kind = $1 AND source_id = $2 AND state = 'applied' FOR UPDATE",
@@ -302,7 +302,7 @@ pub(crate) async fn apply_stock_write(
 
         if unresolved && let Some(product_id) = product_id {
             outcomes.push(mmp_core::domain::StockOutcome {
-                product_id,
+                subject: mmp_core::domain::DemandSubject::product(product_id),
                 wanted: mmp_core::domain::Quantity::new(Decimal::ZERO, unit),
                 deducted: mmp_core::domain::Quantity::new(Decimal::ZERO, unit),
                 shortfall: Shortfall::Covered,
@@ -315,9 +315,16 @@ pub(crate) async fn apply_stock_write(
         let rows: Vec<StockItemRow> = sqlx::query_as(concat!(
             "SELECT ",
             columns!(),
-            " FROM stock_item WHERE product_id = $1 AND archived_at IS NULL FOR UPDATE"
+            " FROM stock_item WHERE product_id = ANY($1) AND archived_at IS NULL FOR UPDATE"
         ))
-        .bind(deduction.product_id.as_uuid())
+        .bind(
+            deduction
+                .target
+                .product_ids
+                .iter()
+                .map(|id| id.as_uuid())
+                .collect::<Vec<_>>(),
+        )
         .fetch_all(&mut *conn)
         .await
         .map_err(|e| repository_error("locking stock for a deduction", e))?;
@@ -348,18 +355,20 @@ pub(crate) async fn apply_stock_write(
             let event_id = Uuid::now_v7();
             let inserted: Option<(Uuid,)> = sqlx::query_as(
                 "INSERT INTO stock_effect (
-                     id, source_kind, source_id, stock_item_id, product_id, state,
+                     id, source_kind, source_id, source_detail_id, stock_item_id, product_id, state,
                      applied_mode, applied_unit, exact_delta, low_delta, high_delta,
                      requested_value, apply_event_id, applied_at
-                 ) VALUES ($1, $2, $3, $4, $5, 'applied', $6, $7, $8, $9, $10, $11, $12, $13)
-                 ON CONFLICT (source_kind, source_id, stock_item_id) WHERE state = 'applied'
+                 ) VALUES ($1, $2, $3, $4, $5, $6, 'applied', $7, $8, $9, $10, $11, $12, $13, $14)
+                 ON CONFLICT (source_kind, source_id, source_detail_id, stock_item_id)
+                 WHERE state = 'applied'
                  DO NOTHING RETURNING id",
             )
             .bind(effect_id)
             .bind(deduction.source_kind.code())
             .bind(deduction.source_id)
+            .bind(deduction.source_detail_id)
             .bind(take.stock_item_id.as_uuid())
-            .bind(deduction.product_id.as_uuid())
+            .bind(item.product_id.as_uuid())
             .bind(item.tracking_mode().code())
             .bind(take.requested.unit.code())
             .bind(applied.exact_delta)
@@ -406,7 +415,7 @@ pub(crate) async fn apply_stock_write(
 
         if !matches!(shortfall, Shortfall::Covered) {
             outcomes.push(StockOutcome {
-                product_id: deduction.product_id,
+                subject: deduction.target.subject,
                 wanted: deduction.want,
                 deducted: mmp_core::domain::Quantity::new(deducted, deduction.want.unit),
                 shortfall,
@@ -613,7 +622,7 @@ impl StockRepository for PgStockRepository {
         source_id: Uuid,
     ) -> Result<Vec<StockEffect>> {
         let rows: Vec<StockEffectRow> = sqlx::query_as(
-            "SELECT id, source_kind, source_id, stock_item_id, product_id, state, applied_mode, \
+            "SELECT id, source_kind, source_id, source_detail_id, stock_item_id, product_id, state, applied_mode, \
              applied_unit, exact_delta, low_delta, high_delta, requested_value, apply_event_id, \
              applied_at, released_at, note FROM stock_effect \
              WHERE source_kind = $1 AND source_id = $2 ORDER BY applied_at ASC, id ASC",
