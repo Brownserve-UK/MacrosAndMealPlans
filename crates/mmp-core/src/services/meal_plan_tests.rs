@@ -2866,7 +2866,7 @@ async fn needs_review_lists_unresolved_assumptions_oldest_first() {
 
     let older = planned_at(
         &h,
-        date!(2026 - 08 - 20),
+        date!(2025 - 08 - 20),
         Some(time!(08:00)),
         MealSlot::Breakfast,
         vec![measured(food.id, 100)],

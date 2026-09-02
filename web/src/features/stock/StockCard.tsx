@@ -3,10 +3,8 @@ import Box from '@mui/material/Box';
 import Stack from '@mui/material/Stack';
 import Typography from '@mui/material/Typography';
 import { Link } from '@tanstack/react-router';
-import Chip from '@mui/material/Chip';
-import type { Availability, DemandGap, StockItem } from '../../api/client';
+import type { Availability, StockItem } from '../../api/client';
 import { InitialsAvatar } from '../../components/InitialsAvatar';
-import { gapLabel } from './demandGap';
 import { levelFor } from './stockLevel';
 
 export type StockGroup = {
@@ -14,32 +12,35 @@ export type StockGroup = {
   productName: string;
   items: StockItem[];
   availability: Availability | null;
-  gaps: DemandGap[];
 };
 
-export function groupSortDate(group: StockGroup): string | null {
-  const dates = group.items
+function firstDate(items: StockItem[]): string | null {
+  const dates = items
     .map((item) => item.usability_deadline?.date ?? item.source_date?.date ?? null)
     .filter((value): value is string => value !== null)
     .sort();
   return dates[0] ?? null;
 }
 
+export function groupSortDate(group: StockGroup): string | null {
+  return firstDate(group.items);
+}
+
 function subtitle(items: StockItem[]): string {
-  if (items.length > 1) return `${items.length} lots`;
-  return items[0]?.storage_location ?? '';
+  const locations = [...new Set(items.map((item) => item.storage_location))];
+  const date = firstDate(items);
+  const location = locations.join(', ');
+  return date ? `${location} · nearest date ${new Date(`${date}T00:00:00`).toLocaleDateString('en-GB')}` : location;
 }
 
 export function StockCard({ group }: { group: StockGroup }) {
   const level = levelFor(group.availability);
-  const gap = gapLabel(group.gaps);
-  const target = group.items[0];
-  if (!target) return null;
+  if (group.items.length === 0) return null;
 
   return (
     <Link
-      to="/stock/$id"
-      params={{ id: target.id }}
+      to="/stock/products/$productId"
+      params={{ productId: group.productId }}
       style={{ textDecoration: 'none', color: 'inherit' }}
     >
       <Box
@@ -64,15 +65,6 @@ export function StockCard({ group }: { group: StockGroup }) {
           <Typography variant="caption" color="text.secondary" noWrap>
             {subtitle(group.items)}
           </Typography>
-          {gap && (
-            <Chip
-              size="small"
-              color="warning"
-              variant="outlined"
-              label={gap}
-              sx={{ alignSelf: 'flex-start', mt: 0.25 }}
-            />
-          )}
         </Stack>
 
         {level.figure ? (

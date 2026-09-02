@@ -9,7 +9,7 @@ use mmp_core::domain::{
 };
 use mmp_core::services::{
     MealItem, MealItemSource, MealParticipantView, MealPlanComponentView, MealPlanDay,
-    MealPlanEntryView, MealPlanWeek, MealSlotView, NeedsReview, NutritionSummary, StockAffected,
+    MealPlanEntryView, MealPlanWeek, MealSlotView, NutritionSummary, StockAffected,
 };
 use serde::{Deserialize, Serialize};
 use time::{Date, OffsetDateTime, Time};
@@ -262,17 +262,15 @@ impl From<MealPlanComponentView> for MealPlanComponentDto {
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct NeedsReviewDto {
-    pub personal: Vec<MealPlanEntryDto>,
-    pub household: Vec<MealPlanEntryDto>,
+    pub personal_meals: Vec<MealPlanEntryDto>,
+    pub household_meals: Vec<MealPlanEntryDto>,
+    pub ingredient_mappings: Vec<IngredientMappingReviewDto>,
 }
 
-impl From<NeedsReview> for NeedsReviewDto {
-    fn from(value: NeedsReview) -> Self {
-        Self {
-            personal: value.personal.into_iter().map(Into::into).collect(),
-            household: value.household.into_iter().map(Into::into).collect(),
-        }
-    }
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct IngredientMappingReviewDto {
+    pub id: Uuid,
+    pub name: String,
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]

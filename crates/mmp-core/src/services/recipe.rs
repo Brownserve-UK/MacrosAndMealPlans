@@ -124,6 +124,28 @@ impl RecipeService {
         self.recipes.list(query).await
     }
 
+    pub async fn ingredients_needing_products(
+        &self,
+        viewer_id: UserId,
+        include_all_private: bool,
+    ) -> Result<Vec<crate::domain::Ingredient>> {
+        let ids = self
+            .recipes
+            .referenced_ingredient_ids(viewer_id, include_all_private)
+            .await?;
+        let counts = self.products.count_by_ingredient(&ids).await?;
+        let mut ingredients: Vec<_> = self
+            .ingredients
+            .get_many(&ids)
+            .await?
+            .into_iter()
+            .filter(|ingredient| !ingredient.is_archived())
+            .filter(|ingredient| counts.get(&ingredient.id).copied().unwrap_or(0) == 0)
+            .collect();
+        ingredients.sort_by_cached_key(|ingredient| ingredient.name.to_lowercase());
+        Ok(ingredients)
+    }
+
     pub async fn names_for(&self, recipe: &Recipe) -> Result<RecipeNames> {
         let requirements: Vec<&RecipeRequirement> = recipe
             .components

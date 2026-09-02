@@ -1374,6 +1374,30 @@ async fn round_trips_a_planned_meal_with_components(pool: PgPool) {
 }
 
 #[sqlx::test]
+async fn lists_review_entries_without_a_lower_date_bound(pool: PgPool) {
+    let (member_id, product_id, actor_id) = seed_meal_plan_dependencies(&pool).await;
+    let repo = PgMealPlanRepository::new(pool);
+    let mut original = meal_plan_entry(member_id, product_id, actor_id);
+    original.planned_on = date!(2020 - 01 - 01);
+    repo.insert(&original).await.unwrap();
+
+    let personal = repo
+        .list_through(member_id, date!(2026 - 09 - 02))
+        .await
+        .unwrap();
+    let all = repo.list_all_through(date!(2026 - 09 - 02)).await.unwrap();
+
+    assert_eq!(
+        personal.iter().map(|entry| entry.id).collect::<Vec<_>>(),
+        vec![original.id]
+    );
+    assert_eq!(
+        all.iter().map(|entry| entry.id).collect::<Vec<_>>(),
+        vec![original.id]
+    );
+}
+
+#[sqlx::test]
 async fn household_snacks_allow_distinct_times_and_one_untimed_occurrence(pool: PgPool) {
     let (member_id, product_id, actor_id) = seed_meal_plan_dependencies(&pool).await;
     let repo = PgMealPlanRepository::new(pool.clone());
@@ -2615,6 +2639,32 @@ async fn lists_recipes_scoped_to_owner_and_excludes_archived(pool: PgPool) {
         page.total, 2,
         "including archived shows both of the owner's recipes"
     );
+}
+
+#[sqlx::test]
+async fn lists_ingredient_references_from_visible_active_recipes(pool: PgPool) {
+    let (owner, product_id, _second) = seed_recipe_dependencies(&pool).await;
+    let ingredients = PgIngredientRepository::new(pool.clone());
+    let oats = ingredient("Review Oats");
+    ingredients.insert(&oats).await.unwrap();
+    let recipes = PgRecipeRepository::new(pool);
+    recipes
+        .insert(&recipe(
+            owner,
+            vec![
+                recipe_component(product_id, 0),
+                recipe_ingredient_component(oats.id, 1),
+            ],
+        ))
+        .await
+        .unwrap();
+
+    let ids = recipes
+        .referenced_ingredient_ids(owner, false)
+        .await
+        .unwrap();
+
+    assert_eq!(ids, vec![oats.id]);
 }
 
 #[sqlx::test]

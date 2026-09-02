@@ -1956,17 +1956,17 @@ async fn needs_review_only_shows_the_household_section_with_household_write() {
 
     let (status, body, _) = send(
         &app,
-        Call::new("GET", "/api/v1/meal-plan/needs-review").signed_in_as("sam"),
+        Call::new("GET", "/api/v1/needs-review").signed_in_as("sam"),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    assert!(body["personal"].is_array());
-    assert_eq!(body["household"], json!([]));
+    assert!(body["personal_meals"].is_array());
+    assert_eq!(body["household_meals"], json!([]));
+    assert!(body["ingredient_mappings"].is_array());
 
-    // The bootstrap admin holds household:write, so it gets the household section too.
-    let (status, body, _) = send(&app, Call::new("GET", "/api/v1/meal-plan/needs-review")).await;
+    let (status, body, _) = send(&app, Call::new("GET", "/api/v1/needs-review")).await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    assert!(body["household"].is_array());
+    assert!(body["household_meals"].is_array());
 }
 
 #[tokio::test]

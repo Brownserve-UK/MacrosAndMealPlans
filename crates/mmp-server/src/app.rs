@@ -23,6 +23,7 @@ pub fn build(state: AppState) -> (Router, utoipa::openapi::OpenApi) {
         .merge(routes::meal_plan::router())
         .merge(routes::nutrition_target::router())
         .merge(routes::recipes::router())
+        .merge(routes::review::router())
         .merge(routes::settings::router())
         .merge(routes::stock::router())
         .split_for_parts();
@@ -182,6 +183,13 @@ impl mmp_core::ports::RecipeRepository for NoopRecipes {
         q: &mmp_core::ports::RecipeQuery,
     ) -> mmp_core::Result<mmp_core::ports::Paginated<mmp_core::domain::RecipeSummary>> {
         Ok(mmp_core::ports::Paginated::new(vec![], 0, q.page))
+    }
+    async fn referenced_ingredient_ids(
+        &self,
+        _: mmp_core::domain::UserId,
+        _: bool,
+    ) -> mmp_core::Result<Vec<mmp_core::domain::IngredientId>> {
+        Ok(vec![])
     }
     async fn insert(&self, _: &mmp_core::domain::Recipe) -> mmp_core::Result<()> {
         Ok(())
@@ -515,6 +523,19 @@ impl mmp_core::ports::MealPlanRepository for NoopMealPlans {
     async fn list_all(
         &self,
         _: time::Date,
+        _: time::Date,
+    ) -> mmp_core::Result<Vec<mmp_core::domain::MealPlanEntry>> {
+        Ok(vec![])
+    }
+    async fn list_through(
+        &self,
+        _: mmp_core::domain::HouseholdMemberId,
+        _: time::Date,
+    ) -> mmp_core::Result<Vec<mmp_core::domain::MealPlanEntry>> {
+        Ok(vec![])
+    }
+    async fn list_all_through(
+        &self,
         _: time::Date,
     ) -> mmp_core::Result<Vec<mmp_core::domain::MealPlanEntry>> {
         Ok(vec![])

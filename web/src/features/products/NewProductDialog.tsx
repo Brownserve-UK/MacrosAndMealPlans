@@ -48,7 +48,7 @@ function validate(draft: ProductDraft): Record<string, string> {
   return errors;
 }
 
-function toBody(draft: ProductDraft) {
+function toBody(draft: ProductDraft, mappedIngredientId?: string) {
   return {
     name: draft.name.trim(),
     brand: draft.brand.trim() || null,
@@ -60,10 +60,19 @@ function toBody(draft: ProductDraft) {
       : null,
     servings_per_pack: draft.servingsPerPack.trim() ? Number(draft.servingsPerPack) : null,
     nutrition: draftToNutrition(draft.nutrition, packContextFrom(draft)),
+    mapped_ingredient_id: mappedIngredientId ?? null,
   };
 }
 
-export function NewProductDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+export function NewProductDialog({
+  open,
+  onClose,
+  mappedIngredientId,
+}: {
+  open: boolean;
+  onClose: () => void;
+  mappedIngredientId?: string;
+}) {
   const navigate = useNavigate();
   const create = useCreateProduct();
   const [draft, setDraft] = useState<ProductDraft>(emptyDraft());
@@ -85,7 +94,7 @@ export function NewProductDialog({ open, onClose }: { open: boolean; onClose: ()
     if (Object.keys(found).length > 0) return;
 
     try {
-      const created = await create.mutateAsync(toBody(draft));
+      const created = await create.mutateAsync(toBody(draft, mappedIngredientId));
       handleClose();
       void navigate({ to: '/products/$id', params: { id: created.id } });
     } catch (caught) {

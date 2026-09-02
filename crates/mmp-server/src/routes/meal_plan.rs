@@ -11,8 +11,8 @@ use crate::auth::Principal;
 use crate::dto::common::iso_date;
 use crate::dto::{
     CreateMealPlanEntryRequest, MarkMealPlanComponentEatenRequest, MarkMealPlanEatenRequest,
-    MealGuestGroupDto, MealPlanEntryDto, MealPlanWeekDto, NeedsReviewDto, PlannerCapabilitiesDto,
-    PlannerFoodDto, PlannerMealDto, PlannerPersonDto, PlannerWeekDto, ReviewMealOutcomesRequest,
+    MealGuestGroupDto, MealPlanEntryDto, MealPlanWeekDto, PlannerCapabilitiesDto, PlannerFoodDto,
+    PlannerMealDto, PlannerPersonDto, PlannerWeekDto, ReviewMealOutcomesRequest,
     SetMealPlanParticipantsRequest, UpdateMealPlanEntryRequest,
 };
 use crate::error::{ApiError, ApiResult};
@@ -35,7 +35,6 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(opt_out, opt_in))
         .routes(routes!(household_slot_attendance))
         .routes(routes!(review_outcomes))
-        .routes(routes!(needs_review))
 }
 
 fn entry_id(id: Uuid) -> MealPlanEntryId {
@@ -46,7 +45,10 @@ fn component_id(id: Uuid) -> MealPlanComponentId {
     id.into()
 }
 
-async fn personal_member(state: &AppState, principal: &Principal) -> ApiResult<HouseholdMemberId> {
+pub(crate) async fn personal_member(
+    state: &AppState,
+    principal: &Principal,
+) -> ApiResult<HouseholdMemberId> {
     let member_id = principal.member_id.ok_or_else(|| {
         ApiError::new(
             StatusCode::CONFLICT,
@@ -753,27 +755,6 @@ async fn household_slot_attendance(
         });
     }
     Ok(Json(out))
-}
-
-#[utoipa::path(
-    get,
-    path = "/api/v1/meal-plan/needs-review",
-    operation_id = "getMealPlanNeedsReview",
-    responses((status = 200, body = NeedsReviewDto)),
-    tag = "meal-plan",
-    security(("basic" = []))
-)]
-async fn needs_review(
-    State(state): State<AppState>,
-    principal: Principal,
-) -> ApiResult<Json<NeedsReviewDto>> {
-    let member = personal_member(&state, &principal).await?;
-    let include_household = principal.has(mmp_core::domain::Permission::HouseholdWrite);
-    let review = state
-        .meal_plan
-        .needs_review(member, include_household)
-        .await?;
-    Ok(Json(review.into()))
 }
 
 #[derive(serde::Deserialize)]

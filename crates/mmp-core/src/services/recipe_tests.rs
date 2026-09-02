@@ -8,7 +8,8 @@ use crate::CoreError;
 use crate::domain::{
     ConsumedAmount, Ingredient, IngredientId, MealCategory, NewRecipe, NewRecipeComponent,
     NewRecipeInstruction, NutritionFacts, NutritionQuality, Product, ProductId, Provenance,
-    Quantity, RecipePatch, RecipePhotoDerivatives, RecipeRequirement, Revision, Unit, UserId,
+    Quantity, RecipePatch, RecipePhotoDerivatives, RecipeRequirement, RecipeVisibility, Revision,
+    Unit, UserId,
 };
 use crate::ports::{FixedClock, PageRequest, RecipeQuery, SortDirection};
 use crate::services::{NutritionGapReason, RecipeService, ResolveRequirement};
@@ -170,6 +171,94 @@ async fn creates_a_recipe_owned_by_the_actor() {
     assert_eq!(recipe.revision, Revision::INITIAL);
     assert_eq!(recipe.components.len(), 1);
     assert_eq!(h.recipes.count(), 1);
+}
+
+#[tokio::test]
+async fn lists_unmapped_ingredients_used_by_visible_recipes() {
+    let h = harness();
+    let viewer = UserId::new();
+    let other = UserId::new();
+    let own_ingredient = seed_ingredient(&h.ingredients);
+    let shared_ingredient = IngredientId::new();
+    h.ingredients.seed(Ingredient {
+        id: shared_ingredient,
+        name: "Cinnamon".to_owned(),
+        default_unit: Unit::Gram,
+        provenance: Provenance::local(),
+        revision: Revision::INITIAL,
+        created_at: datetime!(2026-08-22 09:00 UTC),
+        updated_at: datetime!(2026-08-22 09:00 UTC),
+        archived_at: None,
+    });
+    let own = h
+        .service
+        .create_recipe(new_recipe(
+            viewer,
+            vec![ingredient_component(own_ingredient)],
+        ))
+        .await
+        .unwrap();
+    let mut shared = h
+        .service
+        .create_recipe(new_recipe(
+            other,
+            vec![ingredient_component(shared_ingredient)],
+        ))
+        .await
+        .unwrap();
+    shared.visibility = RecipeVisibility::Shared;
+    h.recipes.seed(shared);
+    h.recipes.seed(own);
+
+    let result = h
+        .service
+        .ingredients_needing_products(viewer, false)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        result
+            .iter()
+            .map(|ingredient| ingredient.id)
+            .collect::<Vec<_>>(),
+        vec![shared_ingredient, own_ingredient]
+    );
+}
+
+#[tokio::test]
+async fn excludes_mapped_ingredients_and_private_recipes_from_review() {
+    let h = harness();
+    let viewer = UserId::new();
+    let other = UserId::new();
+    let mapped = seed_ingredient(&h.ingredients);
+    seed_product_mapped(&h.products, 100, mapped);
+    h.service
+        .create_recipe(new_recipe(viewer, vec![ingredient_component(mapped)]))
+        .await
+        .unwrap();
+    let private = IngredientId::new();
+    h.ingredients.seed(Ingredient {
+        id: private,
+        name: "Private".to_owned(),
+        default_unit: Unit::Gram,
+        provenance: Provenance::local(),
+        revision: Revision::INITIAL,
+        created_at: datetime!(2026-08-22 09:00 UTC),
+        updated_at: datetime!(2026-08-22 09:00 UTC),
+        archived_at: None,
+    });
+    h.service
+        .create_recipe(new_recipe(other, vec![ingredient_component(private)]))
+        .await
+        .unwrap();
+
+    let result = h
+        .service
+        .ingredients_needing_products(viewer, false)
+        .await
+        .unwrap();
+
+    assert!(result.is_empty());
 }
 
 #[tokio::test]

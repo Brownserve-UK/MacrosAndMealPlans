@@ -13,6 +13,7 @@ export function ProductPicker({
   error,
   helperText,
   excludeIds,
+  unmappedOnly,
 }: {
   value: Product | null;
   onChange: (next: Product | null) => void;
@@ -21,10 +22,11 @@ export function ProductPicker({
   error?: boolean;
   helperText?: string;
   excludeIds?: string[];
+  unmappedOnly?: boolean;
 }) {
   const [input, setInput] = useState('');
   const debounced = useDebounced(input, 300);
-  const query = useProducts({ q: debounced || undefined, per_page: 20 });
+  const query = useProducts({ q: debounced || undefined, per_page: 20, unmapped: unmappedOnly });
   const excluded = new Set(excludeIds ?? []);
   const options = (query.data?.items ?? []).filter(
     (product) => product.id === value?.id || !excluded.has(product.id),

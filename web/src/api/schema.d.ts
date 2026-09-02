@@ -388,22 +388,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/meal-plan/needs-review": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get: operations["getMealPlanNeedsReview"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/v1/meal-plan/{week_start}": {
         parameters: {
             query?: never;
@@ -556,6 +540,22 @@ export interface paths {
             cookie?: never;
         };
         get: operations["getMeta"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/needs-review": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getNeedsReview"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1338,6 +1338,11 @@ export interface components {
              */
             mapped_product_count: number;
         };
+        IngredientMappingReviewDto: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+        };
         IngredientPage: components["schemas"]["PageMeta"] & {
             items: components["schemas"]["IngredientListItemDto"][];
         };
@@ -1587,8 +1592,9 @@ export interface components {
         /** @enum {string} */
         MissingStockInterpretationDto: "absent" | "unknown";
         NeedsReviewDto: {
-            household: components["schemas"]["MealPlanEntryDto"][];
-            personal: components["schemas"]["MealPlanEntryDto"][];
+            household_meals: components["schemas"]["MealPlanEntryDto"][];
+            ingredient_mappings: components["schemas"]["IngredientMappingReviewDto"][];
+            personal_meals: components["schemas"]["MealPlanEntryDto"][];
         };
         NutritionDto: {
             basis?: null | components["schemas"]["QuantityDto"];
@@ -3297,25 +3303,6 @@ export interface operations {
             };
         };
     };
-    getMealPlanNeedsReview: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["NeedsReviewDto"];
-                };
-            };
-        };
-    };
     getMealPlanWeek: {
         parameters: {
             query?: never;
@@ -3817,6 +3804,25 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MetaDto"];
+                };
+            };
+        };
+    };
+    getNeedsReview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NeedsReviewDto"];
                 };
             };
         };

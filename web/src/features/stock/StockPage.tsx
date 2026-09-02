@@ -2,16 +2,13 @@ import AddIcon from '@mui/icons-material/AddOutlined';
 import Button from '@mui/material/Button';
 import Chip from '@mui/material/Chip';
 import Stack from '@mui/material/Stack';
-import Typography from '@mui/material/Typography';
 import { useMemo, useState } from 'react';
 import type { ProductAvailability } from '../../api/client';
-import { useIngredients, useProducts, useStock, useStockAvailability } from '../../api/queries';
+import { useProducts, useStock, useStockAvailability } from '../../api/queries';
 import { PageHeader } from '../../components/PageHeader';
 import { RecordListShell } from '../../components/RecordList';
 import { EmptyState, ErrorState, Loading } from '../../components/States';
 import { useDebounced } from '../../hooks/useDebounced';
-import { gapLabel } from './demandGap';
-import { IngredientShortages, type IngredientRow } from './IngredientShortages';
 import { NewStockDialog } from './NewStockDialog';
 import { groupSortDate, StockCard, type StockGroup } from './StockCard';
 import { levelFor } from './stockLevel';
@@ -58,7 +55,6 @@ export function StockPage() {
   const stock = useStock({ per_page: 200 });
   const availability = useStockAvailability();
   const products = useProducts({ per_page: 200 });
-  const ingredients = useIngredients({ per_page: 200 });
 
   const productName = useMemo(() => {
     const map = new Map<string, string>();
@@ -72,19 +68,6 @@ export function StockPage() {
     return map;
   }, [availability.data]);
 
-  const ingredientRows = useMemo<IngredientRow[]>(() => {
-    const names = new Map<string, string>();
-    for (const ingredient of ingredients.data?.items ?? []) names.set(ingredient.id, ingredient.name);
-    return (availability.data?.ingredients ?? [])
-      .filter((row) => row.demand_gaps.length > 0 || levelFor(row.availability).tier === 'red')
-      .map((row) => ({
-        ingredientId: row.ingredient_id,
-        name: names.get(row.ingredient_id) ?? 'Unknown ingredient',
-        row,
-      }))
-      .sort((a, b) => a.name.localeCompare(b.name));
-  }, [availability.data, ingredients.data]);
-
   const groups = useMemo<StockGroup[]>(() => {
     const byProduct = new Map<string, StockGroup>();
     for (const item of stock.data?.items ?? []) {
@@ -95,7 +78,6 @@ export function StockPage() {
           productName: productName.get(item.product_id) ?? 'Unknown product',
           items: [],
           availability: availabilityByProduct.get(item.product_id)?.availability ?? null,
-          gaps: availabilityByProduct.get(item.product_id)?.demand_gaps ?? [],
         };
         byProduct.set(item.product_id, group);
       }
@@ -114,8 +96,6 @@ export function StockPage() {
 
   if (stock.isLoading) return <Loading label="Loading stock" />;
   if (stock.isError) return <ErrorState error={stock.error} onRetry={() => stock.refetch()} />;
-
-  const looseGap = gapLabel(availability.data?.demand_gaps ?? []);
 
   return (
     <>
@@ -161,14 +141,6 @@ export function StockPage() {
             <StockCard key={group.productId} group={group} />
           ))}
         </RecordListShell>
-      )}
-
-      <IngredientShortages rows={ingredientRows} />
-
-      {looseGap && (
-        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 2 }}>
-          {looseGap}, so some planned demand isn't counted.
-        </Typography>
       )}
 
       <NewStockDialog open={addOpen} onClose={() => setAddOpen(false)} />

@@ -184,7 +184,11 @@ function EditIngredient({ id }: { id: string }) {
           void query.refetch();
         }}
       />
-      <NewProductDialog open={addProductOpen} onClose={() => setAddProductOpen(false)} />
+      <NewProductDialog
+        open={addProductOpen}
+        onClose={() => setAddProductOpen(false)}
+        mappedIngredientId={ingredient.id}
+      />
       <Snackbar open={saved} autoHideDuration={3000} onClose={() => setSaved(false)} message="Saved" />
     </>
   );

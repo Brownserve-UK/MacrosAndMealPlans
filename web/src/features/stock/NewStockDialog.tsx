@@ -6,6 +6,7 @@ import DialogTitle from '@mui/material/DialogTitle';
 import Stack from '@mui/material/Stack';
 import { useState, type FormEvent } from 'react';
 import { ApiError } from '../../api/client';
+import type { Product } from '../../api/client';
 import { useCreateStockItem } from '../../api/queries';
 import { FormDialog } from '../../components/FormDialog';
 import {
@@ -16,14 +17,23 @@ import {
   type StockDraft,
 } from './StockFields';
 
-export function NewStockDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+export function NewStockDialog({
+  open,
+  onClose,
+  product,
+}: {
+  open: boolean;
+  onClose: () => void;
+  product?: Product;
+}) {
   const create = useCreateStockItem();
-  const [draft, setDraft] = useState<StockDraft>(emptyStockDraft());
+  const freshDraft = () => ({ ...emptyStockDraft(), product: product ?? null });
+  const [draft, setDraft] = useState<StockDraft>(freshDraft);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [failure, setFailure] = useState<string | null>(null);
 
   function handleClose() {
-    setDraft(emptyStockDraft());
+    setDraft(freshDraft());
     setErrors({});
     setFailure(null);
     onClose();
@@ -60,7 +70,7 @@ export function NewStockDialog({ open, onClose }: { open: boolean; onClose: () =
         <DialogContent>
           <Stack spacing={3} sx={{ pt: 0.5 }}>
             {failure ? <Alert severity="error">{failure}</Alert> : null}
-            <StockFields draft={draft} errors={errors} onChange={setDraft} />
+            <StockFields draft={draft} errors={errors} onChange={setDraft} lockProduct={Boolean(product)} />
           </Stack>
         </DialogContent>
         <DialogActions>

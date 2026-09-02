@@ -11,8 +11,8 @@ use crate::domain::{
     HouseholdSettings, Ingredient, IngredientId, MealParticipant, MealPlanEntry, MealPlanEntryId,
     MealTimes, MemberAccessGrant, MissingStockInterpretation, NewStockEvent, NutritionTarget,
     NutritionTargetId, Product, ProductId, Quantity, Recipe, RecipeId, RecipePhoto, RecipeSummary,
-    Revision, Role, StockEffect, StockEffectSource, StockEvent, StockEventId, StockItem,
-    StockItemId, StockOutcome, Unit, User, UserId,
+    RecipeVisibility, Revision, Role, StockEffect, StockEffectSource, StockEvent, StockEventId,
+    StockItem, StockItemId, StockOutcome, Unit, User, UserId,
 };
 use crate::error::{CoreError, Result};
 use crate::ports::{
@@ -933,6 +933,59 @@ impl MealPlanRepository for InMemoryMealPlanRepository {
         Ok(entries)
     }
 
+    async fn list_through(
+        &self,
+        member_id: HouseholdMemberId,
+        to: Date,
+    ) -> Result<Vec<MealPlanEntry>> {
+        let mut entries: Vec<_> = self
+            .rows
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|entry| {
+                entry.member_id == Some(member_id)
+                    || entry
+                        .participants
+                        .iter()
+                        .any(|participant| participant.member_id == member_id)
+            })
+            .filter(|entry| entry.planned_on <= to)
+            .cloned()
+            .collect();
+        entries.sort_by_key(|entry| {
+            (
+                entry.planned_on,
+                entry.slot.order(),
+                entry.planned_time,
+                entry.created_at,
+                entry.id,
+            )
+        });
+        Ok(entries)
+    }
+
+    async fn list_all_through(&self, to: Date) -> Result<Vec<MealPlanEntry>> {
+        let mut entries: Vec<_> = self
+            .rows
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|entry| entry.planned_on <= to)
+            .cloned()
+            .collect();
+        entries.sort_by_key(|entry| {
+            (
+                entry.planned_on,
+                entry.slot.order(),
+                entry.planned_time,
+                entry.created_at,
+                entry.id,
+            )
+        });
+        Ok(entries)
+    }
+
     async fn insert(&self, entry: &MealPlanEntry) -> Result<()> {
         self.rows.lock().unwrap().insert(entry.id, entry.clone());
         Ok(())
@@ -1406,6 +1459,34 @@ impl RecipeRepository for InMemoryRecipeRepository {
             })
             .collect();
         Ok(paginate(items, query.page, query.sort, |r| r.name.clone()))
+    }
+
+    async fn referenced_ingredient_ids(
+        &self,
+        viewer_id: UserId,
+        include_all_private: bool,
+    ) -> Result<Vec<IngredientId>> {
+        let mut ids: Vec<_> = self
+            .rows
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|recipe| !recipe.is_archived())
+            .filter(|recipe| {
+                include_all_private
+                    || recipe.owner_id == viewer_id
+                    || recipe.visibility == RecipeVisibility::Shared
+            })
+            .flat_map(|recipe| {
+                recipe
+                    .components
+                    .iter()
+                    .filter_map(|component| component.requirement.ingredient_id())
+            })
+            .collect();
+        ids.sort_unstable();
+        ids.dedup();
+        Ok(ids)
     }
 
     async fn insert(&self, recipe: &Recipe) -> Result<()> {

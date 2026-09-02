@@ -35,8 +35,6 @@ use super::stock_effects::{
     requirement_deduction,
 };
 
-const REVIEW_LOOKBACK_DAYS: i64 = 90;
-
 const MEAL_PLAN_ENTRY: &str = "meal plan entry";
 const MEAL_PLAN_COMPONENT: &str = "meal plan component";
 const PRODUCT: &str = "product";
@@ -1815,19 +1813,8 @@ impl MealPlanService {
     ) -> Result<NeedsReview> {
         let rules = self.assumption_rules().await?;
         let today = rules.now.date();
-        let from = today - Duration::days(REVIEW_LOOKBACK_DAYS);
-
         let mut personal = Vec::new();
-        for entry in self
-            .plans
-            .list(&MealPlanQuery {
-                member_id,
-                from,
-                to: today,
-                include_participating: true,
-            })
-            .await?
-        {
+        for entry in self.plans.list_through(member_id, today).await? {
             let records = self.records_for_entry(entry.id).await?;
             let view = self
                 .present_with(&rules, entry, &records, Some(member_id))
@@ -1841,7 +1828,7 @@ impl MealPlanService {
         if include_household {
             for entry in self
                 .plans
-                .list_all(from, today)
+                .list_all_through(today)
                 .await?
                 .into_iter()
                 .filter(|entry| entry.scope == MealPlanScope::Household)

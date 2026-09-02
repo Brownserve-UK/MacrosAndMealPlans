@@ -253,6 +253,8 @@ fn assemble(
 const GET_ENTRY: &str = "SELECT id, scope, member_id, planned_on, planned_time, slot, portioning, created_by, updated_by, revision, created_at, updated_at FROM meal_plan_entry WHERE id = $1";
 const LIST_ENTRIES: &str = "SELECT id, scope, member_id, planned_on, planned_time, slot, portioning, created_by, updated_by, revision, created_at, updated_at FROM meal_plan_entry WHERE (member_id = $1 OR ($4 AND (EXISTS (SELECT 1 FROM meal_plan_participant p WHERE p.entry_id = meal_plan_entry.id AND p.member_id = $1) OR EXISTS (SELECT 1 FROM meal_plan_opt_out o WHERE o.entry_id = meal_plan_entry.id AND o.member_id = $1)))) AND planned_on >= $2 AND planned_on <= $3 ORDER BY planned_on, CASE slot WHEN 'breakfast' THEN 0 WHEN 'lunch' THEN 1 WHEN 'dinner' THEN 2 ELSE 3 END, planned_time NULLS LAST, created_at, id";
 const LIST_ALL_ENTRIES: &str = "SELECT id, scope, member_id, planned_on, planned_time, slot, portioning, created_by, updated_by, revision, created_at, updated_at FROM meal_plan_entry WHERE planned_on >= $1 AND planned_on <= $2 ORDER BY planned_on, CASE slot WHEN 'breakfast' THEN 0 WHEN 'lunch' THEN 1 WHEN 'dinner' THEN 2 ELSE 3 END, planned_time NULLS LAST, created_at, id";
+const LIST_ENTRIES_THROUGH: &str = "SELECT id, scope, member_id, planned_on, planned_time, slot, portioning, created_by, updated_by, revision, created_at, updated_at FROM meal_plan_entry WHERE (member_id = $1 OR EXISTS (SELECT 1 FROM meal_plan_participant p WHERE p.entry_id = meal_plan_entry.id AND p.member_id = $1)) AND planned_on <= $2 ORDER BY planned_on, CASE slot WHEN 'breakfast' THEN 0 WHEN 'lunch' THEN 1 WHEN 'dinner' THEN 2 ELSE 3 END, planned_time NULLS LAST, created_at, id";
+const LIST_ALL_ENTRIES_THROUGH: &str = "SELECT id, scope, member_id, planned_on, planned_time, slot, portioning, created_by, updated_by, revision, created_at, updated_at FROM meal_plan_entry WHERE planned_on <= $1 ORDER BY planned_on, CASE slot WHEN 'breakfast' THEN 0 WHEN 'lunch' THEN 1 WHEN 'dinner' THEN 2 ELSE 3 END, planned_time NULLS LAST, created_at, id";
 const LIST_COMPONENTS: &str = "SELECT id, entry_id, position, item_kind, product_id, recipe_id, amount_kind, amount_value, amount_unit, frozen_item_name, nutrition_basis_amount, nutrition_basis_unit, energy_kcal, protein_g, carbohydrate_g, sugar_g, fat_g, saturated_fat_g, fibre_g, salt_g, cholesterol_mg, nutrition_extra, nutrition_quality, revision, display_order FROM meal_plan_component WHERE entry_id = ANY($1) ORDER BY entry_id, position";
 const LIST_PARTICIPANTS: &str = "SELECT id, entry_id, member_id, revision, created_at, updated_at FROM meal_plan_participant WHERE entry_id = ANY($1) ORDER BY entry_id, created_at, id";
 const LIST_ALLOCATIONS: &str = "SELECT id, participant_id, component_id, allocated_kind, allocated_value, allocated_unit, status, consumption_record_id, resolved_by, resolved_at FROM meal_plan_participant_allocation WHERE participant_id = ANY($1)";
@@ -455,6 +457,29 @@ impl MealPlanRepository for PgMealPlanRepository {
             .fetch_all(&self.pool)
             .await
             .map_err(|error| repository_error("listing Planner meals", error))?;
+        self.hydrate(rows).await
+    }
+
+    async fn list_through(
+        &self,
+        member_id: mmp_core::domain::HouseholdMemberId,
+        to: Date,
+    ) -> Result<Vec<MealPlanEntry>> {
+        let rows: Vec<EntryRow> = sqlx::query_as(LIST_ENTRIES_THROUGH)
+            .bind(member_id.as_uuid())
+            .bind(to)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|error| repository_error("listing meal plan review entries", error))?;
+        self.hydrate(rows).await
+    }
+
+    async fn list_all_through(&self, to: Date) -> Result<Vec<MealPlanEntry>> {
+        let rows: Vec<EntryRow> = sqlx::query_as(LIST_ALL_ENTRIES_THROUGH)
+            .bind(to)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|error| repository_error("listing household review entries", error))?;
         self.hydrate(rows).await
     }
 

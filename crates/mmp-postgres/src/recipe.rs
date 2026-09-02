@@ -4,9 +4,9 @@ use std::str::FromStr;
 use async_trait::async_trait;
 use mmp_core::Result;
 use mmp_core::domain::{
-    MealCategory, Recipe, RecipeComponent, RecipeComponentId, RecipeId, RecipeInstruction,
-    RecipeInstructionId, RecipePhoto, RecipePhotoDerivatives, RecipeRequirement, RecipeSummary,
-    RecipeVisibility, Revision, UserId,
+    IngredientId, MealCategory, Recipe, RecipeComponent, RecipeComponentId, RecipeId,
+    RecipeInstruction, RecipeInstructionId, RecipePhoto, RecipePhotoDerivatives, RecipeRequirement,
+    RecipeSummary, RecipeVisibility, Revision, UserId,
 };
 use mmp_core::ports::{Paginated, RecipeQuery, RecipeRepository, SortDirection, UpdateOutcome};
 use rust_decimal::Decimal;
@@ -188,6 +188,7 @@ const LIST_INSTRUCTIONS: &str = "SELECT id, recipe_id, position, instruction FRO
 const LIST_MEAL_CATEGORIES: &str = "SELECT recipe_id, category AS value FROM recipe_meal_category WHERE recipe_id = ANY($1) ORDER BY recipe_id, position";
 const LIST_COUNTRY_CATEGORIES: &str = "SELECT recipe_id, country_code AS value FROM recipe_country_category WHERE recipe_id = ANY($1) ORDER BY recipe_id, position";
 const LIST_TAGS: &str = "SELECT recipe_id, tag AS value FROM recipe_tag WHERE recipe_id = ANY($1) ORDER BY recipe_id, position";
+const REFERENCED_INGREDIENT_IDS: &str = "SELECT DISTINCT rc.ingredient_id FROM recipe_component rc JOIN recipe r ON r.id = rc.recipe_id WHERE rc.ingredient_id IS NOT NULL AND r.archived_at IS NULL AND ($2 OR r.owner_id = $1 OR r.visibility = 'shared') ORDER BY rc.ingredient_id";
 const CURRENT_REVISION: &str = "SELECT revision FROM recipe WHERE id = $1";
 
 pub struct PgRecipeRepository {
@@ -362,6 +363,20 @@ impl RecipeRepository for PgRecipeRepository {
             })
             .collect::<Result<Vec<RecipeSummary>>>()?;
         Ok(Paginated::new(items, total.0, query.page))
+    }
+
+    async fn referenced_ingredient_ids(
+        &self,
+        viewer_id: UserId,
+        include_all_private: bool,
+    ) -> Result<Vec<IngredientId>> {
+        let ids: Vec<(Uuid,)> = sqlx::query_as(REFERENCED_INGREDIENT_IDS)
+            .bind(viewer_id.as_uuid())
+            .bind(include_all_private)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|error| repository_error("listing referenced ingredients", error))?;
+        Ok(ids.into_iter().map(|(id,)| id.into()).collect())
     }
 
     async fn insert(&self, recipe: &Recipe) -> Result<()> {

@@ -110,7 +110,7 @@ describe('StockPage', () => {
     renderPage();
     expect(screen.getAllByText('Sample Chicken Breast')).toHaveLength(1);
     const chicken = screen.getByTestId('stock-card-ck');
-    expect(within(chicken).getByText('2 lots')).toBeInTheDocument();
+    expect(within(chicken).getByText('chilled, frozen · nearest date 27/08/2026')).toBeInTheDocument();
     expect(within(chicken).getByText('300 g / 1,050 g')).toBeInTheDocument();
   });
 
@@ -140,15 +140,6 @@ describe('StockPage', () => {
       'stock-card-oa',
       'stock-card-mk',
     ]);
-  });
-
-  it('surfaces only the ingredients that need attention', () => {
-    renderPage();
-    const rice = screen.getByTestId('ingredient-shortage-rice');
-    expect(within(rice).getByText('Basmati Rice')).toBeInTheDocument();
-    expect(within(rice).getByText('No products for this ingredient')).toBeInTheDocument();
-    // Jumbo Oats has demand its pool covers, so it stays out of the way.
-    expect(screen.queryByTestId('ingredient-shortage-oats')).toBeNull();
   });
 
   it('no longer claims recipe meals are uncounted', () => {

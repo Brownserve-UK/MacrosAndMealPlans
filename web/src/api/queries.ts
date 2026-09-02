@@ -56,7 +56,7 @@ export const keys = {
   stock: (params: StockListParams) => ['stock', params] as const,
   stockItem: (id: string) => ['stock', id] as const,
   stockEvents: (id: string) => ['stock', id, 'events'] as const,
-  stockAvailability: ['stock', 'availability'] as const,
+  stockAvailability: (productId?: string) => ['stock', 'availability', productId] as const,
 };
 
 export type StockListParams = {
@@ -206,7 +206,11 @@ export function useCreateProduct() {
   return useMutation({
     mutationFn: async (body: components['schemas']['CreateProductRequest']) =>
       unwrap(await client.POST('/api/v1/products', { body })),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['products'] }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['products'] });
+      void qc.invalidateQueries({ queryKey: ['ingredients'] });
+      void qc.invalidateQueries({ queryKey: mealPlanKeys.needsReview() });
+    },
   });
 }
 
@@ -269,6 +273,7 @@ export function useSetProductMapping() {
       qc.setQueryData(keys.product(updated.id), updated);
       void qc.invalidateQueries({ queryKey: ['products'] });
       void qc.invalidateQueries({ queryKey: ['ingredient'] });
+      void qc.invalidateQueries({ queryKey: mealPlanKeys.needsReview() });
     },
   });
 }
@@ -546,7 +551,7 @@ export const mealPlanKeys = {
 export function useNeedsReview() {
   return useQuery({
     queryKey: mealPlanKeys.needsReview(),
-    queryFn: async () => unwrap(await client.GET('/api/v1/meal-plan/needs-review', {})),
+    queryFn: async () => unwrap(await client.GET('/api/v1/needs-review', {})),
   });
 }
 
@@ -1046,10 +1051,15 @@ export function useStockEvents(id: string, options?: { enabled?: boolean }) {
   });
 }
 
-export function useStockAvailability() {
+export function useStockAvailability(productId?: string) {
   return useQuery({
-    queryKey: keys.stockAvailability,
-    queryFn: async () => unwrap(await client.GET('/api/v1/stock/availability', { params: {} })),
+    queryKey: keys.stockAvailability(productId),
+    queryFn: async () =>
+      unwrap(
+        await client.GET('/api/v1/stock/availability', {
+          params: { query: { product_id: productId } },
+        }),
+      ),
   });
 }
 

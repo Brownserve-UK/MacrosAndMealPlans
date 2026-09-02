@@ -304,6 +304,14 @@ pub trait MealPlanRepository: Send + Sync + 'static {
 
     async fn list_all(&self, from: Date, to: Date) -> Result<Vec<MealPlanEntry>>;
 
+    async fn list_through(
+        &self,
+        member_id: HouseholdMemberId,
+        to: Date,
+    ) -> Result<Vec<MealPlanEntry>>;
+
+    async fn list_all_through(&self, to: Date) -> Result<Vec<MealPlanEntry>>;
+
     async fn insert(&self, entry: &MealPlanEntry) -> Result<()>;
 
     async fn update(&self, entry: &MealPlanEntry, expected: Revision) -> Result<UpdateOutcome>;
@@ -382,6 +390,12 @@ pub trait RecipeRepository: Send + Sync + 'static {
     }
 
     async fn list(&self, query: &RecipeQuery) -> Result<Paginated<RecipeSummary>>;
+
+    async fn referenced_ingredient_ids(
+        &self,
+        viewer_id: UserId,
+        include_all_private: bool,
+    ) -> Result<Vec<IngredientId>>;
 
     async fn insert(&self, recipe: &Recipe) -> Result<()>;
 

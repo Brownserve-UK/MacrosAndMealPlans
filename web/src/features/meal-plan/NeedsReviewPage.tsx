@@ -4,21 +4,26 @@ import Button from '@mui/material/Button';
 import Chip from '@mui/material/Chip';
 import Paper from '@mui/material/Paper';
 import Stack from '@mui/material/Stack';
+import Tab from '@mui/material/Tab';
+import Tabs from '@mui/material/Tabs';
 import Typography from '@mui/material/Typography';
 import { useState } from 'react';
-import { ApiError, type MealPlanEntry } from '../../api/client';
+import { ApiError, type MealPlanEntry, type Product } from '../../api/client';
 import {
   useMarkMealPlanEaten,
   useMarkMealPlanNotEaten,
   useNeedsReview,
+  useSetProductMapping,
 } from '../../api/queries';
 import { useAuth } from '../../auth/AuthProvider';
 import { PageHeader } from '../../components/PageHeader';
 import { ErrorState, Loading } from '../../components/States';
+import { NewProductDialog } from '../products/NewProductDialog';
 import { AteSomethingElseDialog } from './AteSomethingElseDialog';
 import { parseIsoDate } from './date';
 import { Fact, FactBar, MealCard } from './MealCard';
 import { MealOutcomeDialog } from './MealOutcomeDialog';
+import { ProductPicker } from './ProductPicker';
 import { labelForSlot } from './slots';
 
 function whenLabel(entry: MealPlanEntry) {
@@ -82,9 +87,14 @@ export function NeedsReviewPage() {
   const review = useNeedsReview();
   const markEaten = useMarkMealPlanEaten();
   const markNotEaten = useMarkMealPlanNotEaten();
+  const setMapping = useSetProductMapping();
   const [error, setError] = useState<string | null>(null);
+  const [tab, setTab] = useState<'personal' | 'household' | 'ingredients'>('personal');
   const [replacing, setReplacing] = useState<MealPlanEntry | null>(null);
   const [householdReview, setHouseholdReview] = useState<string | null>(null);
+  const [creatingIngredient, setCreatingIngredient] = useState<string | null>(null);
+  const [linkingIngredient, setLinkingIngredient] = useState<string | null>(null);
+  const [mappingProduct, setMappingProduct] = useState<Product | null>(null);
 
   const busy = markEaten.isPending || markNotEaten.isPending;
 
@@ -114,13 +124,47 @@ export function NeedsReviewPage() {
 
   if (review.isError) return <ErrorState error={review.error} onRetry={() => review.refetch()} />;
 
-  const personal = review.data?.personal ?? [];
-  const household = review.data?.household ?? [];
-  const nothingToDo = personal.length === 0 && household.length === 0;
+  const personal = review.data?.personal_meals ?? [];
+  const household = review.data?.household_meals ?? [];
+  const ingredients = review.data?.ingredient_mappings ?? [];
+  const canReviewHousehold = principal?.permissions.includes('household:write') ?? false;
+  const canMapIngredients = principal?.permissions.includes('catalogue:write') ?? false;
+
+  async function linkProduct(ingredientId: string) {
+    if (!mappingProduct) return;
+    try {
+      await setMapping.mutateAsync({
+        id: mappingProduct.id,
+        revision: mappingProduct.revision,
+        ingredientId,
+      });
+      setLinkingIngredient(null);
+      setMappingProduct(null);
+      setError(null);
+    } catch (caught) {
+      setError(caught instanceof ApiError ? caught.message : 'Could not link this product.');
+    }
+  }
 
   return (
     <Box>
-      <PageHeader title="Needs review" subtitle="Meals whose time has passed without a result." />
+      <PageHeader title="Needs review" subtitle="Things that need your attention." />
+
+      <Tabs
+        value={tab}
+        onChange={(_, value) => setTab(value)}
+        variant="scrollable"
+        scrollButtons="auto"
+        sx={{ mb: 3 }}
+      >
+        <Tab value="personal" label={`My meals (${personal.length})`} />
+        {canReviewHousehold ? (
+          <Tab value="household" label={`Household meals (${household.length})`} />
+        ) : null}
+        {canMapIngredients ? (
+          <Tab value="ingredients" label={`Ingredient mappings (${ingredients.length})`} />
+        ) : null}
+      </Tabs>
 
       {error ? (
         <Alert severity="error" onClose={() => setError(null)} sx={{ mb: 2 }}>
@@ -130,17 +174,14 @@ export function NeedsReviewPage() {
 
       {review.isLoading ? <Loading label="Loading meals" /> : null}
 
-      {review.data && nothingToDo ? (
+      {review.data && tab === 'personal' && personal.length === 0 ? (
         <Paper variant="outlined" sx={{ px: 3, py: 4 }}>
-          <Typography color="text.secondary">Nothing to review.</Typography>
+          <Typography color="text.secondary">No meals need review.</Typography>
         </Paper>
       ) : null}
 
-      {personal.length > 0 ? (
+      {tab === 'personal' && personal.length > 0 ? (
         <Box component="section" sx={{ mb: 4 }}>
-          <Typography variant="h2" sx={{ mb: 2 }}>
-            Your meals
-          </Typography>
           <Stack spacing={2}>
             {personal.map((entry) => (
               <ReviewCard
@@ -156,11 +197,14 @@ export function NeedsReviewPage() {
         </Box>
       ) : null}
 
-      {household.length > 0 ? (
+      {tab === 'household' && household.length === 0 ? (
+        <Paper variant="outlined" sx={{ px: 3, py: 4 }}>
+          <Typography color="text.secondary">No household meals need review.</Typography>
+        </Paper>
+      ) : null}
+
+      {tab === 'household' && household.length > 0 ? (
         <Box component="section">
-          <Typography variant="h2" sx={{ mb: 2 }}>
-            Household meals
-          </Typography>
           <Stack spacing={2}>
             {household.map((entry) => (
               <MealCard
@@ -195,6 +239,64 @@ export function NeedsReviewPage() {
         </Box>
       ) : null}
 
+      {tab === 'ingredients' && ingredients.length === 0 ? (
+        <Paper variant="outlined" sx={{ px: 3, py: 4 }}>
+          <Typography color="text.secondary">No ingredient mappings need review.</Typography>
+        </Paper>
+      ) : null}
+
+      {tab === 'ingredients' && ingredients.length > 0 ? (
+        <Stack spacing={1.5}>
+          {ingredients.map((ingredient) => (
+            <Paper key={ingredient.id} variant="outlined" sx={{ p: 2.5 }}>
+              <Stack spacing={2}>
+                <Stack
+                  direction={{ xs: 'column', sm: 'row' }}
+                  spacing={1}
+                  sx={{ justifyContent: 'space-between', alignItems: { sm: 'center' } }}
+                >
+                  <Typography sx={{ fontWeight: 600 }}>{ingredient.name}</Typography>
+                  <Stack direction="row" spacing={1}>
+                    <Button size="small" onClick={() => setCreatingIngredient(ingredient.id)}>
+                      Create product
+                    </Button>
+                    <Button
+                      size="small"
+                      variant="contained"
+                      onClick={() => {
+                        setLinkingIngredient(ingredient.id);
+                        setMappingProduct(null);
+                      }}
+                    >
+                      Link product
+                    </Button>
+                  </Stack>
+                </Stack>
+                {linkingIngredient === ingredient.id ? (
+                  <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5}>
+                    <Box sx={{ flexGrow: 1 }}>
+                      <ProductPicker
+                        value={mappingProduct}
+                        onChange={setMappingProduct}
+                        unmappedOnly
+                      />
+                    </Box>
+                    <Button
+                      variant="contained"
+                      disabled={!mappingProduct || setMapping.isPending}
+                      onClick={() => void linkProduct(ingredient.id)}
+                    >
+                      Link
+                    </Button>
+                    <Button onClick={() => setLinkingIngredient(null)}>Cancel</Button>
+                  </Stack>
+                ) : null}
+              </Stack>
+            </Paper>
+          ))}
+        </Stack>
+      ) : null}
+
       {replacing ? (
         <AteSomethingElseDialog
           open
@@ -209,13 +311,21 @@ export function NeedsReviewPage() {
       {householdReview ? (
         <HouseholdReview entryId={householdReview} onClose={() => setHouseholdReview(null)} />
       ) : null}
+
+      {creatingIngredient ? (
+        <NewProductDialog
+          open
+          onClose={() => setCreatingIngredient(null)}
+          mappedIngredientId={creatingIngredient}
+        />
+      ) : null}
     </Box>
   );
 }
 
 function HouseholdReview({ entryId, onClose }: { entryId: string; onClose: () => void }) {
   const review = useNeedsReview();
-  const entry = review.data?.household.find((candidate) => candidate.id === entryId);
+  const entry = review.data?.household_meals.find((candidate) => candidate.id === entryId);
   if (!entry) return null;
   return <MealOutcomeDialog meal={entryToPlannerMeal(entry)} onClose={onClose} />;
 }

@@ -1,5 +1,4 @@
 import Alert from '@mui/material/Alert';
-import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
 import Divider from '@mui/material/Divider';
 import Paper from '@mui/material/Paper';
@@ -11,13 +10,10 @@ import { ApiError, type StockItem } from '../../api/client';
 import {
   useArchiveStockItem,
   useProduct,
-  useStock,
-  useStockAvailability,
   useStockEvents,
   useStockItem,
   useUpdateStockItem,
 } from '../../api/queries';
-import { levelFor } from './stockLevel';
 import { useAuth } from '../../auth/AuthProvider';
 import { BackLabel } from '../../components/BackLink';
 import { PageHeader } from '../../components/PageHeader';
@@ -89,11 +85,6 @@ export function StockItemPage({ id }: { id: string }) {
   const [showHistory, setShowHistory] = useState(false);
 
   const product = useProduct(item.data?.product_id ?? '', { enabled: Boolean(item.data) });
-  const availabilityQuery = useStockAvailability();
-  const siblingsQuery = useStock({
-    product_id: item.data?.product_id,
-    per_page: 50,
-  });
 
   if (item.isLoading) return <Loading label="Loading stock item" />;
   if (item.isError || !item.data) {
@@ -103,12 +94,6 @@ export function StockItemPage({ id }: { id: string }) {
   const current = item.data;
   const working = draft ?? draftFrom(current);
   const canSeeHistory = principal?.permissions.includes('stock:history') ?? false;
-
-  const availability =
-    (availabilityQuery.data?.products ?? []).find((row) => row.product_id === current.product_id)
-      ?.availability ?? null;
-  const level = levelFor(availability);
-  const siblings = (siblingsQuery.data?.items ?? []).filter((row) => row.id !== id);
 
   async function onSubmit(event: FormEvent) {
     event.preventDefault();
@@ -138,72 +123,17 @@ export function StockItemPage({ id }: { id: string }) {
 
   return (
     <>
-      <Link to="/stock" className="app-link">
-        <BackLabel>Stock</BackLabel>
+      <Link
+        to="/stock/products/$productId"
+        params={{ productId: current.product_id }}
+        className="app-link"
+      >
+        <BackLabel>{product.data?.name ?? 'Product stock'}</BackLabel>
       </Link>
       <PageHeader
         title={product.data?.name ?? 'Stock item'}
-        subtitle={`${current.storage_location} · revision ${current.revision}`}
+        subtitle={current.storage_location}
       />
-
-      <Paper variant="outlined" sx={{ p: 3, maxWidth: 560, mb: 3 }}>
-        <Stack direction="row" sx={{ alignItems: 'baseline', justifyContent: 'space-between' }}>
-          <Typography variant="overline" color="text.secondary">
-            Availability
-          </Typography>
-          <Typography
-            variant="body2"
-            className="numeral"
-            sx={{ fontWeight: 600, color: level.colour }}
-          >
-            {level.figure
-              ? `${level.figure.needed} / ${level.figure.available}`
-              : level.statusWord}
-          </Typography>
-        </Stack>
-        {level.figure && (
-          <Box
-            aria-hidden
-            sx={{
-              mt: 1.25,
-              height: 8,
-              borderRadius: 999,
-              overflow: 'hidden',
-              backgroundColor: 'text.primary',
-            }}
-          >
-            <Box
-              sx={{
-                width: level.solidRed ? '100%' : `${level.fillPct}%`,
-                height: '100%',
-                backgroundColor: level.colour,
-              }}
-            />
-          </Box>
-        )}
-        {level.detailLine && (
-          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
-            {level.detailLine}
-          </Typography>
-        )}
-        {siblings.length > 0 && (
-          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
-            {siblings.length === 1 ? '1 other lot' : `${siblings.length} other lots`} of this product:{' '}
-            {siblings.map((sibling, index) => (
-              <span key={sibling.id}>
-                {index > 0 && ', '}
-                <Link
-                  to="/stock/$id"
-                  params={{ id: sibling.id }}
-                  className="app-link"
-                >
-                  {sibling.storage_location}
-                </Link>
-              </span>
-            ))}
-          </Typography>
-        )}
-      </Paper>
 
       <Paper variant="outlined" sx={{ p: 3, maxWidth: 560 }}>
         <form onSubmit={onSubmit}>
@@ -225,7 +155,10 @@ export function StockItemPage({ id }: { id: string }) {
                   disabled={archive.isPending}
                   onClick={async () => {
                     await archive.mutateAsync({ id, revision: current.revision });
-                    void navigate({ to: '/stock' });
+                    void navigate({
+                      to: '/stock/products/$productId',
+                      params: { productId: current.product_id },
+                    });
                   }}
                 >
                   Archive

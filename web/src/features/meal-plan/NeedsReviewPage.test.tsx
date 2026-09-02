@@ -54,13 +54,14 @@ function entry(id: string, plannedOn: string, name: string): MealPlanEntry {
 }
 
 vi.mock('../../auth/AuthProvider', () => ({
-  useAuth: () => ({ principal: { member_id: 'member-1' } }),
+  useAuth: () => ({ principal: { member_id: 'member-1', permissions: [] } }),
 }));
 
 vi.mock('../../api/queries', () => ({
   useNeedsReview: () => mocks.needsReview(),
   useMarkMealPlanEaten: () => ({ mutateAsync: mocks.markEaten, isPending: false }),
   useMarkMealPlanNotEaten: () => ({ mutateAsync: mocks.markNotEaten, isPending: false }),
+  useSetProductMapping: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useReviewMealOutcomes: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useProducts: () => ({ data: { items: [] }, isLoading: false }),
   useRecipes: () => ({ data: { items: [] }, isLoading: false }),
@@ -88,11 +89,12 @@ describe('NeedsReviewPage', () => {
     vi.clearAllMocks();
     mocks.needsReview.mockReturnValue({
       data: {
-        personal: [
+        personal_meals: [
           entry('entry-old', '2026-08-20', 'Older Porridge'),
           entry('entry-new', '2026-08-22', 'Newer Porridge'),
         ],
-        household: [],
+        household_meals: [],
+        ingredient_mappings: [],
       },
       isLoading: false,
       isError: false,
@@ -140,19 +142,20 @@ describe('NeedsReviewPage', () => {
 
   it('says so when there is nothing to review', () => {
     mocks.needsReview.mockReturnValue({
-      data: { personal: [], household: [] },
+      data: { personal_meals: [], household_meals: [], ingredient_mappings: [] },
       isLoading: false,
       isError: false,
       refetch: vi.fn(),
     });
     renderPage();
 
-    expect(screen.getByText('Nothing to review.')).toBeInTheDocument();
+    expect(screen.getByText('No meals need review.')).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'My meals (0)' })).toBeInTheDocument();
   });
 
   it('hides the household section without household meals to act on', () => {
     renderPage();
 
-    expect(screen.queryByText('Household meals')).not.toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: /Household meals/ })).not.toBeInTheDocument();
   });
 });
