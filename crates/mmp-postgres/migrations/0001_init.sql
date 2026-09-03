@@ -634,8 +634,6 @@ CREATE TABLE stock_item (
     tracking_mode     TEXT NOT NULL,
     quantity_value    NUMERIC(16, 4),
     quantity_unit     TEXT,
-    estimated_low     NUMERIC(16, 4),
-    estimated_high    NUMERIC(16, 4),
 
     storage_location  TEXT NOT NULL,
 
@@ -657,23 +655,11 @@ CREATE TABLE stock_item (
         CHECK (storage_location IN ('ambient', 'chilled', 'frozen')),
     CONSTRAINT stock_item_quantity_unit_valid
         CHECK (quantity_unit IS NULL OR quantity_unit IN ('mg', 'g', 'kg', 'oz', 'lb', 'ml', 'l', 'tsp', 'tbsp', 'fl_oz', 'cup', 'item', 'piece', 'slice', 'clove', 'can', 'pack', 'bunch')),
-    CONSTRAINT stock_item_exact_has_quantity
-        CHECK (tracking_mode <> 'exact'
-            OR (quantity_value IS NOT NULL AND quantity_unit IS NOT NULL
-                AND estimated_low IS NULL AND estimated_high IS NULL)),
-    CONSTRAINT stock_item_estimated_has_band
-        CHECK (tracking_mode <> 'estimated'
-            OR (quantity_unit IS NOT NULL AND estimated_low IS NOT NULL AND estimated_high IS NOT NULL
-                AND quantity_value IS NULL)),
-    CONSTRAINT stock_item_not_tracked_has_nothing
-        CHECK (tracking_mode <> 'not_tracked'
-            OR (quantity_value IS NULL AND estimated_low IS NULL AND estimated_high IS NULL)),
-    CONSTRAINT stock_item_estimated_band_ordered
-        CHECK (estimated_low IS NULL OR estimated_high IS NULL OR estimated_low <= estimated_high),
-    CONSTRAINT stock_item_quantities_non_negative
-        CHECK ((quantity_value IS NULL OR quantity_value >= 0)
-            AND (estimated_low IS NULL OR estimated_low >= 0)
-            AND (estimated_high IS NULL OR estimated_high >= 0)),
+    CONSTRAINT stock_item_quantity_matches_mode
+        CHECK ((tracking_mode <> 'not_tracked')
+            = (quantity_value IS NOT NULL AND quantity_unit IS NOT NULL)),
+    CONSTRAINT stock_item_quantity_non_negative
+        CHECK (quantity_value IS NULL OR quantity_value >= 0),
     CONSTRAINT stock_item_source_date_kind_valid
         CHECK (source_date_kind IS NULL OR source_date_kind IN ('use_by', 'best_before'))
 );
@@ -882,8 +868,7 @@ CREATE TABLE stock_effect (
     applied_mode      TEXT NOT NULL,
     applied_unit      TEXT NOT NULL,
     exact_delta       NUMERIC(16, 4),
-    low_delta         NUMERIC(16, 4),
-    high_delta        NUMERIC(16, 4),
+    estimated_delta   NUMERIC(16, 4),
     requested_value   NUMERIC(16, 4) NOT NULL,
 
     apply_event_id    UUID NOT NULL,
@@ -901,8 +886,8 @@ CREATE TABLE stock_effect (
         CHECK (applied_unit IN ('mg', 'g', 'kg', 'oz', 'lb', 'ml', 'l', 'tsp', 'tbsp', 'fl_oz', 'cup', 'item', 'piece', 'slice', 'clove', 'can', 'pack', 'bunch')),
     CONSTRAINT stock_effect_exact_delta_matches_mode
         CHECK ((applied_mode = 'exact') = (exact_delta IS NOT NULL)),
-    CONSTRAINT stock_effect_band_delta_matches_mode
-        CHECK ((applied_mode = 'estimated') = (low_delta IS NOT NULL AND high_delta IS NOT NULL))
+    CONSTRAINT stock_effect_estimated_delta_matches_mode
+        CHECK ((applied_mode = 'estimated') = (estimated_delta IS NOT NULL))
 );
 
 CREATE UNIQUE INDEX stock_effect_active_source_item_unique

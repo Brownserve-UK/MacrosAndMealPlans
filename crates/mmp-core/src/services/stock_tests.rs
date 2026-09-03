@@ -223,9 +223,7 @@ async fn estimated_stock_uses_its_lower_bound() {
             new_item(
                 p.id,
                 StockLevel::Estimated {
-                    low: Decimal::new(200, 0),
-                    high: Decimal::new(600, 0),
-                    unit: Unit::Gram,
+                    quantity: Quantity::new(Decimal::new(200, 0), Unit::Gram),
                 },
             ),
             h.actor_id,
@@ -842,4 +840,175 @@ async fn a_pools_demand_includes_meals_planned_directly_against_its_products() {
     // The pool owes both, not just the 200 g asked for by name.
     assert_eq!(planned_demand, grams(700));
     assert_eq!(unallocated, grams(100));
+}
+
+fn planned_demand_for(report: &crate::domain::AvailabilityReport, product: ProductId) -> Quantity {
+    let row = report
+        .products
+        .iter()
+        .find(|row| row.product_id == product)
+        .expect("the product is reported");
+    match &row.availability {
+        Availability::Quantified { planned_demand, .. } => *planned_demand,
+        other => panic!("expected a quantified product, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn a_pool_share_skips_a_member_its_own_planned_meals_have_already_emptied() {
+    let h = harness();
+    let milk = crate::domain::IngredientId::new();
+    seed_ingredient(&h, milk, "Whole Milk");
+    let a = mapped("Tesco Whole Milk", milk);
+    let b = mapped("Value Whole Milk", milk);
+    h.products.seed(a.clone());
+    h.products.seed(b.clone());
+    for p in [&a, &b] {
+        h.service
+            .create(
+                new_item(
+                    p.id,
+                    StockLevel::Exact {
+                        quantity: grams(400),
+                    },
+                ),
+                h.actor_id,
+                None,
+            )
+            .await
+            .unwrap();
+    }
+
+    plan_measured(&h, a.id, 500).await;
+    let curry = seed_recipe(&h, 1, vec![ingredient_line(milk, 200)]);
+    plan_servings(&h, curry.id, 1).await;
+
+    let report = h
+        .service
+        .availability_overview(date!(2026 - 08 - 24), date!(2026 - 08 - 31))
+        .await
+        .unwrap();
+
+    assert_eq!(planned_demand_for(&report, a.id), grams(500));
+    assert_eq!(planned_demand_for(&report, b.id), grams(200));
+}
+
+#[tokio::test]
+async fn a_fully_pinned_pool_leaves_the_shared_want_on_the_ingredient_row() {
+    let h = harness();
+    let milk = crate::domain::IngredientId::new();
+    seed_ingredient(&h, milk, "Whole Milk");
+    let a = mapped("Tesco Whole Milk", milk);
+    let b = mapped("Value Whole Milk", milk);
+    h.products.seed(a.clone());
+    h.products.seed(b.clone());
+    for p in [&a, &b] {
+        h.service
+            .create(
+                new_item(
+                    p.id,
+                    StockLevel::Exact {
+                        quantity: grams(100),
+                    },
+                ),
+                h.actor_id,
+                None,
+            )
+            .await
+            .unwrap();
+    }
+
+    plan_measured(&h, a.id, 100).await;
+    plan_measured(&h, b.id, 100).await;
+    let curry = seed_recipe(&h, 1, vec![ingredient_line(milk, 300)]);
+    plan_servings(&h, curry.id, 1).await;
+
+    let report = h
+        .service
+        .availability_overview(date!(2026 - 08 - 24), date!(2026 - 08 - 31))
+        .await
+        .unwrap();
+
+    assert_eq!(planned_demand_for(&report, a.id), grams(100));
+    assert_eq!(planned_demand_for(&report, b.id), grams(100));
+
+    let ingredient = report
+        .ingredients
+        .iter()
+        .find(|row| row.ingredient_id == milk)
+        .expect("the pool is reported");
+    let Availability::Quantified {
+        on_hand,
+        planned_demand,
+        unallocated,
+        ..
+    } = ingredient.availability
+    else {
+        panic!("expected a quantified pool");
+    };
+    assert_eq!(on_hand, grams(200));
+    assert_eq!(planned_demand, grams(500));
+    assert_eq!(unallocated, grams(-300));
+}
+
+#[tokio::test]
+async fn a_products_claims_name_both_the_meals_that_asked_for_it_and_the_ones_that_asked_for_its_ingredient()
+ {
+    let h = harness();
+    let milk = crate::domain::IngredientId::new();
+    seed_ingredient(&h, milk, "Whole Milk");
+    let a = mapped("Tesco Whole Milk", milk);
+    let b = mapped("Value Whole Milk", milk);
+    h.products.seed(a.clone());
+    h.products.seed(b.clone());
+    for p in [&a, &b] {
+        h.service
+            .create(
+                new_item(
+                    p.id,
+                    StockLevel::Exact {
+                        quantity: grams(400),
+                    },
+                ),
+                h.actor_id,
+                None,
+            )
+            .await
+            .unwrap();
+    }
+
+    plan_measured(&h, a.id, 250).await;
+    let curry = seed_recipe(&h, 1, vec![ingredient_line(milk, 200)]);
+    plan_servings(&h, curry.id, 1).await;
+
+    let report = h
+        .service
+        .availability(&[a.id], date!(2026 - 08 - 24), date!(2026 - 08 - 31))
+        .await
+        .unwrap();
+
+    let pinned: Vec<_> = report
+        .claims
+        .iter()
+        .filter(|claim| claim.subject == DemandSubject::product(a.id))
+        .collect();
+    assert_eq!(pinned.len(), 1);
+    assert_eq!(pinned[0].quantity, grams(250));
+    assert_eq!(pinned[0].recipe_name, None);
+
+    let shared: Vec<_> = report
+        .claims
+        .iter()
+        .filter(|claim| claim.subject == DemandSubject::ingredient(milk))
+        .collect();
+    assert_eq!(shared.len(), 1);
+    assert_eq!(shared[0].quantity, grams(200));
+    assert_eq!(shared[0].recipe_name.as_deref(), Some(curry.name.as_str()));
+
+    let overview = h
+        .service
+        .availability_overview(date!(2026 - 08 - 24), date!(2026 - 08 - 31))
+        .await
+        .unwrap();
+    assert!(overview.claims.is_empty());
 }

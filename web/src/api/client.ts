@@ -60,6 +60,7 @@ export type ProductAvailability = components['schemas']['ProductAvailabilityDto'
 export type IngredientAvailability = components['schemas']['IngredientAvailabilityDto'];
 export type AvailabilityReport = components['schemas']['AvailabilityReportDto'];
 export type Availability = components['schemas']['AvailabilityDto'];
+export type DemandClaim = components['schemas']['DemandClaimDto'];
 export type DemandGap = components['schemas']['DemandGapDto'];
 
 const CREDENTIAL_KEY = 'mmp.credential';

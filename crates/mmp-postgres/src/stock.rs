@@ -13,9 +13,9 @@ use crate::rows::{StockEffectRow, StockEventRow, StockItemRow};
 
 macro_rules! columns {
     () => {
-        "id, product_id, tracking_mode, quantity_value, quantity_unit, estimated_low, \
-         estimated_high, storage_location, source_date, source_date_kind, usability_deadline, \
-         usability_deadline_basis, note, revision, created_at, updated_at, archived_at"
+        "id, product_id, tracking_mode, quantity_value, quantity_unit, storage_location, \
+         source_date, source_date_kind, usability_deadline, usability_deadline_basis, note, \
+         revision, created_at, updated_at, archived_at"
     };
 }
 
@@ -58,8 +58,6 @@ struct LevelBindings {
     tracking_mode: &'static str,
     quantity_value: Option<rust_decimal::Decimal>,
     quantity_unit: Option<&'static str>,
-    estimated_low: Option<rust_decimal::Decimal>,
-    estimated_high: Option<rust_decimal::Decimal>,
 }
 
 fn level_bindings(level: &StockLevel) -> LevelBindings {
@@ -68,22 +66,16 @@ fn level_bindings(level: &StockLevel) -> LevelBindings {
             tracking_mode: "exact",
             quantity_value: Some(quantity.amount),
             quantity_unit: Some(quantity.unit.code()),
-            estimated_low: None,
-            estimated_high: None,
         },
-        StockLevel::Estimated { low, high, unit } => LevelBindings {
+        StockLevel::Estimated { quantity } => LevelBindings {
             tracking_mode: "estimated",
-            quantity_value: None,
-            quantity_unit: Some(unit.code()),
-            estimated_low: Some(*low),
-            estimated_high: Some(*high),
+            quantity_value: Some(quantity.amount),
+            quantity_unit: Some(quantity.unit.code()),
         },
         StockLevel::NotTracked => LevelBindings {
             tracking_mode: "not_tracked",
             quantity_value: None,
             quantity_unit: None,
-            estimated_low: None,
-            estimated_high: None,
         },
     }
 }
@@ -174,15 +166,13 @@ async fn write_level(
     let bindings = level_bindings(level);
     sqlx::query(
         "UPDATE stock_item SET tracking_mode = $2, quantity_value = $3, quantity_unit = $4, \
-         estimated_low = $5, estimated_high = $6, revision = revision + 1, updated_at = $7 \
+         revision = revision + 1, updated_at = $5 \
          WHERE id = $1",
     )
     .bind(item_id.as_uuid())
     .bind(bindings.tracking_mode)
     .bind(bindings.quantity_value)
     .bind(bindings.quantity_unit)
-    .bind(bindings.estimated_low)
-    .bind(bindings.estimated_high)
     .bind(now)
     .execute(&mut *conn)
     .await
@@ -206,7 +196,7 @@ pub(crate) async fn apply_stock_write(
     for release in &write.releases {
         let effect_rows: Vec<crate::rows::StockEffectRow> = sqlx::query_as(
             "SELECT id, source_kind, source_id, source_detail_id, stock_item_id, product_id, state, applied_mode, \
-             applied_unit, exact_delta, low_delta, high_delta, requested_value, apply_event_id, \
+             applied_unit, exact_delta, estimated_delta, requested_value, apply_event_id, \
              applied_at, released_at, note FROM stock_effect \
              WHERE source_kind = $1 AND source_id = $2 AND state = 'applied' FOR UPDATE",
         )
@@ -356,9 +346,9 @@ pub(crate) async fn apply_stock_write(
             let inserted: Option<(Uuid,)> = sqlx::query_as(
                 "INSERT INTO stock_effect (
                      id, source_kind, source_id, source_detail_id, stock_item_id, product_id, state,
-                     applied_mode, applied_unit, exact_delta, low_delta, high_delta,
+                     applied_mode, applied_unit, exact_delta, estimated_delta,
                      requested_value, apply_event_id, applied_at
-                 ) VALUES ($1, $2, $3, $4, $5, $6, 'applied', $7, $8, $9, $10, $11, $12, $13, $14)
+                 ) VALUES ($1, $2, $3, $4, $5, $6, 'applied', $7, $8, $9, $10, $11, $12, $13)
                  ON CONFLICT (source_kind, source_id, source_detail_id, stock_item_id)
                  WHERE state = 'applied'
                  DO NOTHING RETURNING id",
@@ -372,8 +362,7 @@ pub(crate) async fn apply_stock_write(
             .bind(item.tracking_mode().code())
             .bind(take.requested.unit.code())
             .bind(applied.exact_delta)
-            .bind(applied.low_delta)
-            .bind(applied.high_delta)
+            .bind(applied.estimated_delta)
             .bind(take.requested.amount)
             .bind(event_id)
             .bind(now)
@@ -387,7 +376,7 @@ pub(crate) async fn apply_stock_write(
 
             let delta_amount = applied
                 .exact_delta
-                .or(applied.low_delta)
+                .or(applied.estimated_delta)
                 .unwrap_or(Decimal::ZERO);
             insert_stock_event(
                 conn,
@@ -492,18 +481,16 @@ impl StockRepository for PgStockRepository {
         sqlx::query(
             "INSERT INTO stock_item (
                  id, product_id, tracking_mode, quantity_value, quantity_unit,
-                 estimated_low, estimated_high, storage_location,
+                 storage_location,
                  source_date, source_date_kind, usability_deadline, usability_deadline_basis,
                  note, revision, created_at, updated_at
-             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)",
+             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)",
         )
         .bind(item.id.as_uuid())
         .bind(item.product_id.as_uuid())
         .bind(bindings.tracking_mode)
         .bind(bindings.quantity_value)
         .bind(bindings.quantity_unit)
-        .bind(bindings.estimated_low)
-        .bind(bindings.estimated_high)
         .bind(item.storage_location.code())
         .bind(item.source_date.as_ref().map(|d| d.date))
         .bind(item.source_date.as_ref().map(|d| d.kind.code()))
@@ -545,18 +532,16 @@ impl StockRepository for PgStockRepository {
         let affected = sqlx::query(
             "UPDATE stock_item SET
                  tracking_mode = $2, quantity_value = $3, quantity_unit = $4,
-                 estimated_low = $5, estimated_high = $6, storage_location = $7,
-                 source_date = $8, source_date_kind = $9,
-                 usability_deadline = $10, usability_deadline_basis = $11,
-                 note = $12, archived_at = $13, revision = $14, updated_at = $15
-             WHERE id = $1 AND revision = $16",
+                 storage_location = $5,
+                 source_date = $6, source_date_kind = $7,
+                 usability_deadline = $8, usability_deadline_basis = $9,
+                 note = $10, archived_at = $11, revision = $12, updated_at = $13
+             WHERE id = $1 AND revision = $14",
         )
         .bind(item.id.as_uuid())
         .bind(bindings.tracking_mode)
         .bind(bindings.quantity_value)
         .bind(bindings.quantity_unit)
-        .bind(bindings.estimated_low)
-        .bind(bindings.estimated_high)
         .bind(item.storage_location.code())
         .bind(item.source_date.as_ref().map(|d| d.date))
         .bind(item.source_date.as_ref().map(|d| d.kind.code()))
@@ -623,7 +608,7 @@ impl StockRepository for PgStockRepository {
     ) -> Result<Vec<StockEffect>> {
         let rows: Vec<StockEffectRow> = sqlx::query_as(
             "SELECT id, source_kind, source_id, source_detail_id, stock_item_id, product_id, state, applied_mode, \
-             applied_unit, exact_delta, low_delta, high_delta, requested_value, apply_event_id, \
+             applied_unit, exact_delta, estimated_delta, requested_value, apply_event_id, \
              applied_at, released_at, note FROM stock_effect \
              WHERE source_kind = $1 AND source_id = $2 ORDER BY applied_at ASC, id ASC",
         )

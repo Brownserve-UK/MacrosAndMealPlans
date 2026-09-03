@@ -24,7 +24,7 @@ vi.mock('../../api/queries', () => ({
     data: {
       items: [
         { id: 'br1', product_id: 'br', level: exact(120, 'g'), storage_location: 'chilled', revision: 1 },
-        { id: 'mk1', product_id: 'mk', level: { mode: 'estimated', low: 300, high: 1500, unit: 'ml' }, storage_location: 'chilled', revision: 1 },
+        { id: 'mk1', product_id: 'mk', level: { mode: 'estimated', quantity: { amount: 300, unit: 'ml' } }, storage_location: 'chilled', revision: 1 },
         { id: 'mv1', product_id: 'mv', level: exact(450, 'ml'), storage_location: 'chilled', revision: 1 },
         { id: 'oa1', product_id: 'oa', level: exact(500, 'g'), storage_location: 'ambient', revision: 1 },
         { id: 'ck1', product_id: 'ck', level: exact(400, 'g'), storage_location: 'chilled', usability_deadline: { date: '2026-08-27' }, revision: 1 },

@@ -6,11 +6,11 @@ use time::Date;
 
 use super::fulfilment::{RecipeFulfilments, RecipeWant, expand_recipe};
 use crate::domain::{
-    Availability, AvailabilityReport, Confidence, ConsumedAmount, DeductionPlan, DemandGap,
-    DemandSubject, HouseholdMemberId, IngredientAvailability, IngredientId, MealItemRef,
+    Availability, AvailabilityReport, Confidence, ConsumedAmount, DeductionPlan, DemandClaim,
+    DemandGap, DemandSubject, HouseholdMemberId, IngredientAvailability, IngredientId, MealItemRef,
     MissingStockInterpretation, NewStockEvent, NewStockItem, ProductAvailability, ProductId,
     Quantity, Recipe, RecipeId, RecipeRequirement, Revision, StockEvent, StockEventKind, StockItem,
-    StockItemId, StockItemPatch, UserId, plan_deduction,
+    StockItemId, StockItemPatch, UserId, apply_take, plan_deduction,
 };
 use crate::error::{CoreError, Result};
 use crate::ports::{
@@ -255,6 +255,22 @@ impl StockService {
             .collect();
         sort_dedup(&mut ingredient_ids, IngredientId::as_uuid);
 
+        let claims: Vec<DemandClaim> = if all_ingredients {
+            Vec::new()
+        } else {
+            demand
+                .claims
+                .iter()
+                .filter(|claim| match claim.subject {
+                    DemandSubject::Product { product_id } => product_ids.contains(&product_id),
+                    DemandSubject::Ingredient { ingredient_id } => {
+                        ingredient_ids.contains(&ingredient_id)
+                    }
+                })
+                .cloned()
+                .collect()
+        };
+
         let mut wanted: Vec<ProductId> = product_ids.to_vec();
         for ingredient_id in &ingredient_ids {
             wanted.extend(demand.pool(ingredient_id).iter().copied());
@@ -290,9 +306,9 @@ impl StockService {
                 .collect();
             let want = demand.quantity(&subject);
 
-            let owned: Vec<StockItem> = pool.iter().map(|item| (*item).clone()).collect();
+            let free = free_pool_stock(&demand, demand.pool(&ingredient_id), &by_product);
             if let Some(want) = want
-                && let DeductionPlan::Planned { takes, .. } = plan_deduction(&owned, want)
+                && let DeductionPlan::Planned { takes, .. } = plan_deduction(&free, want)
             {
                 for take in takes {
                     let Some(item) = pool.iter().find(|item| item.id == take.stock_item_id) else {
@@ -366,6 +382,7 @@ impl StockService {
             products,
             ingredients,
             demand_gaps: demand.loose_gaps(),
+            claims,
         })
     }
 
@@ -477,7 +494,10 @@ impl StockService {
                             continue;
                         };
                         match wanted.resolve(&product) {
-                            Ok(quantity) => demand.add(subject, quantity),
+                            Ok(quantity) => {
+                                demand.add(subject, quantity);
+                                demand.note_claim(entry, subject, quantity, None);
+                            }
                             Err(_) => demand.note_gap(subject, DemandGap::AmountUnresolvable),
                         }
                     }
@@ -493,6 +513,12 @@ impl StockService {
                         let expansion = expand_recipe(recipe, servings, &fulfilments);
                         for want in expansion.wants {
                             demand.add_want(&want);
+                            demand.note_claim(
+                                entry,
+                                want.target.subject,
+                                want.want,
+                                Some(recipe.name.clone()),
+                            );
                         }
                         for (subject, gap) in expansion.subject_gaps {
                             demand.note_gap(subject, gap);
@@ -515,6 +541,7 @@ struct Demand {
     subject_gaps: HashMap<DemandSubject, BTreeSet<DemandGap>>,
     loose: BTreeSet<DemandGap>,
     pools: HashMap<IngredientId, Vec<ProductId>>,
+    claims: Vec<DemandClaim>,
 }
 
 impl Demand {
@@ -581,6 +608,24 @@ impl Demand {
             .get(ingredient_id)
             .map(Vec::as_slice)
             .unwrap_or(&[])
+    }
+
+    fn note_claim(
+        &mut self,
+        entry: &crate::domain::MealPlanEntry,
+        subject: DemandSubject,
+        quantity: Quantity,
+        recipe_name: Option<String>,
+    ) {
+        self.claims.push(DemandClaim {
+            subject,
+            quantity,
+            entry_id: entry.id,
+            planned_on: entry.planned_on,
+            slot: entry.slot,
+            scope: entry.scope,
+            recipe_name,
+        });
     }
 
     fn ingredients(&self) -> impl Iterator<Item = IngredientId> + '_ {
@@ -655,6 +700,33 @@ fn component_is_future_demand(
         return false;
     }
     statuses.contains(&crate::domain::ParticipantStatus::Planned)
+}
+
+fn free_pool_stock(
+    demand: &Demand,
+    pool: &[ProductId],
+    by_product: &HashMap<ProductId, Vec<&StockItem>>,
+) -> Vec<StockItem> {
+    let mut free = Vec::new();
+    for product_id in pool {
+        let Some(items) = by_product.get(product_id) else {
+            continue;
+        };
+        let mut owned: Vec<StockItem> = items.iter().map(|item| (*item).clone()).collect();
+        if let Some(pinned) = demand.quantity(&DemandSubject::product(*product_id))
+            && let DeductionPlan::Planned { takes, .. } = plan_deduction(&owned, pinned)
+        {
+            for take in takes {
+                if let Some(item) = owned.iter_mut().find(|item| item.id == take.stock_item_id)
+                    && let Some(applied) = apply_take(&item.level, take.requested)
+                {
+                    item.level = applied.new_level;
+                }
+            }
+        }
+        free.extend(owned);
+    }
+    free
 }
 
 fn resolve_availability(

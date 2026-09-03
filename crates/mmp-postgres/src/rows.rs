@@ -376,8 +376,6 @@ pub struct StockItemRow {
     pub tracking_mode: String,
     pub quantity_value: Option<Decimal>,
     pub quantity_unit: Option<String>,
-    pub estimated_low: Option<Decimal>,
-    pub estimated_high: Option<Decimal>,
     pub storage_location: String,
     pub source_date: Option<Date>,
     pub source_date_kind: Option<String>,
@@ -401,22 +399,17 @@ impl TryFrom<StockItemRow> for StockItem {
             None => None,
         };
         let level = match mode {
-            TrackingMode::Exact => StockLevel::Exact {
-                quantity: Quantity::new(
+            TrackingMode::Exact | TrackingMode::Estimated => {
+                let quantity = Quantity::new(
                     row.quantity_value
                         .ok_or_else(|| bad_value("quantity_value", "null"))?,
                     unit.ok_or_else(|| bad_value("quantity_unit", "null"))?,
-                ),
-            },
-            TrackingMode::Estimated => StockLevel::Estimated {
-                low: row
-                    .estimated_low
-                    .ok_or_else(|| bad_value("estimated_low", "null"))?,
-                high: row
-                    .estimated_high
-                    .ok_or_else(|| bad_value("estimated_high", "null"))?,
-                unit: unit.ok_or_else(|| bad_value("quantity_unit", "null"))?,
-            },
+                );
+                match mode {
+                    TrackingMode::Exact => StockLevel::Exact { quantity },
+                    _ => StockLevel::Estimated { quantity },
+                }
+            }
             TrackingMode::NotTracked => StockLevel::NotTracked,
         };
 
@@ -515,8 +508,7 @@ pub struct StockEffectRow {
     pub applied_mode: String,
     pub applied_unit: String,
     pub exact_delta: Option<Decimal>,
-    pub low_delta: Option<Decimal>,
-    pub high_delta: Option<Decimal>,
+    pub estimated_delta: Option<Decimal>,
     pub requested_value: Decimal,
     pub apply_event_id: Uuid,
     pub applied_at: OffsetDateTime,
@@ -543,8 +535,7 @@ impl TryFrom<StockEffectRow> for StockEffect {
             applied_unit: Unit::from_str(&row.applied_unit)
                 .map_err(|_| bad_value("applied_unit", &row.applied_unit))?,
             exact_delta: row.exact_delta,
-            low_delta: row.low_delta,
-            high_delta: row.high_delta,
+            estimated_delta: row.estimated_delta,
             requested_value: row.requested_value,
             apply_event_id: StockEventId::from(row.apply_event_id),
             applied_at: row.applied_at,

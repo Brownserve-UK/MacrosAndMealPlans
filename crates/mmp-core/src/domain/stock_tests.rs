@@ -106,11 +106,9 @@ fn an_incompatible_unit_candidate_makes_the_remainder_indeterminate() {
 }
 
 #[test]
-fn covering_from_an_estimated_low_bound_reports_estimated_confidence() {
+fn covering_from_an_estimated_level_reports_estimated_confidence() {
     let estimated = item(StockLevel::Estimated {
-        low: dec(100),
-        high: dec(400),
-        unit: Unit::Gram,
+        quantity: grams(100),
     });
     let DeductionPlan::Planned { takes, shortfall } = plan_deduction(&[estimated], grams(250))
     else {
@@ -147,23 +145,16 @@ fn no_live_items_is_no_record() {
 }
 
 #[test]
-fn an_estimated_band_decrements_both_bounds_floors_at_zero_and_reverses_exactly() {
+fn an_estimated_take_floors_at_zero_and_reverses_exactly() {
     let level = StockLevel::Estimated {
-        low: dec(100),
-        high: dec(200),
-        unit: Unit::Gram,
+        quantity: grams(100),
     };
     let applied = apply_take(&level, grams(150)).unwrap();
     assert_eq!(
         applied.new_level,
-        StockLevel::Estimated {
-            low: dec(0),
-            high: dec(50),
-            unit: Unit::Gram,
-        }
+        StockLevel::Estimated { quantity: grams(0) }
     );
-    assert_eq!(applied.low_delta, Some(dec(-100)));
-    assert_eq!(applied.high_delta, Some(dec(-150)));
+    assert_eq!(applied.estimated_delta, Some(dec(-100)));
 
     let after = item(applied.new_level);
     let effect = StockEffect {
@@ -177,8 +168,7 @@ fn an_estimated_band_decrements_both_bounds_floors_at_zero_and_reverses_exactly(
         applied_mode: TrackingMode::Estimated,
         applied_unit: Unit::Gram,
         exact_delta: None,
-        low_delta: applied.low_delta,
-        high_delta: applied.high_delta,
+        estimated_delta: applied.estimated_delta,
         requested_value: dec(150),
         apply_event_id: StockEventId::new(),
         applied_at: OffsetDateTime::UNIX_EPOCH,
@@ -210,8 +200,7 @@ fn an_exact_take_floors_at_zero_and_reverses_to_the_amount_actually_removed() {
         applied_mode: TrackingMode::Exact,
         applied_unit: Unit::Gram,
         exact_delta: Some(dec(-150)),
-        low_delta: None,
-        high_delta: None,
+        estimated_delta: None,
         requested_value: dec(400),
         apply_event_id: StockEventId::new(),
         applied_at: OffsetDateTime::UNIX_EPOCH,
@@ -228,11 +217,7 @@ fn an_exact_take_floors_at_zero_and_reverses_to_the_amount_actually_removed() {
 
 #[test]
 fn release_fails_when_the_tracking_mode_has_since_changed() {
-    let now_estimated = item(StockLevel::Estimated {
-        low: dec(0),
-        high: dec(50),
-        unit: Unit::Gram,
-    });
+    let now_estimated = item(StockLevel::Estimated { quantity: grams(0) });
     let effect = StockEffect {
         source_detail_id: None,
         id: StockEffectId::new(),
@@ -244,8 +229,7 @@ fn release_fails_when_the_tracking_mode_has_since_changed() {
         applied_mode: TrackingMode::Exact,
         applied_unit: Unit::Gram,
         exact_delta: Some(dec(-100)),
-        low_delta: None,
-        high_delta: None,
+        estimated_delta: None,
         requested_value: dec(100),
         apply_event_id: StockEventId::new(),
         applied_at: OffsetDateTime::UNIX_EPOCH,
@@ -271,11 +255,9 @@ fn exact_level_contributes_its_quantity() {
 }
 
 #[test]
-fn estimated_level_contributes_its_lower_bound() {
+fn estimated_level_contributes_its_quantity() {
     let level = StockLevel::Estimated {
-        low: dec(100),
-        high: dec(300),
-        unit: Unit::Gram,
+        quantity: grams(100),
     };
     assert_eq!(
         level.conservative_quantity(),
@@ -292,13 +274,11 @@ fn not_tracked_level_contributes_nothing_measurable() {
 }
 
 #[test]
-fn estimated_band_must_be_ordered() {
+fn an_estimated_level_cannot_be_negative() {
     let item = NewStockItem {
         product_id: ProductId::new(),
         level: StockLevel::Estimated {
-            low: dec(300),
-            high: dec(100),
-            unit: Unit::Gram,
+            quantity: Quantity::new(dec(-1), Unit::Gram),
         },
         storage_location: StorageLocation::Chilled,
         source_date: None,

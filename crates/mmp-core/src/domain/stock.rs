@@ -5,8 +5,8 @@ use rust_decimal::Decimal;
 use time::{Date, OffsetDateTime};
 
 use super::{
-    HouseholdMemberId, IngredientId, Patch, ProductId, Quantity, Revision, StockEffectId,
-    StockEventId, StockItemId, Unit, UserId,
+    HouseholdMemberId, IngredientId, MealPlanEntryId, MealPlanScope, MealSlot, Patch, ProductId,
+    Quantity, Revision, StockEffectId, StockEventId, StockItemId, Unit, UserId,
 };
 use crate::error::{Result, ValidationErrors};
 
@@ -154,14 +154,8 @@ pub struct UsabilityDeadline {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "mode", rename_all = "snake_case")]
 pub enum StockLevel {
-    Exact {
-        quantity: Quantity,
-    },
-    Estimated {
-        low: Decimal,
-        high: Decimal,
-        unit: Unit,
-    },
+    Exact { quantity: Quantity },
+    Estimated { quantity: Quantity },
     NotTracked,
 }
 
@@ -176,8 +170,7 @@ impl StockLevel {
 
     pub fn conservative_quantity(&self) -> Option<Quantity> {
         match self {
-            StockLevel::Exact { quantity } => Some(*quantity),
-            StockLevel::Estimated { low, unit, .. } => Some(Quantity::new(*low, *unit)),
+            StockLevel::Exact { quantity } | StockLevel::Estimated { quantity } => Some(*quantity),
             StockLevel::NotTracked => None,
         }
     }
@@ -197,15 +190,9 @@ impl StockLevel {
                     errors.push("level.quantity", "Cannot be negative");
                 }
             }
-            StockLevel::Estimated { low, high, .. } => {
-                if low.is_sign_negative() || high.is_sign_negative() {
+            StockLevel::Estimated { quantity } => {
+                if quantity.amount.is_sign_negative() {
                     errors.push("level.estimate", "Cannot be negative");
-                }
-                if low > high {
-                    errors.push(
-                        "level.estimate",
-                        "The low bound cannot exceed the high bound",
-                    );
                 }
             }
             StockLevel::NotTracked => {}
@@ -436,6 +423,17 @@ impl DemandSubject {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct DemandClaim {
+    pub subject: DemandSubject,
+    pub quantity: Quantity,
+    pub entry_id: MealPlanEntryId,
+    pub planned_on: Date,
+    pub slot: MealSlot,
+    pub scope: MealPlanScope,
+    pub recipe_name: Option<String>,
+}
+
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
 )]
@@ -482,6 +480,7 @@ pub struct AvailabilityReport {
     pub products: Vec<ProductAvailability>,
     pub ingredients: Vec<IngredientAvailability>,
     pub demand_gaps: Vec<DemandGap>,
+    pub claims: Vec<DemandClaim>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -632,8 +631,7 @@ pub struct StockEffect {
     pub applied_mode: TrackingMode,
     pub applied_unit: Unit,
     pub exact_delta: Option<Decimal>,
-    pub low_delta: Option<Decimal>,
-    pub high_delta: Option<Decimal>,
+    pub estimated_delta: Option<Decimal>,
     pub requested_value: Decimal,
     pub apply_event_id: StockEventId,
     pub applied_at: OffsetDateTime,
@@ -650,8 +648,7 @@ pub struct NewStockEffect {
     pub applied_mode: TrackingMode,
     pub applied_unit: Unit,
     pub exact_delta: Option<Decimal>,
-    pub low_delta: Option<Decimal>,
-    pub high_delta: Option<Decimal>,
+    pub estimated_delta: Option<Decimal>,
     pub requested_value: Decimal,
 }
 
@@ -688,8 +685,7 @@ pub enum DeductionPlan {
 pub struct AppliedDelta {
     pub new_level: StockLevel,
     pub exact_delta: Option<Decimal>,
-    pub low_delta: Option<Decimal>,
-    pub high_delta: Option<Decimal>,
+    pub estimated_delta: Option<Decimal>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -717,8 +713,7 @@ fn floor_zero(value: Decimal) -> Decimal {
 
 fn current_unit(level: &StockLevel) -> Option<Unit> {
     match level {
-        StockLevel::Exact { quantity } => Some(quantity.unit),
-        StockLevel::Estimated { unit, .. } => Some(*unit),
+        StockLevel::Exact { quantity } | StockLevel::Estimated { quantity } => Some(quantity.unit),
         StockLevel::NotTracked => None,
     }
 }
@@ -754,22 +749,17 @@ pub fn apply_take(level: &StockLevel, requested: Quantity) -> Option<AppliedDelt
                     quantity: Quantity::new(new, quantity.unit),
                 },
                 exact_delta: Some(new - quantity.amount),
-                low_delta: None,
-                high_delta: None,
+                estimated_delta: None,
             })
         }
-        StockLevel::Estimated { low, high, unit } if *unit == requested.unit => {
-            let new_low = floor_zero(low - requested.amount);
-            let new_high = floor_zero(high - requested.amount);
+        StockLevel::Estimated { quantity } if quantity.unit == requested.unit => {
+            let new = floor_zero(quantity.amount - requested.amount);
             Some(AppliedDelta {
                 new_level: StockLevel::Estimated {
-                    low: new_low,
-                    high: new_high,
-                    unit: *unit,
+                    quantity: Quantity::new(new, quantity.unit),
                 },
                 exact_delta: None,
-                low_delta: Some(new_low - low),
-                high_delta: Some(new_high - high),
+                estimated_delta: Some(new - quantity.amount),
             })
         }
         _ => None,
@@ -858,26 +848,17 @@ pub fn plan_release(item: &StockItem, effect: &StockEffect) -> ReleasePlan {
         };
     }
 
-    match (
-        &item.level,
-        effect.exact_delta,
-        effect.low_delta,
-        effect.high_delta,
-    ) {
-        (StockLevel::Exact { quantity }, Some(delta), _, _) => ReleasePlan::Restored {
+    match (&item.level, effect.exact_delta, effect.estimated_delta) {
+        (StockLevel::Exact { quantity }, Some(delta), _) => ReleasePlan::Restored {
             new_level: StockLevel::Exact {
                 quantity: Quantity::new(quantity.amount - delta, quantity.unit),
             },
         },
-        (StockLevel::Estimated { low, high, unit }, _, Some(low_delta), Some(high_delta)) => {
-            ReleasePlan::Restored {
-                new_level: StockLevel::Estimated {
-                    low: low - low_delta,
-                    high: high - high_delta,
-                    unit: *unit,
-                },
-            }
-        }
+        (StockLevel::Estimated { quantity }, _, Some(delta)) => ReleasePlan::Restored {
+            new_level: StockLevel::Estimated {
+                quantity: Quantity::new(quantity.amount - delta, quantity.unit),
+            },
+        },
         _ => ReleasePlan::Failed {
             reason: "The stored change does not match the item's current shape.".to_owned(),
         },

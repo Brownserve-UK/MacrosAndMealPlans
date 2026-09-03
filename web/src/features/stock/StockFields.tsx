@@ -11,8 +11,6 @@ export type StockDraft = {
   trackingMode: TrackingMode;
   unit: Unit | '';
   quantity: string;
-  low: string;
-  high: string;
   storageLocation: StorageLocation;
   note: string;
 };
@@ -23,8 +21,6 @@ export function emptyStockDraft(): StockDraft {
     trackingMode: 'exact',
     unit: 'g',
     quantity: '',
-    low: '',
-    high: '',
     storageLocation: 'chilled',
     note: '',
   };
@@ -38,23 +34,15 @@ const STORAGE_LOCATIONS: { value: StorageLocation; label: string }[] = [
 
 const TRACKING_MODES: { value: TrackingMode; label: string; hint: string }[] = [
   { value: 'exact', label: 'Exact', hint: 'You track the remaining amount.' },
-  { value: 'estimated', label: 'Estimated', hint: 'You only know it roughly, as a range.' },
+  { value: 'estimated', label: 'Estimated', hint: 'You only know it roughly. Give the amount you are confident is there.' },
   { value: 'not_tracked', label: 'Not tracked', hint: 'A staple you always keep in; assumed available.' },
 ];
 
 export function validateStockDraft(draft: StockDraft): Record<string, string> {
   const errors: Record<string, string> = {};
   if (!draft.product) errors.product = 'Pick a product';
-  if (draft.trackingMode === 'exact') {
+  if (draft.trackingMode !== 'not_tracked') {
     if (!draft.quantity.trim() || Number(draft.quantity) < 0) errors.quantity = 'Enter an amount';
-    if (!draft.unit) errors.unit = 'Pick a unit';
-  }
-  if (draft.trackingMode === 'estimated') {
-    if (!draft.low.trim() || Number(draft.low) < 0) errors.low = 'Enter a low bound';
-    if (!draft.high.trim() || Number(draft.high) < 0) errors.high = 'Enter a high bound';
-    if (draft.low.trim() && draft.high.trim() && Number(draft.low) > Number(draft.high)) {
-      errors.high = 'The high bound cannot be below the low bound';
-    }
     if (!draft.unit) errors.unit = 'Pick a unit';
   }
   return errors;
@@ -62,16 +50,8 @@ export function validateStockDraft(draft: StockDraft): Record<string, string> {
 
 export function draftToLevel(draft: StockDraft): components['schemas']['StockLevelDto'] {
   if (draft.trackingMode === 'not_tracked') return { mode: 'not_tracked' };
-  if (draft.trackingMode === 'estimated') {
-    return {
-      mode: 'estimated',
-      low: Number(draft.low),
-      high: Number(draft.high),
-      unit: draft.unit as Unit,
-    };
-  }
   return {
-    mode: 'exact',
+    mode: draft.trackingMode,
     quantity: { amount: Number(draft.quantity), unit: draft.unit as Unit },
   };
 }
@@ -115,10 +95,10 @@ export function StockFields({
         ))}
       </TextField>
 
-      {draft.trackingMode === 'exact' && (
+      {draft.trackingMode !== 'not_tracked' && (
         <Stack direction="row" spacing={2}>
           <TextField
-            label="Amount"
+            label={draft.trackingMode === 'estimated' ? 'Roughly how much' : 'Amount'}
             type="number"
             value={draft.quantity}
             onChange={(event) => set('quantity', event.target.value)}
@@ -133,35 +113,6 @@ export function StockFields({
             error={Boolean(errors.unit)}
             helperText={errors.unit}
             sx={{ width: 200 }}
-          />
-        </Stack>
-      )}
-
-      {draft.trackingMode === 'estimated' && (
-        <Stack direction="row" spacing={2}>
-          <TextField
-            label="At least"
-            type="number"
-            value={draft.low}
-            onChange={(event) => set('low', event.target.value)}
-            error={Boolean(errors.low)}
-            helperText={errors.low}
-          />
-          <TextField
-            label="At most"
-            type="number"
-            value={draft.high}
-            onChange={(event) => set('high', event.target.value)}
-            error={Boolean(errors.high)}
-            helperText={errors.high}
-          />
-          <UnitSelect
-            label="Unit"
-            value={draft.unit}
-            onChange={(next) => set('unit', next)}
-            error={Boolean(errors.unit)}
-            helperText={errors.unit}
-            sx={{ width: 180 }}
           />
         </Stack>
       )}

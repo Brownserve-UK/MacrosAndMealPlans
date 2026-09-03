@@ -31,15 +31,8 @@ function draftFrom(item: StockItem): StockDraft {
   return {
     product: null,
     trackingMode: level.mode,
-    unit:
-      level.mode === 'exact'
-        ? level.quantity.unit
-        : level.mode === 'estimated'
-          ? level.unit
-          : 'g',
-    quantity: level.mode === 'exact' ? String(level.quantity.amount) : '',
-    low: level.mode === 'estimated' ? String(level.low) : '',
-    high: level.mode === 'estimated' ? String(level.high) : '',
+    unit: level.mode === 'not_tracked' ? 'g' : level.quantity.unit,
+    quantity: level.mode === 'not_tracked' ? '' : String(level.quantity.amount),
     storageLocation: item.storage_location,
     note: item.note ?? '',
   };

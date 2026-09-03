@@ -1,8 +1,8 @@
 use mmp_core::domain::{
-    Availability, AvailabilityReport, Confidence, DemandGap, DemandSubject, IngredientAvailability,
-    NewStockItem, Patch, ProductAvailability, Shortfall, SourceDate, SourceDateKind, StockEvent,
-    StockItem, StockItemId, StockItemPatch, StockLevel, StockOutcome, StorageLocation,
-    TrackingMode, Unit, UsabilityDeadline,
+    Availability, AvailabilityReport, Confidence, DemandClaim, DemandGap, DemandSubject,
+    IngredientAvailability, MealPlanScope, MealSlot, NewStockItem, Patch, ProductAvailability,
+    Shortfall, SourceDate, SourceDateKind, StockEvent, StockItem, StockItemId, StockItemPatch,
+    StockLevel, StockOutcome, StorageLocation, TrackingMode, UsabilityDeadline,
 };
 use mmp_core::services::StockOutcomeView;
 use rust_decimal::Decimal;
@@ -88,18 +88,8 @@ impl From<SourceDateKindDto> for SourceDateKind {
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(tag = "mode", rename_all = "snake_case")]
 pub enum StockLevelDto {
-    Exact {
-        quantity: QuantityDto,
-    },
-    Estimated {
-        #[serde(with = "rust_decimal::serde::float")]
-        #[schema(value_type = f64)]
-        low: Decimal,
-        #[serde(with = "rust_decimal::serde::float")]
-        #[schema(value_type = f64)]
-        high: Decimal,
-        unit: Unit,
-    },
+    Exact { quantity: QuantityDto },
+    Estimated { quantity: QuantityDto },
     NotTracked,
 }
 
@@ -109,7 +99,9 @@ impl From<StockLevel> for StockLevelDto {
             StockLevel::Exact { quantity } => Self::Exact {
                 quantity: quantity.into(),
             },
-            StockLevel::Estimated { low, high, unit } => Self::Estimated { low, high, unit },
+            StockLevel::Estimated { quantity } => Self::Estimated {
+                quantity: quantity.into(),
+            },
             StockLevel::NotTracked => Self::NotTracked,
         }
     }
@@ -121,7 +113,9 @@ impl From<StockLevelDto> for StockLevel {
             StockLevelDto::Exact { quantity } => Self::Exact {
                 quantity: quantity.into(),
             },
-            StockLevelDto::Estimated { low, high, unit } => Self::Estimated { low, high, unit },
+            StockLevelDto::Estimated { quantity } => Self::Estimated {
+                quantity: quantity.into(),
+            },
             StockLevelDto::NotTracked => Self::NotTracked,
         }
     }
@@ -531,6 +525,8 @@ pub struct AvailabilityReportDto {
     pub products: Vec<ProductAvailabilityDto>,
     pub ingredients: Vec<IngredientAvailabilityDto>,
     pub demand_gaps: Vec<DemandGapDto>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub claims: Vec<DemandClaimDto>,
 }
 
 impl From<AvailabilityReport> for AvailabilityReportDto {
@@ -539,6 +535,35 @@ impl From<AvailabilityReport> for AvailabilityReportDto {
             products: value.products.into_iter().map(Into::into).collect(),
             ingredients: value.ingredients.into_iter().map(Into::into).collect(),
             demand_gaps: value.demand_gaps.into_iter().map(Into::into).collect(),
+            claims: value.claims.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct DemandClaimDto {
+    pub subject: DemandSubjectDto,
+    pub quantity: QuantityDto,
+    pub entry_id: Uuid,
+    #[serde(with = "iso_date")]
+    #[schema(value_type = String, format = Date)]
+    pub planned_on: Date,
+    pub slot: MealSlot,
+    pub scope: MealPlanScope,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recipe_name: Option<String>,
+}
+
+impl From<DemandClaim> for DemandClaimDto {
+    fn from(value: DemandClaim) -> Self {
+        Self {
+            subject: value.subject.into(),
+            quantity: value.quantity.into(),
+            entry_id: value.entry_id.as_uuid(),
+            planned_on: value.planned_on,
+            slot: value.slot,
+            scope: value.scope,
+            recipe_name: value.recipe_name,
         }
     }
 }

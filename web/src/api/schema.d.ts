@@ -1074,6 +1074,7 @@ export interface components {
             state: "absent";
         };
         AvailabilityReportDto: {
+            claims?: components["schemas"]["DemandClaimDto"][];
             demand_gaps: components["schemas"]["DemandGapDto"][];
             ingredients: components["schemas"]["IngredientAvailabilityDto"][];
             products: components["schemas"]["ProductAvailabilityDto"][];
@@ -1235,6 +1236,17 @@ export interface components {
             partial_count: number;
             /** Format: int64 */
             unknown_count: number;
+        };
+        DemandClaimDto: {
+            /** Format: uuid */
+            entry_id: string;
+            /** Format: date */
+            planned_on: string;
+            quantity: components["schemas"]["QuantityDto"];
+            recipe_name?: string | null;
+            scope: components["schemas"]["MealPlanScope"];
+            slot: components["schemas"]["MealSlot"];
+            subject: components["schemas"]["DemandSubjectDto"];
         };
         /** @enum {string} */
         DemandGapDto: "unresolved_recipe_line" | "ingredient_has_no_products" | "recipe_missing" | "product_missing" | "amount_unresolvable" | "incompatible_units";
@@ -2115,13 +2127,9 @@ export interface components {
             mode: "exact";
             quantity: components["schemas"]["QuantityDto"];
         } | {
-            /** Format: double */
-            high: number;
-            /** Format: double */
-            low: number;
             /** @enum {string} */
             mode: "estimated";
-            unit: components["schemas"]["Unit"];
+            quantity: components["schemas"]["QuantityDto"];
         } | {
             /** @enum {string} */
             mode: "not_tracked";

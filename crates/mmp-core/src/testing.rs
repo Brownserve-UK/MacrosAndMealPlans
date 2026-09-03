@@ -1725,7 +1725,7 @@ impl InMemoryStockRepository {
 
                 let delta = applied
                     .exact_delta
-                    .or(applied.low_delta)
+                    .or(applied.estimated_delta)
                     .unwrap_or(rust_decimal::Decimal::ZERO);
                 let event = NewStockEvent {
                     kind: StockEventKind::Consumed,
@@ -1752,8 +1752,7 @@ impl InMemoryStockRepository {
                     applied_mode: item.tracking_mode(),
                     applied_unit: take.requested.unit,
                     exact_delta: applied.exact_delta,
-                    low_delta: applied.low_delta,
-                    high_delta: applied.high_delta,
+                    estimated_delta: applied.estimated_delta,
                     requested_value: take.requested.amount,
                     apply_event_id: event_id,
                     applied_at: now,

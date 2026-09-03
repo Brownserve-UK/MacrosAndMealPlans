@@ -7,21 +7,20 @@ import Stack from '@mui/material/Stack';
 import Typography from '@mui/material/Typography';
 import { Link } from '@tanstack/react-router';
 import { useState } from 'react';
-import type { StockItem, StockLevel } from '../../api/client';
-import { useProduct, useStock, useStockAvailability } from '../../api/queries';
+import type { DemandClaim, Quantity, StockItem, StockLevel } from '../../api/client';
+import { useProduct, useProducts, useStock, useStockAvailability } from '../../api/queries';
 import { BackLabel } from '../../components/BackLink';
 import { PageHeader } from '../../components/PageHeader';
 import { EmptyState, ErrorState, Loading } from '../../components/States';
 import { displayUnit } from '../../components/UnitSelect';
 import { NewStockDialog } from './NewStockDialog';
+import { SpokenFor } from './SpokenFor';
 import { levelFor } from './stockLevel';
 
 function amountLabel(level: StockLevel): string {
   if (level.mode === 'not_tracked') return 'Amount not tracked';
-  if (level.mode === 'estimated') {
-    return `Estimated ${level.low} to ${level.high} ${displayUnit(level.unit)}`;
-  }
-  return `${level.quantity.amount} ${displayUnit(level.quantity.unit)}`;
+  const amount = `${level.quantity.amount} ${displayUnit(level.quantity.unit)}`;
+  return level.mode === 'estimated' ? `About ${amount}` : amount;
 }
 
 function dateLabel(item: StockItem): string | null {
@@ -35,11 +34,22 @@ function dateLabel(item: StockItem): string | null {
   return null;
 }
 
+function sumIn(claims: DemandClaim[], unit: string): number | null {
+  let total = 0;
+  for (const claim of claims) {
+    if (claim.quantity.unit !== unit) return null;
+    total += claim.quantity.amount;
+  }
+  return total;
+}
+
 export function ProductStockPage({ productId }: { productId: string }) {
   const [addOpen, setAddOpen] = useState(false);
   const product = useProduct(productId);
   const stock = useStock({ product_id: productId, per_page: 200 });
   const availability = useStockAvailability(productId);
+  const ingredientId = product.data?.mapped_ingredient_id ?? undefined;
+  const pool = useProducts({ mapped_ingredient_id: ingredientId, per_page: 50 });
 
   if (product.isLoading || stock.isLoading || availability.isLoading) {
     return <Loading label="Loading product stock" />;
@@ -55,6 +65,28 @@ export function ProductStockPage({ productId }: { productId: string }) {
   const items = stock.data?.items ?? [];
   const row = availability.data?.products.find((candidate) => candidate.product_id === productId);
   const level = levelFor(row?.availability ?? null);
+
+  const claims = availability.data?.claims ?? [];
+  const pinned = claims.filter(
+    (claim) => claim.subject.kind === 'product' && claim.subject.product_id === productId,
+  );
+  const shared = claims.filter((claim) => claim.subject.kind === 'ingredient');
+  const ingredientRow = availability.data?.ingredients.find(
+    (candidate) => candidate.ingredient_id === ingredientId,
+  );
+  const alternatives = (pool.data?.items ?? [])
+    .filter((candidate) => candidate.id !== productId)
+    .map((candidate) => candidate.name);
+
+  let expectedFromHere: Quantity | null = null;
+  if (row?.availability.state === 'quantified') {
+    const unit = row.availability.planned_demand.unit;
+    const pinnedTotal = sumIn(pinned, unit);
+    if (pinnedTotal !== null) {
+      const share = row.availability.planned_demand.amount - pinnedTotal;
+      if (share > 0) expectedFromHere = { amount: share, unit };
+    }
+  }
 
   return (
     <>
@@ -100,6 +132,14 @@ export function ProductStockPage({ productId }: { productId: string }) {
           </Typography>
         ) : null}
       </Paper>
+
+      <SpokenFor
+        pinned={pinned}
+        shared={shared}
+        ingredientName={ingredientRow?.name ?? null}
+        expectedFromHere={expectedFromHere}
+        alternatives={alternatives}
+      />
 
       <Typography variant="h2" sx={{ mb: 2 }}>
         On hand

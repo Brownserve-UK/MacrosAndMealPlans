@@ -458,17 +458,6 @@ impl Loader<'_> {
                 note: None,
             },
             StockSpec {
-                product_key: "whole-milk",
-                level: StockLevel::Estimated {
-                    low: Decimal::new(300, 0),
-                    high: Decimal::new(1500, 0),
-                    unit: Unit::Millilitre,
-                },
-                storage_location: StorageLocation::Chilled,
-                source_date: None,
-                note: Some("guessing from the weight of the bottle"),
-            },
-            StockSpec {
                 product_key: "broccoli",
                 level: StockLevel::Exact {
                     quantity: quantity(120, Unit::Gram),
@@ -561,10 +550,32 @@ impl Loader<'_> {
 
     async fn load_pooled_ingredient_demand(&mut self) -> anyhow::Result<()> {
         let milk = [
-            ("whole-milk", 150, 2_i64, "nearly empty, use this one first"),
-            ("whole-milk-value", 600, 9, "the big bottle, still sealed"),
+            (
+                "whole-milk",
+                StockLevel::Exact {
+                    quantity: quantity(150, Unit::Millilitre),
+                },
+                Some(2_i64),
+                "nearly empty, use this one first",
+            ),
+            (
+                "whole-milk-value",
+                StockLevel::Exact {
+                    quantity: quantity(600, Unit::Millilitre),
+                },
+                Some(9),
+                "the big bottle, still sealed",
+            ),
+            (
+                "whole-milk",
+                StockLevel::Estimated {
+                    quantity: quantity(300, Unit::Millilitre),
+                },
+                None,
+                "guessing from the weight of the bottle",
+            ),
         ];
-        for (key, millilitres, days, note) in milk {
+        for (key, level, days, note) in milk {
             let product = product_id(key);
             if self
                 .state
@@ -585,12 +596,10 @@ impl Loader<'_> {
                 .create(
                     NewStockItem {
                         product_id: product,
-                        level: StockLevel::Exact {
-                            quantity: quantity(millilitres, Unit::Millilitre),
-                        },
+                        level,
                         storage_location: StorageLocation::Chilled,
                         source_date: None,
-                        usability_deadline: Some(UsabilityDeadline {
+                        usability_deadline: days.map(|days| UsabilityDeadline {
                             date: self.today + Duration::days(days),
                             basis: Some("printed on the bottle".to_owned()),
                         }),

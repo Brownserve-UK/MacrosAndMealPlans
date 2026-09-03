@@ -74,11 +74,11 @@ pub use recipe::{
 };
 pub use stock::{
     AppliedDelta, Availability, AvailabilityReport, Confidence, DeductionPlan, DeductionTarget,
-    DemandGap, DemandSubject, IngredientAvailability, NewStockEffect, NewStockEvent, NewStockItem,
-    PlannedTake, ProductAvailability, ReleasePlan, Shortfall, SourceDate, SourceDateKind,
-    StockEffect, StockEffectSource, StockEffectState, StockEvent, StockEventKind, StockEventSource,
-    StockItem, StockItemPatch, StockLevel, StockOutcome, StorageLocation, TrackingMode,
-    UnknownSourceDateKind, UnknownStockEffectSource, UnknownStockEffectState,
+    DemandClaim, DemandGap, DemandSubject, IngredientAvailability, NewStockEffect, NewStockEvent,
+    NewStockItem, PlannedTake, ProductAvailability, ReleasePlan, Shortfall, SourceDate,
+    SourceDateKind, StockEffect, StockEffectSource, StockEffectState, StockEvent, StockEventKind,
+    StockEventSource, StockItem, StockItemPatch, StockLevel, StockOutcome, StorageLocation,
+    TrackingMode, UnknownSourceDateKind, UnknownStockEffectSource, UnknownStockEffectState,
     UnknownStockEventKind, UnknownStorageLocation, UnknownTrackingMode, UsabilityDeadline,
     apply_take, plan_deduction, plan_release,
 };
