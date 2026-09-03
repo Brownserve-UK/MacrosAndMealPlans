@@ -1,0 +1,23 @@
+[package]
+name = "mmp-postgres"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "PostgreSQL persistence adapters for Macros & Meal Plans"
+
+[features]
+db-tests = []
+
+[dependencies]
+async-trait = "0.1.92"
+mmp-core = { version = "0.1.0", path = "../mmp-core" }
+rust_decimal = { version = "1.42.1", features = ["serde"] }
+serde_json = "1.0.151"
+sqlx = { version = "0.9.0", default-features = false, features = ["postgres", "runtime-tokio", "tls-rustls-ring", "uuid", "time", "rust_decimal", "json", "migrate", "macros"] }
+time = { version = "0.3.55", features = ["serde"] }
+tracing = "0.1.44"
+uuid = { version = "1.25.0", features = ["v7", "serde"] }
+
+[dev-dependencies]
+tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread"] }

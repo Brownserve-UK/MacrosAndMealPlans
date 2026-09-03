@@ -1,0 +1,13 @@
+[workspace]
+members = ["crates/mmp-core", "crates/mmp-postgres", "crates/mmp-server"]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/Brownserve-UK/MacrosAndMealPlans"
+
+[workspace.dependencies]
+mmp-core = { path = "crates/mmp-core" }
+mmp-postgres = { path = "crates/mmp-postgres" }

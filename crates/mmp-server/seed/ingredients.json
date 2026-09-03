@@ -1,0 +1,1192 @@
+[
+  {
+    "seed_key": "whole-milk",
+    "name": "Whole Milk",
+    "default_unit": "ml",
+    "shopping_section": "dairy",
+    "track_stock": true
+  },
+  {
+    "seed_key": "semi-skimmed-milk",
+    "name": "Semi-Skimmed Milk",
+    "default_unit": "ml",
+    "shopping_section": "dairy",
+    "track_stock": true
+  },
+  {
+    "seed_key": "skimmed-milk",
+    "name": "Skimmed Milk",
+    "default_unit": "ml",
+    "shopping_section": "dairy",
+    "track_stock": true
+  },
+  {
+    "seed_key": "salted-butter",
+    "name": "Salted Butter",
+    "default_unit": "g",
+    "shopping_section": "dairy",
+    "track_stock": true
+  },
+  {
+    "seed_key": "unsalted-butter",
+    "name": "Unsalted Butter",
+    "default_unit": "g",
+    "shopping_section": "dairy",
+    "track_stock": true
+  },
+  {
+    "seed_key": "cheddar-cheese",
+    "name": "Cheddar Cheese",
+    "default_unit": "g",
+    "shopping_section": "dairy",
+    "track_stock": true
+  },
+  {
+    "seed_key": "mozzarella",
+    "name": "Mozzarella",
+    "default_unit": "g",
+    "shopping_section": "dairy",
+    "track_stock": true
+  },
+  {
+    "seed_key": "parmesan",
+    "name": "Parmesan",
+    "default_unit": "g",
+    "shopping_section": "dairy",
+    "track_stock": true
+  },
+  {
+    "seed_key": "feta",
+    "name": "Feta",
+    "default_unit": "g",
+    "shopping_section": "dairy",
+    "track_stock": true
+  },
+  {
+    "seed_key": "cream-cheese",
+    "name": "Cream Cheese",
+    "default_unit": "g",
+    "shopping_section": "dairy",
+    "track_stock": true
+  },
+  {
+    "seed_key": "double-cream",
+    "name": "Double Cream",
+    "default_unit": "ml",
+    "shopping_section": "dairy",
+    "track_stock": true
+  },
+  {
+    "seed_key": "single-cream",
+    "name": "Single Cream",
+    "default_unit": "ml",
+    "shopping_section": "dairy",
+    "track_stock": true
+  },
+  {
+    "seed_key": "soured-cream",
+    "name": "Soured Cream",
+    "default_unit": "ml",
+    "shopping_section": "dairy",
+    "track_stock": true
+  },
+  {
+    "seed_key": "creme-fraiche",
+    "name": "Crème Fraîche",
+    "default_unit": "g",
+    "shopping_section": "dairy",
+    "track_stock": true
+  },
+  {
+    "seed_key": "natural-yoghurt",
+    "name": "Natural Yoghurt",
+    "default_unit": "g",
+    "shopping_section": "dairy",
+    "track_stock": true
+  },
+  {
+    "seed_key": "greek-yoghurt",
+    "name": "Greek Yoghurt",
+    "default_unit": "g",
+    "shopping_section": "dairy",
+    "track_stock": true
+  },
+  {
+    "seed_key": "eggs",
+    "name": "Eggs",
+    "default_unit": "item",
+    "shopping_section": "dairy",
+    "track_stock": true
+  },
+  {
+    "seed_key": "chicken-breast",
+    "name": "Chicken Breast",
+    "default_unit": "g",
+    "shopping_section": "meat_fish",
+    "track_stock": true
+  },
+  {
+    "seed_key": "chicken-thigh",
+    "name": "Chicken Thigh",
+    "default_unit": "g",
+    "shopping_section": "meat_fish",
+    "track_stock": true
+  },
+  {
+    "seed_key": "whole-chicken",
+    "name": "Whole Chicken",
+    "default_unit": "item",
+    "shopping_section": "meat_fish",
+    "track_stock": true
+  },
+  {
+    "seed_key": "beef-mince-5",
+    "name": "Beef Mince 5% Fat",
+    "default_unit": "g",
+    "shopping_section": "meat_fish",
+    "track_stock": true
+  },
+  {
+    "seed_key": "beef-mince-20",
+    "name": "Beef Mince 20% Fat",
+    "default_unit": "g",
+    "shopping_section": "meat_fish",
+    "track_stock": true
+  },
+  {
+    "seed_key": "beef-steak",
+    "name": "Beef Steak",
+    "default_unit": "g",
+    "shopping_section": "meat_fish",
+    "track_stock": true
+  },
+  {
+    "seed_key": "pork-mince",
+    "name": "Pork Mince",
+    "default_unit": "g",
+    "shopping_section": "meat_fish",
+    "track_stock": true
+  },
+  {
+    "seed_key": "pork-chop",
+    "name": "Pork Chop",
+    "default_unit": "item",
+    "shopping_section": "meat_fish",
+    "track_stock": true
+  },
+  {
+    "seed_key": "bacon",
+    "name": "Bacon",
+    "default_unit": "g",
+    "shopping_section": "meat_fish",
+    "track_stock": true
+  },
+  {
+    "seed_key": "sausages",
+    "name": "Sausages",
+    "default_unit": "item",
+    "shopping_section": "meat_fish",
+    "track_stock": true
+  },
+  {
+    "seed_key": "lamb-mince",
+    "name": "Lamb Mince",
+    "default_unit": "g",
+    "shopping_section": "meat_fish",
+    "track_stock": true
+  },
+  {
+    "seed_key": "ham",
+    "name": "Ham",
+    "default_unit": "g",
+    "shopping_section": "meat_fish",
+    "track_stock": true
+  },
+  {
+    "seed_key": "chorizo",
+    "name": "Chorizo",
+    "default_unit": "g",
+    "shopping_section": "meat_fish",
+    "track_stock": true
+  },
+  {
+    "seed_key": "turkey-breast",
+    "name": "Turkey Breast",
+    "default_unit": "g",
+    "shopping_section": "meat_fish",
+    "track_stock": true
+  },
+  {
+    "seed_key": "salmon-fillet",
+    "name": "Salmon Fillet",
+    "default_unit": "g",
+    "shopping_section": "meat_fish",
+    "track_stock": true
+  },
+  {
+    "seed_key": "cod-fillet",
+    "name": "Cod Fillet",
+    "default_unit": "g",
+    "shopping_section": "meat_fish",
+    "track_stock": true
+  },
+  {
+    "seed_key": "tuna-tinned",
+    "name": "Tinned Tuna",
+    "default_unit": "g",
+    "shopping_section": "meat_fish",
+    "track_stock": true
+  },
+  {
+    "seed_key": "prawns",
+    "name": "Prawns",
+    "default_unit": "g",
+    "shopping_section": "meat_fish",
+    "track_stock": true
+  },
+  {
+    "seed_key": "smoked-salmon",
+    "name": "Smoked Salmon",
+    "default_unit": "g",
+    "shopping_section": "meat_fish",
+    "track_stock": true
+  },
+  {
+    "seed_key": "mackerel",
+    "name": "Mackerel",
+    "default_unit": "g",
+    "shopping_section": "meat_fish",
+    "track_stock": true
+  },
+  {
+    "seed_key": "haddock",
+    "name": "Haddock",
+    "default_unit": "g",
+    "shopping_section": "meat_fish",
+    "track_stock": true
+  },
+  {
+    "seed_key": "potato",
+    "name": "Potato",
+    "default_unit": "g",
+    "shopping_section": "fresh_produce",
+    "track_stock": true
+  },
+  {
+    "seed_key": "sweet-potato",
+    "name": "Sweet Potato",
+    "default_unit": "g",
+    "shopping_section": "fresh_produce",
+    "track_stock": true
+  },
+  {
+    "seed_key": "carrot",
+    "name": "Carrot",
+    "default_unit": "g",
+    "shopping_section": "fresh_produce",
+    "track_stock": true
+  },
+  {
+    "seed_key": "onion",
+    "name": "Onion",
+    "default_unit": "g",
+    "shopping_section": "fresh_produce",
+    "track_stock": true
+  },
+  {
+    "seed_key": "red-onion",
+    "name": "Red Onion",
+    "default_unit": "g",
+    "shopping_section": "fresh_produce",
+    "track_stock": true
+  },
+  {
+    "seed_key": "garlic",
+    "name": "Garlic",
+    "default_unit": "clove",
+    "shopping_section": "fresh_produce",
+    "track_stock": true
+  },
+  {
+    "seed_key": "tomato",
+    "name": "Tomato",
+    "default_unit": "g",
+    "shopping_section": "fresh_produce",
+    "track_stock": true
+  },
+  {
+    "seed_key": "cherry-tomatoes",
+    "name": "Cherry Tomatoes",
+    "default_unit": "g",
+    "shopping_section": "fresh_produce",
+    "track_stock": true
+  },
+  {
+    "seed_key": "tinned-chopped-tomatoes",
+    "name": "Tinned Chopped Tomatoes",
+    "default_unit": "g",
+    "shopping_section": "ambient",
+    "track_stock": true
+  },
+  {
+    "seed_key": "broccoli",
+    "name": "Broccoli",
+    "default_unit": "g",
+    "shopping_section": "fresh_produce",
+    "track_stock": true
+  },
+  {
+    "seed_key": "cauliflower",
+    "name": "Cauliflower",
+    "default_unit": "g",
+    "shopping_section": "fresh_produce",
+    "track_stock": true
+  },
+  {
+    "seed_key": "spinach",
+    "name": "Spinach",
+    "default_unit": "g",
+    "shopping_section": "fresh_produce",
+    "track_stock": true
+  },
+  {
+    "seed_key": "kale",
+    "name": "Kale",
+    "default_unit": "g",
+    "shopping_section": "fresh_produce",
+    "track_stock": true
+  },
+  {
+    "seed_key": "peas",
+    "name": "Peas",
+    "default_unit": "g",
+    "shopping_section": "fresh_produce",
+    "track_stock": true
+  },
+  {
+    "seed_key": "green-beans",
+    "name": "Green Beans",
+    "default_unit": "g",
+    "shopping_section": "fresh_produce",
+    "track_stock": true
+  },
+  {
+    "seed_key": "courgette",
+    "name": "Courgette",
+    "default_unit": "g",
+    "shopping_section": "fresh_produce",
+    "track_stock": true
+  },
+  {
+    "seed_key": "aubergine",
+    "name": "Aubergine",
+    "default_unit": "g",
+    "shopping_section": "fresh_produce",
+    "track_stock": true
+  },
+  {
+    "seed_key": "red-pepper",
+    "name": "Red Pepper",
+    "default_unit": "item",
+    "shopping_section": "fresh_produce",
+    "track_stock": true
+  },
+  {
+    "seed_key": "green-pepper",
+    "name": "Green Pepper",
+    "default_unit": "item",
+    "shopping_section": "fresh_produce",
+    "track_stock": true
+  },
+  {
+    "seed_key": "mushrooms",
+    "name": "Mushrooms",
+    "default_unit": "g",
+    "shopping_section": "fresh_produce",
+    "track_stock": true
+  },
+  {
+    "seed_key": "leek",
+    "name": "Leek",
+    "default_unit": "item",
+    "shopping_section": "fresh_produce",
+    "track_stock": true
+  },
+  {
+    "seed_key": "celery",
+    "name": "Celery",
+    "default_unit": "g",
+    "shopping_section": "fresh_produce",
+    "track_stock": true
+  },
+  {
+    "seed_key": "cucumber",
+    "name": "Cucumber",
+    "default_unit": "g",
+    "shopping_section": "fresh_produce",
+    "track_stock": true
+  },
+  {
+    "seed_key": "lettuce",
+    "name": "Lettuce",
+    "default_unit": "g",
+    "shopping_section": "fresh_produce",
+    "track_stock": true
+  },
+  {
+    "seed_key": "cabbage",
+    "name": "Cabbage",
+    "default_unit": "g",
+    "shopping_section": "fresh_produce",
+    "track_stock": true
+  },
+  {
+    "seed_key": "butternut-squash",
+    "name": "Butternut Squash",
+    "default_unit": "g",
+    "shopping_section": "fresh_produce",
+    "track_stock": true
+  },
+  {
+    "seed_key": "parsnip",
+    "name": "Parsnip",
+    "default_unit": "g",
+    "shopping_section": "fresh_produce",
+    "track_stock": true
+  },
+  {
+    "seed_key": "sweetcorn",
+    "name": "Sweetcorn",
+    "default_unit": "g",
+    "shopping_section": "ambient",
+    "track_stock": true
+  },
+  {
+    "seed_key": "spring-onion",
+    "name": "Spring Onion",
+    "default_unit": "item",
+    "shopping_section": "fresh_produce",
+    "track_stock": true
+  },
+  {
+    "seed_key": "beetroot",
+    "name": "Beetroot",
+    "default_unit": "g",
+    "shopping_section": "fresh_produce",
+    "track_stock": true
+  },
+  {
+    "seed_key": "asparagus",
+    "name": "Asparagus",
+    "default_unit": "g",
+    "shopping_section": "fresh_produce",
+    "track_stock": true
+  },
+  {
+    "seed_key": "brussels-sprouts",
+    "name": "Brussels Sprouts",
+    "default_unit": "g",
+    "shopping_section": "fresh_produce",
+    "track_stock": true
+  },
+  {
+    "seed_key": "ginger",
+    "name": "Ginger",
+    "default_unit": "g",
+    "shopping_section": "fresh_produce",
+    "track_stock": true
+  },
+  {
+    "seed_key": "chilli",
+    "name": "Chilli",
+    "default_unit": "item",
+    "shopping_section": "fresh_produce",
+    "track_stock": true
+  },
+  {
+    "seed_key": "banana",
+    "name": "Banana",
+    "default_unit": "item",
+    "shopping_section": "fresh_produce",
+    "track_stock": true
+  },
+  {
+    "seed_key": "apple",
+    "name": "Apple",
+    "default_unit": "item",
+    "shopping_section": "fresh_produce",
+    "track_stock": true
+  },
+  {
+    "seed_key": "orange",
+    "name": "Orange",
+    "default_unit": "item",
+    "shopping_section": "fresh_produce",
+    "track_stock": true
+  },
+  {
+    "seed_key": "lemon",
+    "name": "Lemon",
+    "default_unit": "item",
+    "shopping_section": "fresh_produce",
+    "track_stock": true
+  },
+  {
+    "seed_key": "lime",
+    "name": "Lime",
+    "default_unit": "item",
+    "shopping_section": "fresh_produce",
+    "track_stock": true
+  },
+  {
+    "seed_key": "strawberries",
+    "name": "Strawberries",
+    "default_unit": "g",
+    "shopping_section": "fresh_produce",
+    "track_stock": true
+  },
+  {
+    "seed_key": "blueberries",
+    "name": "Blueberries",
+    "default_unit": "g",
+    "shopping_section": "fresh_produce",
+    "track_stock": true
+  },
+  {
+    "seed_key": "raspberries",
+    "name": "Raspberries",
+    "default_unit": "g",
+    "shopping_section": "fresh_produce",
+    "track_stock": true
+  },
+  {
+    "seed_key": "grapes",
+    "name": "Grapes",
+    "default_unit": "g",
+    "shopping_section": "fresh_produce",
+    "track_stock": true
+  },
+  {
+    "seed_key": "avocado",
+    "name": "Avocado",
+    "default_unit": "item",
+    "shopping_section": "fresh_produce",
+    "track_stock": true
+  },
+  {
+    "seed_key": "pear",
+    "name": "Pear",
+    "default_unit": "item",
+    "shopping_section": "fresh_produce",
+    "track_stock": true
+  },
+  {
+    "seed_key": "mango",
+    "name": "Mango",
+    "default_unit": "item",
+    "shopping_section": "fresh_produce",
+    "track_stock": true
+  },
+  {
+    "seed_key": "pineapple",
+    "name": "Pineapple",
+    "default_unit": "g",
+    "shopping_section": "fresh_produce",
+    "track_stock": true
+  },
+  {
+    "seed_key": "raisins",
+    "name": "Raisins",
+    "default_unit": "g",
+    "shopping_section": "ambient",
+    "track_stock": true
+  },
+  {
+    "seed_key": "basmati-rice",
+    "name": "Basmati Rice",
+    "default_unit": "g",
+    "shopping_section": "ambient",
+    "track_stock": true
+  },
+  {
+    "seed_key": "long-grain-rice",
+    "name": "Long Grain Rice",
+    "default_unit": "g",
+    "shopping_section": "ambient",
+    "track_stock": true
+  },
+  {
+    "seed_key": "brown-rice",
+    "name": "Brown Rice",
+    "default_unit": "g",
+    "shopping_section": "ambient",
+    "track_stock": true
+  },
+  {
+    "seed_key": "jasmine-rice",
+    "name": "Jasmine Rice",
+    "default_unit": "g",
+    "shopping_section": "ambient",
+    "track_stock": true
+  },
+  {
+    "seed_key": "arborio-rice",
+    "name": "Arborio Rice",
+    "default_unit": "g",
+    "shopping_section": "ambient",
+    "track_stock": true
+  },
+  {
+    "seed_key": "spaghetti",
+    "name": "Spaghetti",
+    "default_unit": "g",
+    "shopping_section": "ambient",
+    "track_stock": true
+  },
+  {
+    "seed_key": "penne",
+    "name": "Penne",
+    "default_unit": "g",
+    "shopping_section": "ambient",
+    "track_stock": true
+  },
+  {
+    "seed_key": "fusilli",
+    "name": "Fusilli",
+    "default_unit": "g",
+    "shopping_section": "ambient",
+    "track_stock": true
+  },
+  {
+    "seed_key": "lasagne-sheets",
+    "name": "Lasagne Sheets",
+    "default_unit": "g",
+    "shopping_section": "ambient",
+    "track_stock": true
+  },
+  {
+    "seed_key": "egg-noodles",
+    "name": "Egg Noodles",
+    "default_unit": "g",
+    "shopping_section": "ambient",
+    "track_stock": true
+  },
+  {
+    "seed_key": "couscous",
+    "name": "Couscous",
+    "default_unit": "g",
+    "shopping_section": "ambient",
+    "track_stock": true
+  },
+  {
+    "seed_key": "quinoa",
+    "name": "Quinoa",
+    "default_unit": "g",
+    "shopping_section": "ambient",
+    "track_stock": true
+  },
+  {
+    "seed_key": "bulgur-wheat",
+    "name": "Bulgur Wheat",
+    "default_unit": "g",
+    "shopping_section": "ambient",
+    "track_stock": true
+  },
+  {
+    "seed_key": "rolled-oats",
+    "name": "Rolled Oats",
+    "default_unit": "g",
+    "shopping_section": "ambient",
+    "track_stock": true
+  },
+  {
+    "seed_key": "white-bread",
+    "name": "White Bread",
+    "default_unit": "slice",
+    "shopping_section": "bakery",
+    "track_stock": true
+  },
+  {
+    "seed_key": "wholemeal-bread",
+    "name": "Wholemeal Bread",
+    "default_unit": "slice",
+    "shopping_section": "bakery",
+    "track_stock": true
+  },
+  {
+    "seed_key": "bread-rolls",
+    "name": "Bread Rolls",
+    "default_unit": "item",
+    "shopping_section": "bakery",
+    "track_stock": true
+  },
+  {
+    "seed_key": "tortilla-wraps",
+    "name": "Tortilla Wraps",
+    "default_unit": "item",
+    "shopping_section": "bakery",
+    "track_stock": true
+  },
+  {
+    "seed_key": "pitta-bread",
+    "name": "Pitta Bread",
+    "default_unit": "item",
+    "shopping_section": "bakery",
+    "track_stock": true
+  },
+  {
+    "seed_key": "naan-bread",
+    "name": "Naan Bread",
+    "default_unit": "item",
+    "shopping_section": "bakery",
+    "track_stock": true
+  },
+  {
+    "seed_key": "red-lentils",
+    "name": "Red Lentils",
+    "default_unit": "g",
+    "shopping_section": "ambient",
+    "track_stock": true
+  },
+  {
+    "seed_key": "green-lentils",
+    "name": "Green Lentils",
+    "default_unit": "g",
+    "shopping_section": "ambient",
+    "track_stock": true
+  },
+  {
+    "seed_key": "chickpeas",
+    "name": "Chickpeas",
+    "default_unit": "g",
+    "shopping_section": "ambient",
+    "track_stock": true
+  },
+  {
+    "seed_key": "kidney-beans",
+    "name": "Kidney Beans",
+    "default_unit": "g",
+    "shopping_section": "ambient",
+    "track_stock": true
+  },
+  {
+    "seed_key": "black-beans",
+    "name": "Black Beans",
+    "default_unit": "g",
+    "shopping_section": "ambient",
+    "track_stock": true
+  },
+  {
+    "seed_key": "butter-beans",
+    "name": "Butter Beans",
+    "default_unit": "g",
+    "shopping_section": "ambient",
+    "track_stock": true
+  },
+  {
+    "seed_key": "baked-beans",
+    "name": "Baked Beans",
+    "default_unit": "g",
+    "shopping_section": "ambient",
+    "track_stock": true
+  },
+  {
+    "seed_key": "almonds",
+    "name": "Almonds",
+    "default_unit": "g",
+    "shopping_section": "ambient",
+    "track_stock": true
+  },
+  {
+    "seed_key": "walnuts",
+    "name": "Walnuts",
+    "default_unit": "g",
+    "shopping_section": "ambient",
+    "track_stock": true
+  },
+  {
+    "seed_key": "cashews",
+    "name": "Cashews",
+    "default_unit": "g",
+    "shopping_section": "ambient",
+    "track_stock": true
+  },
+  {
+    "seed_key": "peanuts",
+    "name": "Peanuts",
+    "default_unit": "g",
+    "shopping_section": "ambient",
+    "track_stock": true
+  },
+  {
+    "seed_key": "peanut-butter",
+    "name": "Peanut Butter",
+    "default_unit": "g",
+    "shopping_section": "ambient",
+    "track_stock": true
+  },
+  {
+    "seed_key": "sunflower-seeds",
+    "name": "Sunflower Seeds",
+    "default_unit": "g",
+    "shopping_section": "ambient",
+    "track_stock": true
+  },
+  {
+    "seed_key": "chia-seeds",
+    "name": "Chia Seeds",
+    "default_unit": "g",
+    "shopping_section": "ambient",
+    "track_stock": true
+  },
+  {
+    "seed_key": "pine-nuts",
+    "name": "Pine Nuts",
+    "default_unit": "g",
+    "shopping_section": "ambient",
+    "track_stock": true
+  },
+  {
+    "seed_key": "olive-oil",
+    "name": "Olive Oil",
+    "default_unit": "ml",
+    "shopping_section": "ambient",
+    "track_stock": false
+  },
+  {
+    "seed_key": "vegetable-oil",
+    "name": "Vegetable Oil",
+    "default_unit": "ml",
+    "shopping_section": "ambient",
+    "track_stock": false
+  },
+  {
+    "seed_key": "rapeseed-oil",
+    "name": "Rapeseed Oil",
+    "default_unit": "ml",
+    "shopping_section": "ambient",
+    "track_stock": false
+  },
+  {
+    "seed_key": "sesame-oil",
+    "name": "Sesame Oil",
+    "default_unit": "ml",
+    "shopping_section": "ambient",
+    "track_stock": false
+  },
+  {
+    "seed_key": "balsamic-vinegar",
+    "name": "Balsamic Vinegar",
+    "default_unit": "ml",
+    "shopping_section": "ambient",
+    "track_stock": false
+  },
+  {
+    "seed_key": "white-wine-vinegar",
+    "name": "White Wine Vinegar",
+    "default_unit": "ml",
+    "shopping_section": "ambient",
+    "track_stock": false
+  },
+  {
+    "seed_key": "soy-sauce",
+    "name": "Soy Sauce",
+    "default_unit": "ml",
+    "shopping_section": "ambient",
+    "track_stock": false
+  },
+  {
+    "seed_key": "worcestershire-sauce",
+    "name": "Worcestershire Sauce",
+    "default_unit": "ml",
+    "shopping_section": "ambient",
+    "track_stock": false
+  },
+  {
+    "seed_key": "tomato-puree",
+    "name": "Tomato Purée",
+    "default_unit": "g",
+    "shopping_section": "ambient",
+    "track_stock": false
+  },
+  {
+    "seed_key": "tomato-ketchup",
+    "name": "Tomato Ketchup",
+    "default_unit": "g",
+    "shopping_section": "ambient",
+    "track_stock": false
+  },
+  {
+    "seed_key": "mayonnaise",
+    "name": "Mayonnaise",
+    "default_unit": "g",
+    "shopping_section": "ambient",
+    "track_stock": false
+  },
+  {
+    "seed_key": "dijon-mustard",
+    "name": "Dijon Mustard",
+    "default_unit": "g",
+    "shopping_section": "ambient",
+    "track_stock": false
+  },
+  {
+    "seed_key": "wholegrain-mustard",
+    "name": "Wholegrain Mustard",
+    "default_unit": "g",
+    "shopping_section": "ambient",
+    "track_stock": false
+  },
+  {
+    "seed_key": "honey",
+    "name": "Honey",
+    "default_unit": "g",
+    "shopping_section": "ambient",
+    "track_stock": false
+  },
+  {
+    "seed_key": "stock-cube",
+    "name": "Stock Cube",
+    "default_unit": "item",
+    "shopping_section": "ambient",
+    "track_stock": false
+  },
+  {
+    "seed_key": "coconut-milk",
+    "name": "Coconut Milk",
+    "default_unit": "ml",
+    "shopping_section": "ambient",
+    "track_stock": true
+  },
+  {
+    "seed_key": "plain-flour",
+    "name": "Plain Flour",
+    "default_unit": "g",
+    "shopping_section": "ambient",
+    "track_stock": false
+  },
+  {
+    "seed_key": "self-raising-flour",
+    "name": "Self-Raising Flour",
+    "default_unit": "g",
+    "shopping_section": "ambient",
+    "track_stock": false
+  },
+  {
+    "seed_key": "bread-flour",
+    "name": "Strong Bread Flour",
+    "default_unit": "g",
+    "shopping_section": "ambient",
+    "track_stock": false
+  },
+  {
+    "seed_key": "granulated-sugar",
+    "name": "Granulated Sugar",
+    "default_unit": "g",
+    "shopping_section": "ambient",
+    "track_stock": false
+  },
+  {
+    "seed_key": "caster-sugar",
+    "name": "Caster Sugar",
+    "default_unit": "g",
+    "shopping_section": "ambient",
+    "track_stock": false
+  },
+  {
+    "seed_key": "brown-sugar",
+    "name": "Brown Sugar",
+    "default_unit": "g",
+    "shopping_section": "ambient",
+    "track_stock": false
+  },
+  {
+    "seed_key": "baking-powder",
+    "name": "Baking Powder",
+    "default_unit": "tsp",
+    "shopping_section": "ambient",
+    "track_stock": false
+  },
+  {
+    "seed_key": "bicarbonate-of-soda",
+    "name": "Bicarbonate of Soda",
+    "default_unit": "tsp",
+    "shopping_section": "ambient",
+    "track_stock": false
+  },
+  {
+    "seed_key": "dried-yeast",
+    "name": "Dried Yeast",
+    "default_unit": "g",
+    "shopping_section": "ambient",
+    "track_stock": false
+  },
+  {
+    "seed_key": "cornflour",
+    "name": "Cornflour",
+    "default_unit": "g",
+    "shopping_section": "ambient",
+    "track_stock": false
+  },
+  {
+    "seed_key": "cocoa-powder",
+    "name": "Cocoa Powder",
+    "default_unit": "g",
+    "shopping_section": "ambient",
+    "track_stock": false
+  },
+  {
+    "seed_key": "dark-chocolate",
+    "name": "Dark Chocolate",
+    "default_unit": "g",
+    "shopping_section": "ambient",
+    "track_stock": true
+  },
+  {
+    "seed_key": "vanilla-extract",
+    "name": "Vanilla Extract",
+    "default_unit": "tsp",
+    "shopping_section": "ambient",
+    "track_stock": false
+  },
+  {
+    "seed_key": "salt",
+    "name": "Salt",
+    "default_unit": "g",
+    "shopping_section": "ambient",
+    "track_stock": false
+  },
+  {
+    "seed_key": "black-pepper",
+    "name": "Black Pepper",
+    "default_unit": "tsp",
+    "shopping_section": "ambient",
+    "track_stock": false
+  },
+  {
+    "seed_key": "paprika",
+    "name": "Paprika",
+    "default_unit": "tsp",
+    "shopping_section": "ambient",
+    "track_stock": false
+  },
+  {
+    "seed_key": "smoked-paprika",
+    "name": "Smoked Paprika",
+    "default_unit": "tsp",
+    "shopping_section": "ambient",
+    "track_stock": false
+  },
+  {
+    "seed_key": "ground-cumin",
+    "name": "Ground Cumin",
+    "default_unit": "tsp",
+    "shopping_section": "ambient",
+    "track_stock": false
+  },
+  {
+    "seed_key": "ground-coriander",
+    "name": "Ground Coriander",
+    "default_unit": "tsp",
+    "shopping_section": "ambient",
+    "track_stock": false
+  },
+  {
+    "seed_key": "turmeric",
+    "name": "Turmeric",
+    "default_unit": "tsp",
+    "shopping_section": "ambient",
+    "track_stock": false
+  },
+  {
+    "seed_key": "garam-masala",
+    "name": "Garam Masala",
+    "default_unit": "tsp",
+    "shopping_section": "ambient",
+    "track_stock": false
+  },
+  {
+    "seed_key": "curry-powder",
+    "name": "Curry Powder",
+    "default_unit": "tsp",
+    "shopping_section": "ambient",
+    "track_stock": false
+  },
+  {
+    "seed_key": "chilli-powder",
+    "name": "Chilli Powder",
+    "default_unit": "tsp",
+    "shopping_section": "ambient",
+    "track_stock": false
+  },
+  {
+    "seed_key": "dried-oregano",
+    "name": "Dried Oregano",
+    "default_unit": "tsp",
+    "shopping_section": "ambient",
+    "track_stock": false
+  },
+  {
+    "seed_key": "dried-thyme",
+    "name": "Dried Thyme",
+    "default_unit": "tsp",
+    "shopping_section": "ambient",
+    "track_stock": false
+  },
+  {
+    "seed_key": "bay-leaves",
+    "name": "Bay Leaves",
+    "default_unit": "item",
+    "shopping_section": "ambient",
+    "track_stock": false
+  },
+  {
+    "seed_key": "cinnamon",
+    "name": "Ground Cinnamon",
+    "default_unit": "tsp",
+    "shopping_section": "ambient",
+    "track_stock": false
+  },
+  {
+    "seed_key": "fresh-basil",
+    "name": "Fresh Basil",
+    "default_unit": "g",
+    "shopping_section": "fresh_produce",
+    "track_stock": true
+  },
+  {
+    "seed_key": "fresh-coriander",
+    "name": "Fresh Coriander",
+    "default_unit": "g",
+    "shopping_section": "fresh_produce",
+    "track_stock": true
+  },
+  {
+    "seed_key": "fresh-parsley",
+    "name": "Fresh Parsley",
+    "default_unit": "g",
+    "shopping_section": "fresh_produce",
+    "track_stock": true
+  },
+  {
+    "seed_key": "fresh-rosemary",
+    "name": "Fresh Rosemary",
+    "default_unit": "g",
+    "shopping_section": "fresh_produce",
+    "track_stock": true
+  },
+  {
+    "seed_key": "fresh-thyme",
+    "name": "Fresh Thyme",
+    "default_unit": "g",
+    "shopping_section": "fresh_produce",
+    "track_stock": true
+  },
+  {
+    "seed_key": "fresh-mint",
+    "name": "Fresh Mint",
+    "default_unit": "g",
+    "shopping_section": "fresh_produce",
+    "track_stock": true
+  }
+]

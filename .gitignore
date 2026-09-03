@@ -1,0 +1,13 @@
+/target
+/.target-container
+**/node_modules
+/web/dist
+.env
+.env.local
+/.dev
+*.log
+/web/tsconfig.tsbuildinfo
+
+# Test and coverage output
+/coverage
+**/coverage

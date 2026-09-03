@@ -1,0 +1,3350 @@
+#![cfg(feature = "db-tests")]
+
+use mmp_core::CoreError;
+use mmp_core::domain::{
+    AccessScope, Assumption, CatalogueOrigin, ConsumedAmount, ConsumptionRecord,
+    ConsumptionRecordId, ExceptionState, HouseholdMember, HouseholdMemberId, Ingredient,
+    IngredientId, MealCategory, MealGuestAllocation, MealGuestAllocationId, MealGuestGroup,
+    MealGuestGroupId, MealItemRef, MealParticipant, MealParticipantAllocation,
+    MealParticipantAllocationId, MealParticipantId, MealPlanComponent, MealPlanComponentId,
+    MealPlanComponentSnapshot, MealPlanEntry, MealPlanEntryId, MealPlanScope, MealPlanStatus,
+    MealSlot, MemberAccessGrant, NewStockEvent, NutritionFacts, NutritionGoals, NutritionQuality,
+    NutritionTarget, NutritionTargetId, OpportunityException, ParticipantStatus, Portioning,
+    Product, ProductId, Provenance, Purchase, PurchaseId, PurchaseState, Quantity, Recipe,
+    RecipeComponent, RecipeComponentId, RecipeId, RecipeInstruction, RecipeInstructionId,
+    RecipePhoto, RecipePhotoDerivatives, RecipeRequirement, RecipeVisibility, Revision, Role,
+    ShoppingCadence, ShoppingOpportunityId, StockEventKind, StockItem, StockItemId, StockLevel,
+    StorageLocation, Unit, User, UserId,
+};
+use mmp_core::domain::{DeductionTarget, StockEffectSource, StockEventSource};
+use mmp_core::ports::{
+    AccessGrantRepository, ConsumptionQuery, ConsumptionRecordRepository,
+    HouseholdMemberRepository, HouseholdSettingsRepository, IngredientQuery, IngredientRepository,
+    IngredientSort, MealPlanComponentUpdate, MealPlanQuery, MealPlanRepository, MemberQuery,
+    NewStockFromPurchase, NutritionTargetRepository, PageRequest, ProductQuery, ProductRepository,
+    PurchaseRepository, RecipeQuery, RecipeRepository, ShoppingCadenceRepository,
+    ShoppingOpportunityRepository, SnapshotOp, SortDirection, StockDeduction, StockQuery,
+    StockRepository, StockWrite, UpdateOutcome, UserRepository,
+};
+
+fn no_stock() -> StockWrite {
+    StockWrite::default()
+}
+use mmp_postgres::{
+    PgAccessGrantRepository, PgConsumptionRecordRepository, PgHouseholdMemberRepository,
+    PgHouseholdSettingsRepository, PgIngredientRepository, PgMealPlanRepository,
+    PgNutritionTargetRepository, PgProductRepository, PgPurchaseRepository, PgRecipeRepository,
+    PgShoppingCadenceRepository, PgShoppingOpportunityRepository, PgStockRepository,
+    PgUserRepository,
+};
+use rust_decimal::Decimal;
+use sqlx::PgPool;
+use time::macros::{date, time};
+use time::{Date, OffsetDateTime, Time, Weekday};
+use uuid::Uuid;
+
+fn ingredient(name: &str) -> Ingredient {
+    let now = OffsetDateTime::now_utc();
+    Ingredient {
+        id: IngredientId::new(),
+        name: name.to_owned(),
+        default_unit: Unit::Gram,
+        shopping_section: None,
+        track_stock: None,
+        provenance: Provenance::local(),
+        revision: Revision::INITIAL,
+        created_at: now,
+        updated_at: now,
+        archived_at: None,
+    }
+}
+
+fn product(name: &str) -> Product {
+    let now = OffsetDateTime::now_utc();
+    Product {
+        id: ProductId::new(),
+        name: name.to_owned(),
+        brand: None,
+        barcode: None,
+        retailer: None,
+        shopping_section: None,
+        track_stock: None,
+        package_quantity: None,
+        servings_per_pack: None,
+        mapped_ingredient_id: None,
+        nutrition: NutritionFacts::default(),
+        provenance: Provenance::local(),
+        revision: Revision::INITIAL,
+        created_at: now,
+        updated_at: now,
+        archived_at: None,
+    }
+}
+
+#[sqlx::test]
+async fn round_trips_an_ingredient(pool: PgPool) {
+    let repo = PgIngredientRepository::new(pool);
+    let mut original = ingredient("Whole Milk");
+    original.default_unit = Unit::Millilitre;
+
+    repo.insert(&original).await.unwrap();
+    let loaded = repo.get(original.id).await.unwrap().expect("should exist");
+
+    assert_eq!(loaded.name, "Whole Milk");
+    assert_eq!(loaded.default_unit, Unit::Millilitre);
+    assert_eq!(loaded.revision, Revision::INITIAL);
+}
+
+#[sqlx::test]
+async fn round_trips_product_nutrition(pool: PgPool) {
+    let repo = PgProductRepository::new(pool);
+    let mut original = product("Tesco Whole Milk 1L");
+    original.nutrition = NutritionFacts {
+        basis: Some(Quantity::new(Decimal::new(100, 0), Unit::Millilitre)),
+        energy_kcal: Some(Decimal::new(64, 0)),
+        fat_g: Some(Decimal::new(36, 1)),
+        ..Default::default()
+    };
+
+    repo.insert(&original).await.unwrap();
+    let loaded = repo.get(original.id).await.unwrap().expect("should exist");
+
+    assert_eq!(loaded.nutrition.energy_kcal, Some(Decimal::new(64, 0)));
+    assert_eq!(loaded.nutrition.fat_g, Some(Decimal::new(36, 1)));
+    assert_eq!(
+        loaded.nutrition.protein_g, None,
+        "unknown must stay unknown"
+    );
+}
+
+#[sqlx::test]
+async fn an_ingredient_has_no_nutrition_columns(pool: PgPool) {
+    let exists: (bool,) = sqlx::query_as(
+        "SELECT EXISTS (SELECT 1 FROM information_schema.columns
+         WHERE table_name = 'ingredient' AND column_name = 'energy_kcal')",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(!exists.0, "nutrition lives on products, not ingredients");
+}
+
+#[sqlx::test]
+async fn every_unit_the_domain_knows_is_accepted_by_the_schema(pool: PgPool) {
+    let repo = PgIngredientRepository::new(pool);
+    for unit in Unit::ALL {
+        let mut row = ingredient(&format!("Test {}", unit.code()));
+        row.default_unit = unit;
+        repo.insert(&row)
+            .await
+            .unwrap_or_else(|e| panic!("the CHECK constraint rejected `{}`: {e}", unit.code()));
+        let loaded = repo.get(row.id).await.unwrap().unwrap();
+        assert_eq!(loaded.default_unit, unit);
+    }
+}
+
+#[sqlx::test]
+async fn every_unit_is_accepted_as_a_nutrition_basis(pool: PgPool) {
+    let repo = PgProductRepository::new(pool);
+    for unit in Unit::ALL {
+        let mut row = product(&format!("Basis {}", unit.code()));
+        row.nutrition = NutritionFacts {
+            basis: Some(Quantity::new(Decimal::new(100, 0), unit)),
+            energy_kcal: Some(Decimal::ONE),
+            ..Default::default()
+        };
+        repo.insert(&row)
+            .await
+            .unwrap_or_else(|e| panic!("the CHECK rejected basis unit `{}`: {e}", unit.code()));
+        let loaded = repo.get(row.id).await.unwrap().unwrap();
+        assert_eq!(loaded.nutrition.basis.unwrap().unit, unit);
+    }
+}
+
+#[sqlx::test]
+async fn a_serving_sized_basis_round_trips(pool: PgPool) {
+    let repo = PgProductRepository::new(pool);
+    let mut row = product("Granola 500g");
+    row.package_quantity = Some(Quantity::new(Decimal::new(500, 0), Unit::Gram));
+    row.nutrition = NutritionFacts {
+        basis: Some(Quantity::new(Decimal::new(30, 0), Unit::Gram)),
+        energy_kcal: Some(Decimal::new(120, 0)),
+        ..Default::default()
+    };
+    repo.insert(&row).await.unwrap();
+
+    let loaded = repo.get(row.id).await.unwrap().unwrap();
+    assert_eq!(
+        loaded.nutrition.basis,
+        Some(Quantity::new(Decimal::new(30, 0), Unit::Gram))
+    );
+}
+
+#[sqlx::test]
+async fn every_origin_is_accepted_by_the_schema(pool: PgPool) {
+    let repo = PgIngredientRepository::new(pool);
+    for origin in CatalogueOrigin::ALL {
+        let mut row = ingredient(&format!("Test {}", origin.code()));
+        row.provenance = Provenance {
+            origin,
+            seed_key: Some(format!("test-{}", origin.code())),
+            source_provider: None,
+            source_external_id: None,
+            locally_modified: false,
+        };
+        repo.insert(&row)
+            .await
+            .unwrap_or_else(|e| panic!("the CHECK constraint rejected `{}`: {e}", origin.code()));
+    }
+}
+
+#[sqlx::test]
+async fn extra_nutrients_survive_the_jsonb_round_trip(pool: PgPool) {
+    let repo = PgProductRepository::new(pool);
+    let mut row = product("Orange Juice 1L");
+    row.nutrition = NutritionFacts {
+        basis: Some(Quantity::new(Decimal::new(100, 0), Unit::Gram)),
+        ..Default::default()
+    };
+    row.nutrition
+        .extra
+        .insert("vitamin_c_mg".to_owned(), Decimal::new(532, 1));
+    repo.insert(&row).await.unwrap();
+
+    let loaded = repo.get(row.id).await.unwrap().unwrap();
+    assert_eq!(
+        loaded.nutrition.extra.get("vitamin_c_mg"),
+        Some(&Decimal::new(532, 1))
+    );
+}
+
+#[sqlx::test]
+async fn a_duplicate_name_is_reported_as_a_duplicate(pool: PgPool) {
+    let repo = PgIngredientRepository::new(pool);
+    repo.insert(&ingredient("Whole Milk")).await.unwrap();
+
+    let err = repo.insert(&ingredient("whole milk")).await.unwrap_err();
+    assert!(
+        matches!(err, CoreError::Duplicate { field: "name", .. }),
+        "the unique index must surface as a Duplicate, got {err:?}"
+    );
+}
+
+#[sqlx::test]
+async fn negative_nutrition_is_refused_by_the_database(pool: PgPool) {
+    let repo = PgProductRepository::new(pool);
+    let mut row = product("Impossible Product");
+    row.nutrition = NutritionFacts {
+        basis: Some(Quantity::new(Decimal::new(100, 0), Unit::Gram)),
+        protein_g: Some(Decimal::new(-1, 0)),
+        ..Default::default()
+    };
+    assert!(repo.insert(&row).await.is_err());
+}
+
+#[sqlx::test]
+async fn updating_with_the_current_revision_succeeds(pool: PgPool) {
+    let repo = PgIngredientRepository::new(pool);
+    let original = ingredient("Whole Milk");
+    repo.insert(&original).await.unwrap();
+
+    let mut next = original.clone();
+    next.name = "Full Fat Milk".to_owned();
+    next.revision = original.revision.next();
+
+    let outcome = repo.update(&next, original.revision).await.unwrap();
+    assert_eq!(outcome, UpdateOutcome::Updated);
+
+    let loaded = repo.get(original.id).await.unwrap().unwrap();
+    assert_eq!(loaded.name, "Full Fat Milk");
+    assert_eq!(loaded.revision, Revision::new(2));
+}
+
+#[sqlx::test]
+async fn updating_with_a_stale_revision_reports_the_actual(pool: PgPool) {
+    let repo = PgIngredientRepository::new(pool);
+    let original = ingredient("Whole Milk");
+    repo.insert(&original).await.unwrap();
+
+    let mut next = original.clone();
+    next.revision = original.revision.next();
+    repo.update(&next, original.revision).await.unwrap();
+
+    let mut stale = original.clone();
+    stale.name = "Something Else".to_owned();
+    stale.revision = Revision::new(2);
+    let outcome = repo.update(&stale, Revision::INITIAL).await.unwrap();
+
+    assert_eq!(
+        outcome,
+        UpdateOutcome::RevisionMismatch {
+            actual: Revision::new(2)
+        }
+    );
+}
+
+#[sqlx::test]
+async fn updating_something_that_does_not_exist_is_not_found(pool: PgPool) {
+    let repo = PgIngredientRepository::new(pool);
+    let outcome = repo
+        .update(&ingredient("Ghost"), Revision::INITIAL)
+        .await
+        .unwrap();
+    assert_eq!(outcome, UpdateOutcome::NotFound);
+}
+
+#[sqlx::test]
+async fn listing_hides_archived_records_by_default(pool: PgPool) {
+    let repo = PgIngredientRepository::new(pool);
+    let mut archived = ingredient("Retired Ingredient");
+    archived.archived_at = Some(OffsetDateTime::now_utc());
+    repo.insert(&archived).await.unwrap();
+    repo.insert(&ingredient("Whole Milk")).await.unwrap();
+
+    let visible = repo.list(&IngredientQuery::default()).await.unwrap();
+    assert_eq!(visible.total, 1);
+
+    let all = repo
+        .list(&IngredientQuery {
+            include_archived: true,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(all.total, 2);
+}
+
+#[sqlx::test]
+async fn listing_searches_by_name(pool: PgPool) {
+    let repo = PgIngredientRepository::new(pool);
+    repo.insert(&ingredient("Chicken Breast")).await.unwrap();
+    repo.insert(&ingredient("Whole Milk")).await.unwrap();
+
+    let found = repo
+        .list(&IngredientQuery {
+            search: Some("chick".to_owned()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(found.total, 1);
+    assert_eq!(found.items[0].name, "Chicken Breast");
+}
+
+#[sqlx::test]
+async fn listing_filters_by_origin(pool: PgPool) {
+    let repo = PgIngredientRepository::new(pool);
+    let mut seeded = ingredient("Seeded Thing");
+    seeded.provenance = Provenance::seeded("seeded-thing");
+    repo.insert(&seeded).await.unwrap();
+    repo.insert(&ingredient("Local Thing")).await.unwrap();
+
+    let found = repo
+        .list(&IngredientQuery {
+            origin: Some(CatalogueOrigin::Seeded),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(found.total, 1);
+    assert_eq!(found.items[0].name, "Seeded Thing");
+}
+
+#[sqlx::test]
+async fn listing_paginates(pool: PgPool) {
+    let repo = PgIngredientRepository::new(pool);
+    for n in 0..7 {
+        repo.insert(&ingredient(&format!("Ingredient {n}")))
+            .await
+            .unwrap();
+    }
+
+    let page = repo
+        .list(&IngredientQuery {
+            page: PageRequest::new(2, 3),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(page.total, 7);
+    assert_eq!(page.items.len(), 3);
+    assert_eq!(page.total_pages(), 3);
+}
+
+#[sqlx::test]
+async fn listing_filters_to_ingredients_without_products(pool: PgPool) {
+    let ingredients = PgIngredientRepository::new(pool.clone());
+    let products = PgProductRepository::new(pool);
+
+    let milk = ingredient("Whole Milk");
+    let flour = ingredient("Plain Flour");
+    let coriander = ingredient("Coriander");
+    ingredients.insert(&milk).await.unwrap();
+    ingredients.insert(&flour).await.unwrap();
+    ingredients.insert(&coriander).await.unwrap();
+
+    let mut tesco_milk = product("Tesco Whole Milk 1L");
+    tesco_milk.mapped_ingredient_id = Some(milk.id);
+    products.insert(&tesco_milk).await.unwrap();
+
+    let mut archived = product("Discontinued Flour");
+    archived.mapped_ingredient_id = Some(flour.id);
+    archived.archived_at = Some(OffsetDateTime::now_utc());
+    products.insert(&archived).await.unwrap();
+
+    let needs = ingredients
+        .list(&IngredientQuery {
+            needs_products: Some(true),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let mut names: Vec<&str> = needs.items.iter().map(|i| i.name.as_str()).collect();
+    names.sort_unstable();
+    assert_eq!(needs.total, 2);
+    assert_eq!(names, ["Coriander", "Plain Flour"]);
+
+    let has = ingredients
+        .list(&IngredientQuery {
+            needs_products: Some(false),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(has.total, 1);
+    assert_eq!(has.items[0].name, "Whole Milk");
+}
+
+#[sqlx::test]
+async fn the_needs_products_filter_paginates_over_the_filtered_set(pool: PgPool) {
+    let ingredients = PgIngredientRepository::new(pool.clone());
+    let products = PgProductRepository::new(pool);
+
+    for n in 0..5 {
+        ingredients
+            .insert(&ingredient(&format!("Bare Ingredient {n}")))
+            .await
+            .unwrap();
+    }
+    let stocked = ingredient("Stocked Ingredient");
+    ingredients.insert(&stocked).await.unwrap();
+    let mut p = product("A Product");
+    p.mapped_ingredient_id = Some(stocked.id);
+    products.insert(&p).await.unwrap();
+
+    let page = ingredients
+        .list(&IngredientQuery {
+            needs_products: Some(true),
+            page: PageRequest::new(2, 3),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(
+        page.total, 5,
+        "the count must exclude the stocked ingredient"
+    );
+    assert_eq!(page.items.len(), 2);
+    assert_eq!(page.total_pages(), 2);
+}
+
+#[sqlx::test]
+async fn finds_a_seeded_ingredient_by_its_key(pool: PgPool) {
+    let repo = PgIngredientRepository::new(pool);
+    let mut seeded = ingredient("Whole Milk");
+    seeded.id = IngredientId::seeded("whole-milk");
+    seeded.provenance = Provenance::seeded("whole-milk");
+    repo.insert(&seeded).await.unwrap();
+
+    let found = repo.find_by_seed_key("whole-milk").await.unwrap().unwrap();
+    assert_eq!(found.id, IngredientId::seeded("whole-milk"));
+}
+
+#[sqlx::test]
+async fn round_trips_a_product_with_a_package_size(pool: PgPool) {
+    let repo = PgProductRepository::new(pool);
+    let mut row = product("Tesco Whole Milk 1L");
+    row.brand = Some("Tesco".to_owned());
+    row.barcode = Some("5000119012345".to_owned());
+    row.package_quantity = Some(Quantity::new(Decimal::ONE, Unit::Litre));
+
+    repo.insert(&row).await.unwrap();
+    let loaded = repo.get(row.id).await.unwrap().unwrap();
+
+    assert_eq!(loaded.brand.as_deref(), Some("Tesco"));
+    assert_eq!(
+        loaded.package_quantity,
+        Some(Quantity::new(Decimal::ONE, Unit::Litre))
+    );
+}
+
+#[sqlx::test]
+async fn round_trips_servings_per_pack(pool: PgPool) {
+    let repo = PgProductRepository::new(pool);
+    let mut row = product("Stonebaked Pizza");
+    row.package_quantity = Some(Quantity::new(Decimal::ONE, Unit::Item));
+    row.servings_per_pack = Some(4);
+
+    repo.insert(&row).await.unwrap();
+    let loaded = repo.get(row.id).await.unwrap().unwrap();
+
+    assert_eq!(loaded.servings_per_pack, Some(4));
+}
+
+#[sqlx::test]
+async fn a_duplicate_barcode_is_reported_as_a_duplicate(pool: PgPool) {
+    let repo = PgProductRepository::new(pool);
+    let mut first = product("Tesco Whole Milk 1L");
+    first.barcode = Some("5000119012345".to_owned());
+    repo.insert(&first).await.unwrap();
+
+    let mut second = product("Tesco Whole Milk 2L");
+    second.barcode = Some("5000119012345".to_owned());
+    let err = repo.insert(&second).await.unwrap_err();
+    assert!(matches!(
+        err,
+        CoreError::Duplicate {
+            field: "barcode",
+            ..
+        }
+    ));
+}
+
+#[sqlx::test]
+async fn several_products_may_have_no_barcode(pool: PgPool) {
+    let repo = PgProductRepository::new(pool);
+    repo.insert(&product("Loose Apples")).await.unwrap();
+    repo.insert(&product("Loose Bananas")).await.unwrap();
+    let all = repo.list(&ProductQuery::default()).await.unwrap();
+    assert_eq!(all.total, 2, "the barcode index must only apply where set");
+}
+
+#[sqlx::test]
+async fn mapping_to_a_missing_ingredient_is_rejected(pool: PgPool) {
+    let repo = PgProductRepository::new(pool);
+    let mut row = product("Mystery Milk");
+    row.mapped_ingredient_id = Some(IngredientId::new());
+
+    let err = repo.insert(&row).await.unwrap_err();
+    assert!(
+        matches!(err, CoreError::NotFound { .. }),
+        "the foreign key must surface as NotFound, got {err:?}"
+    );
+}
+
+#[sqlx::test]
+async fn lists_products_filtered_by_mapped_ingredient(pool: PgPool) {
+    let ingredients = PgIngredientRepository::new(pool.clone());
+    let products = PgProductRepository::new(pool);
+
+    let milk = ingredient("Whole Milk");
+    ingredients.insert(&milk).await.unwrap();
+
+    let mut tesco = product("Tesco Whole Milk 1L");
+    tesco.mapped_ingredient_id = Some(milk.id);
+    products.insert(&tesco).await.unwrap();
+    products.insert(&product("Hovis Bread")).await.unwrap();
+
+    let found = products
+        .list(&ProductQuery {
+            mapped_ingredient_id: Some(milk.id),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(found.total, 1);
+    assert_eq!(found.items[0].name, "Tesco Whole Milk 1L");
+}
+
+#[sqlx::test]
+async fn lists_only_unmapped_products(pool: PgPool) {
+    let ingredients = PgIngredientRepository::new(pool.clone());
+    let products = PgProductRepository::new(pool);
+
+    let milk = ingredient("Whole Milk");
+    ingredients.insert(&milk).await.unwrap();
+
+    let mut mapped = product("Tesco Whole Milk 1L");
+    mapped.mapped_ingredient_id = Some(milk.id);
+    products.insert(&mapped).await.unwrap();
+    products.insert(&product("Mystery Snack")).await.unwrap();
+    products.insert(&product("Unlabelled Sauce")).await.unwrap();
+
+    let unmapped = products
+        .list(&ProductQuery {
+            unmapped: Some(true),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let mut names: Vec<&str> = unmapped.items.iter().map(|p| p.name.as_str()).collect();
+    names.sort_unstable();
+    assert_eq!(unmapped.total, 2);
+    assert_eq!(names, ["Mystery Snack", "Unlabelled Sauce"]);
+
+    let mapped_only = products
+        .list(&ProductQuery {
+            unmapped: Some(false),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(mapped_only.total, 1);
+    assert_eq!(mapped_only.items[0].name, "Tesco Whole Milk 1L");
+}
+
+#[sqlx::test]
+async fn decimal_precision_is_preserved(pool: PgPool) {
+    let repo = PgProductRepository::new(pool);
+    let mut row = product("Precise Product");
+    row.nutrition = NutritionFacts {
+        basis: Some(Quantity::new(Decimal::new(100, 0), Unit::Gram)),
+        energy_kcal: Some(Decimal::new(123456, 3)),
+        ..Default::default()
+    };
+    repo.insert(&row).await.unwrap();
+
+    let loaded = repo.get(row.id).await.unwrap().unwrap();
+    assert_eq!(loaded.nutrition.energy_kcal, Some(Decimal::new(123456, 3)));
+}
+
+#[sqlx::test]
+async fn counts_products_per_ingredient_in_one_query(pool: PgPool) {
+    let ingredients = PgIngredientRepository::new(pool.clone());
+    let products = PgProductRepository::new(pool);
+
+    let milk = ingredient("Whole Milk");
+    let coriander = ingredient("Coriander");
+    ingredients.insert(&milk).await.unwrap();
+    ingredients.insert(&coriander).await.unwrap();
+
+    for name in ["Tesco Whole Milk 1L", "Sainsbury's Whole Milk 1L"] {
+        let mut p = product(name);
+        p.mapped_ingredient_id = Some(milk.id);
+        products.insert(&p).await.unwrap();
+    }
+
+    let counts = products
+        .count_by_ingredient(&[milk.id, coriander.id])
+        .await
+        .unwrap();
+
+    assert_eq!(counts.get(&milk.id), Some(&2));
+    assert_eq!(
+        counts.get(&coriander.id),
+        Some(&0),
+        "an ingredient with no products must report zero, not be absent"
+    );
+}
+
+#[sqlx::test]
+async fn archived_products_do_not_count_towards_an_ingredient(pool: PgPool) {
+    let ingredients = PgIngredientRepository::new(pool.clone());
+    let products = PgProductRepository::new(pool);
+
+    let milk = ingredient("Whole Milk");
+    ingredients.insert(&milk).await.unwrap();
+
+    let mut live = product("Tesco Whole Milk 1L");
+    live.mapped_ingredient_id = Some(milk.id);
+    products.insert(&live).await.unwrap();
+
+    let mut gone = product("Discontinued Milk");
+    gone.mapped_ingredient_id = Some(milk.id);
+    gone.archived_at = Some(OffsetDateTime::now_utc());
+    products.insert(&gone).await.unwrap();
+
+    let counts = products.count_by_ingredient(&[milk.id]).await.unwrap();
+    assert_eq!(counts.get(&milk.id), Some(&1));
+}
+
+#[sqlx::test]
+async fn counting_nothing_is_not_an_error(pool: PgPool) {
+    let products = PgProductRepository::new(pool);
+    assert!(products.count_by_ingredient(&[]).await.unwrap().is_empty());
+}
+
+fn member(name: &str) -> HouseholdMember {
+    let now = OffsetDateTime::now_utc();
+    HouseholdMember {
+        id: HouseholdMemberId::new(),
+        display_name: name.to_owned(),
+        linked_user_id: None,
+        revision: Revision::INITIAL,
+        created_at: now,
+        updated_at: now,
+        archived_at: None,
+    }
+}
+
+fn user(username: &str, roles: Vec<Role>) -> User {
+    let now = OffsetDateTime::now_utc();
+    User {
+        id: UserId::new(),
+        username: username.to_owned(),
+        display_name: None,
+        auth_subject: None,
+        roles,
+        revision: Revision::INITIAL,
+        created_at: now,
+        updated_at: now,
+        archived_at: None,
+    }
+}
+
+#[sqlx::test]
+async fn round_trips_a_household_member(pool: PgPool) {
+    let repo = PgHouseholdMemberRepository::new(pool);
+    let original = member("Joe");
+
+    repo.insert(&original).await.unwrap();
+    let loaded = repo.get(original.id).await.unwrap().expect("should exist");
+
+    assert_eq!(loaded.display_name, "Joe");
+    assert_eq!(loaded.linked_user_id, None);
+    assert_eq!(loaded.revision, Revision::INITIAL);
+}
+
+#[sqlx::test]
+async fn a_duplicate_member_name_is_reported_as_a_duplicate(pool: PgPool) {
+    let repo = PgHouseholdMemberRepository::new(pool);
+    repo.insert(&member("Joe")).await.unwrap();
+
+    let mut clash = member("joe");
+    clash.display_name = "joe".to_owned();
+    let err = repo.insert(&clash).await.unwrap_err();
+
+    assert!(matches!(err, CoreError::Duplicate { .. }), "{err:?}");
+}
+
+#[sqlx::test]
+async fn a_member_revision_mismatch_is_detected(pool: PgPool) {
+    let repo = PgHouseholdMemberRepository::new(pool);
+    let original = member("Joe");
+    repo.insert(&original).await.unwrap();
+
+    let mut next = original.clone();
+    next.display_name = "Joseph".to_owned();
+    next.revision = original.revision.next();
+
+    let outcome = repo.update(&next, Revision::new(99)).await.unwrap();
+    assert!(matches!(
+        outcome,
+        UpdateOutcome::RevisionMismatch { actual } if actual == Revision::INITIAL
+    ));
+}
+
+#[sqlx::test]
+async fn round_trips_a_user_with_its_roles(pool: PgPool) {
+    let repo = PgUserRepository::new(pool);
+    let original = user("joe", vec![Role::Admin, Role::BasicUser]);
+
+    repo.insert(&original).await.unwrap();
+    let loaded = repo.get(original.id).await.unwrap().expect("should exist");
+
+    assert_eq!(loaded.username, "joe");
+    assert_eq!(loaded.roles, vec![Role::Admin, Role::BasicUser]);
+}
+
+#[sqlx::test]
+async fn every_role_the_domain_knows_is_accepted_by_the_schema(pool: PgPool) {
+    let repo = PgUserRepository::new(pool);
+    let original = user("everyone", Role::ALL.to_vec());
+
+    repo.insert(&original).await.unwrap();
+    let loaded = repo.get(original.id).await.unwrap().unwrap();
+
+    assert_eq!(loaded.roles.len(), Role::ALL.len());
+}
+
+#[sqlx::test]
+async fn setting_roles_replaces_the_previous_set(pool: PgPool) {
+    let repo = PgUserRepository::new(pool);
+    let original = user("joe", vec![Role::Admin, Role::BasicUser]);
+    repo.insert(&original).await.unwrap();
+
+    let mut next = original.clone();
+    next.roles = vec![Role::Nutritionist];
+    next.revision = original.revision.next();
+    repo.update(&next, original.revision).await.unwrap();
+
+    let loaded = repo.get(original.id).await.unwrap().unwrap();
+    assert_eq!(loaded.roles, vec![Role::Nutritionist]);
+}
+
+#[sqlx::test]
+async fn a_duplicate_username_is_reported_as_a_duplicate(pool: PgPool) {
+    let repo = PgUserRepository::new(pool);
+    repo.insert(&user("joe", vec![Role::BasicUser]))
+        .await
+        .unwrap();
+
+    let err = repo
+        .insert(&user("JOE", vec![Role::BasicUser]))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, CoreError::Duplicate { .. }), "{err:?}");
+}
+
+#[sqlx::test]
+async fn users_are_counted_by_role_excluding_archived(pool: PgPool) {
+    let repo = PgUserRepository::new(pool);
+    let keeper = user("admin", vec![Role::Admin]);
+    let spare = user("root", vec![Role::Admin]);
+    repo.insert(&keeper).await.unwrap();
+    repo.insert(&spare).await.unwrap();
+
+    assert_eq!(repo.count_with_role(Role::Admin, false).await.unwrap(), 2);
+
+    let mut archived = spare.clone();
+    archived.archived_at = Some(OffsetDateTime::now_utc());
+    archived.revision = spare.revision.next();
+    repo.update(&archived, spare.revision).await.unwrap();
+
+    assert_eq!(repo.count_with_role(Role::Admin, false).await.unwrap(), 1);
+    assert_eq!(repo.count_with_role(Role::Admin, true).await.unwrap(), 2);
+}
+
+#[sqlx::test]
+async fn one_account_cannot_be_linked_to_two_members(pool: PgPool) {
+    let users = PgUserRepository::new(pool.clone());
+    let members = PgHouseholdMemberRepository::new(pool);
+
+    let account = user("joe", vec![Role::BasicUser]);
+    users.insert(&account).await.unwrap();
+
+    let mut first = member("Joe");
+    first.linked_user_id = Some(account.id);
+    members.insert(&first).await.unwrap();
+
+    let mut second = member("Jo");
+    second.linked_user_id = Some(account.id);
+    let err = members.insert(&second).await.unwrap_err();
+
+    assert!(matches!(err, CoreError::Duplicate { .. }), "{err:?}");
+}
+
+#[sqlx::test]
+async fn archiving_an_account_leaves_its_member_linked(pool: PgPool) {
+    let users = PgUserRepository::new(pool.clone());
+    let members = PgHouseholdMemberRepository::new(pool);
+
+    let account = user("joe", vec![Role::BasicUser]);
+    users.insert(&account).await.unwrap();
+
+    let mut linked = member("Joe");
+    linked.linked_user_id = Some(account.id);
+    members.insert(&linked).await.unwrap();
+
+    let mut archived = account.clone();
+    archived.archived_at = Some(OffsetDateTime::now_utc());
+    archived.revision = account.revision.next();
+    users.update(&archived, account.revision).await.unwrap();
+
+    let loaded = members.get(linked.id).await.unwrap().unwrap();
+    assert_eq!(loaded.linked_user_id, Some(account.id));
+    assert_eq!(loaded.revision, Revision::INITIAL);
+}
+
+#[sqlx::test]
+async fn a_member_can_be_found_by_its_linked_account(pool: PgPool) {
+    let users = PgUserRepository::new(pool.clone());
+    let members = PgHouseholdMemberRepository::new(pool);
+
+    let account = user("joe", vec![Role::BasicUser]);
+    users.insert(&account).await.unwrap();
+    let mut linked = member("Joe");
+    linked.linked_user_id = Some(account.id);
+    members.insert(&linked).await.unwrap();
+
+    let found = members
+        .find_by_linked_user(account.id)
+        .await
+        .unwrap()
+        .expect("should exist");
+    assert_eq!(found.id, linked.id);
+}
+
+#[sqlx::test]
+async fn members_can_be_filtered_by_whether_they_have_an_account(pool: PgPool) {
+    let users = PgUserRepository::new(pool.clone());
+    let members = PgHouseholdMemberRepository::new(pool);
+
+    let account = user("joe", vec![Role::BasicUser]);
+    users.insert(&account).await.unwrap();
+    let mut linked = member("Joe");
+    linked.linked_user_id = Some(account.id);
+    members.insert(&linked).await.unwrap();
+    members.insert(&member("Ann")).await.unwrap();
+
+    let with = members
+        .list(&MemberQuery {
+            with_account: Some(true),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(with.total, 1);
+    assert_eq!(with.items[0].display_name, "Joe");
+
+    let without = members
+        .list(&MemberQuery {
+            with_account: Some(false),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(without.total, 1);
+    assert_eq!(without.items[0].display_name, "Ann");
+}
+
+#[sqlx::test]
+async fn access_grants_round_trip(pool: PgPool) {
+    let users = PgUserRepository::new(pool.clone());
+    let members = PgHouseholdMemberRepository::new(pool.clone());
+    let grants = PgAccessGrantRepository::new(pool);
+
+    let account = user("nutritionist", vec![Role::Nutritionist]);
+    users.insert(&account).await.unwrap();
+    let subject = member("Joe");
+    members.insert(&subject).await.unwrap();
+
+    assert!(
+        !grants
+            .exists(account.id, subject.id, AccessScope::HealthData)
+            .await
+            .unwrap()
+    );
+
+    grants
+        .upsert(&MemberAccessGrant {
+            grantee_user_id: account.id,
+            subject_member_id: subject.id,
+            scope: AccessScope::HealthData,
+            granted_at: OffsetDateTime::now_utc(),
+            granted_by: None,
+        })
+        .await
+        .unwrap();
+
+    assert!(
+        grants
+            .exists(account.id, subject.id, AccessScope::HealthData)
+            .await
+            .unwrap()
+    );
+    assert_eq!(grants.list_for_member(subject.id).await.unwrap().len(), 1);
+
+    assert!(
+        grants
+            .revoke(account.id, subject.id, AccessScope::HealthData)
+            .await
+            .unwrap()
+    );
+    assert!(grants.list_for_member(subject.id).await.unwrap().is_empty());
+}
+
+#[sqlx::test]
+async fn granting_the_same_scope_twice_does_not_duplicate(pool: PgPool) {
+    let users = PgUserRepository::new(pool.clone());
+    let members = PgHouseholdMemberRepository::new(pool.clone());
+    let grants = PgAccessGrantRepository::new(pool);
+
+    let account = user("viewer", vec![Role::BasicUser]);
+    users.insert(&account).await.unwrap();
+    let subject = member("Joe");
+    members.insert(&subject).await.unwrap();
+
+    for _ in 0..2 {
+        grants
+            .upsert(&MemberAccessGrant {
+                grantee_user_id: account.id,
+                subject_member_id: subject.id,
+                scope: AccessScope::HealthData,
+                granted_at: OffsetDateTime::now_utc(),
+                granted_by: Some(account.id),
+            })
+            .await
+            .unwrap();
+    }
+
+    assert_eq!(grants.list_for_member(subject.id).await.unwrap().len(), 1);
+}
+
+#[sqlx::test]
+async fn catalogue_records_carry_optional_audit_columns(pool: PgPool) {
+    let users = PgUserRepository::new(pool.clone());
+    let account = user("joe", vec![Role::BasicUser]);
+    users.insert(&account).await.unwrap();
+
+    let repo = PgIngredientRepository::new(pool.clone());
+    let created = ingredient("Coriander");
+    repo.insert(&created).await.unwrap();
+
+    sqlx::query("UPDATE ingredient SET created_by = $2 WHERE id = $1")
+        .bind(created.id.as_uuid())
+        .bind(account.id.as_uuid())
+        .execute(&pool)
+        .await
+        .expect("the audit column should accept a user id");
+
+    let stored: (Option<uuid::Uuid>,) =
+        sqlx::query_as("SELECT created_by FROM ingredient WHERE id = $1")
+            .bind(created.id.as_uuid())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(stored.0, Some(account.id.as_uuid()));
+}
+
+async fn seed_member_and_product(pool: &PgPool) -> (HouseholdMemberId, ProductId) {
+    let members = PgHouseholdMemberRepository::new(pool.clone());
+    let seeded_member = member("Joe");
+    members.insert(&seeded_member).await.unwrap();
+
+    let products = PgProductRepository::new(pool.clone());
+    let mut seeded_product = product("Whole Milk");
+    seeded_product.package_quantity = Some(Quantity::new(Decimal::new(1000, 0), Unit::Millilitre));
+    seeded_product.nutrition = NutritionFacts {
+        basis: Some(Quantity::new(Decimal::new(100, 0), Unit::Millilitre)),
+        energy_kcal: Some(Decimal::new(64, 0)),
+        ..Default::default()
+    };
+    products.insert(&seeded_product).await.unwrap();
+
+    (seeded_member.id, seeded_product.id)
+}
+
+fn consumption_record(member_id: HouseholdMemberId, product_id: ProductId) -> ConsumptionRecord {
+    let now = OffsetDateTime::now_utc();
+    ConsumptionRecord {
+        id: ConsumptionRecordId::new(),
+        member_id,
+        item: MealItemRef::product(product_id),
+        recorded_by: None,
+        meal_plan_entry_id: None,
+        meal_plan_component_id: None,
+        slot: MealSlot::Breakfast,
+        amount: ConsumedAmount::Measure(Quantity::new(Decimal::new(150, 0), Unit::Millilitre)),
+        consumed_on: date!(2026 - 08 - 22),
+        consumed_at: Some(now),
+        nutrition: NutritionFacts {
+            basis: Some(Quantity::new(Decimal::new(150, 0), Unit::Millilitre)),
+            energy_kcal: Some(Decimal::new(96, 0)),
+            ..Default::default()
+        },
+        quality: NutritionQuality::Partial,
+        revision: Revision::INITIAL,
+        created_at: now,
+        updated_at: now,
+    }
+}
+
+#[sqlx::test]
+async fn round_trips_a_measured_consumption_record(pool: PgPool) {
+    let (member_id, product_id) = seed_member_and_product(&pool).await;
+    let repo = PgConsumptionRecordRepository::new(pool);
+    let original = consumption_record(member_id, product_id);
+
+    repo.insert(&original, &no_stock()).await.unwrap();
+    let loaded = repo.get(original.id).await.unwrap().expect("should exist");
+
+    assert_eq!(loaded.amount, original.amount);
+    assert_eq!(loaded.slot, MealSlot::Breakfast);
+    assert_eq!(loaded.nutrition.energy_kcal, Some(Decimal::new(96, 0)));
+    assert_eq!(loaded.quality, NutritionQuality::Partial);
+    assert_eq!(loaded.consumed_on, date!(2026 - 08 - 22));
+    assert_eq!(loaded.revision, Revision::INITIAL);
+}
+
+#[sqlx::test]
+async fn round_trips_a_consumption_record_with_an_unknown_time(pool: PgPool) {
+    let (member_id, product_id) = seed_member_and_product(&pool).await;
+    let repo = PgConsumptionRecordRepository::new(pool);
+    let mut original = consumption_record(member_id, product_id);
+    original.consumed_at = None;
+
+    repo.insert(&original, &no_stock()).await.unwrap();
+    let loaded = repo.get(original.id).await.unwrap().unwrap();
+
+    assert_eq!(loaded.consumed_at, None);
+}
+
+#[sqlx::test]
+async fn round_trips_a_servings_amount_with_no_unit(pool: PgPool) {
+    let (member_id, product_id) = seed_member_and_product(&pool).await;
+    let repo = PgConsumptionRecordRepository::new(pool);
+    let mut original = consumption_record(member_id, product_id);
+    original.amount = ConsumedAmount::Servings(Decimal::new(15, 1));
+
+    repo.insert(&original, &no_stock()).await.unwrap();
+    let loaded = repo.get(original.id).await.unwrap().unwrap();
+
+    assert_eq!(loaded.amount, ConsumedAmount::Servings(Decimal::new(15, 1)));
+}
+
+#[sqlx::test]
+async fn round_trips_a_packs_amount(pool: PgPool) {
+    let (member_id, product_id) = seed_member_and_product(&pool).await;
+    let repo = PgConsumptionRecordRepository::new(pool);
+    let mut original = consumption_record(member_id, product_id);
+    original.amount = ConsumedAmount::Packs(Decimal::new(5, 1));
+
+    repo.insert(&original, &no_stock()).await.unwrap();
+    let loaded = repo.get(original.id).await.unwrap().unwrap();
+
+    assert_eq!(loaded.amount, ConsumedAmount::Packs(Decimal::new(5, 1)));
+}
+
+#[sqlx::test]
+async fn every_unit_the_domain_knows_is_accepted_as_a_measured_amount(pool: PgPool) {
+    let (member_id, product_id) = seed_member_and_product(&pool).await;
+    let repo = PgConsumptionRecordRepository::new(pool);
+    for unit in Unit::ALL {
+        let mut row = consumption_record(member_id, product_id);
+        row.amount = ConsumedAmount::Measure(Quantity::new(Decimal::ONE, unit));
+        repo.insert(&row, &no_stock())
+            .await
+            .unwrap_or_else(|e| panic!("the CHECK rejected amount unit `{}`: {e}", unit.code()));
+        let loaded = repo.get(row.id).await.unwrap().unwrap();
+        assert_eq!(
+            loaded.amount,
+            ConsumedAmount::Measure(Quantity::new(Decimal::ONE, unit))
+        );
+    }
+}
+
+#[sqlx::test]
+async fn every_nutrition_quality_round_trips(pool: PgPool) {
+    let (member_id, product_id) = seed_member_and_product(&pool).await;
+    let repo = PgConsumptionRecordRepository::new(pool);
+    for quality in NutritionQuality::ALL {
+        let mut row = consumption_record(member_id, product_id);
+        row.quality = quality;
+        repo.insert(&row, &no_stock()).await.unwrap();
+        let loaded = repo.get(row.id).await.unwrap().unwrap();
+        assert_eq!(loaded.quality, quality);
+    }
+}
+
+#[sqlx::test]
+async fn updating_a_consumption_record_with_a_stale_revision_reports_the_actual(pool: PgPool) {
+    let (member_id, product_id) = seed_member_and_product(&pool).await;
+    let repo = PgConsumptionRecordRepository::new(pool);
+    let original = consumption_record(member_id, product_id);
+    repo.insert(&original, &no_stock()).await.unwrap();
+
+    let mut next = original.clone();
+    next.revision = original.revision.next();
+    repo.update(&next, original.revision, &no_stock())
+        .await
+        .unwrap();
+
+    let mut stale = original.clone();
+    stale.consumed_on = date!(2026 - 08 - 23);
+    stale.revision = Revision::new(2);
+    let (outcome, _) = repo
+        .update(&stale, Revision::INITIAL, &no_stock())
+        .await
+        .unwrap();
+
+    assert_eq!(
+        outcome,
+        UpdateOutcome::RevisionMismatch {
+            actual: Revision::new(2)
+        }
+    );
+}
+
+#[sqlx::test]
+async fn updating_a_missing_consumption_record_is_not_found(pool: PgPool) {
+    let (member_id, product_id) = seed_member_and_product(&pool).await;
+    let repo = PgConsumptionRecordRepository::new(pool);
+    let (outcome, _) = repo
+        .update(
+            &consumption_record(member_id, product_id),
+            Revision::INITIAL,
+            &no_stock(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(outcome, UpdateOutcome::NotFound);
+}
+
+#[sqlx::test]
+async fn deleting_a_consumption_record_removes_it(pool: PgPool) {
+    let (member_id, product_id) = seed_member_and_product(&pool).await;
+    let repo = PgConsumptionRecordRepository::new(pool);
+    let original = consumption_record(member_id, product_id);
+    repo.insert(&original, &no_stock()).await.unwrap();
+
+    let (outcome, _) = repo
+        .delete(original.id, original.revision, &no_stock())
+        .await
+        .unwrap();
+    assert_eq!(outcome, UpdateOutcome::Updated);
+    assert!(repo.get(original.id).await.unwrap().is_none());
+}
+
+#[sqlx::test]
+async fn deleting_a_missing_consumption_record_reports_false(pool: PgPool) {
+    let repo = PgConsumptionRecordRepository::new(pool);
+    let (outcome, _) = repo
+        .delete(ConsumptionRecordId::new(), Revision::INITIAL, &no_stock())
+        .await
+        .unwrap();
+    assert_eq!(outcome, UpdateOutcome::NotFound);
+}
+
+#[sqlx::test]
+async fn listing_filters_by_member_and_date_range(pool: PgPool) {
+    let (member_id, product_id) = seed_member_and_product(&pool).await;
+    let other_members = PgHouseholdMemberRepository::new(pool.clone());
+    let other_member = member("Ann");
+    other_members.insert(&other_member).await.unwrap();
+
+    let repo = PgConsumptionRecordRepository::new(pool);
+
+    let mut on_day = consumption_record(member_id, product_id);
+    on_day.consumed_on = date!(2026 - 08 - 22);
+    repo.insert(&on_day, &no_stock()).await.unwrap();
+
+    let mut other_day = consumption_record(member_id, product_id);
+    other_day.consumed_on = date!(2026 - 08 - 21);
+    repo.insert(&other_day, &no_stock()).await.unwrap();
+
+    let mut other_member_entry = consumption_record(other_member.id, product_id);
+    other_member_entry.consumed_on = date!(2026 - 08 - 22);
+    repo.insert(&other_member_entry, &no_stock()).await.unwrap();
+
+    let query = ConsumptionQuery {
+        member_id: Some(member_id),
+        from: Some(date!(2026 - 08 - 22)),
+        to: Some(date!(2026 - 08 - 22)),
+        page: PageRequest::default(),
+        sort: Default::default(),
+    };
+    let page = repo.list(&query).await.unwrap();
+
+    assert_eq!(page.items.len(), 1);
+    assert_eq!(page.items[0].id, on_day.id);
+}
+
+async fn seed_meal_plan_dependencies(pool: &PgPool) -> (HouseholdMemberId, ProductId, UserId) {
+    let users = PgUserRepository::new(pool.clone());
+    let actor = user("planner", vec![Role::Admin]);
+    users.insert(&actor).await.unwrap();
+    let (member_id, product_id) = seed_member_and_product(pool).await;
+    (member_id, product_id, actor.id)
+}
+
+fn meal_plan_entry(
+    member_id: HouseholdMemberId,
+    product_id: ProductId,
+    actor_id: UserId,
+) -> MealPlanEntry {
+    let now = OffsetDateTime::now_utc();
+    let now = now
+        .replace_nanosecond(now.nanosecond() / 1_000 * 1_000)
+        .unwrap();
+    MealPlanEntry {
+        id: MealPlanEntryId::new(),
+        scope: MealPlanScope::Member,
+        member_id: Some(member_id),
+        planned_on: date!(2026 - 08 - 25),
+        planned_time: Some(time::macros::time!(18:30)),
+        slot: MealSlot::Dinner,
+        portioning: Portioning::Equal,
+        components: vec![MealPlanComponent {
+            id: MealPlanComponentId::new(),
+            item: MealItemRef::product(product_id),
+            amount: ConsumedAmount::Measure(Quantity::new(Decimal::new(150, 0), Unit::Millilitre)),
+            position: 0,
+            snapshot: None,
+            revision: Revision::INITIAL,
+            display_order: Uuid::now_v7(),
+        }],
+        participants: Vec::<MealParticipant>::new(),
+        guest_groups: Vec::new(),
+        opted_out: Vec::new(),
+        created_by: actor_id,
+        updated_by: actor_id,
+        revision: Revision::INITIAL,
+        created_at: now,
+        updated_at: now,
+    }
+}
+
+fn household_snack_entry(
+    member_id: HouseholdMemberId,
+    product_id: ProductId,
+    actor_id: UserId,
+    planned_time: Option<time::Time>,
+) -> MealPlanEntry {
+    let mut entry = meal_plan_entry(member_id, product_id, actor_id);
+    entry.scope = MealPlanScope::Household;
+    entry.member_id = None;
+    entry.slot = MealSlot::Snacks;
+    entry.planned_time = planned_time;
+    let component_id = entry.components[0].id;
+    entry.participants = vec![MealParticipant {
+        id: MealParticipantId::new(),
+        member_id,
+        allocations: vec![MealParticipantAllocation {
+            id: MealParticipantAllocationId::new(),
+            component_id,
+            allocated: entry.components[0].amount,
+            status: ParticipantStatus::Planned,
+            consumption_record_id: None,
+            resolved_by: None,
+            resolved_at: None,
+        }],
+        revision: Revision::INITIAL,
+        created_at: entry.created_at,
+        updated_at: entry.updated_at,
+    }];
+    entry
+}
+
+fn household_dinner_entry(
+    member_id: HouseholdMemberId,
+    product_id: ProductId,
+    actor_id: UserId,
+) -> MealPlanEntry {
+    let mut entry = household_snack_entry(member_id, product_id, actor_id, None);
+    entry.slot = MealSlot::Dinner;
+    entry.planned_time = Some(time::macros::time!(18:30));
+    entry
+}
+
+#[sqlx::test]
+async fn opting_out_replaces_the_participant_with_a_marker_and_cascades_on_delete(pool: PgPool) {
+    let (member_id, product_id, actor_id) = seed_meal_plan_dependencies(&pool).await;
+    let repo = PgMealPlanRepository::new(pool.clone());
+    let mut entry = household_dinner_entry(member_id, product_id, actor_id);
+    repo.insert(&entry).await.unwrap();
+
+    entry.participants.clear();
+    entry.opted_out.push(mmp_core::domain::MealOptOut {
+        member_id,
+        created_by: actor_id,
+        created_at: entry.updated_at,
+    });
+    entry.revision = entry.revision.next();
+    let outcome = repo
+        .set_participants(&entry, Revision::INITIAL)
+        .await
+        .unwrap();
+    assert_eq!(outcome, UpdateOutcome::Updated);
+
+    let loaded = repo.get(entry.id).await.unwrap().unwrap();
+    assert!(loaded.participants.is_empty());
+    assert_eq!(loaded.opted_out.len(), 1);
+    assert_eq!(loaded.opted_out[0].member_id, member_id);
+
+    let outcome = repo.delete(entry.id, loaded.revision).await.unwrap();
+    assert_eq!(outcome, UpdateOutcome::Updated);
+    let remaining: (i64,) =
+        sqlx::query_as("SELECT count(*) FROM meal_plan_opt_out WHERE entry_id = $1")
+            .bind(entry.id.as_uuid())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(remaining.0, 0);
+}
+
+#[sqlx::test]
+async fn round_trips_a_planned_meal_with_components(pool: PgPool) {
+    let (member_id, product_id, actor_id) = seed_meal_plan_dependencies(&pool).await;
+    let repo = PgMealPlanRepository::new(pool);
+    let original = meal_plan_entry(member_id, product_id, actor_id);
+
+    repo.insert(&original).await.unwrap();
+    let loaded = repo.get(original.id).await.unwrap().unwrap();
+
+    assert_eq!(loaded, original);
+    let listed = repo
+        .list(&MealPlanQuery {
+            member_id,
+            from: date!(2026 - 08 - 24),
+            to: date!(2026 - 08 - 30),
+            include_participating: false,
+        })
+        .await
+        .unwrap();
+    assert_eq!(listed, vec![original]);
+}
+
+#[sqlx::test]
+async fn lists_review_entries_without_a_lower_date_bound(pool: PgPool) {
+    let (member_id, product_id, actor_id) = seed_meal_plan_dependencies(&pool).await;
+    let repo = PgMealPlanRepository::new(pool);
+    let mut original = meal_plan_entry(member_id, product_id, actor_id);
+    original.planned_on = date!(2020 - 01 - 01);
+    repo.insert(&original).await.unwrap();
+
+    let personal = repo
+        .list_through(member_id, date!(2026 - 09 - 02))
+        .await
+        .unwrap();
+    let all = repo.list_all_through(date!(2026 - 09 - 02)).await.unwrap();
+
+    assert_eq!(
+        personal.iter().map(|entry| entry.id).collect::<Vec<_>>(),
+        vec![original.id]
+    );
+    assert_eq!(
+        all.iter().map(|entry| entry.id).collect::<Vec<_>>(),
+        vec![original.id]
+    );
+}
+
+#[sqlx::test]
+async fn household_snacks_allow_distinct_times_and_one_untimed_occurrence(pool: PgPool) {
+    let (member_id, product_id, actor_id) = seed_meal_plan_dependencies(&pool).await;
+    let repo = PgMealPlanRepository::new(pool.clone());
+
+    let morning = household_snack_entry(
+        member_id,
+        product_id,
+        actor_id,
+        Some(time::macros::time!(10:00)),
+    );
+    let afternoon = household_snack_entry(
+        member_id,
+        product_id,
+        actor_id,
+        Some(time::macros::time!(14:00)),
+    );
+    let untimed = household_snack_entry(member_id, product_id, actor_id, None);
+    repo.insert(&morning).await.unwrap();
+    repo.insert(&afternoon).await.unwrap();
+    repo.insert(&untimed).await.unwrap();
+
+    assert_eq!(repo.get(morning.id).await.unwrap(), Some(morning));
+    assert_eq!(repo.get(afternoon.id).await.unwrap(), Some(afternoon));
+    assert_eq!(repo.get(untimed.id).await.unwrap(), Some(untimed));
+
+    let duplicate = household_snack_entry(
+        member_id,
+        product_id,
+        actor_id,
+        Some(time::macros::time!(10:00)),
+    );
+    let error = repo.insert(&duplicate).await.unwrap_err();
+    assert!(matches!(error, CoreError::Duplicate { field: "time", .. }));
+}
+
+#[sqlx::test]
+async fn round_trips_counted_guest_allocations(pool: PgPool) {
+    let (member_id, product_id, actor_id) = seed_meal_plan_dependencies(&pool).await;
+    let repo = PgMealPlanRepository::new(pool);
+    let mut original = meal_plan_entry(member_id, product_id, actor_id);
+    original.guest_groups = vec![MealGuestGroup {
+        id: MealGuestGroupId::new(),
+        count: 2,
+        allocations: vec![MealGuestAllocation {
+            id: MealGuestAllocationId::new(),
+            component_id: original.components[0].id,
+            allocated: ConsumedAmount::Measure(Quantity::new(
+                Decimal::new(75, 0),
+                Unit::Millilitre,
+            )),
+            status: ParticipantStatus::Planned,
+            confirmed: None,
+            resolved_by: None,
+            resolved_at: None,
+        }],
+        revision: Revision::INITIAL,
+        created_at: original.created_at,
+        updated_at: original.updated_at,
+    }];
+
+    repo.insert(&original).await.unwrap();
+
+    assert_eq!(repo.get(original.id).await.unwrap(), Some(original));
+}
+
+#[sqlx::test]
+async fn resolving_a_meal_freezes_components_and_links_consumption(pool: PgPool) {
+    let (member_id, product_id, actor_id) = seed_meal_plan_dependencies(&pool).await;
+    let plans = PgMealPlanRepository::new(pool.clone());
+    let consumption = PgConsumptionRecordRepository::new(pool);
+    let original = meal_plan_entry(member_id, product_id, actor_id);
+    plans.insert(&original).await.unwrap();
+
+    let mut resolved = original.clone();
+    resolved.revision = resolved.revision.next();
+    resolved.components[0].revision = resolved.components[0].revision.next();
+    let resolved_record_id = ConsumptionRecordId::new();
+    resolved.participants = vec![MealParticipant {
+        id: MealParticipantId::new(),
+        member_id,
+        allocations: vec![MealParticipantAllocation {
+            id: MealParticipantAllocationId::new(),
+            component_id: resolved.components[0].id,
+            allocated: resolved.components[0].amount,
+            status: ParticipantStatus::Eaten,
+            consumption_record_id: Some(resolved_record_id),
+            resolved_by: Some(actor_id),
+            resolved_at: Some(resolved.updated_at),
+        }],
+        revision: Revision::INITIAL,
+        created_at: resolved.created_at,
+        updated_at: resolved.updated_at,
+    }];
+    resolved.components[0].snapshot = Some(MealPlanComponentSnapshot {
+        item_name: "Whole Milk".to_owned(),
+        nutrition: NutritionFacts {
+            basis: Some(Quantity::new(Decimal::new(150, 0), Unit::Millilitre)),
+            energy_kcal: Some(Decimal::new(96, 0)),
+            ..Default::default()
+        },
+        quality: NutritionQuality::Partial,
+    });
+    let mut record = consumption_record(member_id, product_id);
+    record.id = resolved_record_id;
+    record.meal_plan_entry_id = Some(original.id);
+    record.meal_plan_component_id = Some(original.components[0].id);
+    record.recorded_by = Some(actor_id);
+
+    let (outcome, _) = plans
+        .resolve(&resolved, original.revision, &[record.clone()], &no_stock())
+        .await
+        .unwrap();
+    assert_eq!(outcome, UpdateOutcome::Updated);
+    let loaded = plans.get(original.id).await.unwrap().unwrap();
+    assert_eq!(loaded, resolved);
+    assert_eq!(loaded.status(Assumption::NONE), MealPlanStatus::Eaten);
+
+    let loaded_record = consumption.get(record.id).await.unwrap().unwrap();
+    assert_eq!(loaded_record.meal_plan_entry_id, Some(original.id));
+    assert_eq!(
+        loaded_record.meal_plan_component_id,
+        Some(original.components[0].id)
+    );
+}
+
+#[sqlx::test]
+async fn resolving_and_reopening_one_component_preserves_its_sibling(pool: PgPool) {
+    let (member_id, product_id, actor_id) = seed_meal_plan_dependencies(&pool).await;
+    let plans = PgMealPlanRepository::new(pool.clone());
+    let consumption = PgConsumptionRecordRepository::new(pool);
+    let mut original = meal_plan_entry(member_id, product_id, actor_id);
+    let mut sibling = original.components[0].clone();
+    sibling.id = MealPlanComponentId::new();
+    sibling.position = 1;
+    original.components.push(sibling.clone());
+    plans.insert(&original).await.unwrap();
+
+    let component_id = original.components[0].id;
+    let snapshot = MealPlanComponentSnapshot {
+        item_name: "Whole Milk".to_owned(),
+        nutrition: NutritionFacts::default(),
+        quality: NutritionQuality::Unknown,
+    };
+    let now = original.updated_at;
+    let sibling_id = original.components[1].id;
+    let participant_id = MealParticipantId::new();
+    let mut record = consumption_record(member_id, product_id);
+    record.meal_plan_entry_id = Some(original.id);
+    record.meal_plan_component_id = Some(component_id);
+
+    let eaten_participant = MealParticipant {
+        id: participant_id,
+        member_id,
+        allocations: vec![
+            MealParticipantAllocation {
+                id: MealParticipantAllocationId::new(),
+                component_id,
+                allocated: original.components[0].amount,
+                status: ParticipantStatus::Eaten,
+                consumption_record_id: Some(record.id),
+                resolved_by: Some(actor_id),
+                resolved_at: Some(now),
+            },
+            MealParticipantAllocation {
+                id: MealParticipantAllocationId::new(),
+                component_id: sibling_id,
+                allocated: original.components[1].amount,
+                status: ParticipantStatus::Planned,
+                consumption_record_id: None,
+                resolved_by: None,
+                resolved_at: None,
+            },
+        ],
+        revision: Revision::INITIAL,
+        created_at: now,
+        updated_at: now,
+    };
+
+    let eaten_update = MealPlanComponentUpdate {
+        id: component_id,
+        snapshot: SnapshotOp::Set(&snapshot),
+        revision: original.components[0].revision.next(),
+        actor_id,
+        now,
+    };
+
+    let (outcome, _) = plans
+        .resolve_component(
+            original.id,
+            &eaten_update,
+            std::slice::from_ref(&eaten_participant),
+            original.components[0].revision,
+            Some(&record),
+            &no_stock(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(outcome, UpdateOutcome::Updated);
+
+    let partially_resolved = plans.get(original.id).await.unwrap().unwrap();
+    assert_eq!(
+        partially_resolved.status(Assumption::NONE),
+        MealPlanStatus::PartiallyResolved
+    );
+    assert_eq!(
+        partially_resolved.component_status(component_id, Assumption::NONE),
+        MealPlanStatus::Eaten
+    );
+    assert!(partially_resolved.components[0].snapshot.is_some());
+    assert_eq!(partially_resolved.components[1], sibling);
+    assert!(consumption.get(record.id).await.unwrap().is_some());
+
+    let planned_participant = MealParticipant {
+        allocations: vec![
+            MealParticipantAllocation {
+                status: ParticipantStatus::Planned,
+                consumption_record_id: None,
+                resolved_by: None,
+                resolved_at: None,
+                ..eaten_participant.allocations[0].clone()
+            },
+            eaten_participant.allocations[1].clone(),
+        ],
+        ..eaten_participant.clone()
+    };
+    let reopen_update = MealPlanComponentUpdate {
+        id: component_id,
+        snapshot: SnapshotOp::Clear,
+        revision: partially_resolved.components[0].revision.next(),
+        actor_id,
+        now,
+    };
+    let (outcome, _) = plans
+        .reopen_component(
+            original.id,
+            &reopen_update,
+            std::slice::from_ref(&planned_participant),
+            partially_resolved.components[0].revision,
+            None,
+            &no_stock(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(outcome, UpdateOutcome::Updated);
+
+    let reopened = plans.get(original.id).await.unwrap().unwrap();
+    assert_eq!(reopened.status(Assumption::NONE), MealPlanStatus::Planned);
+    assert_eq!(
+        reopened.component_status(component_id, Assumption::NONE),
+        MealPlanStatus::Planned
+    );
+    assert_eq!(reopened.components[0].snapshot, None);
+    assert_eq!(reopened.components[1], sibling);
+    assert!(consumption.get(record.id).await.unwrap().is_some());
+}
+
+#[sqlx::test]
+async fn reopening_a_component_removes_its_linked_record_without_tripping_the_allocation_check(
+    pool: PgPool,
+) {
+    let (member_id, product_id, actor_id) = seed_meal_plan_dependencies(&pool).await;
+    let plans = PgMealPlanRepository::new(pool.clone());
+    let consumption = PgConsumptionRecordRepository::new(pool);
+    let original = meal_plan_entry(member_id, product_id, actor_id);
+    plans.insert(&original).await.unwrap();
+
+    let component_id = original.components[0].id;
+    let now = original.updated_at;
+
+    let mut record = consumption_record(member_id, product_id);
+    record.meal_plan_entry_id = Some(original.id);
+    record.meal_plan_component_id = Some(component_id);
+    record.recorded_by = Some(actor_id);
+
+    let participant_id = MealParticipantId::new();
+    let eaten_participant = MealParticipant {
+        id: participant_id,
+        member_id,
+        allocations: vec![MealParticipantAllocation {
+            id: MealParticipantAllocationId::new(),
+            component_id,
+            allocated: ConsumedAmount::Measure(Quantity::new(
+                Decimal::new(150, 0),
+                Unit::Millilitre,
+            )),
+            status: ParticipantStatus::Eaten,
+            consumption_record_id: Some(record.id),
+            resolved_by: Some(actor_id),
+            resolved_at: Some(now),
+        }],
+        revision: Revision::INITIAL,
+        created_at: now,
+        updated_at: now,
+    };
+
+    let snapshot = MealPlanComponentSnapshot {
+        item_name: "Whole Milk".to_owned(),
+        nutrition: NutritionFacts::default(),
+        quality: NutritionQuality::Unknown,
+    };
+    let eaten_update = MealPlanComponentUpdate {
+        id: component_id,
+        snapshot: SnapshotOp::Set(&snapshot),
+        revision: original.components[0].revision.next(),
+        actor_id,
+        now,
+    };
+    let (outcome, _) = plans
+        .resolve_component(
+            original.id,
+            &eaten_update,
+            std::slice::from_ref(&eaten_participant),
+            original.components[0].revision,
+            Some(&record),
+            &no_stock(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(outcome, UpdateOutcome::Updated);
+    assert!(consumption.get(record.id).await.unwrap().is_some());
+
+    let planned_participant = MealParticipant {
+        allocations: vec![MealParticipantAllocation {
+            status: ParticipantStatus::Planned,
+            consumption_record_id: None,
+            resolved_by: None,
+            resolved_at: None,
+            ..eaten_participant.allocations[0].clone()
+        }],
+        ..eaten_participant.clone()
+    };
+    let reopen_update = MealPlanComponentUpdate {
+        id: component_id,
+        snapshot: SnapshotOp::Clear,
+        revision: eaten_update.revision.next(),
+        actor_id,
+        now,
+    };
+    let (outcome, _) = plans
+        .reopen_component(
+            original.id,
+            &reopen_update,
+            std::slice::from_ref(&planned_participant),
+            eaten_update.revision,
+            Some(record.id),
+            &no_stock(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(outcome, UpdateOutcome::Updated);
+
+    assert!(consumption.get(record.id).await.unwrap().is_none());
+    let reopened = plans.get(original.id).await.unwrap().unwrap();
+    assert_eq!(reopened.status(Assumption::NONE), MealPlanStatus::Planned);
+    assert_eq!(
+        reopened.component_status(component_id, Assumption::NONE),
+        MealPlanStatus::Planned
+    );
+    assert_eq!(
+        reopened.participants[0].allocations[0].status,
+        ParticipantStatus::Planned
+    );
+    assert_eq!(
+        reopened.participants[0].allocations[0].consumption_record_id,
+        None
+    );
+}
+
+#[sqlx::test]
+async fn updating_a_meal_plan_entry_replaces_its_components(pool: PgPool) {
+    let (member_id, product_id, actor_id) = seed_meal_plan_dependencies(&pool).await;
+    let other_product = product("Other product");
+    PgProductRepository::new(pool.clone())
+        .insert(&other_product)
+        .await
+        .unwrap();
+    let repo = PgMealPlanRepository::new(pool);
+    let original = meal_plan_entry(member_id, product_id, actor_id);
+    repo.insert(&original).await.unwrap();
+
+    let mut updated = original.clone();
+    updated.components = vec![
+        MealPlanComponent {
+            id: MealPlanComponentId::new(),
+            item: MealItemRef::product(other_product.id),
+            amount: ConsumedAmount::Servings(Decimal::new(2, 0)),
+            position: 0,
+            snapshot: None,
+            revision: Revision::INITIAL,
+            display_order: Uuid::now_v7(),
+        },
+        MealPlanComponent {
+            id: MealPlanComponentId::new(),
+            item: MealItemRef::product(product_id),
+            amount: ConsumedAmount::Servings(Decimal::new(1, 0)),
+            position: 1,
+            snapshot: None,
+            revision: Revision::INITIAL,
+            display_order: Uuid::now_v7(),
+        },
+    ];
+    updated.revision = updated.revision.next();
+
+    let outcome = repo.update(&updated, original.revision).await.unwrap();
+    assert_eq!(outcome, UpdateOutcome::Updated);
+
+    let loaded = repo.get(original.id).await.unwrap().unwrap();
+    assert_eq!(loaded.components.len(), 2);
+    assert!(
+        loaded
+            .components
+            .iter()
+            .all(|component| component.id != original.components[0].id)
+    );
+    assert_eq!(loaded.components[0].position, 0);
+    assert_eq!(loaded.components[1].position, 1);
+}
+
+#[sqlx::test]
+async fn updating_a_meal_plan_entry_with_a_stale_revision_is_refused(pool: PgPool) {
+    let (member_id, product_id, actor_id) = seed_meal_plan_dependencies(&pool).await;
+    let repo = PgMealPlanRepository::new(pool);
+    let original = meal_plan_entry(member_id, product_id, actor_id);
+    repo.insert(&original).await.unwrap();
+
+    let mut stale = original.clone();
+    stale.revision = stale.revision.next();
+
+    let outcome = repo.update(&stale, Revision::INITIAL.next()).await.unwrap();
+    assert_eq!(
+        outcome,
+        UpdateOutcome::RevisionMismatch {
+            actual: original.revision
+        }
+    );
+    assert_eq!(repo.get(original.id).await.unwrap().unwrap(), original);
+}
+
+#[sqlx::test]
+async fn resolving_with_a_stale_revision_leaves_the_entry_untouched(pool: PgPool) {
+    let (member_id, product_id, actor_id) = seed_meal_plan_dependencies(&pool).await;
+    let plans = PgMealPlanRepository::new(pool.clone());
+    let consumption = PgConsumptionRecordRepository::new(pool);
+    let original = meal_plan_entry(member_id, product_id, actor_id);
+    plans.insert(&original).await.unwrap();
+
+    let mut resolved = original.clone();
+    resolved.revision = resolved.revision.next();
+    let mut record = consumption_record(member_id, product_id);
+    record.meal_plan_entry_id = Some(original.id);
+    record.meal_plan_component_id = Some(original.components[0].id);
+
+    let (outcome, _) = plans
+        .resolve(
+            &resolved,
+            Revision::INITIAL.next(),
+            &[record.clone()],
+            &no_stock(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        outcome,
+        UpdateOutcome::RevisionMismatch {
+            actual: original.revision
+        }
+    );
+    assert_eq!(plans.get(original.id).await.unwrap().unwrap(), original);
+    assert!(consumption.get(record.id).await.unwrap().is_none());
+}
+
+#[sqlx::test]
+async fn deleting_a_meal_plan_entry_cascades_to_its_components(pool: PgPool) {
+    let (member_id, product_id, actor_id) = seed_meal_plan_dependencies(&pool).await;
+    let repo = PgMealPlanRepository::new(pool.clone());
+    let original = meal_plan_entry(member_id, product_id, actor_id);
+    repo.insert(&original).await.unwrap();
+
+    let outcome = repo.delete(original.id, original.revision).await.unwrap();
+    assert_eq!(outcome, UpdateOutcome::Updated);
+    assert!(repo.get(original.id).await.unwrap().is_none());
+
+    let remaining: i64 = sqlx::query_scalar("SELECT count(*) FROM meal_plan_component")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(remaining, 0);
+}
+
+#[sqlx::test]
+async fn deleting_an_unknown_meal_plan_entry_reports_not_found(pool: PgPool) {
+    let repo = PgMealPlanRepository::new(pool);
+    let outcome = repo
+        .delete(MealPlanEntryId::new(), Revision::INITIAL)
+        .await
+        .unwrap();
+    assert_eq!(outcome, UpdateOutcome::NotFound);
+}
+
+#[sqlx::test]
+async fn reopening_a_meal_clears_the_snapshot(pool: PgPool) {
+    let (member_id, product_id, actor_id) = seed_meal_plan_dependencies(&pool).await;
+    let plans = PgMealPlanRepository::new(pool.clone());
+    let consumption = PgConsumptionRecordRepository::new(pool);
+    let original = meal_plan_entry(member_id, product_id, actor_id);
+    plans.insert(&original).await.unwrap();
+
+    let mut resolved = original.clone();
+    resolved.revision = resolved.revision.next();
+    resolved.components[0].revision = resolved.components[0].revision.next();
+    let resolved_record_id = ConsumptionRecordId::new();
+    resolved.participants = vec![MealParticipant {
+        id: MealParticipantId::new(),
+        member_id,
+        allocations: vec![MealParticipantAllocation {
+            id: MealParticipantAllocationId::new(),
+            component_id: resolved.components[0].id,
+            allocated: resolved.components[0].amount,
+            status: ParticipantStatus::Eaten,
+            consumption_record_id: Some(resolved_record_id),
+            resolved_by: Some(actor_id),
+            resolved_at: Some(resolved.updated_at),
+        }],
+        revision: Revision::INITIAL,
+        created_at: resolved.created_at,
+        updated_at: resolved.updated_at,
+    }];
+    resolved.components[0].snapshot = Some(MealPlanComponentSnapshot {
+        item_name: "Whole Milk".to_owned(),
+        nutrition: NutritionFacts {
+            basis: Some(Quantity::new(Decimal::new(150, 0), Unit::Millilitre)),
+            energy_kcal: Some(Decimal::new(96, 0)),
+            ..Default::default()
+        },
+        quality: NutritionQuality::Partial,
+    });
+    let mut record = consumption_record(member_id, product_id);
+    record.id = resolved_record_id;
+    record.meal_plan_entry_id = Some(original.id);
+    record.meal_plan_component_id = Some(original.components[0].id);
+    plans
+        .resolve(&resolved, original.revision, &[record.clone()], &no_stock())
+        .await
+        .unwrap();
+
+    let mut reopened = resolved.clone();
+    reopened.components[0].snapshot = None;
+    reopened.components[0].revision = reopened.components[0].revision.next();
+    reopened.revision = reopened.revision.next();
+
+    let (outcome, _) = plans
+        .reopen(&reopened, resolved.revision, &[], &no_stock())
+        .await
+        .unwrap();
+    assert_eq!(outcome, UpdateOutcome::Updated);
+    assert_eq!(plans.get(original.id).await.unwrap().unwrap(), reopened);
+    assert!(consumption.get(record.id).await.unwrap().is_some());
+}
+
+#[sqlx::test]
+async fn a_component_cannot_be_confirmed_by_two_consumption_records(pool: PgPool) {
+    let (member_id, product_id, actor_id) = seed_meal_plan_dependencies(&pool).await;
+    let plans = PgMealPlanRepository::new(pool.clone());
+    let original = meal_plan_entry(member_id, product_id, actor_id);
+    plans.insert(&original).await.unwrap();
+
+    let mut resolved = original.clone();
+    resolved.revision = resolved.revision.next();
+    resolved.components[0].revision = resolved.components[0].revision.next();
+    let resolved_record_id = ConsumptionRecordId::new();
+    resolved.participants = vec![MealParticipant {
+        id: MealParticipantId::new(),
+        member_id,
+        allocations: vec![MealParticipantAllocation {
+            id: MealParticipantAllocationId::new(),
+            component_id: resolved.components[0].id,
+            allocated: resolved.components[0].amount,
+            status: ParticipantStatus::Eaten,
+            consumption_record_id: Some(resolved_record_id),
+            resolved_by: Some(actor_id),
+            resolved_at: Some(resolved.updated_at),
+        }],
+        revision: Revision::INITIAL,
+        created_at: resolved.created_at,
+        updated_at: resolved.updated_at,
+    }];
+    resolved.components[0].snapshot = Some(MealPlanComponentSnapshot {
+        item_name: "Whole Milk".to_owned(),
+        nutrition: NutritionFacts::default(),
+        quality: NutritionQuality::Unknown,
+    });
+    let mut first = consumption_record(member_id, product_id);
+    first.meal_plan_entry_id = Some(original.id);
+    first.meal_plan_component_id = Some(original.components[0].id);
+    let mut second = consumption_record(member_id, product_id);
+    second.meal_plan_entry_id = Some(original.id);
+    second.meal_plan_component_id = Some(original.components[0].id);
+
+    let error = plans
+        .resolve(&resolved, original.revision, &[first, second], &no_stock())
+        .await
+        .unwrap_err();
+    assert!(matches!(error, CoreError::Duplicate { .. }), "{error:?}");
+}
+
+fn target(
+    member_id: HouseholdMemberId,
+    effective: time::Date,
+    goals: NutritionGoals,
+) -> NutritionTarget {
+    let now = OffsetDateTime::now_utc();
+    NutritionTarget {
+        id: NutritionTargetId::new(),
+        member_id,
+        effective_from: effective,
+        goals,
+        revision: Revision::INITIAL,
+        created_at: now,
+        updated_at: now,
+    }
+}
+
+#[sqlx::test]
+async fn round_trips_and_orders_nutrition_targets(pool: PgPool) {
+    let members = PgHouseholdMemberRepository::new(pool.clone());
+    let repo = PgNutritionTargetRepository::new(pool);
+    let joe = member("Joe");
+    members.insert(&joe).await.unwrap();
+
+    let later = target(
+        joe.id,
+        date!(2026 - 06 - 01),
+        NutritionGoals {
+            energy_kcal: Some(Decimal::new(1800, 0)),
+            protein_g: Some(Decimal::new(120, 0)),
+            ..Default::default()
+        },
+    );
+    let earlier = target(
+        joe.id,
+        date!(2026 - 01 - 01),
+        NutritionGoals {
+            energy_kcal: Some(Decimal::new(2200, 0)),
+            ..Default::default()
+        },
+    );
+    repo.insert(&later).await.unwrap();
+    repo.insert(&earlier).await.unwrap();
+
+    let listed = repo.list_for_member(joe.id).await.unwrap();
+    let dates: Vec<_> = listed.iter().map(|t| t.effective_from).collect();
+    assert_eq!(dates, vec![date!(2026 - 01 - 01), date!(2026 - 06 - 01)]);
+
+    let loaded = repo.get(later.id).await.unwrap().expect("should exist");
+    assert_eq!(loaded.goals.energy_kcal, Some(Decimal::new(1800, 0)));
+    assert_eq!(loaded.goals.protein_g, Some(Decimal::new(120, 0)));
+    assert_eq!(loaded.goals.fat_g, None, "unknown must stay unknown");
+}
+
+#[sqlx::test]
+async fn a_duplicate_effective_date_is_a_conflict(pool: PgPool) {
+    let members = PgHouseholdMemberRepository::new(pool.clone());
+    let repo = PgNutritionTargetRepository::new(pool);
+    let joe = member("Joe");
+    members.insert(&joe).await.unwrap();
+
+    let first = target(
+        joe.id,
+        date!(2026 - 08 - 25),
+        NutritionGoals {
+            energy_kcal: Some(Decimal::new(2000, 0)),
+            ..Default::default()
+        },
+    );
+    repo.insert(&first).await.unwrap();
+    let clash = target(
+        joe.id,
+        date!(2026 - 08 - 25),
+        NutritionGoals {
+            energy_kcal: Some(Decimal::new(1800, 0)),
+            ..Default::default()
+        },
+    );
+    let error = repo.insert(&clash).await.unwrap_err();
+    assert!(matches!(error, CoreError::Duplicate { .. }));
+}
+
+#[sqlx::test]
+async fn an_empty_target_is_rejected_by_the_schema(pool: PgPool) {
+    let members = PgHouseholdMemberRepository::new(pool.clone());
+    let repo = PgNutritionTargetRepository::new(pool);
+    let joe = member("Joe");
+    members.insert(&joe).await.unwrap();
+
+    let empty = target(joe.id, date!(2026 - 08 - 25), NutritionGoals::default());
+    let error = repo.insert(&empty).await.unwrap_err();
+    assert!(matches!(error, CoreError::Repository(_)));
+}
+
+#[sqlx::test]
+async fn a_negative_goal_is_rejected_by_the_schema(pool: PgPool) {
+    let members = PgHouseholdMemberRepository::new(pool.clone());
+    let repo = PgNutritionTargetRepository::new(pool);
+    let joe = member("Joe");
+    members.insert(&joe).await.unwrap();
+
+    let negative = target(
+        joe.id,
+        date!(2026 - 08 - 25),
+        NutritionGoals {
+            protein_g: Some(Decimal::new(-1, 0)),
+            ..Default::default()
+        },
+    );
+    let error = repo.insert(&negative).await.unwrap_err();
+    assert!(matches!(error, CoreError::Repository(_)));
+}
+
+#[sqlx::test]
+async fn nutrition_target_updates_report_revision_outcomes(pool: PgPool) {
+    let members = PgHouseholdMemberRepository::new(pool.clone());
+    let repo = PgNutritionTargetRepository::new(pool);
+    let joe = member("Joe");
+    members.insert(&joe).await.unwrap();
+
+    let original = target(
+        joe.id,
+        date!(2026 - 08 - 25),
+        NutritionGoals {
+            energy_kcal: Some(Decimal::new(2000, 0)),
+            ..Default::default()
+        },
+    );
+    repo.insert(&original).await.unwrap();
+
+    let mut updated = original.clone();
+    updated.goals.energy_kcal = Some(Decimal::new(1900, 0));
+    updated.revision = original.revision.next();
+    assert_eq!(
+        repo.update(&updated, original.revision).await.unwrap(),
+        UpdateOutcome::Updated
+    );
+
+    let stale = repo.update(&updated, original.revision).await.unwrap();
+    assert_eq!(
+        stale,
+        UpdateOutcome::RevisionMismatch {
+            actual: updated.revision,
+        }
+    );
+
+    let missing = target(
+        joe.id,
+        date!(2026 - 09 - 01),
+        NutritionGoals {
+            energy_kcal: Some(Decimal::new(2000, 0)),
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        repo.update(&missing, Revision::INITIAL).await.unwrap(),
+        UpdateOutcome::NotFound
+    );
+}
+
+#[sqlx::test]
+async fn nutrition_targets_can_be_deleted(pool: PgPool) {
+    let members = PgHouseholdMemberRepository::new(pool.clone());
+    let repo = PgNutritionTargetRepository::new(pool);
+    let joe = member("Joe");
+    members.insert(&joe).await.unwrap();
+
+    let original = target(
+        joe.id,
+        date!(2026 - 08 - 25),
+        NutritionGoals {
+            energy_kcal: Some(Decimal::new(2000, 0)),
+            ..Default::default()
+        },
+    );
+    repo.insert(&original).await.unwrap();
+
+    let stale = repo
+        .delete(original.id, original.revision.next())
+        .await
+        .unwrap();
+    assert_eq!(
+        stale,
+        UpdateOutcome::RevisionMismatch {
+            actual: original.revision
+        }
+    );
+
+    assert_eq!(
+        repo.delete(original.id, original.revision).await.unwrap(),
+        UpdateOutcome::Updated
+    );
+    assert!(repo.get(original.id).await.unwrap().is_none());
+}
+
+#[sqlx::test]
+async fn household_settings_are_seeded_with_defaults(pool: PgPool) {
+    let repo = PgHouseholdSettingsRepository::new(pool);
+    let settings = repo.get().await.unwrap();
+    assert_eq!(settings.meal_times.breakfast, time!(08:00));
+    assert_eq!(settings.meal_times.lunch, time!(12:30));
+    assert_eq!(settings.meal_times.dinner, time!(18:00));
+    assert_eq!(settings.revision, Revision::INITIAL);
+}
+
+#[sqlx::test]
+async fn household_settings_updates_report_revision_outcomes(pool: PgPool) {
+    let repo = PgHouseholdSettingsRepository::new(pool);
+    let original = repo.get().await.unwrap();
+
+    let mut updated = original;
+    updated.meal_times.lunch = time!(13:15);
+    updated.revision = original.revision.next();
+    assert_eq!(
+        repo.update(&updated, original.revision).await.unwrap(),
+        UpdateOutcome::Updated
+    );
+
+    let stored = repo.get().await.unwrap();
+    assert_eq!(stored.meal_times.lunch, time!(13:15));
+    assert_eq!(stored.meal_times.breakfast, time!(08:00));
+
+    let stale = repo.update(&updated, original.revision).await.unwrap();
+    assert_eq!(
+        stale,
+        UpdateOutcome::RevisionMismatch {
+            actual: updated.revision,
+        }
+    );
+}
+
+async fn seed_recipe_dependencies(pool: &PgPool) -> (UserId, ProductId, ProductId) {
+    let users = PgUserRepository::new(pool.clone());
+    let owner = user("cook", vec![Role::Admin]);
+    users.insert(&owner).await.unwrap();
+    let products = PgProductRepository::new(pool.clone());
+    let first = product("Recipe product one");
+    let second = product("Recipe product two");
+    products.insert(&first).await.unwrap();
+    products.insert(&second).await.unwrap();
+    (owner.id, first.id, second.id)
+}
+
+fn recipe_component(product_id: ProductId, position: i32) -> RecipeComponent {
+    RecipeComponent {
+        id: RecipeComponentId::new(),
+        requirement: RecipeRequirement::Product { product_id },
+        source_text: None,
+        amount: ConsumedAmount::Measure(Quantity::new(Decimal::new(100, 0), Unit::Gram)),
+        position,
+    }
+}
+
+fn recipe_ingredient_component(ingredient_id: IngredientId, position: i32) -> RecipeComponent {
+    RecipeComponent {
+        id: RecipeComponentId::new(),
+        requirement: RecipeRequirement::Ingredient { ingredient_id },
+        source_text: None,
+        amount: ConsumedAmount::Measure(Quantity::new(Decimal::new(100, 0), Unit::Gram)),
+        position,
+    }
+}
+
+fn recipe_unresolved_component(text: &str, position: i32) -> RecipeComponent {
+    RecipeComponent {
+        id: RecipeComponentId::new(),
+        requirement: RecipeRequirement::Unresolved {
+            text: text.to_owned(),
+        },
+        source_text: None,
+        amount: ConsumedAmount::Measure(Quantity::new(Decimal::new(100, 0), Unit::Gram)),
+        position,
+    }
+}
+
+fn recipe(owner: UserId, components: Vec<RecipeComponent>) -> Recipe {
+    let now = OffsetDateTime::now_utc();
+    Recipe {
+        id: RecipeId::new(),
+        name: "Test Recipe".to_owned(),
+        description: None,
+        servings: 2,
+        preparation_minutes: None,
+        cooking_minutes: None,
+        notes: None,
+        components,
+        instructions: vec![],
+        meal_categories: vec![],
+        country_categories: vec![],
+        tags: vec![],
+        photo_version: None,
+        owner_id: owner,
+        visibility: RecipeVisibility::Private,
+        created_by: owner,
+        updated_by: owner,
+        revision: Revision::INITIAL,
+        created_at: now,
+        updated_at: now,
+        archived_at: None,
+    }
+}
+
+#[sqlx::test]
+async fn round_trips_a_recipe_with_ordered_components(pool: PgPool) {
+    let (owner, first, second) = seed_recipe_dependencies(&pool).await;
+    let repo = PgRecipeRepository::new(pool);
+    let mut original = recipe(
+        owner,
+        vec![recipe_component(first, 0), recipe_component(second, 1)],
+    );
+    original.description = Some("A complete recipe".to_owned());
+    original.preparation_minutes = Some(10);
+    original.cooking_minutes = Some(20);
+    original.notes = Some("Serve warm".to_owned());
+    original.instructions = vec![
+        RecipeInstruction {
+            id: RecipeInstructionId::new(),
+            text: "First".to_owned(),
+            position: 0,
+        },
+        RecipeInstruction {
+            id: RecipeInstructionId::new(),
+            text: "Second".to_owned(),
+            position: 1,
+        },
+    ];
+    original.meal_categories = vec![MealCategory::Dinner];
+    original.country_categories = vec!["GB".to_owned()];
+    original.tags = vec!["Family".to_owned()];
+    repo.insert(&original).await.unwrap();
+
+    let loaded = repo.get(original.id).await.unwrap().unwrap();
+    assert_eq!(loaded.name, "Test Recipe");
+    assert_eq!(loaded.owner_id, owner);
+    assert_eq!(loaded.visibility, RecipeVisibility::Private);
+    assert_eq!(loaded.components.len(), 2);
+    assert_eq!(loaded.components[0].position, 0);
+    assert_eq!(
+        loaded.components[0].requirement,
+        RecipeRequirement::Product { product_id: first }
+    );
+    assert_eq!(
+        loaded.components[1].requirement,
+        RecipeRequirement::Product { product_id: second }
+    );
+    assert_eq!(loaded.description, original.description);
+    assert_eq!(loaded.instructions, original.instructions);
+    assert_eq!(loaded.meal_categories, vec![MealCategory::Dinner]);
+    assert_eq!(loaded.country_categories, vec!["GB"]);
+    assert_eq!(loaded.tags, vec!["Family"]);
+}
+
+#[sqlx::test]
+async fn replaces_and_deletes_recipe_photo_derivatives(pool: PgPool) {
+    let (owner, first, _second) = seed_recipe_dependencies(&pool).await;
+    let repo = PgRecipeRepository::new(pool);
+    let original = recipe(owner, vec![recipe_component(first, 0)]);
+    repo.insert(&original).await.unwrap();
+
+    let mut with_photo = original.clone();
+    with_photo.photo_version = Some(1);
+    with_photo.revision = Revision::new(2);
+    let photo = RecipePhoto {
+        recipe_id: original.id,
+        version: 1,
+        derivatives: RecipePhotoDerivatives {
+            hero_jpeg: vec![1, 2, 3],
+            card_jpeg: vec![4, 5],
+            hero_width: 100,
+            hero_height: 50,
+            card_width: 50,
+            card_height: 25,
+        },
+        updated_at: OffsetDateTime::now_utc(),
+    };
+    assert_eq!(
+        repo.update_photo(&with_photo, original.revision, Some(&photo))
+            .await
+            .unwrap(),
+        UpdateOutcome::Updated
+    );
+    assert_eq!(
+        repo.get_photo(original.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .derivatives
+            .card_jpeg,
+        vec![4, 5]
+    );
+
+    let mut without_photo = with_photo.clone();
+    without_photo.photo_version = None;
+    without_photo.revision = Revision::new(3);
+    assert_eq!(
+        repo.update_photo(&without_photo, with_photo.revision, None)
+            .await
+            .unwrap(),
+        UpdateOutcome::Updated
+    );
+    assert!(repo.get_photo(original.id).await.unwrap().is_none());
+}
+
+#[sqlx::test]
+async fn updating_a_recipe_reorders_and_preserves_component_ids(pool: PgPool) {
+    let (owner, first, second) = seed_recipe_dependencies(&pool).await;
+    let repo = PgRecipeRepository::new(pool);
+    let original = recipe(
+        owner,
+        vec![recipe_component(first, 0), recipe_component(second, 1)],
+    );
+    repo.insert(&original).await.unwrap();
+
+    let mut updated = original.clone();
+    updated.components = vec![
+        RecipeComponent {
+            position: 0,
+            ..original.components[1].clone()
+        },
+        RecipeComponent {
+            position: 1,
+            ..original.components[0].clone()
+        },
+    ];
+    updated.revision = updated.revision.next();
+
+    let outcome = repo.update(&updated, original.revision).await.unwrap();
+    assert_eq!(outcome, UpdateOutcome::Updated);
+
+    let loaded = repo.get(original.id).await.unwrap().unwrap();
+    assert_eq!(loaded.components[0].id, original.components[1].id);
+    assert_eq!(loaded.components[1].id, original.components[0].id);
+}
+
+#[sqlx::test]
+async fn a_stale_recipe_update_is_rejected_and_keeps_components(pool: PgPool) {
+    let (owner, first, second) = seed_recipe_dependencies(&pool).await;
+    let repo = PgRecipeRepository::new(pool);
+    let original = recipe(owner, vec![recipe_component(first, 0)]);
+    repo.insert(&original).await.unwrap();
+
+    let mut updated = original.clone();
+    updated.components = vec![recipe_component(second, 0)];
+    updated.revision = updated.revision.next();
+
+    let outcome = repo.update(&updated, Revision::new(99)).await.unwrap();
+    assert!(matches!(outcome, UpdateOutcome::RevisionMismatch { .. }));
+
+    // The rollback must leave the original single component untouched.
+    let loaded = repo.get(original.id).await.unwrap().unwrap();
+    assert_eq!(loaded.components.len(), 1);
+    assert_eq!(
+        loaded.components[0].requirement,
+        RecipeRequirement::Product { product_id: first }
+    );
+}
+
+#[sqlx::test]
+async fn a_recipe_round_trips_every_requirement_kind(pool: PgPool) {
+    let (owner, product_id, _second) = seed_recipe_dependencies(&pool).await;
+    let ingredients = PgIngredientRepository::new(pool.clone());
+    let oats = ingredient("Rolled Oats");
+    ingredients.insert(&oats).await.unwrap();
+
+    let repo = PgRecipeRepository::new(pool.clone());
+    let mut dish = recipe(
+        owner,
+        vec![
+            recipe_component(product_id, 0),
+            recipe_ingredient_component(oats.id, 1),
+            recipe_unresolved_component("Jasmin Rice", 2),
+        ],
+    );
+    dish.components[1].source_text = Some("imported: Rolld Oats".to_owned());
+    repo.insert(&dish).await.unwrap();
+
+    let loaded = repo.get(dish.id).await.unwrap().unwrap();
+    assert_eq!(
+        loaded.components[0].requirement,
+        RecipeRequirement::Product { product_id }
+    );
+    assert_eq!(
+        loaded.components[1].requirement,
+        RecipeRequirement::Ingredient {
+            ingredient_id: oats.id
+        }
+    );
+    assert_eq!(
+        loaded.components[2].requirement,
+        RecipeRequirement::Unresolved {
+            text: "Jasmin Rice".to_owned()
+        }
+    );
+    assert_eq!(
+        loaded.components[1].source_text.as_deref(),
+        Some("imported: Rolld Oats")
+    );
+    assert_eq!(loaded.components[2].source_text, None);
+
+    let summaries = repo
+        .list(&RecipeQuery {
+            owner_id: owner,
+            include_archived: false,
+            search: None,
+            sort: SortDirection::Ascending,
+            page: PageRequest::default(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(summaries.items[0].unresolved_count, 1);
+}
+
+#[sqlx::test]
+async fn a_recipe_component_needs_exactly_one_requirement(pool: PgPool) {
+    let (owner, product_id, _second) = seed_recipe_dependencies(&pool).await;
+    let repo = PgRecipeRepository::new(pool.clone());
+    let dish = recipe(owner, vec![recipe_component(product_id, 0)]);
+    repo.insert(&dish).await.unwrap();
+
+    let none_set = sqlx::query(
+        "INSERT INTO recipe_component (id, recipe_id, position, amount_kind, amount_value, amount_unit) \
+         VALUES ($1, $2, 1, 'measure', 100, 'g')",
+    )
+    .bind(Uuid::now_v7())
+    .bind(dish.id.as_uuid())
+    .execute(&pool)
+    .await;
+    assert!(none_set.is_err());
+
+    let two_set = sqlx::query(
+        "INSERT INTO recipe_component (id, recipe_id, position, ingredient_id, unresolved_text, amount_kind, amount_value, amount_unit) \
+         VALUES ($1, $2, 1, $3, 'text', 'measure', 100, 'g')",
+    )
+    .bind(Uuid::now_v7())
+    .bind(dish.id.as_uuid())
+    .bind(product_id.as_uuid())
+    .execute(&pool)
+    .await;
+    assert!(two_set.is_err());
+}
+
+#[sqlx::test]
+async fn a_recipe_component_referencing_a_missing_ingredient_names_the_ingredient(pool: PgPool) {
+    let (owner, _first, _second) = seed_recipe_dependencies(&pool).await;
+    let repo = PgRecipeRepository::new(pool.clone());
+    let dish = recipe(
+        owner,
+        vec![recipe_ingredient_component(IngredientId::new(), 0)],
+    );
+
+    let error = repo.insert(&dish).await.unwrap_err();
+    assert!(
+        matches!(
+            error,
+            CoreError::NotFound {
+                resource: "ingredient",
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+}
+
+#[sqlx::test]
+async fn products_are_listed_by_the_ingredient_they_fulfil(pool: PgPool) {
+    let ingredients = PgIngredientRepository::new(pool.clone());
+    let products = PgProductRepository::new(pool.clone());
+    let oats = ingredient("Rolled Oats");
+    let rice = ingredient("Basmati Rice");
+    ingredients.insert(&oats).await.unwrap();
+    ingredients.insert(&rice).await.unwrap();
+
+    let mut branded = product("Sainsbury Oats");
+    branded.mapped_ingredient_id = Some(oats.id);
+    let mut own_brand = product("Tesco Oats");
+    own_brand.mapped_ingredient_id = Some(oats.id);
+    let mut archived = product("Discontinued Oats");
+    archived.mapped_ingredient_id = Some(oats.id);
+    archived.archived_at = Some(OffsetDateTime::now_utc());
+    for item in [&branded, &own_brand, &archived] {
+        products.insert(item).await.unwrap();
+    }
+
+    let grouped = products
+        .list_by_ingredient(&[oats.id, rice.id])
+        .await
+        .unwrap();
+    let oats_products = grouped.get(&oats.id).unwrap();
+    assert_eq!(oats_products.len(), 2);
+    assert_eq!(oats_products[0].name, "Sainsbury Oats");
+    assert_eq!(oats_products[1].name, "Tesco Oats");
+    assert!(grouped.get(&rice.id).is_none_or(Vec::is_empty));
+}
+
+#[sqlx::test]
+async fn lists_recipes_scoped_to_owner_and_excludes_archived(pool: PgPool) {
+    let (owner, first, _second) = seed_recipe_dependencies(&pool).await;
+    let stranger = user("stranger", vec![Role::Admin]);
+    PgUserRepository::new(pool.clone())
+        .insert(&stranger)
+        .await
+        .unwrap();
+    let repo = PgRecipeRepository::new(pool);
+
+    repo.insert(&recipe(owner, vec![recipe_component(first, 0)]))
+        .await
+        .unwrap();
+    let mut archived = recipe(owner, vec![recipe_component(first, 0)]);
+    archived.archived_at = Some(OffsetDateTime::now_utc());
+    repo.insert(&archived).await.unwrap();
+    repo.insert(&recipe(stranger.id, vec![recipe_component(first, 0)]))
+        .await
+        .unwrap();
+
+    let query = RecipeQuery {
+        owner_id: owner,
+        search: None,
+        include_archived: false,
+        page: PageRequest::default(),
+        sort: SortDirection::Ascending,
+    };
+    let page = repo.list(&query).await.unwrap();
+    assert_eq!(
+        page.total, 1,
+        "only the owner's non-archived recipe should list"
+    );
+
+    let with_archived = RecipeQuery {
+        include_archived: true,
+        ..query
+    };
+    let page = repo.list(&with_archived).await.unwrap();
+    assert_eq!(
+        page.total, 2,
+        "including archived shows both of the owner's recipes"
+    );
+}
+
+#[sqlx::test]
+async fn lists_ingredient_references_from_visible_active_recipes(pool: PgPool) {
+    let (owner, product_id, _second) = seed_recipe_dependencies(&pool).await;
+    let ingredients = PgIngredientRepository::new(pool.clone());
+    let oats = ingredient("Review Oats");
+    ingredients.insert(&oats).await.unwrap();
+    let recipes = PgRecipeRepository::new(pool);
+    recipes
+        .insert(&recipe(
+            owner,
+            vec![
+                recipe_component(product_id, 0),
+                recipe_ingredient_component(oats.id, 1),
+            ],
+        ))
+        .await
+        .unwrap();
+
+    let ids = recipes
+        .referenced_ingredient_ids(owner, false)
+        .await
+        .unwrap();
+
+    assert_eq!(ids, vec![oats.id]);
+}
+
+#[sqlx::test]
+async fn round_trips_a_meal_plan_entry_with_a_recipe_component(pool: PgPool) {
+    let (member_id, product_id, actor_id) = seed_meal_plan_dependencies(&pool).await;
+    let recipes = PgRecipeRepository::new(pool.clone());
+    let dish = recipe(actor_id, vec![recipe_component(product_id, 0)]);
+    recipes.insert(&dish).await.unwrap();
+
+    let repo = PgMealPlanRepository::new(pool.clone());
+    let mut entry = meal_plan_entry(member_id, product_id, actor_id);
+    entry.components = vec![MealPlanComponent {
+        id: MealPlanComponentId::new(),
+        item: MealItemRef::recipe(dish.id),
+        amount: ConsumedAmount::Servings(Decimal::new(2, 0)),
+        position: 0,
+        snapshot: None,
+        revision: Revision::INITIAL,
+        display_order: Uuid::now_v7(),
+    }];
+    repo.insert(&entry).await.unwrap();
+
+    let loaded = repo.get(entry.id).await.unwrap().unwrap();
+    assert_eq!(loaded.components.len(), 1);
+    assert_eq!(loaded.components[0].item, MealItemRef::recipe(dish.id));
+    assert_eq!(
+        loaded.components[0].amount,
+        ConsumedAmount::Servings(Decimal::new(2, 0))
+    );
+}
+
+#[sqlx::test]
+async fn a_recipe_component_referencing_a_missing_recipe_is_rejected(pool: PgPool) {
+    let (member_id, product_id, actor_id) = seed_meal_plan_dependencies(&pool).await;
+    let repo = PgMealPlanRepository::new(pool.clone());
+    let mut entry = meal_plan_entry(member_id, product_id, actor_id);
+    entry.components = vec![MealPlanComponent {
+        id: MealPlanComponentId::new(),
+        item: MealItemRef::recipe(RecipeId::new()),
+        amount: ConsumedAmount::Servings(Decimal::ONE),
+        position: 0,
+        snapshot: None,
+        revision: Revision::INITIAL,
+        display_order: Uuid::now_v7(),
+    }];
+
+    let error = repo.insert(&entry).await.unwrap_err();
+    assert!(
+        matches!(
+            error,
+            CoreError::NotFound {
+                resource: "recipe",
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+}
+
+#[sqlx::test]
+async fn logs_and_reloads_a_recipe_consumption_record(pool: PgPool) {
+    let (member_id, product_id, actor_id) = seed_meal_plan_dependencies(&pool).await;
+    let recipes = PgRecipeRepository::new(pool.clone());
+    let dish = recipe(actor_id, vec![recipe_component(product_id, 0)]);
+    recipes.insert(&dish).await.unwrap();
+
+    let repo = PgConsumptionRecordRepository::new(pool.clone());
+    let mut record = consumption_record(member_id, product_id);
+    record.item = MealItemRef::recipe(dish.id);
+    record.amount = ConsumedAmount::Servings(Decimal::ONE);
+    repo.insert(&record, &no_stock()).await.unwrap();
+
+    let loaded = repo.get(record.id).await.unwrap().unwrap();
+    assert_eq!(loaded.item, MealItemRef::recipe(dish.id));
+}
+
+fn added_event(actor: UserId, subject: HouseholdMemberId) -> NewStockEvent {
+    NewStockEvent {
+        kind: StockEventKind::Added,
+        quantity_delta: None,
+        actor_user_id: Some(actor),
+        subject_member_id: Some(subject),
+        source: None,
+        reverses_event_id: None,
+        note: None,
+    }
+}
+
+#[sqlx::test]
+async fn round_trips_a_stock_item_and_writes_an_event(pool: PgPool) {
+    let users = PgUserRepository::new(pool.clone());
+    let actor = user("stockkeeper", vec![Role::Admin]);
+    users.insert(&actor).await.unwrap();
+    let (member_id, product_id) = seed_member_and_product(&pool).await;
+
+    let repo = PgStockRepository::new(pool.clone());
+    let item = mmp_core::domain::StockItem {
+        id: StockItemId::new(),
+        product_id,
+        level: StockLevel::Exact {
+            quantity: Quantity::new(Decimal::new(400, 0), Unit::Gram),
+        },
+        storage_location: StorageLocation::Chilled,
+        source_date: None,
+        usability_deadline: None,
+        note: Some("back left".to_owned()),
+        revision: Revision::INITIAL,
+        created_at: OffsetDateTime::now_utc(),
+        updated_at: OffsetDateTime::now_utc(),
+        archived_at: None,
+    };
+    repo.insert(&item, &added_event(actor.id, member_id))
+        .await
+        .unwrap();
+
+    let loaded = repo.get(item.id).await.unwrap().expect("should exist");
+    assert_eq!(
+        loaded.level,
+        StockLevel::Exact {
+            quantity: Quantity::new(Decimal::new(400, 0), Unit::Gram)
+        }
+    );
+    assert_eq!(loaded.storage_location, StorageLocation::Chilled);
+
+    let events = repo.list_events(item.id).await.unwrap();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].kind, StockEventKind::Added);
+    assert_eq!(events[0].actor_user_id, Some(actor.id));
+    assert_eq!(events[0].subject_member_id, Some(member_id));
+}
+
+#[sqlx::test]
+async fn several_stock_rows_may_share_a_product(pool: PgPool) {
+    let users = PgUserRepository::new(pool.clone());
+    let actor = user("stockkeeper", vec![Role::Admin]);
+    users.insert(&actor).await.unwrap();
+    let (member_id, product_id) = seed_member_and_product(&pool).await;
+    let repo = PgStockRepository::new(pool.clone());
+
+    for grams in [400, 650] {
+        let now = OffsetDateTime::now_utc();
+        let item = mmp_core::domain::StockItem {
+            id: StockItemId::new(),
+            product_id,
+            level: StockLevel::Exact {
+                quantity: Quantity::new(Decimal::new(grams, 0), Unit::Gram),
+            },
+            storage_location: StorageLocation::Frozen,
+            source_date: None,
+            usability_deadline: None,
+            note: None,
+            revision: Revision::INITIAL,
+            created_at: now,
+            updated_at: now,
+            archived_at: None,
+        };
+        repo.insert(&item, &added_event(actor.id, member_id))
+            .await
+            .unwrap();
+    }
+
+    let rows = repo.list_for_products(&[product_id]).await.unwrap();
+    assert_eq!(rows.len(), 2);
+    let page = repo
+        .list(&StockQuery {
+            product_id: Some(product_id),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(page.total, 2);
+}
+
+#[sqlx::test]
+async fn a_stale_stock_update_is_refused(pool: PgPool) {
+    let users = PgUserRepository::new(pool.clone());
+    let actor = user("stockkeeper", vec![Role::Admin]);
+    users.insert(&actor).await.unwrap();
+    let (member_id, product_id) = seed_member_and_product(&pool).await;
+    let repo = PgStockRepository::new(pool.clone());
+
+    let now = OffsetDateTime::now_utc();
+    let mut item = mmp_core::domain::StockItem {
+        id: StockItemId::new(),
+        product_id,
+        level: StockLevel::Exact {
+            quantity: Quantity::new(Decimal::new(400, 0), Unit::Gram),
+        },
+        storage_location: StorageLocation::Chilled,
+        source_date: None,
+        usability_deadline: None,
+        note: None,
+        revision: Revision::INITIAL,
+        created_at: now,
+        updated_at: now,
+        archived_at: None,
+    };
+    repo.insert(&item, &added_event(actor.id, member_id))
+        .await
+        .unwrap();
+
+    item.level = StockLevel::Exact {
+        quantity: Quantity::new(Decimal::new(150, 0), Unit::Gram),
+    };
+    item.revision = Revision::INITIAL.next();
+    let stale = Revision::new(99);
+    let outcome = repo
+        .update(&item, stale, &added_event(actor.id, member_id))
+        .await
+        .unwrap();
+    assert!(matches!(outcome, UpdateOutcome::RevisionMismatch { .. }));
+
+    let events = repo.list_events(item.id).await.unwrap();
+    assert_eq!(events.len(), 1, "a refused update must not write an event");
+}
+
+fn stock_item_of(product_id: ProductId, millilitres: i64) -> mmp_core::domain::StockItem {
+    let now = OffsetDateTime::now_utc();
+    mmp_core::domain::StockItem {
+        id: StockItemId::new(),
+        product_id,
+        level: StockLevel::Exact {
+            quantity: Quantity::new(Decimal::new(millilitres, 0), Unit::Millilitre),
+        },
+        storage_location: StorageLocation::Chilled,
+        source_date: None,
+        usability_deadline: None,
+        note: None,
+        revision: Revision::INITIAL,
+        created_at: now,
+        updated_at: now,
+        archived_at: None,
+    }
+}
+
+fn millilitres(value: i64) -> Quantity {
+    Quantity::new(Decimal::new(value, 0), Unit::Millilitre)
+}
+
+fn level_of(item: &mmp_core::domain::StockItem) -> Decimal {
+    match item.level {
+        StockLevel::Exact { quantity } => quantity.amount,
+        _ => panic!("expected an exact level"),
+    }
+}
+
+#[sqlx::test]
+async fn a_pooled_deduction_draws_across_every_product_in_the_pool(pool: PgPool) {
+    let users = PgUserRepository::new(pool.clone());
+    let actor = user("stockkeeper", vec![Role::Admin]);
+    users.insert(&actor).await.unwrap();
+    let (member_id, first_product) = seed_member_and_product(&pool).await;
+
+    let ingredients = PgIngredientRepository::new(pool.clone());
+    let milk = ingredient("Whole Milk");
+    ingredients.insert(&milk).await.unwrap();
+
+    let products = PgProductRepository::new(pool.clone());
+    let mut second_product = product("Sainsbury's Whole Milk");
+    second_product.mapped_ingredient_id = Some(milk.id);
+    products.insert(&second_product).await.unwrap();
+
+    let stock = PgStockRepository::new(pool.clone());
+    let a = stock_item_of(first_product, 400);
+    let b = stock_item_of(second_product.id, 400);
+    for item in [&a, &b] {
+        stock
+            .insert(item, &added_event(actor.id, member_id))
+            .await
+            .unwrap();
+    }
+
+    let record = consumption_record(member_id, first_product);
+    let write = StockWrite {
+        deductions: vec![StockDeduction {
+            source_kind: StockEffectSource::ConsumptionRecord,
+            source_id: record.id.as_uuid(),
+            source_detail_id: None,
+            target: DeductionTarget::pool(milk.id, vec![first_product, second_product.id]),
+            want: millilitres(600),
+            actor_user_id: Some(actor.id),
+            subject_member_id: Some(member_id),
+            source_label: "Cup of tea".to_owned(),
+        }],
+        releases: Vec::new(),
+    };
+
+    let outcomes = PgConsumptionRecordRepository::new(pool.clone())
+        .insert(&record, &write)
+        .await
+        .unwrap();
+
+    assert!(outcomes.is_empty(), "800 ml covers a 600 ml want");
+    let mut drawn = Decimal::ZERO;
+    for id in [a.id, b.id] {
+        let after = stock.get(id).await.unwrap().unwrap();
+        drawn += Decimal::new(400, 0) - level_of(&after);
+    }
+    assert_eq!(drawn, Decimal::new(600, 0));
+}
+
+#[sqlx::test]
+async fn two_draws_from_one_source_can_share_a_stock_item(pool: PgPool) {
+    let users = PgUserRepository::new(pool.clone());
+    let actor = user("stockkeeper", vec![Role::Admin]);
+    users.insert(&actor).await.unwrap();
+    let (member_id, product_id) = seed_member_and_product(&pool).await;
+
+    let stock = PgStockRepository::new(pool.clone());
+    let item = stock_item_of(product_id, 1000);
+    stock
+        .insert(&item, &added_event(actor.id, member_id))
+        .await
+        .unwrap();
+
+    // This is a recipe that both pins a product and asks for its ingredient: two lines, one source,
+    // and both land on the same bottle. Without the detail id the second insert is swallowed as a
+    // duplicate and we quietly under-deduct.
+    let record = consumption_record(member_id, product_id);
+    let line_a = Uuid::now_v7();
+    let line_b = Uuid::now_v7();
+    let deduction = |detail: Uuid, want: i64| StockDeduction {
+        source_kind: StockEffectSource::ConsumptionRecord,
+        source_id: record.id.as_uuid(),
+        source_detail_id: Some(detail),
+        target: DeductionTarget::product(product_id),
+        want: millilitres(want),
+        actor_user_id: Some(actor.id),
+        subject_member_id: Some(member_id),
+        source_label: "Milky pudding".to_owned(),
+    };
+    let write = StockWrite {
+        deductions: vec![deduction(line_a, 200), deduction(line_b, 150)],
+        releases: Vec::new(),
+    };
+
+    let records = PgConsumptionRecordRepository::new(pool.clone());
+    records.insert(&record, &write).await.unwrap();
+
+    let after = stock.get(item.id).await.unwrap().unwrap();
+    assert_eq!(level_of(&after), Decimal::new(650, 0));
+
+    let effects = stock
+        .effects_for_source(StockEffectSource::ConsumptionRecord, record.id.as_uuid())
+        .await
+        .unwrap();
+    assert_eq!(effects.len(), 2);
+}
+
+#[sqlx::test]
+async fn ingredients_sort_by_date_added_and_by_product_count(pool: PgPool) {
+    let ingredients = PgIngredientRepository::new(pool.clone());
+    let products = PgProductRepository::new(pool);
+
+    let now = OffsetDateTime::now_utc();
+    let mut oldest = ingredient("Coriander");
+    oldest.created_at = now - time::Duration::days(3);
+    let mut middle = ingredient("Whole Milk");
+    middle.created_at = now - time::Duration::days(2);
+    let mut newest = ingredient("Plain Flour");
+    newest.created_at = now - time::Duration::days(1);
+    for row in [&oldest, &middle, &newest] {
+        ingredients.insert(row).await.unwrap();
+    }
+
+    for (name, ingredient_id) in [
+        ("Tesco Whole Milk", middle.id),
+        ("Sainsbury's Whole Milk", middle.id),
+        ("Tesco Plain Flour", newest.id),
+    ] {
+        let mut row = product(name);
+        row.mapped_ingredient_id = Some(ingredient_id);
+        products.insert(&row).await.unwrap();
+    }
+
+    let mut archived = product("Discontinued Milk");
+    archived.mapped_ingredient_id = Some(middle.id);
+    archived.archived_at = Some(now);
+    products.insert(&archived).await.unwrap();
+
+    let names = |page: &mmp_core::ports::Paginated<Ingredient>| -> Vec<String> {
+        page.items.iter().map(|i| i.name.clone()).collect()
+    };
+
+    let newest_first = ingredients
+        .list(&IngredientQuery {
+            sort_by: IngredientSort::Created,
+            sort: SortDirection::Descending,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        names(&newest_first),
+        ["Plain Flour", "Whole Milk", "Coriander"]
+    );
+
+    let most_products = ingredients
+        .list(&IngredientQuery {
+            sort_by: IngredientSort::ProductCount,
+            sort: SortDirection::Descending,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        names(&most_products),
+        ["Whole Milk", "Plain Flour", "Coriander"],
+        "the archived product must not count towards Whole Milk"
+    );
+
+    let a_to_z = ingredients.list(&IngredientQuery::default()).await.unwrap();
+    assert_eq!(names(&a_to_z), ["Coriander", "Plain Flour", "Whole Milk"]);
+}
+
+fn cadence(interval_weeks: u8, days: Vec<Weekday>) -> ShoppingCadence {
+    let now = OffsetDateTime::now_utc();
+    ShoppingCadence {
+        interval_weeks,
+        days,
+        anchor: date!(2026 - 08 - 31),
+        usual_time: Time::from_hms(10, 0, 0).ok(),
+        revision: Revision::INITIAL,
+        created_at: now,
+        updated_at: now,
+    }
+}
+
+fn exception(
+    state: ExceptionState,
+    generated_for: Option<Date>,
+    effective_date: Option<Date>,
+) -> OpportunityException {
+    let now = OffsetDateTime::now_utc();
+    OpportunityException {
+        id: ShoppingOpportunityId::new(),
+        generated_for,
+        effective_date,
+        usual_time: None,
+        state,
+        note: None,
+        revision: Revision::INITIAL,
+        created_at: now,
+        updated_at: now,
+    }
+}
+
+#[sqlx::test]
+async fn the_shopping_cadence_is_a_singleton_that_replaces_itself(pool: PgPool) {
+    let repo = PgShoppingCadenceRepository::new(pool);
+
+    assert!(repo.get().await.unwrap().is_none());
+
+    repo.set(&cadence(1, vec![Weekday::Wednesday, Weekday::Saturday]))
+        .await
+        .unwrap();
+    let loaded = repo.get().await.unwrap().expect("a cadence is stored");
+    assert_eq!(loaded.days, vec![Weekday::Wednesday, Weekday::Saturday]);
+
+    repo.set(&cadence(2, vec![Weekday::Friday])).await.unwrap();
+    let loaded = repo.get().await.unwrap().expect("a cadence is stored");
+    assert_eq!(loaded.interval_weeks, 2);
+    assert_eq!(loaded.days, vec![Weekday::Friday]);
+
+    repo.clear().await.unwrap();
+    assert!(repo.get().await.unwrap().is_none());
+}
+
+#[sqlx::test]
+async fn an_occurrence_can_only_carry_one_exception(pool: PgPool) {
+    let repo = PgShoppingOpportunityRepository::new(pool);
+    let occurrence = date!(2026 - 09 - 05);
+
+    repo.upsert(&exception(
+        ExceptionState::Moved,
+        Some(occurrence),
+        Some(date!(2026 - 09 - 03)),
+    ))
+    .await
+    .unwrap();
+
+    let clash = exception(ExceptionState::Skipped, Some(occurrence), None);
+    let error = repo.upsert(&clash).await.unwrap_err();
+    assert!(
+        matches!(error, CoreError::Duplicate { .. }),
+        "expected a duplicate, got {error:?}"
+    );
+
+    let found = repo
+        .find_for_occurrence(occurrence)
+        .await
+        .unwrap()
+        .expect("the move is stored");
+    assert_eq!(found.effective_date, Some(date!(2026 - 09 - 03)));
+
+    let in_range = repo.list_in_range(occurrence, occurrence).await.unwrap();
+    assert_eq!(in_range.len(), 1);
+}
+
+#[sqlx::test]
+async fn a_purchase_and_the_stock_it_creates_land_together(pool: PgPool) {
+    let users = PgUserRepository::new(pool.clone());
+    let ingredients = PgIngredientRepository::new(pool.clone());
+    let products = PgProductRepository::new(pool.clone());
+    let stock = PgStockRepository::new(pool.clone());
+    let purchases = PgPurchaseRepository::new(pool.clone());
+
+    let actor = user("buyer", vec![Role::Admin]);
+    users.insert(&actor).await.unwrap();
+    let milk = ingredient("Whole Milk");
+    ingredients.insert(&milk).await.unwrap();
+    let mut bottle = product("Sample Whole Milk");
+    bottle.mapped_ingredient_id = Some(milk.id);
+    products.insert(&bottle).await.unwrap();
+
+    let now = OffsetDateTime::now_utc();
+    let item = StockItem {
+        id: StockItemId::new(),
+        product_id: bottle.id,
+        level: StockLevel::Exact {
+            quantity: Quantity::new(Decimal::new(2000, 0), Unit::Millilitre),
+        },
+        storage_location: StorageLocation::Chilled,
+        source_date: None,
+        usability_deadline: None,
+        note: None,
+        revision: Revision::INITIAL,
+        created_at: now,
+        updated_at: now,
+        archived_at: None,
+    };
+    let event = NewStockEvent {
+        kind: StockEventKind::Added,
+        quantity_delta: item.level.conservative_quantity(),
+        actor_user_id: Some(actor.id),
+        subject_member_id: None,
+        source: Some(StockEventSource {
+            kind: StockEffectSource::Purchase,
+            id: Uuid::now_v7(),
+            label: "Purchase".to_owned(),
+        }),
+        reverses_event_id: None,
+        note: None,
+    };
+
+    let purchase = Purchase {
+        id: PurchaseId::new(),
+        ingredient_id: Some(milk.id),
+        product_id: Some(bottle.id),
+        quantity: item.level.conservative_quantity(),
+        opportunity_date: Some(date!(2026 - 09 - 05)),
+        state: PurchaseState::Reconciled,
+        stock_item_id: Some(item.id),
+        purchased_at: now,
+        actor_user_id: actor.id,
+        note: None,
+        revision: Revision::INITIAL,
+        created_at: now,
+        updated_at: now,
+    };
+
+    purchases
+        .insert(
+            &purchase,
+            Some(&NewStockFromPurchase {
+                item: item.clone(),
+                event,
+            }),
+        )
+        .await
+        .unwrap();
+
+    let stored = purchases.get(purchase.id).await.unwrap().expect("stored");
+    assert_eq!(stored.state, PurchaseState::Reconciled);
+    assert_eq!(stored.stock_item_id, Some(item.id));
+    assert!(stock.get(item.id).await.unwrap().is_some());
+
+    let events = stock.list_events(item.id).await.unwrap();
+    assert_eq!(events.len(), 1);
+}
+
+#[sqlx::test]
+async fn a_pending_purchase_creates_no_stock_at_all(pool: PgPool) {
+    let users = PgUserRepository::new(pool.clone());
+    let ingredients = PgIngredientRepository::new(pool.clone());
+    let purchases = PgPurchaseRepository::new(pool.clone());
+
+    let actor = user("buyer", vec![Role::Admin]);
+    users.insert(&actor).await.unwrap();
+    let milk = ingredient("Whole Milk");
+    ingredients.insert(&milk).await.unwrap();
+
+    let now = OffsetDateTime::now_utc();
+    let purchase = Purchase {
+        id: PurchaseId::new(),
+        ingredient_id: Some(milk.id),
+        product_id: None,
+        quantity: None,
+        opportunity_date: None,
+        state: PurchaseState::Pending,
+        stock_item_id: None,
+        purchased_at: now,
+        actor_user_id: actor.id,
+        note: Some("forgot to look at the pack".to_owned()),
+        revision: Revision::INITIAL,
+        created_at: now,
+        updated_at: now,
+    };
+    purchases.insert(&purchase, None).await.unwrap();
+
+    let open = purchases.list_open().await.unwrap();
+    assert_eq!(open.len(), 1);
+    assert_eq!(open[0].state, PurchaseState::Pending);
+    assert_eq!(open[0].quantity, None);
+}
+
+#[sqlx::test]
+async fn stock_tracking_round_trips_on_both_catalogue_tables(pool: PgPool) {
+    let ingredients = PgIngredientRepository::new(pool.clone());
+    let products = PgProductRepository::new(pool);
+
+    let mut staple = ingredient("Paprika");
+    staple.track_stock = Some(false);
+    let mut tracked = ingredient("Apples");
+    tracked.track_stock = Some(true);
+    let unanswered = ingredient("Rice");
+    for row in [&staple, &tracked, &unanswered] {
+        ingredients.insert(row).await.unwrap();
+    }
+
+    assert_eq!(
+        ingredients
+            .get(staple.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .track_stock,
+        Some(false)
+    );
+    assert_eq!(
+        ingredients
+            .get(tracked.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .track_stock,
+        Some(true)
+    );
+    assert_eq!(
+        ingredients
+            .get(unanswered.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .track_stock,
+        None
+    );
+
+    let mut bottle = product("Extra virgin 500ml");
+    bottle.track_stock = Some(true);
+    products.insert(&bottle).await.unwrap();
+    assert_eq!(
+        products.get(bottle.id).await.unwrap().unwrap().track_stock,
+        Some(true)
+    );
+
+    bottle.track_stock = Some(false);
+    let next = bottle.revision.next();
+    let expected = bottle.revision;
+    bottle.revision = next;
+    products.update(&bottle, expected).await.unwrap();
+    assert_eq!(
+        products.get(bottle.id).await.unwrap().unwrap().track_stock,
+        Some(false)
+    );
+}
