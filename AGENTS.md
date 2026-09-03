@@ -10,7 +10,9 @@ In Brownserve devcontainers, the repository is available at `~/Repositories/Brow
 
 The specification and ADRs are authoritative. Check the current document status and follow any superseding records. Do not copy their decisions, requirements, terminology, or models into this file, since that would create a second and potentially stale source of truth.
 
-If the requested change conflicts with them, or they do not settle behaviour the change requires, raise that with the user before deciding a direction and if the direction changes substantially capture that in a new ADR.
+If the requested change conflicts with them, or they do not settle behaviour the change requires, raise that with the user before deciding a direction and if the _direction changes substantially_ capture that in a new ADR.
+
+An ADR does NOT need to be written for implementation detail, only if that detail conflicts with the Tech Spec or other ADR's
 
 ## Project guidance
 
