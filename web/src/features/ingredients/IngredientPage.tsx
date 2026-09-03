@@ -207,11 +207,14 @@ function EditIngredientForm({
   const [draft, setDraft] = useState<IngredientDraft>({
     name: ingredient.name,
     default_unit: ingredient.default_unit,
+    track_stock: ingredient.track_stock ?? true,
   });
   const [errors, setErrors] = useState<Record<string, string>>({});
 
   const dirty =
-    draft.name !== ingredient.name || draft.default_unit !== ingredient.default_unit;
+    draft.name !== ingredient.name ||
+    draft.default_unit !== ingredient.default_unit ||
+    draft.track_stock !== (ingredient.track_stock ?? true);
 
   async function onSubmit(event: FormEvent) {
     event.preventDefault();
@@ -223,7 +226,11 @@ function EditIngredientForm({
       await update.mutateAsync({
         id: ingredient.id,
         revision: ingredient.revision,
-        body: { name: draft.name.trim(), default_unit: draft.default_unit },
+        body: {
+          name: draft.name.trim(),
+          default_unit: draft.default_unit,
+          track_stock: draft.track_stock,
+        },
       });
       onSaved();
     } catch (caught) {

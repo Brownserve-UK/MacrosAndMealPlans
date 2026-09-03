@@ -372,6 +372,30 @@ pub enum Confidence {
     Estimated,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MissingStock {
+    Absent,
+    Unknown,
+    Assumed,
+}
+
+impl MissingStock {
+    pub fn resolve(
+        product: Option<bool>,
+        ingredient: Option<bool>,
+        household: super::MissingStockInterpretation,
+    ) -> MissingStock {
+        match product.or(ingredient) {
+            Some(true) => MissingStock::Absent,
+            Some(false) => MissingStock::Assumed,
+            None => match household {
+                super::MissingStockInterpretation::Absent => MissingStock::Absent,
+                super::MissingStockInterpretation::Unknown => MissingStock::Unknown,
+            },
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum Availability {
@@ -432,6 +456,7 @@ pub struct DemandClaim {
     pub slot: MealSlot,
     pub scope: MealPlanScope,
     pub recipe_name: Option<String>,
+    pub assumed: bool,
 }
 
 #[derive(
@@ -537,18 +562,21 @@ impl IngredientAvailability {
 pub enum StockEffectSource {
     MealPlanComponent,
     ConsumptionRecord,
+    Purchase,
 }
 
 impl StockEffectSource {
-    pub const ALL: [StockEffectSource; 2] = [
+    pub const ALL: [StockEffectSource; 3] = [
         StockEffectSource::MealPlanComponent,
         StockEffectSource::ConsumptionRecord,
+        StockEffectSource::Purchase,
     ];
 
     pub const fn code(&self) -> &'static str {
         match self {
             StockEffectSource::MealPlanComponent => "meal_plan_component",
             StockEffectSource::ConsumptionRecord => "consumption_record",
+            StockEffectSource::Purchase => "purchase",
         }
     }
 }
@@ -711,14 +739,14 @@ fn floor_zero(value: Decimal) -> Decimal {
     }
 }
 
-fn current_unit(level: &StockLevel) -> Option<Unit> {
+pub(crate) fn current_unit(level: &StockLevel) -> Option<Unit> {
     match level {
         StockLevel::Exact { quantity } | StockLevel::Estimated { quantity } => Some(quantity.unit),
         StockLevel::NotTracked => None,
     }
 }
 
-type FefoKey = (
+pub(crate) type FefoKey = (
     bool,
     Option<time::Date>,
     bool,
@@ -727,7 +755,7 @@ type FefoKey = (
     uuid::Uuid,
 );
 
-fn fefo_key(item: &StockItem) -> FefoKey {
+pub(crate) fn fefo_key(item: &StockItem) -> FefoKey {
     let deadline = item.usability_deadline.as_ref().map(|d| d.date);
     let source = item.source_date.as_ref().map(|d| d.date);
     (

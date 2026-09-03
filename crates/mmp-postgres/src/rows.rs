@@ -3,13 +3,15 @@ use std::str::FromStr;
 
 use mmp_core::domain::{
     AccessScope, CatalogueOrigin, ConsumedAmount, ConsumptionRecord, ConsumptionRecordId,
-    HouseholdMember, HouseholdMemberId, HouseholdSettings, Ingredient, IngredientId, MealItemRef,
-    MealPlanComponentId, MealPlanEntryId, MealSlot, MealTimes, MemberAccessGrant,
-    MissingStockInterpretation, NutritionFacts, NutritionGoals, NutritionQuality, NutritionTarget,
-    NutritionTargetId, Product, ProductId, Provenance, Quantity, RecipeId, Revision, Role,
-    SourceDate, SourceDateKind, StockEffect, StockEffectId, StockEffectSource, StockEffectState,
-    StockEvent, StockEventId, StockEventKind, StockEventSource, StockItem, StockItemId, StockLevel,
-    StorageLocation, TrackingMode, Unit, UsabilityDeadline, User, UserId,
+    ExceptionState, HouseholdMember, HouseholdMemberId, HouseholdSettings, Ingredient,
+    IngredientId, MealItemRef, MealPlanComponentId, MealPlanEntryId, MealSlot, MealTimes,
+    MemberAccessGrant, MissingStockInterpretation, NutritionFacts, NutritionGoals,
+    NutritionQuality, NutritionTarget, NutritionTargetId, OpportunityException, Product, ProductId,
+    Provenance, Purchase, PurchaseId, PurchaseState, Quantity, RecipeId, Revision, Role,
+    ShoppingCadence, ShoppingOpportunityId, ShoppingSection, SourceDate, SourceDateKind,
+    StockEffect, StockEffectId, StockEffectSource, StockEffectState, StockEvent, StockEventId,
+    StockEventKind, StockEventSource, StockItem, StockItemId, StockLevel, StorageLocation,
+    TrackingMode, Unit, UsabilityDeadline, User, UserId, week_day_from_number,
 };
 use mmp_core::{CoreError, RepositoryError};
 use rust_decimal::Decimal;
@@ -35,6 +37,8 @@ pub struct IngredientRow {
     pub source_provider: Option<String>,
     pub source_external_id: Option<String>,
     pub locally_modified: bool,
+    pub shopping_section: Option<String>,
+    pub track_stock: Option<bool>,
     pub revision: i64,
     pub created_at: OffsetDateTime,
     pub updated_at: OffsetDateTime,
@@ -50,6 +54,15 @@ impl TryFrom<IngredientRow> for Ingredient {
             name: row.name,
             default_unit: Unit::from_str(&row.default_unit)
                 .map_err(|_| bad_value("default_unit", &row.default_unit))?,
+            shopping_section: row
+                .shopping_section
+                .as_deref()
+                .map(|section| {
+                    ShoppingSection::from_str(section)
+                        .map_err(|_| bad_value("shopping_section", section))
+                })
+                .transpose()?,
+            track_stock: row.track_stock,
             provenance: Provenance {
                 origin: CatalogueOrigin::from_str(&row.origin)
                     .map_err(|_| bad_value("origin", &row.origin))?,
@@ -95,6 +108,7 @@ pub struct ProductRow {
     pub source_provider: Option<String>,
     pub source_external_id: Option<String>,
     pub locally_modified: bool,
+    pub track_stock: Option<bool>,
     pub revision: i64,
     pub created_at: OffsetDateTime,
     pub updated_at: OffsetDateTime,
@@ -120,6 +134,7 @@ impl TryFrom<ProductRow> for Product {
             barcode: row.barcode,
             retailer: row.retailer,
             shopping_section: row.shopping_section,
+            track_stock: row.track_stock,
             package_quantity,
             servings_per_pack: row.servings_per_pack,
             mapped_ingredient_id: row.mapped_ingredient_id.map(IngredientId::from),
@@ -654,6 +669,122 @@ impl TryFrom<ConsumptionRecordRow> for ConsumptionRecord {
             },
             quality: NutritionQuality::from_str(&row.nutrition_quality)
                 .map_err(|_| bad_value("nutrition_quality", &row.nutrition_quality))?,
+            revision: Revision::new(row.revision),
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+        })
+    }
+}
+
+#[derive(Debug, sqlx::FromRow)]
+pub struct ShoppingCadenceRow {
+    pub interval_weeks: i32,
+    pub days_of_week: Vec<i16>,
+    pub anchor_date: Date,
+    pub usual_time: Option<Time>,
+    pub revision: i64,
+    pub created_at: OffsetDateTime,
+    pub updated_at: OffsetDateTime,
+}
+
+impl TryFrom<ShoppingCadenceRow> for ShoppingCadence {
+    type Error = CoreError;
+
+    fn try_from(row: ShoppingCadenceRow) -> Result<Self, Self::Error> {
+        let mut days = Vec::with_capacity(row.days_of_week.len());
+        for number in &row.days_of_week {
+            let day = u8::try_from(*number)
+                .ok()
+                .and_then(week_day_from_number)
+                .ok_or_else(|| bad_value("days_of_week", &number.to_string()))?;
+            days.push(day);
+        }
+        Ok(ShoppingCadence {
+            interval_weeks: u8::try_from(row.interval_weeks)
+                .map_err(|_| bad_value("interval_weeks", &row.interval_weeks.to_string()))?,
+            days,
+            anchor: row.anchor_date,
+            usual_time: row.usual_time,
+            revision: Revision::new(row.revision),
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+        })
+    }
+}
+
+#[derive(Debug, sqlx::FromRow)]
+pub struct OpportunityExceptionRow {
+    pub id: Uuid,
+    pub generated_for: Option<Date>,
+    pub effective_date: Option<Date>,
+    pub usual_time: Option<Time>,
+    pub state: String,
+    pub note: Option<String>,
+    pub revision: i64,
+    pub created_at: OffsetDateTime,
+    pub updated_at: OffsetDateTime,
+}
+
+impl TryFrom<OpportunityExceptionRow> for OpportunityException {
+    type Error = CoreError;
+
+    fn try_from(row: OpportunityExceptionRow) -> Result<Self, Self::Error> {
+        Ok(OpportunityException {
+            id: ShoppingOpportunityId::from(row.id),
+            generated_for: row.generated_for,
+            effective_date: row.effective_date,
+            usual_time: row.usual_time,
+            state: ExceptionState::from_str(&row.state)
+                .map_err(|_| bad_value("state", &row.state))?,
+            note: row.note,
+            revision: Revision::new(row.revision),
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+        })
+    }
+}
+
+#[derive(Debug, sqlx::FromRow)]
+pub struct PurchaseRow {
+    pub id: Uuid,
+    pub ingredient_id: Option<Uuid>,
+    pub product_id: Option<Uuid>,
+    pub quantity_value: Option<Decimal>,
+    pub quantity_unit: Option<String>,
+    pub opportunity_date: Option<Date>,
+    pub state: String,
+    pub stock_item_id: Option<Uuid>,
+    pub purchased_at: OffsetDateTime,
+    pub actor_user_id: Uuid,
+    pub note: Option<String>,
+    pub revision: i64,
+    pub created_at: OffsetDateTime,
+    pub updated_at: OffsetDateTime,
+}
+
+impl TryFrom<PurchaseRow> for Purchase {
+    type Error = CoreError;
+
+    fn try_from(row: PurchaseRow) -> Result<Self, Self::Error> {
+        let quantity = match (row.quantity_value, row.quantity_unit.as_deref()) {
+            (Some(amount), Some(unit)) => Some(Quantity::new(
+                amount,
+                Unit::from_str(unit).map_err(|_| bad_value("quantity_unit", unit))?,
+            )),
+            _ => None,
+        };
+        Ok(Purchase {
+            id: PurchaseId::from(row.id),
+            ingredient_id: row.ingredient_id.map(IngredientId::from),
+            product_id: row.product_id.map(ProductId::from),
+            quantity,
+            opportunity_date: row.opportunity_date,
+            state: PurchaseState::from_str(&row.state)
+                .map_err(|_| bad_value("state", &row.state))?,
+            stock_item_id: row.stock_item_id.map(StockItemId::from),
+            purchased_at: row.purchased_at,
+            actor_user_id: UserId::from(row.actor_user_id),
+            note: row.note,
             revision: Revision::new(row.revision),
             created_at: row.created_at,
             updated_at: row.updated_at,

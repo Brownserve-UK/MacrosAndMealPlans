@@ -42,6 +42,8 @@ fn new_ingredient(name: &str) -> NewIngredient {
         id: None,
         name: name.to_owned(),
         default_unit: Unit::Gram,
+        shopping_section: None,
+        track_stock: None,
         provenance: Provenance::local(),
     }
 }
@@ -54,6 +56,7 @@ fn new_product(name: &str) -> NewProduct {
         barcode: None,
         retailer: None,
         shopping_section: None,
+        track_stock: None,
         package_quantity: None,
         servings_per_pack: None,
         mapped_ingredient_id: None,
@@ -152,6 +155,8 @@ async fn a_successful_update_advances_the_revision() {
             created.revision,
             IngredientPatch {
                 default_unit: Some(Unit::Millilitre),
+                shopping_section: Default::default(),
+                track_stock: Default::default(),
                 ..Default::default()
             },
         )
@@ -532,6 +537,8 @@ fn seed(key: &str, name: &str) -> crate::services::SeedIngredient {
         seed_key: key.to_owned(),
         name: name.to_owned(),
         default_unit: Unit::Gram,
+        shopping_section: None,
+        track_stock: None,
     }
 }
 
@@ -653,6 +660,8 @@ async fn seed_entries_are_validated() {
         seed_key: String::new(),
         name: "Whole Milk".to_owned(),
         default_unit: Unit::Gram,
+        shopping_section: None,
+        track_stock: None,
     };
     assert!(h.service.apply_seed_ingredients(&[bad]).await.is_err());
 }

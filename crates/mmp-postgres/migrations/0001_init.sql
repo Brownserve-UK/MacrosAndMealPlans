@@ -920,3 +920,116 @@ ALTER TABLE consumption_record
 CREATE INDEX consumption_record_meal_plan_entry
     ON consumption_record (meal_plan_entry_id)
     WHERE meal_plan_entry_id IS NOT NULL;
+
+-- Shopping ---------------------------------------------------------------------------------
+
+ALTER TABLE ingredient
+    ADD COLUMN shopping_section TEXT,
+    ADD COLUMN track_stock BOOLEAN,
+    ADD CONSTRAINT ingredient_shopping_section_valid
+        CHECK (shopping_section IS NULL OR shopping_section IN
+               ('fresh_produce', 'meat_fish', 'dairy', 'bakery', 'frozen', 'ambient', 'drinks',
+                'household', 'other'));
+
+ALTER TABLE product
+    ADD COLUMN track_stock BOOLEAN,
+    ADD CONSTRAINT product_shopping_section_valid
+        CHECK (shopping_section IS NULL OR shopping_section IN
+               ('fresh_produce', 'meat_fish', 'dairy', 'bakery', 'frozen', 'ambient', 'drinks',
+                'household', 'other'));
+
+ALTER TABLE stock_event
+    DROP CONSTRAINT stock_event_source_kind_valid,
+    ADD CONSTRAINT stock_event_source_kind_valid
+        CHECK (source_kind IS NULL OR source_kind IN
+               ('meal_plan_component', 'consumption_record', 'purchase'));
+
+CREATE TABLE shopping_cadence (
+    singleton       BOOLEAN PRIMARY KEY DEFAULT TRUE,
+
+    interval_weeks  INTEGER NOT NULL,
+    days_of_week    SMALLINT[] NOT NULL,
+    anchor_date     DATE NOT NULL,
+    usual_time      TIME,
+
+    revision        BIGINT NOT NULL DEFAULT 1,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    CONSTRAINT shopping_cadence_singleton
+        CHECK (singleton),
+    CONSTRAINT shopping_cadence_interval_valid
+        CHECK (interval_weeks BETWEEN 1 AND 8),
+    CONSTRAINT shopping_cadence_days_valid
+        CHECK (cardinality(days_of_week) BETWEEN 1 AND 7
+               AND days_of_week <@ ARRAY[1, 2, 3, 4, 5, 6, 7]::SMALLINT[])
+);
+
+CREATE TABLE shopping_opportunity (
+    id              UUID PRIMARY KEY,
+
+    generated_for   DATE,
+    effective_date  DATE,
+    usual_time      TIME,
+    state           TEXT NOT NULL,
+    note            TEXT,
+
+    revision        BIGINT NOT NULL DEFAULT 1,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    CONSTRAINT shopping_opportunity_state_valid
+        CHECK (state IN ('moved', 'skipped', 'one_off')),
+    CONSTRAINT shopping_opportunity_one_off_has_no_origin
+        CHECK ((state = 'one_off') = (generated_for IS NULL)),
+    CONSTRAINT shopping_opportunity_skipped_has_no_date
+        CHECK ((state = 'skipped') = (effective_date IS NULL))
+);
+
+CREATE UNIQUE INDEX shopping_opportunity_generated_for_unique
+    ON shopping_opportunity (generated_for)
+    WHERE generated_for IS NOT NULL;
+
+CREATE INDEX shopping_opportunity_effective_date
+    ON shopping_opportunity (effective_date)
+    WHERE effective_date IS NOT NULL;
+
+CREATE TABLE purchase (
+    id                UUID PRIMARY KEY,
+
+    ingredient_id     UUID REFERENCES ingredient (id) ON DELETE RESTRICT,
+    product_id        UUID REFERENCES product (id) ON DELETE RESTRICT,
+    quantity_value    NUMERIC(16, 4),
+    quantity_unit     TEXT,
+
+    opportunity_date  DATE,
+    state             TEXT NOT NULL,
+    stock_item_id     UUID REFERENCES stock_item (id) ON DELETE SET NULL,
+
+    purchased_at      TIMESTAMPTZ NOT NULL,
+    actor_user_id     UUID NOT NULL REFERENCES app_user (id) ON DELETE RESTRICT,
+    note              TEXT,
+
+    revision          BIGINT NOT NULL DEFAULT 1,
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    CONSTRAINT purchase_has_a_subject
+        CHECK (num_nonnulls(ingredient_id, product_id) >= 1),
+    CONSTRAINT purchase_state_valid
+        CHECK (state IN ('pending', 'reconciled', 'cancelled')),
+    CONSTRAINT purchase_reconciled_has_stock
+        CHECK ((state = 'reconciled') = (stock_item_id IS NOT NULL)),
+    CONSTRAINT purchase_quantity_complete
+        CHECK ((quantity_value IS NULL) = (quantity_unit IS NULL)),
+    CONSTRAINT purchase_quantity_positive
+        CHECK (quantity_value IS NULL OR quantity_value > 0),
+    CONSTRAINT purchase_quantity_unit_valid
+        CHECK (quantity_unit IS NULL OR quantity_unit IN
+               ('mg', 'g', 'kg', 'oz', 'lb', 'ml', 'l', 'tsp', 'tbsp', 'fl_oz', 'cup', 'item',
+                'piece', 'slice', 'clove', 'can', 'pack', 'bunch'))
+);
+
+CREATE INDEX purchase_state ON purchase (state);
+CREATE INDEX purchase_opportunity_date ON purchase (opportunity_date)
+    WHERE opportunity_date IS NOT NULL;

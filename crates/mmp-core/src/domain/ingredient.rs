@@ -1,6 +1,6 @@
 use time::OffsetDateTime;
 
-use super::{IngredientId, Provenance, Revision, Unit};
+use super::{IngredientId, Provenance, Revision, ShoppingSection, Unit};
 use crate::error::ValidationErrors;
 
 pub const MAX_NAME_LEN: usize = 200;
@@ -10,6 +10,8 @@ pub struct Ingredient {
     pub id: IngredientId,
     pub name: String,
     pub default_unit: Unit,
+    pub shopping_section: Option<ShoppingSection>,
+    pub track_stock: Option<bool>,
     pub provenance: Provenance,
     pub revision: Revision,
     pub created_at: OffsetDateTime,
@@ -40,6 +42,8 @@ pub struct NewIngredient {
     pub id: Option<IngredientId>,
     pub name: String,
     pub default_unit: Unit,
+    pub shopping_section: Option<ShoppingSection>,
+    pub track_stock: Option<bool>,
     pub provenance: Provenance,
 }
 
@@ -47,11 +51,16 @@ pub struct NewIngredient {
 pub struct IngredientPatch {
     pub name: Option<String>,
     pub default_unit: Option<Unit>,
+    pub shopping_section: super::Patch<ShoppingSection>,
+    pub track_stock: super::Patch<bool>,
 }
 
 impl IngredientPatch {
     pub fn is_empty(&self) -> bool {
-        self.name.is_none() && self.default_unit.is_none()
+        self.name.is_none()
+            && self.default_unit.is_none()
+            && self.shopping_section.is_unchanged()
+            && self.track_stock.is_unchanged()
     }
 }
 

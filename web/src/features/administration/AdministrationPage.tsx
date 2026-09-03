@@ -17,6 +17,12 @@ const SECTIONS = [
     detail: 'Default times for planned meals',
     needs: 'household:write',
   },
+  {
+    to: '/administration/shopping' as const,
+    label: 'Shopping',
+    detail: 'When the household normally shops',
+    needs: 'household:write',
+  },
 ] as const;
 
 export function AdministrationPage() {

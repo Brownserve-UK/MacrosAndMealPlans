@@ -35,6 +35,11 @@ export function ProductPage({ id }: { id: string }) {
   return <EditProduct id={id} />;
 }
 
+function trackStockFrom(value: boolean | null | undefined): ProductDraft['trackStock'] {
+  if (value == null) return 'default';
+  return value ? 'yes' : 'no';
+}
+
 function draftFrom(product: Product): ProductDraft {
   const packAmount = product.package_quantity ? String(product.package_quantity.amount) : '';
   const packUnit = product.package_quantity?.unit ?? 'g';
@@ -45,6 +50,7 @@ function draftFrom(product: Product): ProductDraft {
     barcode: product.barcode ?? '',
     retailer: product.retailer ?? '',
     section: product.shopping_section ?? '',
+    trackStock: trackStockFrom(product.track_stock),
     packAmount,
     packUnit,
     servingsPerPack,
@@ -85,6 +91,7 @@ function toBody(draft: ProductDraft) {
       ? { amount: Number(draft.packAmount), unit: draft.packUnit }
       : null,
     servings_per_pack: draft.servingsPerPack.trim() ? Number(draft.servingsPerPack) : null,
+    track_stock: draft.trackStock === 'default' ? null : draft.trackStock === 'yes',
     nutrition: draftToNutrition(draft.nutrition, packContextFrom(draft)),
   };
 }

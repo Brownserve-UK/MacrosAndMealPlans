@@ -25,6 +25,7 @@ pub fn build(state: AppState) -> (Router, utoipa::openapi::OpenApi) {
         .merge(routes::recipes::router())
         .merge(routes::review::router())
         .merge(routes::settings::router())
+        .merge(routes::shopping::router())
         .merge(routes::stock::router())
         .split_for_parts();
 
@@ -68,6 +69,16 @@ pub fn stub_state() -> AppState {
     let consumption = Arc::new(NoopConsumptionRecords);
     let products = Arc::new(NoopProducts);
     let targets = Arc::new(NoopNutritionTargets);
+    let stock = mmp_core::services::StockService::new(
+        Arc::new(NoopStock),
+        Arc::new(NoopProducts),
+        Arc::new(NoopIngredients),
+        Arc::new(NoopMealPlans),
+        Arc::new(NoopRecipes),
+        Arc::new(NoopMembers),
+        Arc::new(NoopHouseholdSettings),
+        Arc::new(SystemClock),
+    );
 
     AppState::new(
         mmp_core::services::CatalogueService::new(
@@ -105,14 +116,14 @@ pub fn stub_state() -> AppState {
             Arc::new(NoopIngredients),
             Arc::new(SystemClock),
         ),
-        mmp_core::services::StockService::new(
-            Arc::new(NoopStock),
-            Arc::new(NoopProducts),
+        stock.clone(),
+        mmp_core::services::ShoppingService::new(
+            Arc::new(NoopShoppingCadence),
+            Arc::new(NoopShoppingOpportunities),
+            Arc::new(NoopPurchases),
             Arc::new(NoopIngredients),
-            Arc::new(NoopMealPlans),
-            Arc::new(NoopRecipes),
-            Arc::new(NoopMembers),
-            Arc::new(NoopHouseholdSettings),
+            Arc::new(NoopProducts),
+            stock,
             Arc::new(SystemClock),
         ),
         Arc::new(crate::auth::DevBasicAuthProvider::new(household, "")),
@@ -645,5 +656,100 @@ impl mmp_core::ports::AccessGrantRepository for NoopGrants {
         _: mmp_core::domain::AccessScope,
     ) -> mmp_core::Result<bool> {
         Ok(false)
+    }
+}
+
+struct NoopShoppingCadence;
+
+#[async_trait::async_trait]
+impl mmp_core::ports::ShoppingCadenceRepository for NoopShoppingCadence {
+    async fn get(&self) -> mmp_core::Result<Option<mmp_core::domain::ShoppingCadence>> {
+        Ok(None)
+    }
+
+    async fn set(&self, _: &mmp_core::domain::ShoppingCadence) -> mmp_core::Result<()> {
+        Ok(())
+    }
+
+    async fn clear(&self) -> mmp_core::Result<()> {
+        Ok(())
+    }
+}
+
+struct NoopShoppingOpportunities;
+
+#[async_trait::async_trait]
+impl mmp_core::ports::ShoppingOpportunityRepository for NoopShoppingOpportunities {
+    async fn get(
+        &self,
+        _: mmp_core::domain::ShoppingOpportunityId,
+    ) -> mmp_core::Result<Option<mmp_core::domain::OpportunityException>> {
+        Ok(None)
+    }
+
+    async fn list_in_range(
+        &self,
+        _: time::Date,
+        _: time::Date,
+    ) -> mmp_core::Result<Vec<mmp_core::domain::OpportunityException>> {
+        Ok(Vec::new())
+    }
+
+    async fn find_for_occurrence(
+        &self,
+        _: time::Date,
+    ) -> mmp_core::Result<Option<mmp_core::domain::OpportunityException>> {
+        Ok(None)
+    }
+
+    async fn upsert(&self, _: &mmp_core::domain::OpportunityException) -> mmp_core::Result<()> {
+        Ok(())
+    }
+
+    async fn delete(
+        &self,
+        _: mmp_core::domain::ShoppingOpportunityId,
+    ) -> mmp_core::Result<mmp_core::ports::UpdateOutcome> {
+        Ok(mmp_core::ports::UpdateOutcome::NotFound)
+    }
+}
+
+struct NoopPurchases;
+
+#[async_trait::async_trait]
+impl mmp_core::ports::PurchaseRepository for NoopPurchases {
+    async fn get(
+        &self,
+        _: mmp_core::domain::PurchaseId,
+    ) -> mmp_core::Result<Option<mmp_core::domain::Purchase>> {
+        Ok(None)
+    }
+
+    async fn list(
+        &self,
+        query: &mmp_core::ports::PurchaseQuery,
+    ) -> mmp_core::Result<mmp_core::ports::Paginated<mmp_core::domain::Purchase>> {
+        Ok(mmp_core::ports::Paginated::new(Vec::new(), 0, query.page))
+    }
+
+    async fn list_open(&self) -> mmp_core::Result<Vec<mmp_core::domain::Purchase>> {
+        Ok(Vec::new())
+    }
+
+    async fn insert(
+        &self,
+        _: &mmp_core::domain::Purchase,
+        _: Option<&mmp_core::ports::NewStockFromPurchase>,
+    ) -> mmp_core::Result<()> {
+        Ok(())
+    }
+
+    async fn update(
+        &self,
+        _: &mmp_core::domain::Purchase,
+        _: mmp_core::domain::Revision,
+        _: Option<&mmp_core::ports::NewStockFromPurchase>,
+    ) -> mmp_core::Result<mmp_core::ports::UpdateOutcome> {
+        Ok(mmp_core::ports::UpdateOutcome::NotFound)
     }
 }

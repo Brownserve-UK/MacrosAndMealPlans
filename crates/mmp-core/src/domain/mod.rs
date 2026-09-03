@@ -1,5 +1,6 @@
 mod access;
 mod consumption;
+mod coverage;
 mod household;
 mod household_settings;
 mod ids;
@@ -13,6 +14,7 @@ mod product;
 mod provenance;
 mod quantity;
 mod recipe;
+mod shopping;
 mod stock;
 
 pub use access::{AccessScope, Permission, Role, UnknownAccessScope, UnknownRole};
@@ -21,6 +23,7 @@ pub use consumption::{
     NewConsumptionRecord, NutritionQuality, UnknownNutritionQuality, mean_nutrition, nutrition_for,
     recipe_nutrition_for, sum_nutrition,
 };
+pub use coverage::{Coverage, cover};
 pub use household::{
     HouseholdMember, HouseholdMemberPatch, MAX_USERNAME_LEN, MIN_USERNAME_LEN, MemberAccessGrant,
     NewHouseholdMember, NewUser, User, UserPatch,
@@ -32,8 +35,8 @@ pub use household_settings::{
 pub use ids::{ConsumptionRecordId, HouseholdMemberId, IngredientId, ProductId, Revision, UserId};
 pub use ids::{
     MealGuestAllocationId, MealGuestGroupId, MealParticipantAllocationId, MealParticipantId,
-    MealPlanComponentId, MealPlanEntryId, NutritionTargetId, RecipeComponentId, RecipeId,
-    RecipeInstructionId, StockEffectId, StockEventId, StockItemId,
+    MealPlanComponentId, MealPlanEntryId, NutritionTargetId, PurchaseId, RecipeComponentId,
+    RecipeId, RecipeInstructionId, ShoppingOpportunityId, StockEffectId, StockEventId, StockItemId,
 };
 pub use ingredient::{
     Ingredient, IngredientPatch, IngredientSummary, MAX_NAME_LEN, NewIngredient, validate_name,
@@ -72,13 +75,20 @@ pub use recipe::{
     normalise_optional_text, normalise_tags, normalise_unique, recipe_nutrition,
     recipe_nutrition_detailed,
 };
+pub use shopping::{
+    Assignment, Certainty, ExceptionState, NewPurchase, NewShoppingCadence, OpportunityException,
+    OpportunityState, Purchase, PurchasePatch, PurchaseState, ShoppingCadence, ShoppingOpportunity,
+    ShoppingRequirement, ShoppingSection, SuggestionReason, UnknownExceptionState,
+    UnknownOpportunityState, UnknownPurchaseState, UnknownShoppingSection, assign,
+    expand_opportunities, week_day_from_number, week_day_number,
+};
 pub use stock::{
     AppliedDelta, Availability, AvailabilityReport, Confidence, DeductionPlan, DeductionTarget,
-    DemandClaim, DemandGap, DemandSubject, IngredientAvailability, NewStockEffect, NewStockEvent,
-    NewStockItem, PlannedTake, ProductAvailability, ReleasePlan, Shortfall, SourceDate,
-    SourceDateKind, StockEffect, StockEffectSource, StockEffectState, StockEvent, StockEventKind,
-    StockEventSource, StockItem, StockItemPatch, StockLevel, StockOutcome, StorageLocation,
-    TrackingMode, UnknownSourceDateKind, UnknownStockEffectSource, UnknownStockEffectState,
-    UnknownStockEventKind, UnknownStorageLocation, UnknownTrackingMode, UsabilityDeadline,
-    apply_take, plan_deduction, plan_release,
+    DemandClaim, DemandGap, DemandSubject, IngredientAvailability, MissingStock, NewStockEffect,
+    NewStockEvent, NewStockItem, PlannedTake, ProductAvailability, ReleasePlan, Shortfall,
+    SourceDate, SourceDateKind, StockEffect, StockEffectSource, StockEffectState, StockEvent,
+    StockEventKind, StockEventSource, StockItem, StockItemPatch, StockLevel, StockOutcome,
+    StorageLocation, TrackingMode, UnknownSourceDateKind, UnknownStockEffectSource,
+    UnknownStockEffectState, UnknownStockEventKind, UnknownStorageLocation, UnknownTrackingMode,
+    UsabilityDeadline, apply_take, plan_deduction, plan_release,
 };

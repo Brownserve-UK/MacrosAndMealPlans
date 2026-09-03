@@ -21,6 +21,7 @@ use utoipa::{Modify, OpenApi};
         (name = "nutrition-targets", description = "Per-member calorie, macro and dietary targets"),
         (name = "recipes", description = "Reusable multi-component recipes with derived nutrition"),
         (name = "stock", description = "Physical household stock and its availability against plans"),
+        (name = "shopping", description = "What needs buying, when the household shops, and what they bought"),
     ),
     components(schemas(
         crate::dto::SortDirectionDto,

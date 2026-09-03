@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use mmp_core::services::{
     CatalogueService, DiaryService, HouseholdService, HouseholdSettingsService, MealPlanService,
-    NutritionTargetService, RecipeService, StockService,
+    NutritionTargetService, RecipeService, ShoppingService, StockService,
 };
 
 use crate::auth::AuthProvider;
@@ -17,6 +17,7 @@ pub struct AppState {
     pub nutrition_targets: NutritionTargetService,
     pub recipes: RecipeService,
     pub stock: StockService,
+    pub shopping: ShoppingService,
     pub auth: Arc<dyn AuthProvider>,
 }
 
@@ -31,6 +32,7 @@ impl AppState {
         nutrition_targets: NutritionTargetService,
         recipes: RecipeService,
         stock: StockService,
+        shopping: ShoppingService,
         auth: Arc<dyn AuthProvider>,
     ) -> Self {
         Self {
@@ -42,6 +44,7 @@ impl AppState {
             nutrition_targets,
             recipes,
             stock,
+            shopping,
             auth,
         }
     }

@@ -12,6 +12,8 @@ pub enum Permission {
     StockRead,
     StockWrite,
     StockHistory,
+    ShoppingRead,
+    ShoppingWrite,
 }
 
 impl Permission {
@@ -26,6 +28,8 @@ impl Permission {
             Permission::StockRead => "stock:read",
             Permission::StockWrite => "stock:write",
             Permission::StockHistory => "stock:history",
+            Permission::ShoppingRead => "shopping:read",
+            Permission::ShoppingWrite => "shopping:write",
         }
     }
 }
@@ -68,6 +72,8 @@ impl Role {
                 Permission::StockRead,
                 Permission::StockWrite,
                 Permission::StockHistory,
+                Permission::ShoppingRead,
+                Permission::ShoppingWrite,
             ],
             Role::HouseholdManager => &[
                 Permission::CatalogueRead,
@@ -77,6 +83,8 @@ impl Role {
                 Permission::StockRead,
                 Permission::StockWrite,
                 Permission::StockHistory,
+                Permission::ShoppingRead,
+                Permission::ShoppingWrite,
             ],
             Role::BasicUser => &[
                 Permission::CatalogueRead,
@@ -84,6 +92,8 @@ impl Role {
                 Permission::HouseholdRead,
                 Permission::StockRead,
                 Permission::StockWrite,
+                Permission::ShoppingRead,
+                Permission::ShoppingWrite,
             ],
             Role::Nutritionist => &[
                 Permission::CatalogueRead,

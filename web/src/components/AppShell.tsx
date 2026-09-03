@@ -11,6 +11,7 @@ import PeopleIcon from '@mui/icons-material/PeopleOutlined';
 import PersonIcon from '@mui/icons-material/PersonOutlined';
 import RestaurantIcon from '@mui/icons-material/RestaurantOutlined';
 import RestaurantMenuIcon from '@mui/icons-material/RestaurantMenuOutlined';
+import ShoppingCartIcon from '@mui/icons-material/ShoppingCartOutlined';
 import AppBar from '@mui/material/AppBar';
 import Divider from '@mui/material/Divider';
 import Menu from '@mui/material/Menu';
@@ -42,6 +43,12 @@ const NAV = [
   { to: '/products', label: 'Products', icon: <InventoryIcon fontSize="small" />, needs: 'catalogue:read' },
   { to: '/recipes', label: 'Recipes', icon: <RestaurantMenuIcon fontSize="small" />, needs: 'catalogue:read' },
   { to: '/stock', label: 'Stock', icon: <KitchenIcon fontSize="small" />, needs: 'stock:read' },
+  {
+    to: '/shopping',
+    label: 'Shopping',
+    icon: <ShoppingCartIcon fontSize="small" />,
+    needs: 'shopping:read',
+  },
   { to: '/household', label: 'Household', icon: <PeopleIcon fontSize="small" />, needs: 'household:read' },
   { to: '/needs-review', label: 'Needs review', icon: <HelpIcon fontSize="small" />, needs: undefined },
 ] as const;

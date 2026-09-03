@@ -7,6 +7,7 @@ mod meal_plan;
 mod nutrition_target;
 mod recipe;
 mod seed;
+mod shopping;
 mod stock;
 mod stock_effects;
 
@@ -24,5 +25,6 @@ pub use recipe::{
     ResolveRequirement,
 };
 pub use seed::{SeedIngredient, SeedReport};
-pub use stock::StockService;
+pub use shopping::{ShoppingList, ShoppingService};
+pub use stock::{ShoppingSnapshot, StockService};
 pub use stock_effects::{StockAffected, StockOutcomeView};

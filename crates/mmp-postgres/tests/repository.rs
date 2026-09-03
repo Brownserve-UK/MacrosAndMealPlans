@@ -3,25 +3,28 @@
 use mmp_core::CoreError;
 use mmp_core::domain::{
     AccessScope, Assumption, CatalogueOrigin, ConsumedAmount, ConsumptionRecord,
-    ConsumptionRecordId, HouseholdMember, HouseholdMemberId, Ingredient, IngredientId,
-    MealCategory, MealGuestAllocation, MealGuestAllocationId, MealGuestGroup, MealGuestGroupId,
-    MealItemRef, MealParticipant, MealParticipantAllocation, MealParticipantAllocationId,
-    MealParticipantId, MealPlanComponent, MealPlanComponentId, MealPlanComponentSnapshot,
-    MealPlanEntry, MealPlanEntryId, MealPlanScope, MealPlanStatus, MealSlot, MemberAccessGrant,
-    NewStockEvent, NutritionFacts, NutritionGoals, NutritionQuality, NutritionTarget,
-    NutritionTargetId, ParticipantStatus, Portioning, Product, ProductId, Provenance, Quantity,
-    Recipe, RecipeComponent, RecipeComponentId, RecipeId, RecipeInstruction, RecipeInstructionId,
+    ConsumptionRecordId, ExceptionState, HouseholdMember, HouseholdMemberId, Ingredient,
+    IngredientId, MealCategory, MealGuestAllocation, MealGuestAllocationId, MealGuestGroup,
+    MealGuestGroupId, MealItemRef, MealParticipant, MealParticipantAllocation,
+    MealParticipantAllocationId, MealParticipantId, MealPlanComponent, MealPlanComponentId,
+    MealPlanComponentSnapshot, MealPlanEntry, MealPlanEntryId, MealPlanScope, MealPlanStatus,
+    MealSlot, MemberAccessGrant, NewStockEvent, NutritionFacts, NutritionGoals, NutritionQuality,
+    NutritionTarget, NutritionTargetId, OpportunityException, ParticipantStatus, Portioning,
+    Product, ProductId, Provenance, Purchase, PurchaseId, PurchaseState, Quantity, Recipe,
+    RecipeComponent, RecipeComponentId, RecipeId, RecipeInstruction, RecipeInstructionId,
     RecipePhoto, RecipePhotoDerivatives, RecipeRequirement, RecipeVisibility, Revision, Role,
-    StockEventKind, StockItemId, StockLevel, StorageLocation, Unit, User, UserId,
+    ShoppingCadence, ShoppingOpportunityId, StockEventKind, StockItem, StockItemId, StockLevel,
+    StorageLocation, Unit, User, UserId,
 };
-use mmp_core::domain::{DeductionTarget, StockEffectSource};
+use mmp_core::domain::{DeductionTarget, StockEffectSource, StockEventSource};
 use mmp_core::ports::{
     AccessGrantRepository, ConsumptionQuery, ConsumptionRecordRepository,
     HouseholdMemberRepository, HouseholdSettingsRepository, IngredientQuery, IngredientRepository,
     IngredientSort, MealPlanComponentUpdate, MealPlanQuery, MealPlanRepository, MemberQuery,
-    NutritionTargetRepository, PageRequest, ProductQuery, ProductRepository, RecipeQuery,
-    RecipeRepository, SnapshotOp, SortDirection, StockDeduction, StockQuery, StockRepository,
-    StockWrite, UpdateOutcome, UserRepository,
+    NewStockFromPurchase, NutritionTargetRepository, PageRequest, ProductQuery, ProductRepository,
+    PurchaseRepository, RecipeQuery, RecipeRepository, ShoppingCadenceRepository,
+    ShoppingOpportunityRepository, SnapshotOp, SortDirection, StockDeduction, StockQuery,
+    StockRepository, StockWrite, UpdateOutcome, UserRepository,
 };
 
 fn no_stock() -> StockWrite {
@@ -30,13 +33,14 @@ fn no_stock() -> StockWrite {
 use mmp_postgres::{
     PgAccessGrantRepository, PgConsumptionRecordRepository, PgHouseholdMemberRepository,
     PgHouseholdSettingsRepository, PgIngredientRepository, PgMealPlanRepository,
-    PgNutritionTargetRepository, PgProductRepository, PgRecipeRepository, PgStockRepository,
+    PgNutritionTargetRepository, PgProductRepository, PgPurchaseRepository, PgRecipeRepository,
+    PgShoppingCadenceRepository, PgShoppingOpportunityRepository, PgStockRepository,
     PgUserRepository,
 };
 use rust_decimal::Decimal;
 use sqlx::PgPool;
-use time::OffsetDateTime;
 use time::macros::{date, time};
+use time::{Date, OffsetDateTime, Time, Weekday};
 use uuid::Uuid;
 
 fn ingredient(name: &str) -> Ingredient {
@@ -45,6 +49,8 @@ fn ingredient(name: &str) -> Ingredient {
         id: IngredientId::new(),
         name: name.to_owned(),
         default_unit: Unit::Gram,
+        shopping_section: None,
+        track_stock: None,
         provenance: Provenance::local(),
         revision: Revision::INITIAL,
         created_at: now,
@@ -62,6 +68,7 @@ fn product(name: &str) -> Product {
         barcode: None,
         retailer: None,
         shopping_section: None,
+        track_stock: None,
         package_quantity: None,
         servings_per_pack: None,
         mapped_ingredient_id: None,
@@ -3078,4 +3085,266 @@ async fn ingredients_sort_by_date_added_and_by_product_count(pool: PgPool) {
 
     let a_to_z = ingredients.list(&IngredientQuery::default()).await.unwrap();
     assert_eq!(names(&a_to_z), ["Coriander", "Plain Flour", "Whole Milk"]);
+}
+
+fn cadence(interval_weeks: u8, days: Vec<Weekday>) -> ShoppingCadence {
+    let now = OffsetDateTime::now_utc();
+    ShoppingCadence {
+        interval_weeks,
+        days,
+        anchor: date!(2026 - 08 - 31),
+        usual_time: Time::from_hms(10, 0, 0).ok(),
+        revision: Revision::INITIAL,
+        created_at: now,
+        updated_at: now,
+    }
+}
+
+fn exception(
+    state: ExceptionState,
+    generated_for: Option<Date>,
+    effective_date: Option<Date>,
+) -> OpportunityException {
+    let now = OffsetDateTime::now_utc();
+    OpportunityException {
+        id: ShoppingOpportunityId::new(),
+        generated_for,
+        effective_date,
+        usual_time: None,
+        state,
+        note: None,
+        revision: Revision::INITIAL,
+        created_at: now,
+        updated_at: now,
+    }
+}
+
+#[sqlx::test]
+async fn the_shopping_cadence_is_a_singleton_that_replaces_itself(pool: PgPool) {
+    let repo = PgShoppingCadenceRepository::new(pool);
+
+    assert!(repo.get().await.unwrap().is_none());
+
+    repo.set(&cadence(1, vec![Weekday::Wednesday, Weekday::Saturday]))
+        .await
+        .unwrap();
+    let loaded = repo.get().await.unwrap().expect("a cadence is stored");
+    assert_eq!(loaded.days, vec![Weekday::Wednesday, Weekday::Saturday]);
+
+    repo.set(&cadence(2, vec![Weekday::Friday])).await.unwrap();
+    let loaded = repo.get().await.unwrap().expect("a cadence is stored");
+    assert_eq!(loaded.interval_weeks, 2);
+    assert_eq!(loaded.days, vec![Weekday::Friday]);
+
+    repo.clear().await.unwrap();
+    assert!(repo.get().await.unwrap().is_none());
+}
+
+#[sqlx::test]
+async fn an_occurrence_can_only_carry_one_exception(pool: PgPool) {
+    let repo = PgShoppingOpportunityRepository::new(pool);
+    let occurrence = date!(2026 - 09 - 05);
+
+    repo.upsert(&exception(
+        ExceptionState::Moved,
+        Some(occurrence),
+        Some(date!(2026 - 09 - 03)),
+    ))
+    .await
+    .unwrap();
+
+    let clash = exception(ExceptionState::Skipped, Some(occurrence), None);
+    let error = repo.upsert(&clash).await.unwrap_err();
+    assert!(
+        matches!(error, CoreError::Duplicate { .. }),
+        "expected a duplicate, got {error:?}"
+    );
+
+    let found = repo
+        .find_for_occurrence(occurrence)
+        .await
+        .unwrap()
+        .expect("the move is stored");
+    assert_eq!(found.effective_date, Some(date!(2026 - 09 - 03)));
+
+    let in_range = repo.list_in_range(occurrence, occurrence).await.unwrap();
+    assert_eq!(in_range.len(), 1);
+}
+
+#[sqlx::test]
+async fn a_purchase_and_the_stock_it_creates_land_together(pool: PgPool) {
+    let users = PgUserRepository::new(pool.clone());
+    let ingredients = PgIngredientRepository::new(pool.clone());
+    let products = PgProductRepository::new(pool.clone());
+    let stock = PgStockRepository::new(pool.clone());
+    let purchases = PgPurchaseRepository::new(pool.clone());
+
+    let actor = user("buyer", vec![Role::Admin]);
+    users.insert(&actor).await.unwrap();
+    let milk = ingredient("Whole Milk");
+    ingredients.insert(&milk).await.unwrap();
+    let mut bottle = product("Sample Whole Milk");
+    bottle.mapped_ingredient_id = Some(milk.id);
+    products.insert(&bottle).await.unwrap();
+
+    let now = OffsetDateTime::now_utc();
+    let item = StockItem {
+        id: StockItemId::new(),
+        product_id: bottle.id,
+        level: StockLevel::Exact {
+            quantity: Quantity::new(Decimal::new(2000, 0), Unit::Millilitre),
+        },
+        storage_location: StorageLocation::Chilled,
+        source_date: None,
+        usability_deadline: None,
+        note: None,
+        revision: Revision::INITIAL,
+        created_at: now,
+        updated_at: now,
+        archived_at: None,
+    };
+    let event = NewStockEvent {
+        kind: StockEventKind::Added,
+        quantity_delta: item.level.conservative_quantity(),
+        actor_user_id: Some(actor.id),
+        subject_member_id: None,
+        source: Some(StockEventSource {
+            kind: StockEffectSource::Purchase,
+            id: Uuid::now_v7(),
+            label: "Purchase".to_owned(),
+        }),
+        reverses_event_id: None,
+        note: None,
+    };
+
+    let purchase = Purchase {
+        id: PurchaseId::new(),
+        ingredient_id: Some(milk.id),
+        product_id: Some(bottle.id),
+        quantity: item.level.conservative_quantity(),
+        opportunity_date: Some(date!(2026 - 09 - 05)),
+        state: PurchaseState::Reconciled,
+        stock_item_id: Some(item.id),
+        purchased_at: now,
+        actor_user_id: actor.id,
+        note: None,
+        revision: Revision::INITIAL,
+        created_at: now,
+        updated_at: now,
+    };
+
+    purchases
+        .insert(
+            &purchase,
+            Some(&NewStockFromPurchase {
+                item: item.clone(),
+                event,
+            }),
+        )
+        .await
+        .unwrap();
+
+    let stored = purchases.get(purchase.id).await.unwrap().expect("stored");
+    assert_eq!(stored.state, PurchaseState::Reconciled);
+    assert_eq!(stored.stock_item_id, Some(item.id));
+    assert!(stock.get(item.id).await.unwrap().is_some());
+
+    let events = stock.list_events(item.id).await.unwrap();
+    assert_eq!(events.len(), 1);
+}
+
+#[sqlx::test]
+async fn a_pending_purchase_creates_no_stock_at_all(pool: PgPool) {
+    let users = PgUserRepository::new(pool.clone());
+    let ingredients = PgIngredientRepository::new(pool.clone());
+    let purchases = PgPurchaseRepository::new(pool.clone());
+
+    let actor = user("buyer", vec![Role::Admin]);
+    users.insert(&actor).await.unwrap();
+    let milk = ingredient("Whole Milk");
+    ingredients.insert(&milk).await.unwrap();
+
+    let now = OffsetDateTime::now_utc();
+    let purchase = Purchase {
+        id: PurchaseId::new(),
+        ingredient_id: Some(milk.id),
+        product_id: None,
+        quantity: None,
+        opportunity_date: None,
+        state: PurchaseState::Pending,
+        stock_item_id: None,
+        purchased_at: now,
+        actor_user_id: actor.id,
+        note: Some("forgot to look at the pack".to_owned()),
+        revision: Revision::INITIAL,
+        created_at: now,
+        updated_at: now,
+    };
+    purchases.insert(&purchase, None).await.unwrap();
+
+    let open = purchases.list_open().await.unwrap();
+    assert_eq!(open.len(), 1);
+    assert_eq!(open[0].state, PurchaseState::Pending);
+    assert_eq!(open[0].quantity, None);
+}
+
+#[sqlx::test]
+async fn stock_tracking_round_trips_on_both_catalogue_tables(pool: PgPool) {
+    let ingredients = PgIngredientRepository::new(pool.clone());
+    let products = PgProductRepository::new(pool);
+
+    let mut staple = ingredient("Paprika");
+    staple.track_stock = Some(false);
+    let mut tracked = ingredient("Apples");
+    tracked.track_stock = Some(true);
+    let unanswered = ingredient("Rice");
+    for row in [&staple, &tracked, &unanswered] {
+        ingredients.insert(row).await.unwrap();
+    }
+
+    assert_eq!(
+        ingredients
+            .get(staple.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .track_stock,
+        Some(false)
+    );
+    assert_eq!(
+        ingredients
+            .get(tracked.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .track_stock,
+        Some(true)
+    );
+    assert_eq!(
+        ingredients
+            .get(unanswered.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .track_stock,
+        None
+    );
+
+    let mut bottle = product("Extra virgin 500ml");
+    bottle.track_stock = Some(true);
+    products.insert(&bottle).await.unwrap();
+    assert_eq!(
+        products.get(bottle.id).await.unwrap().unwrap().track_stock,
+        Some(true)
+    );
+
+    bottle.track_stock = Some(false);
+    let next = bottle.revision.next();
+    let expected = bottle.revision;
+    bottle.revision = next;
+    products.update(&bottle, expected).await.unwrap();
+    assert_eq!(
+        products.get(bottle.id).await.unwrap().unwrap().track_stock,
+        Some(false)
+    );
 }

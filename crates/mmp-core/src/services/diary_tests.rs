@@ -88,6 +88,7 @@ fn seed_product(h: &Harness, nutrition: NutritionFacts) -> Product {
         barcode: None,
         retailer: None,
         shopping_section: None,
+        track_stock: None,
         package_quantity: Some(Quantity::new(Decimal::new(650, 0), Unit::Gram)),
         servings_per_pack: None,
         mapped_ingredient_id: None,

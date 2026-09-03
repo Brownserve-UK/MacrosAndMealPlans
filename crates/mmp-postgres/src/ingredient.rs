@@ -11,7 +11,7 @@ use crate::rows::IngredientRow;
 
 macro_rules! columns {
     () => {
-        "id, name, default_unit, origin, seed_key, source_provider, source_external_id, locally_modified, revision, created_at, updated_at, archived_at"
+        "id, name, default_unit, shopping_section, track_stock, origin, seed_key, source_provider, source_external_id, locally_modified, revision, created_at, updated_at, archived_at"
     };
 }
 
@@ -156,10 +156,11 @@ impl IngredientRepository for PgIngredientRepository {
     async fn insert(&self, ingredient: &Ingredient) -> Result<()> {
         sqlx::query(
             "INSERT INTO ingredient (
-                 id, name, default_unit,
+                 id, name, default_unit, shopping_section,
                  origin, seed_key, source_provider, source_external_id, locally_modified,
+                 track_stock,
                  revision, created_at, updated_at, archived_at
-             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
+             ) VALUES ($1, $2, $3, $13, $4, $5, $6, $7, $8, $14, $9, $10, $11, $12)",
         )
         .bind(ingredient.id.as_uuid())
         .bind(&ingredient.name)
@@ -173,6 +174,8 @@ impl IngredientRepository for PgIngredientRepository {
         .bind(ingredient.created_at)
         .bind(ingredient.updated_at)
         .bind(ingredient.archived_at)
+        .bind(ingredient.shopping_section.map(|s| s.code()))
+        .bind(ingredient.track_stock)
         .execute(&self.pool)
         .await
         .map_err(|e| map_db_error(e, "creating an ingredient"))?;
@@ -182,7 +185,7 @@ impl IngredientRepository for PgIngredientRepository {
     async fn update(&self, ingredient: &Ingredient, expected: Revision) -> Result<UpdateOutcome> {
         let affected = sqlx::query(
             "UPDATE ingredient SET
-                 name = $2, default_unit = $3,
+                 name = $2, default_unit = $3, shopping_section = $13, track_stock = $14,
                  origin = $4, seed_key = $5, source_provider = $6, source_external_id = $7,
                  locally_modified = $8,
                  revision = $9, updated_at = $10, archived_at = $11
@@ -200,6 +203,8 @@ impl IngredientRepository for PgIngredientRepository {
         .bind(ingredient.updated_at)
         .bind(ingredient.archived_at)
         .bind(expected.get())
+        .bind(ingredient.shopping_section.map(|s| s.code()))
+        .bind(ingredient.track_stock)
         .execute(&self.pool)
         .await
         .map_err(|e| map_db_error(e, "updating an ingredient"))?

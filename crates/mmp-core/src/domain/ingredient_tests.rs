@@ -4,6 +4,8 @@ fn new_ingredient(name: &str) -> NewIngredient {
         id: None,
         name: name.to_owned(),
         default_unit: Unit::Gram,
+        shopping_section: None,
+        track_stock: None,
         provenance: Provenance::local(),
     }
 }

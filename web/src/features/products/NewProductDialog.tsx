@@ -22,6 +22,7 @@ function emptyDraft(): ProductDraft {
     barcode: '',
     retailer: '',
     section: '',
+    trackStock: 'default',
     packAmount,
     packUnit,
     servingsPerPack,
@@ -59,6 +60,7 @@ function toBody(draft: ProductDraft, mappedIngredientId?: string) {
       ? { amount: Number(draft.packAmount), unit: draft.packUnit }
       : null,
     servings_per_pack: draft.servingsPerPack.trim() ? Number(draft.servingsPerPack) : null,
+    track_stock: draft.trackStock === 'default' ? null : draft.trackStock === 'yes',
     nutrition: draftToNutrition(draft.nutrition, packContextFrom(draft)),
     mapped_ingredient_id: mappedIngredientId ?? null,
   };

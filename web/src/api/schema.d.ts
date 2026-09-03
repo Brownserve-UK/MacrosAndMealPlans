@@ -692,6 +692,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/purchases": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listPurchases"];
+        put?: never;
+        post: operations["createPurchase"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/purchases/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch: operations["updatePurchase"];
+        trace?: never;
+    };
     "/api/v1/recipes": {
         parameters: {
             query?: never;
@@ -830,6 +862,70 @@ export interface paths {
         get?: never;
         put?: never;
         post: operations["unarchiveRecipe"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/shopping/cadence": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getShoppingCadence"];
+        put: operations["setShoppingCadence"];
+        post?: never;
+        delete: operations["clearShoppingCadence"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/shopping/opportunities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listShoppingOpportunities"];
+        put?: never;
+        post: operations["createShoppingOpportunity"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/shopping/opportunities/{date}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["moveShoppingOpportunity"];
+        post?: never;
+        delete: operations["skipShoppingOpportunity"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/shopping/requirements": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getShoppingRequirements"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1056,6 +1152,18 @@ export interface components {
             unit?: string | null;
             value: string;
         };
+        AssignmentDto: {
+            /** Format: date */
+            date: string;
+            /** @enum {string} */
+            kind: "opportunity";
+        } | {
+            /** @enum {string} */
+            kind: "needs_earlier_opportunity";
+        } | {
+            /** @enum {string} */
+            kind: "unassigned";
+        };
         AvailabilityDto: {
             confidence: components["schemas"]["ConfidenceDto"];
             on_hand: components["schemas"]["QuantityDto"];
@@ -1081,6 +1189,14 @@ export interface components {
         };
         /** @enum {string} */
         CatalogueOrigin: "seeded" | "local" | "external";
+        CertaintyDto: {
+            /** @enum {string} */
+            kind: "definite";
+        } | {
+            /** @enum {string} */
+            kind: "suggested";
+            reason: components["schemas"]["SuggestionReasonDto"];
+        };
         /** @enum {string} */
         ComponentNutritionSource: "known" | "estimated" | "none";
         ComponentPreparationDto: {
@@ -1141,6 +1257,8 @@ export interface components {
             id?: string | null;
             /** @example Whole Milk */
             name: string;
+            shopping_section?: null | components["schemas"]["ShoppingSection"];
+            track_stock?: boolean | null;
         };
         CreateMealPlanEntryRequest: {
             components: components["schemas"]["MealPlanComponentRequest"][];
@@ -1173,6 +1291,14 @@ export interface components {
              */
             effective_from: string;
         };
+        CreateOpportunityRequest: {
+            /**
+             * Format: date
+             * @example 2026-09-02
+             */
+            date: string;
+            note?: string | null;
+        };
         CreateProductRequest: {
             barcode?: string | null;
             brand?: string | null;
@@ -1188,6 +1314,17 @@ export interface components {
             /** Format: int32 */
             servings_per_pack?: number | null;
             shopping_section?: string | null;
+            track_stock?: boolean | null;
+        };
+        CreatePurchaseRequest: {
+            /** Format: uuid */
+            ingredient_id?: string | null;
+            note?: string | null;
+            /** Format: date */
+            opportunity_date?: string | null;
+            /** Format: uuid */
+            product_id?: string | null;
+            quantity?: null | components["schemas"]["QuantityDto"];
         };
         CreateRecipeRequest: {
             components: components["schemas"]["RecipeComponentRequest"][];
@@ -1238,6 +1375,8 @@ export interface components {
             unknown_count: number;
         };
         DemandClaimDto: {
+            /** @description The meal is past its time but nobody has said what happened. */
+            assumed: boolean;
             /** Format: uuid */
             entry_id: string;
             /** Format: date */
@@ -1341,6 +1480,8 @@ export interface components {
              * @example 1
              */
             revision: number;
+            shopping_section?: null | components["schemas"]["ShoppingSection"];
+            track_stock?: boolean | null;
             /** Format: date-time */
             updated_at: string;
         };
@@ -1604,6 +1745,13 @@ export interface components {
         };
         /** @enum {string} */
         MissingStockInterpretationDto: "absent" | "unknown";
+        MoveOpportunityRequest: {
+            /**
+             * Format: date
+             * @example 2026-09-10
+             */
+            to: string;
+        };
         NeedsReviewDto: {
             household_meals: components["schemas"]["MealPlanEntryDto"][];
             ingredient_mappings: components["schemas"]["IngredientMappingReviewDto"][];
@@ -1681,6 +1829,8 @@ export interface components {
             /** Format: date-time */
             updated_at: string;
         };
+        /** @enum {string} */
+        OpportunityStateDto: "normal" | "moved" | "one_off";
         PageMeta: {
             /**
              * Format: int32
@@ -1817,6 +1967,7 @@ export interface components {
              */
             servings_per_pack?: number | null;
             shopping_section?: string | null;
+            track_stock?: boolean | null;
             /** Format: date-time */
             updated_at: string;
         };
@@ -1846,6 +1997,31 @@ export interface components {
             source_external_id?: string | null;
             source_provider?: string | null;
         };
+        PurchaseDto: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            ingredient_id?: string | null;
+            note?: string | null;
+            /** Format: date */
+            opportunity_date?: string | null;
+            /** Format: uuid */
+            product_id?: string | null;
+            /** Format: date-time */
+            purchased_at: string;
+            quantity?: null | components["schemas"]["QuantityDto"];
+            /** Format: int64 */
+            revision: number;
+            state: components["schemas"]["PurchaseStateDto"];
+            /** Format: uuid */
+            stock_item_id?: string | null;
+        };
+        PurchasePage: {
+            items: components["schemas"]["PurchaseDto"][];
+            page: components["schemas"]["PageMeta"];
+        };
+        /** @enum {string} */
+        PurchaseStateDto: "pending" | "reconciled" | "cancelled";
         QuantityDto: {
             /**
              * Format: double
@@ -2049,6 +2225,90 @@ export interface components {
         SetRolesRequest: {
             roles: components["schemas"]["Role"][];
         };
+        SetShoppingCadenceRequest: {
+            /**
+             * Format: date
+             * @example 2026-08-31
+             */
+            anchor: string;
+            /**
+             * @example [
+             *       3,
+             *       6
+             *     ]
+             */
+            days: number[];
+            /**
+             * Format: int32
+             * @example 1
+             */
+            interval_weeks: number;
+            usual_time?: string | null;
+        };
+        ShoppingCadenceDto: {
+            /**
+             * Format: date
+             * @example 2026-08-31
+             */
+            anchor: string;
+            /** Format: date-time */
+            created_at: string;
+            /**
+             * @example [
+             *       3,
+             *       6
+             *     ]
+             */
+            days: number[];
+            /**
+             * Format: int32
+             * @example 1
+             */
+            interval_weeks: number;
+            /** Format: int64 */
+            revision: number;
+            /** Format: date-time */
+            updated_at: string;
+            usual_time?: string | null;
+        };
+        ShoppingListDto: {
+            cadence_configured: boolean;
+            /** Format: date */
+            focus?: string | null;
+            opportunities: components["schemas"]["ShoppingOpportunityDto"][];
+            requirements: components["schemas"]["ShoppingRequirementDto"][];
+        };
+        ShoppingOpportunityDto: {
+            /**
+             * Format: date
+             * @example 2026-09-05
+             */
+            date: string;
+            /** Format: date */
+            generated_for?: string | null;
+            /** Format: uuid */
+            id?: string | null;
+            note?: string | null;
+            state: components["schemas"]["OpportunityStateDto"];
+            usual_time?: string | null;
+        };
+        ShoppingRequirementDto: {
+            assignment: components["schemas"]["AssignmentDto"];
+            certainty: components["schemas"]["CertaintyDto"];
+            claims: components["schemas"]["DemandClaimDto"][];
+            gaps?: components["schemas"]["DemandGapDto"][];
+            name: string;
+            purchase?: null | components["schemas"]["PurchaseDto"];
+            quantity?: null | components["schemas"]["QuantityDto"];
+            /** Format: date */
+            required_by?: string | null;
+            section: components["schemas"]["ShoppingSection"];
+            subject: components["schemas"]["DemandSubjectDto"];
+            /** Format: date */
+            use_by_at_least?: string | null;
+        };
+        /** @enum {string} */
+        ShoppingSection: "fresh_produce" | "meat_fish" | "dairy" | "bakery" | "frozen" | "ambient" | "drinks" | "household" | "other";
         ShortfallDto: {
             /** @enum {string} */
             state: "covered";
@@ -2152,6 +2412,8 @@ export interface components {
         /** @enum {string} */
         StorageLocationDto: "ambient" | "chilled" | "frozen";
         /** @enum {string} */
+        SuggestionReasonDto: "unknown_availability" | "assumption_only";
+        /** @enum {string} */
         TargetDirectionDto: "at_least" | "at_most" | "around";
         /** @enum {string} */
         TrackingModeDto: "exact" | "estimated" | "not_tracked";
@@ -2177,6 +2439,8 @@ export interface components {
         UpdateIngredientRequest: {
             default_unit?: null | components["schemas"]["Unit"];
             name?: string | null;
+            shopping_section?: null | components["schemas"]["ShoppingSection"];
+            track_stock?: boolean | null;
         };
         UpdateMealPlanEntryRequest: {
             components?: components["schemas"]["MealPlanComponentRequest"][] | null;
@@ -2237,6 +2501,14 @@ export interface components {
             /** Format: int32 */
             servings_per_pack?: number | null;
             shopping_section?: string | null;
+            track_stock?: boolean | null;
+        };
+        UpdatePurchaseRequest: {
+            cancelled?: boolean | null;
+            note?: string | null;
+            /** Format: uuid */
+            product_id?: string | null;
+            quantity?: null | components["schemas"]["QuantityDto"];
         };
         UpdateRecipeRequest: {
             components?: components["schemas"]["RecipeComponentRequest"][] | null;
@@ -4335,6 +4607,130 @@ export interface operations {
             };
         };
     };
+    listPurchases: {
+        parameters: {
+            query?: {
+                state?: components["schemas"]["PurchaseStateDto"];
+                opportunity_date?: string;
+                page?: number;
+                per_page?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of purchases */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PurchasePage"];
+                };
+            };
+        };
+    };
+    createPurchase: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreatePurchaseRequest"];
+            };
+        };
+        responses: {
+            /** @description Recorded */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PurchaseDto"];
+                };
+            };
+            /** @description The product does not exist */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    updatePurchase: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The revision being updated */
+                "If-Match": string;
+            };
+            path: {
+                /** @description The purchase */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdatePurchaseRequest"];
+            };
+        };
+        responses: {
+            /** @description Updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PurchaseDto"];
+                };
+            };
+            /** @description No such purchase */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Already in stock */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     listRecipes: {
         parameters: {
             query?: {
@@ -4754,6 +5150,235 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RecipeDto"];
+                };
+            };
+        };
+    };
+    getShoppingCadence: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description When the household normally shops */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShoppingCadenceDto"];
+                };
+            };
+            /** @description No cadence is configured */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    setShoppingCadence: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetShoppingCadenceRequest"];
+            };
+        };
+        responses: {
+            /** @description Saved */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShoppingCadenceDto"];
+                };
+            };
+            /** @description Validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    clearShoppingCadence: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Cleared */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No cadence is configured */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    listShoppingOpportunities: {
+        parameters: {
+            query?: {
+                from?: string;
+                to?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Expected shops in the range */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShoppingOpportunityDto"][];
+                };
+            };
+        };
+    };
+    createShoppingOpportunity: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateOpportunityRequest"];
+            };
+        };
+        responses: {
+            /** @description The one-off shop was added */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    moveShoppingOpportunity: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The expected shop being moved, as YYYY-MM-DD */
+                date: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MoveOpportunityRequest"];
+            };
+        };
+        responses: {
+            /** @description The shop was moved */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The date could not be read */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    skipShoppingOpportunity: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The expected shop being skipped, as YYYY-MM-DD */
+                date: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The shop was skipped */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The date could not be read */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    getShoppingRequirements: {
+        parameters: {
+            query?: {
+                opportunity_date?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description What needs buying, and for which shop */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShoppingListDto"];
                 };
             };
         };

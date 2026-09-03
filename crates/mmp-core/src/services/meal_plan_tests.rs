@@ -151,6 +151,7 @@ fn product(name: &str, energy_per_100g: i64) -> Product {
         barcode: None,
         retailer: None,
         shopping_section: None,
+        track_stock: None,
         package_quantity: Some(Quantity::new(Decimal::new(500, 0), Unit::Gram)),
         servings_per_pack: Some(5),
         mapped_ingredient_id: None,

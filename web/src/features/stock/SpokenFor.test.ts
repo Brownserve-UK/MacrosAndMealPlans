@@ -9,6 +9,7 @@ const claim = (amount: number, unit: Unit = 'ml'): DemandClaim => ({
   planned_on: '2026-09-07',
   slot: 'breakfast',
   scope: 'member',
+  assumed: false,
 });
 
 describe('shareSentence', () => {

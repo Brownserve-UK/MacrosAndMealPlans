@@ -89,6 +89,8 @@ entity_id!(RecipeInstructionId, "recipe_instruction");
 entity_id!(StockItemId, "stock_item");
 entity_id!(StockEventId, "stock_event");
 entity_id!(StockEffectId, "stock_effect");
+entity_id!(ShoppingOpportunityId, "shopping_opportunity");
+entity_id!(PurchaseId, "purchase");
 
 // This should give a stable UUID for a seeded resource
 // so a seeded item remains identifiable

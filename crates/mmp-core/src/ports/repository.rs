@@ -8,9 +8,11 @@ use crate::domain::{
     AccessScope, CatalogueOrigin, ConsumptionRecord, ConsumptionRecordId, DeductionTarget,
     HouseholdMember, HouseholdMemberId, HouseholdSettings, Ingredient, IngredientId,
     MealParticipant, MealPlanComponentId, MealPlanComponentSnapshot, MealPlanEntry,
-    MealPlanEntryId, MemberAccessGrant, NewStockEvent, NutritionTarget, NutritionTargetId, Product,
-    ProductId, Quantity, Recipe, RecipeId, RecipePhoto, RecipeSummary, Revision, Role, StockEffect,
-    StockEffectSource, StockEvent, StockItem, StockItemId, StockOutcome, User, UserId,
+    MealPlanEntryId, MemberAccessGrant, NewStockEvent, NutritionTarget, NutritionTargetId,
+    OpportunityException, Product, ProductId, Purchase, PurchaseId, PurchaseState, Quantity,
+    Recipe, RecipeId, RecipePhoto, RecipeSummary, Revision, Role, ShoppingCadence,
+    ShoppingOpportunityId, StockEffect, StockEffectSource, StockEvent, StockItem, StockItemId,
+    StockOutcome, User, UserId,
 };
 use crate::error::Result;
 
@@ -459,4 +461,62 @@ pub trait NutritionTargetRepository: Send + Sync + 'static {
     async fn update(&self, target: &NutritionTarget, expected: Revision) -> Result<UpdateOutcome>;
 
     async fn delete(&self, id: NutritionTargetId, expected: Revision) -> Result<UpdateOutcome>;
+}
+
+#[async_trait]
+pub trait ShoppingCadenceRepository: Send + Sync + 'static {
+    async fn get(&self) -> Result<Option<ShoppingCadence>>;
+
+    async fn set(&self, cadence: &ShoppingCadence) -> Result<()>;
+
+    async fn clear(&self) -> Result<()>;
+}
+
+#[async_trait]
+pub trait ShoppingOpportunityRepository: Send + Sync + 'static {
+    async fn get(&self, id: ShoppingOpportunityId) -> Result<Option<OpportunityException>>;
+
+    async fn list_in_range(&self, from: Date, to: Date) -> Result<Vec<OpportunityException>>;
+
+    async fn find_for_occurrence(
+        &self,
+        generated_for: Date,
+    ) -> Result<Option<OpportunityException>>;
+
+    async fn upsert(&self, exception: &OpportunityException) -> Result<()>;
+
+    async fn delete(&self, id: ShoppingOpportunityId) -> Result<UpdateOutcome>;
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct PurchaseQuery {
+    pub state: Option<PurchaseState>,
+    pub opportunity_date: Option<Date>,
+    pub page: PageRequest,
+    pub sort: SortDirection,
+}
+
+#[async_trait]
+pub trait PurchaseRepository: Send + Sync + 'static {
+    async fn get(&self, id: PurchaseId) -> Result<Option<Purchase>>;
+
+    async fn list(&self, query: &PurchaseQuery) -> Result<Paginated<Purchase>>;
+
+    async fn list_open(&self) -> Result<Vec<Purchase>>;
+
+    async fn insert(&self, purchase: &Purchase, stock: Option<&NewStockFromPurchase>)
+    -> Result<()>;
+
+    async fn update(
+        &self,
+        purchase: &Purchase,
+        expected: Revision,
+        stock: Option<&NewStockFromPurchase>,
+    ) -> Result<UpdateOutcome>;
+}
+
+#[derive(Debug, Clone)]
+pub struct NewStockFromPurchase {
+    pub item: StockItem,
+    pub event: NewStockEvent,
 }

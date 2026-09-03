@@ -62,6 +62,14 @@ export type AvailabilityReport = components['schemas']['AvailabilityReportDto'];
 export type Availability = components['schemas']['AvailabilityDto'];
 export type DemandClaim = components['schemas']['DemandClaimDto'];
 export type DemandGap = components['schemas']['DemandGapDto'];
+export type ShoppingList = components['schemas']['ShoppingListDto'];
+export type ShoppingRequirement = components['schemas']['ShoppingRequirementDto'];
+export type ShoppingOpportunity = components['schemas']['ShoppingOpportunityDto'];
+export type ShoppingCadence = components['schemas']['ShoppingCadenceDto'];
+export type ShoppingSection = components['schemas']['ShoppingSection'];
+export type Purchase = components['schemas']['PurchaseDto'];
+export type Certainty = components['schemas']['CertaintyDto'];
+export type Assignment = components['schemas']['AssignmentDto'];
 
 const CREDENTIAL_KEY = 'mmp.credential';
 

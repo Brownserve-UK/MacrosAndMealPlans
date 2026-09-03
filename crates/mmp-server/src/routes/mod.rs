@@ -9,6 +9,7 @@ pub mod products;
 pub mod recipes;
 pub mod review;
 pub mod settings;
+pub mod shopping;
 pub mod stock;
 pub mod users;
 

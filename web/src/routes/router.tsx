@@ -21,6 +21,9 @@ import { RecipePage } from '../features/recipes/RecipePage';
 import { EditRecipePage, NewRecipePage } from '../features/recipes/RecipeFormPage';
 import { RecipesPage } from '../features/recipes/RecipesPage';
 import { ProfilePage } from '../features/profile/ProfilePage';
+import { ShopModePage } from '../features/shopping/ShopModePage';
+import { ShoppingPage } from '../features/shopping/ShoppingPage';
+import { ShoppingSettingsPage } from '../features/shopping/ShoppingSettingsPage';
 import { StockPage } from '../features/stock/StockPage';
 import { StockItemPage } from '../features/stock/StockItemPage';
 import { ProductStockPage } from '../features/stock/ProductStockPage';
@@ -257,6 +260,30 @@ const mealTimesRoute = createRoute({
   component: MealTimesPage,
 });
 
+const shoppingRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/shopping',
+  component: ShoppingPage,
+});
+
+const shopModeRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/shopping/shop',
+  component: ShopModePage,
+});
+
+const shoppingSettingsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/administration/shopping',
+  component: function ShoppingSettings() {
+    return (
+      <RequirePermission permission="household:write">
+        <ShoppingSettingsPage />
+      </RequirePermission>
+    );
+  },
+});
+
 const profileRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/profile',
@@ -292,6 +319,9 @@ const routeTree = rootRoute.addChildren([
   administrationRoute,
   accountsRoute,
   mealTimesRoute,
+  shoppingRoute,
+  shopModeRoute,
+  shoppingSettingsRoute,
   profileRoute,
 ]);
 

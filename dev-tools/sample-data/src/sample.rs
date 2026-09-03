@@ -9,14 +9,15 @@ use mmp_core::domain::{
     IngredientId, MealCategory, MealItemRef, MealPlanEntryId, MealPlanScope, MealPlanStatus,
     MealSlot, NewConsumptionRecord, NewHouseholdMember, NewMealGuestAllocation, NewMealGuestGroup,
     NewMealParticipant, NewMealParticipantAllocation, NewMealPlanComponent, NewMealPlanEntry,
-    NewNutritionTarget, NewProduct, NewRecipe, NewRecipeComponent, NewRecipeInstruction,
-    NewStockItem, NewUser, NutritionFacts, NutritionGoals, OutcomeActor, Patch, ProductId,
-    Provenance, Quantity, RecipeId, RecipePatch, RecipeRequirement, Role, SourceDate,
-    SourceDateKind, StockLevel, StorageLocation, Unit, UsabilityDeadline, User, UserId,
+    NewNutritionTarget, NewProduct, NewPurchase, NewRecipe, NewRecipeComponent,
+    NewRecipeInstruction, NewShoppingCadence, NewStockItem, NewUser, NutritionFacts,
+    NutritionGoals, OutcomeActor, Patch, ProductId, Provenance, Quantity, RecipeId, RecipePatch,
+    RecipeRequirement, Role, ShoppingSection, SourceDate, SourceDateKind, StockLevel,
+    StorageLocation, Unit, UsabilityDeadline, User, UserId,
 };
 use mmp_server::state::AppState;
 use rust_decimal::Decimal;
-use time::{Date, Duration, PrimitiveDateTime, Time};
+use time::{Date, Duration, PrimitiveDateTime, Time, Weekday};
 use uuid::Uuid;
 
 const SAMPLE_NAMESPACE: Uuid = Uuid::from_u128(0x6d6d_7073_616d_706c_6580_4c2f_923b_8d10);
@@ -62,6 +63,7 @@ pub struct Report {
     pub stock_effects_applied: usize,
     pub household_participants_created: usize,
     pub diary_entries_created: usize,
+    pub shopping_seeded: usize,
 }
 
 struct Loader<'a> {
@@ -94,6 +96,7 @@ struct ProductSpec {
     name: &'static str,
     brand: Option<&'static str>,
     ingredient_key: Option<&'static str>,
+    section: ShoppingSection,
     package_quantity: Option<Quantity>,
     servings_per_pack: Option<i32>,
     nutrition: NutritionFacts,
@@ -276,7 +279,8 @@ impl Loader<'_> {
                     brand: spec.brand.map(str::to_owned),
                     barcode: None,
                     retailer: Some("Sample Supermarket".to_owned()),
-                    shopping_section: Some("Sample data".to_owned()),
+                    shopping_section: Some(spec.section.code().to_owned()),
+                    track_stock: None,
                     package_quantity: spec.package_quantity,
                     servings_per_pack: spec.servings_per_pack,
                     mapped_ingredient_id: spec.ingredient_key.map(IngredientId::seeded),
@@ -545,7 +549,8 @@ impl Loader<'_> {
         self.load_current_partial_week().await?;
         self.load_household_meals().await?;
         self.load_assumed_meals().await?;
-        self.load_pooled_ingredient_demand().await
+        self.load_pooled_ingredient_demand().await?;
+        self.load_shopping().await
     }
 
     async fn load_pooled_ingredient_demand(&mut self) -> anyhow::Result<()> {
@@ -638,6 +643,163 @@ impl Loader<'_> {
             })
             .await?;
         self.report.meals_created += 1;
+        Ok(())
+    }
+
+    async fn load_shopping(&mut self) -> anyhow::Result<()> {
+        let fresh = self.state.shopping.cadence().await?.is_none();
+        if fresh {
+            self.state
+                .shopping
+                .set_cadence(NewShoppingCadence {
+                    interval_weeks: 1,
+                    days: vec![Weekday::Wednesday, Weekday::Saturday],
+                    anchor: self.week_start,
+                    usual_time: Time::from_hms(10, 0, 0).ok(),
+                })
+                .await?;
+            self.report.shopping_seeded += 1;
+        }
+
+        if fresh {
+            let opportunities = self
+                .state
+                .shopping
+                .opportunities(self.today, self.today + Duration::days(28))
+                .await?;
+            let later: Vec<Date> = opportunities
+                .iter()
+                .filter(|opportunity| opportunity.date > self.today + Duration::days(7))
+                .map(|opportunity| opportunity.date)
+                .collect();
+            if let [skip, move_me, ..] = later.as_slice() {
+                self.state.shopping.skip_opportunity(*skip).await?;
+                self.state
+                    .shopping
+                    .move_opportunity(*move_me, *move_me - Duration::days(1))
+                    .await?;
+                self.report.shopping_seeded += 2;
+            }
+        }
+
+        let expiring_note = "goes off before the weekend";
+        let yoghurt = product_id("greek-yoghurt");
+        let already_there = self
+            .state
+            .stock
+            .list(&mmp_core::ports::StockQuery {
+                product_id: Some(yoghurt),
+                ..Default::default()
+            })
+            .await?
+            .items
+            .iter()
+            .any(|item| item.note.as_deref() == Some(expiring_note));
+        if !already_there {
+            self.state
+                .stock
+                .create(
+                    NewStockItem {
+                        product_id: yoghurt,
+                        level: StockLevel::Exact {
+                            quantity: quantity(200, Unit::Gram),
+                        },
+                        storage_location: StorageLocation::Chilled,
+                        source_date: None,
+                        usability_deadline: Some(UsabilityDeadline {
+                            date: self.today + Duration::days(2),
+                            basis: Some("printed on the pack".to_owned()),
+                        }),
+                        note: Some(expiring_note.to_owned()),
+                    },
+                    self.actor.id,
+                    Some(self.member.id),
+                )
+                .await?;
+            self.report.stock_items_created += 1;
+        }
+
+        for (offset, key) in [(1_i64, "yoghurt-early"), (6, "yoghurt-late")] {
+            let d = self.today + Duration::days(offset);
+            self.ensure_timed_snack(
+                d,
+                key,
+                Time::from_hms(16, 0, 0).unwrap(),
+                "greek-yoghurt",
+                measured(200, Unit::Gram),
+            )
+            .await?;
+        }
+
+        for (key, amount, unit) in [
+            ("broccoli", 400, Unit::Gram),
+            ("potato", 600, Unit::Gram),
+            ("chicken-breast", 1200, Unit::Gram),
+            ("rolled-oats", 200, Unit::Gram),
+            ("banana", 3, Unit::Item),
+        ] {
+            let note = format!("part of the week covered: {key}");
+            let product = product_id(key);
+            let held = self
+                .state
+                .stock
+                .list(&mmp_core::ports::StockQuery {
+                    product_id: Some(product),
+                    ..Default::default()
+                })
+                .await?
+                .items
+                .iter()
+                .any(|item| item.note.as_deref() == Some(note.as_str()));
+            if held {
+                continue;
+            }
+            self.state
+                .stock
+                .create(
+                    NewStockItem {
+                        product_id: product,
+                        level: StockLevel::Exact {
+                            quantity: quantity(amount, unit),
+                        },
+                        storage_location: StorageLocation::Ambient,
+                        source_date: None,
+                        usability_deadline: None,
+                        note: Some(note),
+                    },
+                    self.actor.id,
+                    Some(self.member.id),
+                )
+                .await?;
+            self.report.stock_items_created += 1;
+        }
+
+        self.ensure_timed_snack(
+            self.today + Duration::days(2),
+            "paprika-rub",
+            Time::from_hms(19, 0, 0).unwrap(),
+            "smoked-paprika",
+            measured(5, Unit::Gram),
+        )
+        .await?;
+
+        if self.state.shopping.pending_purchases().await?.is_empty() {
+            self.state
+                .shopping
+                .record_purchase(
+                    NewPurchase {
+                        ingredient_id: Some(IngredientId::seeded("salted-butter")),
+                        product_id: None,
+                        quantity: None,
+                        opportunity_date: None,
+                        note: Some("grabbed some, forgot to look at the pack".to_owned()),
+                    },
+                    self.actor.id,
+                )
+                .await?;
+            self.report.shopping_seeded += 1;
+        }
+
         Ok(())
     }
 
@@ -843,8 +1005,8 @@ impl Loader<'_> {
         ) {
             return Ok(());
         }
-        self.report.meals_created += 1;
-        self.state
+        let created = self
+            .state
             .meal_plan
             .create_unchecked(NewMealPlanEntry {
                 id: Some(id),
@@ -859,7 +1021,12 @@ impl Loader<'_> {
                 guest_groups: Vec::new(),
                 actor_id: self.actor.id,
             })
-            .await?;
+            .await;
+        match created {
+            Ok(_) => self.report.meals_created += 1,
+            Err(CoreError::Conflict { .. }) => return Ok(()),
+            Err(other) => return Err(other.into()),
+        }
         Ok(())
     }
 
@@ -924,7 +1091,8 @@ impl Loader<'_> {
                 }],
             })
             .collect();
-        self.state
+        let created = self
+            .state
             .meal_plan
             .create_unchecked(NewMealPlanEntry {
                 id: Some(id),
@@ -954,7 +1122,15 @@ impl Loader<'_> {
                 },
                 actor_id: self.actor.id,
             })
-            .await?;
+            .await;
+        match created {
+            Ok(_) => {}
+            Err(CoreError::Conflict { .. }) => {
+                self.report.meals_created -= 1;
+                return Ok(());
+            }
+            Err(other) => return Err(other.into()),
+        }
         self.report.household_participants_created += allocations.len();
         Ok(())
     }
@@ -1389,10 +1565,21 @@ impl Loader<'_> {
 fn product_specs() -> Vec<ProductSpec> {
     vec![
         ProductSpec {
+            key: "smoked-paprika",
+            name: "Sample Smoked Paprika",
+            brand: Some("Sample Pantry"),
+            ingredient_key: Some("smoked-paprika"),
+            section: ShoppingSection::Ambient,
+            package_quantity: Some(quantity(50, Unit::Gram)),
+            servings_per_pack: None,
+            nutrition: nutrition(100, Unit::Gram, [282, 14, 54, 10, 13, 2, 35, 1, 0]),
+        },
+        ProductSpec {
             key: "rolled-oats",
             name: "Sample Jumbo Oats",
             brand: Some("Sample Pantry"),
             ingredient_key: Some("rolled-oats"),
+            section: ShoppingSection::Ambient,
             package_quantity: Some(quantity(1000, Unit::Gram)),
             servings_per_pack: Some(12),
             nutrition: nutrition(100, Unit::Gram, [389, 17, 66, 1, 7, 1, 11, 0, 0]),
@@ -1402,6 +1589,7 @@ fn product_specs() -> Vec<ProductSpec> {
             name: "Sample Whole Milk",
             brand: Some("Sample Dairy"),
             ingredient_key: Some("whole-milk"),
+            section: ShoppingSection::Dairy,
             package_quantity: Some(quantity(2000, Unit::Millilitre)),
             servings_per_pack: Some(8),
             nutrition: nutrition(100, Unit::Millilitre, [64, 3, 5, 5, 4, 2, 0, 0, 10]),
@@ -1411,6 +1599,7 @@ fn product_specs() -> Vec<ProductSpec> {
             name: "Sample Value Whole Milk",
             brand: Some("Sample Basics"),
             ingredient_key: Some("whole-milk"),
+            section: ShoppingSection::Dairy,
             package_quantity: Some(quantity(1000, Unit::Millilitre)),
             servings_per_pack: Some(4),
             nutrition: nutrition(100, Unit::Millilitre, [61, 3, 5, 5, 3, 2, 0, 0, 11]),
@@ -1420,6 +1609,7 @@ fn product_specs() -> Vec<ProductSpec> {
             name: "Sample Bananas",
             brand: None,
             ingredient_key: Some("banana"),
+            section: ShoppingSection::FreshProduce,
             package_quantity: Some(quantity(6, Unit::Item)),
             servings_per_pack: Some(6),
             nutrition: nutrition(1, Unit::Item, [105, 1, 27, 14, 0, 0, 3, 0, 0]),
@@ -1429,6 +1619,7 @@ fn product_specs() -> Vec<ProductSpec> {
             name: "Sample Chicken Breast Fillets",
             brand: Some("Sample Fresh"),
             ingredient_key: Some("chicken-breast"),
+            section: ShoppingSection::MeatFish,
             package_quantity: Some(quantity(600, Unit::Gram)),
             servings_per_pack: Some(4),
             nutrition: nutrition(100, Unit::Gram, [165, 31, 0, 0, 4, 1, 0, 1, 85]),
@@ -1438,6 +1629,7 @@ fn product_specs() -> Vec<ProductSpec> {
             name: "Sample Cooked Basmati Rice",
             brand: Some("Sample Pantry"),
             ingredient_key: Some("basmati-rice"),
+            section: ShoppingSection::Ambient,
             package_quantity: Some(quantity(500, Unit::Gram)),
             servings_per_pack: Some(5),
             nutrition: nutrition(100, Unit::Gram, [130, 3, 28, 0, 0, 0, 0, 0, 0]),
@@ -1447,6 +1639,7 @@ fn product_specs() -> Vec<ProductSpec> {
             name: "Sample Salmon Fillets",
             brand: Some("Sample Fresh"),
             ingredient_key: Some("salmon-fillet"),
+            section: ShoppingSection::MeatFish,
             package_quantity: Some(quantity(400, Unit::Gram)),
             servings_per_pack: Some(2),
             nutrition: nutrition(100, Unit::Gram, [208, 20, 0, 0, 13, 3, 0, 0, 55]),
@@ -1456,6 +1649,7 @@ fn product_specs() -> Vec<ProductSpec> {
             name: "Sample White Potatoes",
             brand: None,
             ingredient_key: Some("potato"),
+            section: ShoppingSection::FreshProduce,
             package_quantity: Some(quantity(2500, Unit::Gram)),
             servings_per_pack: None,
             nutrition: nutrition(100, Unit::Gram, [77, 2, 17, 1, 0, 0, 2, 0, 0]),
@@ -1465,6 +1659,7 @@ fn product_specs() -> Vec<ProductSpec> {
             name: "Sample Broccoli",
             brand: None,
             ingredient_key: Some("broccoli"),
+            section: ShoppingSection::FreshProduce,
             package_quantity: Some(quantity(500, Unit::Gram)),
             servings_per_pack: None,
             nutrition: nutrition(100, Unit::Gram, [34, 3, 7, 2, 0, 0, 3, 0, 0]),
@@ -1474,6 +1669,7 @@ fn product_specs() -> Vec<ProductSpec> {
             name: "Sample Greek Yoghurt",
             brand: Some("Sample Dairy"),
             ingredient_key: Some("greek-yoghurt"),
+            section: ShoppingSection::Dairy,
             package_quantity: Some(quantity(500, Unit::Gram)),
             servings_per_pack: Some(4),
             nutrition: nutrition(100, Unit::Gram, [97, 9, 4, 4, 5, 3, 0, 0, 15]),
@@ -1483,6 +1679,7 @@ fn product_specs() -> Vec<ProductSpec> {
             name: "Sample Apples",
             brand: None,
             ingredient_key: Some("apple"),
+            section: ShoppingSection::FreshProduce,
             package_quantity: Some(quantity(6, Unit::Item)),
             servings_per_pack: Some(6),
             nutrition: nutrition(1, Unit::Item, [95, 0, 25, 19, 0, 0, 4, 0, 0]),
@@ -1492,6 +1689,7 @@ fn product_specs() -> Vec<ProductSpec> {
             name: "Sample Bakery Lunch",
             brand: Some("Sample Bakery"),
             ingredient_key: None,
+            section: ShoppingSection::Bakery,
             package_quantity: Some(quantity(1, Unit::Item)),
             servings_per_pack: Some(1),
             nutrition: NutritionFacts {
@@ -1507,6 +1705,7 @@ fn product_specs() -> Vec<ProductSpec> {
             name: "Sample Mystery Snack",
             brand: None,
             ingredient_key: None,
+            section: ShoppingSection::Ambient,
             package_quantity: Some(quantity(1, Unit::Item)),
             servings_per_pack: Some(1),
             nutrition: NutritionFacts::default(),

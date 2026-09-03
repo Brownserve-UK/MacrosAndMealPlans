@@ -8,9 +8,9 @@ use super::fulfilment::{RecipeFulfilments, RecipeWant, expand_recipe};
 use crate::domain::{
     Availability, AvailabilityReport, Confidence, ConsumedAmount, DeductionPlan, DemandClaim,
     DemandGap, DemandSubject, HouseholdMemberId, IngredientAvailability, IngredientId, MealItemRef,
-    MissingStockInterpretation, NewStockEvent, NewStockItem, ProductAvailability, ProductId,
-    Quantity, Recipe, RecipeId, RecipeRequirement, Revision, StockEvent, StockEventKind, StockItem,
-    StockItemId, StockItemPatch, UserId, apply_take, plan_deduction,
+    MissingStock, NewStockEvent, NewStockItem, ProductAvailability, ProductId, Quantity, Recipe,
+    RecipeId, RecipeRequirement, Revision, StockEvent, StockEventKind, StockItem, StockItemId,
+    StockItemPatch, UserId, apply_take, plan_deduction,
 };
 use crate::error::{CoreError, Result};
 use crate::ports::{
@@ -20,6 +20,13 @@ use crate::ports::{
 };
 
 const STOCK_ITEM: &str = "stock item";
+
+#[derive(Clone)]
+pub struct ShoppingSnapshot {
+    pub report: AvailabilityReport,
+    pub pools: HashMap<IngredientId, Vec<ProductId>>,
+    pub items: Vec<StockItem>,
+}
 
 #[derive(Clone)]
 pub struct StockService {
@@ -229,6 +236,31 @@ impl StockService {
         self.report(product_ids, false, from, to).await
     }
 
+    pub async fn shopping_snapshot(&self, from: Date, to: Date) -> Result<ShoppingSnapshot> {
+        let demand = self.planned_demand(from, to).await?;
+
+        let mut ids: Vec<ProductId> = demand
+            .quantities
+            .keys()
+            .filter_map(|subject| subject.product_id())
+            .collect();
+        for ingredient_id in demand.ingredients() {
+            ids.extend(demand.pool(&ingredient_id).iter().copied());
+        }
+        let held = self
+            .stock
+            .list(&StockQuery {
+                include_archived: false,
+                page: PageRequest::new(1, PageRequest::MAX_PER_PAGE),
+                ..Default::default()
+            })
+            .await?;
+        ids.extend(held.items.iter().map(|item| item.product_id));
+        sort_dedup(&mut ids, ProductId::as_uuid);
+
+        self.snapshot(demand, &ids, true).await
+    }
+
     async fn report(
         &self,
         product_ids: &[ProductId],
@@ -236,8 +268,21 @@ impl StockService {
         from: Date,
         to: Date,
     ) -> Result<AvailabilityReport> {
+        let demand = self.planned_demand(from, to).await?;
+        let mut snapshot = self.snapshot(demand, product_ids, all_ingredients).await?;
+        if all_ingredients {
+            snapshot.report.claims = Vec::new();
+        }
+        Ok(snapshot.report)
+    }
+
+    async fn snapshot(
+        &self,
+        mut demand: Demand,
+        product_ids: &[ProductId],
+        all_ingredients: bool,
+    ) -> Result<ShoppingSnapshot> {
         let interpretation = self.settings.get().await?.missing_stock_interpretation;
-        let mut demand = self.planned_demand(from, to).await?;
 
         if all_ingredients {
             self.seed_pools_from_stock(&mut demand, product_ids).await?;
@@ -255,21 +300,17 @@ impl StockService {
             .collect();
         sort_dedup(&mut ingredient_ids, IngredientId::as_uuid);
 
-        let claims: Vec<DemandClaim> = if all_ingredients {
-            Vec::new()
-        } else {
-            demand
-                .claims
-                .iter()
-                .filter(|claim| match claim.subject {
-                    DemandSubject::Product { product_id } => product_ids.contains(&product_id),
-                    DemandSubject::Ingredient { ingredient_id } => {
-                        ingredient_ids.contains(&ingredient_id)
-                    }
-                })
-                .cloned()
-                .collect()
-        };
+        let claims: Vec<DemandClaim> = demand
+            .claims
+            .iter()
+            .filter(|claim| match claim.subject {
+                DemandSubject::Product { product_id } => product_ids.contains(&product_id),
+                DemandSubject::Ingredient { ingredient_id } => {
+                    ingredient_ids.contains(&ingredient_id)
+                }
+            })
+            .cloned()
+            .collect();
 
         let mut wanted: Vec<ProductId> = product_ids.to_vec();
         for ingredient_id in &ingredient_ids {
@@ -286,10 +327,27 @@ impl StockService {
             by_product.entry(item.product_id).or_default().push(item);
         }
 
-        let names: HashMap<IngredientId, String> = self
-            .ingredients
-            .get_many(&ingredient_ids)
-            .await?
+        let catalogue = self.products.get_many(&wanted).await?;
+        let product_tracking: HashMap<ProductId, (Option<bool>, Option<IngredientId>)> = catalogue
+            .iter()
+            .map(|product| {
+                (
+                    product.id,
+                    (product.track_stock, product.mapped_ingredient_id),
+                )
+            })
+            .collect();
+
+        let mut tracked_ingredient_ids = ingredient_ids.clone();
+        tracked_ingredient_ids.extend(catalogue.iter().filter_map(|p| p.mapped_ingredient_id));
+        sort_dedup(&mut tracked_ingredient_ids, IngredientId::as_uuid);
+
+        let catalogue_ingredients = self.ingredients.get_many(&tracked_ingredient_ids).await?;
+        let ingredient_tracking: HashMap<IngredientId, Option<bool>> = catalogue_ingredients
+            .iter()
+            .map(|ingredient| (ingredient.id, ingredient.track_stock))
+            .collect();
+        let names: HashMap<IngredientId, String> = catalogue_ingredients
             .into_iter()
             .map(|ingredient| (ingredient.id, ingredient.name))
             .collect();
@@ -343,7 +401,15 @@ impl StockService {
             ingredients.push(IngredientAvailability {
                 ingredient_id,
                 name: names.get(&ingredient_id).cloned().unwrap_or_default(),
-                availability: resolve_availability(&pool, pool_want, interpretation),
+                availability: resolve_availability(
+                    &pool,
+                    pool_want,
+                    MissingStock::resolve(
+                        None,
+                        ingredient_tracking.get(&ingredient_id).copied().flatten(),
+                        interpretation,
+                    ),
+                ),
                 demand_gaps: gaps,
             });
         }
@@ -371,18 +437,41 @@ impl StockService {
             }
             gaps.sort_unstable();
             gaps.dedup();
+            let (own, mapped) = product_tracking
+                .get(&product_id)
+                .copied()
+                .unwrap_or((None, None));
+            let inherited = mapped
+                .and_then(|id| ingredient_tracking.get(&id).copied())
+                .flatten();
             products.push(ProductAvailability {
                 product_id,
-                availability: resolve_availability(stock, want, interpretation),
+                availability: resolve_availability(
+                    stock,
+                    want,
+                    MissingStock::resolve(own, inherited, interpretation),
+                ),
                 demand_gaps: gaps,
             });
         }
 
-        Ok(AvailabilityReport {
-            products,
-            ingredients,
-            demand_gaps: demand.loose_gaps(),
-            claims,
+        let mut pools: HashMap<IngredientId, Vec<ProductId>> = HashMap::new();
+        for ingredient in &ingredients {
+            pools.insert(
+                ingredient.ingredient_id,
+                demand.pool(&ingredient.ingredient_id).to_vec(),
+            );
+        }
+
+        Ok(ShoppingSnapshot {
+            report: AvailabilityReport {
+                products,
+                ingredients,
+                demand_gaps: demand.loose_gaps(),
+                claims,
+            },
+            pools,
+            items,
         })
     }
 
@@ -463,19 +552,28 @@ impl StockService {
             .collect();
         let fulfilments = RecipeFulfilments::load(&*self.products, &requirements).await?;
 
+        let settings = self.settings.get().await?;
+        let assumption_rules = crate::domain::AssumptionRules {
+            now: self.clock.now(),
+            meal_times: settings.meal_times,
+            enabled: settings.assume_eaten_when_time_passes,
+        };
+
         let mut demand = Demand::default();
         let mut product_cache: HashMap<ProductId, Option<crate::domain::Product>> = HashMap::new();
 
         for entry in &entries {
             let household = entry.scope == crate::domain::MealPlanScope::Household;
+            let assumed = crate::domain::Assumption::for_entry(
+                entry,
+                assumption_rules.now,
+                &assumption_rules.meal_times,
+                assumption_rules.enabled,
+            )
+            .assumed;
             for component in &entry.components {
-                if !component_is_future_demand(entry, component.id) {
+                let Some(wanted) = unresolved_demand(entry, component, household) else {
                     continue;
-                }
-                let wanted = if household {
-                    demand_amount_for_household(entry, component)
-                } else {
-                    component.amount
                 };
 
                 match component.item {
@@ -496,7 +594,7 @@ impl StockService {
                         match wanted.resolve(&product) {
                             Ok(quantity) => {
                                 demand.add(subject, quantity);
-                                demand.note_claim(entry, subject, quantity, None);
+                                demand.note_claim(entry, subject, quantity, None, assumed);
                             }
                             Err(_) => demand.note_gap(subject, DemandGap::AmountUnresolvable),
                         }
@@ -518,6 +616,7 @@ impl StockService {
                                 want.target.subject,
                                 want.want,
                                 Some(recipe.name.clone()),
+                                assumed,
                             );
                         }
                         for (subject, gap) in expansion.subject_gaps {
@@ -616,6 +715,7 @@ impl Demand {
         subject: DemandSubject,
         quantity: Quantity,
         recipe_name: Option<String>,
+        assumed: bool,
     ) {
         self.claims.push(DemandClaim {
             subject,
@@ -625,6 +725,7 @@ impl Demand {
             slot: entry.slot,
             scope: entry.scope,
             recipe_name,
+            assumed,
         });
     }
 
@@ -654,52 +755,53 @@ fn add_quantity(totals: &mut HashMap<ProductId, Quantity>, key: ProductId, quant
     }
 }
 
-fn demand_amount_for_household(
+fn unresolved_demand(
     entry: &crate::domain::MealPlanEntry,
     component: &crate::domain::MealPlanComponent,
-) -> crate::domain::ConsumedAmount {
-    let mut allocations: Vec<crate::domain::ConsumedAmount> = entry
+    household: bool,
+) -> Option<crate::domain::ConsumedAmount> {
+    use crate::domain::ParticipantStatus;
+
+    let mut any = false;
+    let mut unresolved: Vec<crate::domain::ConsumedAmount> = Vec::new();
+
+    for allocation in entry
         .participants
         .iter()
         .flat_map(|participant| participant.allocations.iter())
         .filter(|allocation| allocation.component_id == component.id)
-        .map(|allocation| allocation.allocated)
-        .collect();
+    {
+        any = true;
+        if allocation.status == ParticipantStatus::Planned {
+            unresolved.push(allocation.allocated);
+        }
+    }
+
     for group in &entry.guest_groups {
         for allocation in group
             .allocations
             .iter()
             .filter(|allocation| allocation.component_id == component.id)
         {
-            for _ in 0..group.count.max(0) {
-                allocations.push(allocation.allocated);
+            any = true;
+            if allocation.status == ParticipantStatus::Planned {
+                for _ in 0..group.count.max(0) {
+                    unresolved.push(allocation.allocated);
+                }
             }
         }
     }
-    if allocations.is_empty() {
-        return component.amount;
-    }
-    crate::domain::allocated_total(&component.amount, &allocations).unwrap_or(component.amount)
-}
 
-fn component_is_future_demand(
-    entry: &crate::domain::MealPlanEntry,
-    component_id: crate::domain::MealPlanComponentId,
-) -> bool {
-    let statuses: Vec<crate::domain::ParticipantStatus> = entry
-        .participants
-        .iter()
-        .flat_map(|participant| participant.allocations.iter())
-        .filter(|allocation| allocation.component_id == component_id)
-        .map(|allocation| allocation.status)
-        .collect();
-    if statuses.is_empty() {
-        return true;
+    if !any {
+        return Some(component.amount);
     }
-    if statuses.contains(&crate::domain::ParticipantStatus::Eaten) {
-        return false;
+    if unresolved.is_empty() {
+        return None;
     }
-    statuses.contains(&crate::domain::ParticipantStatus::Planned)
+    if !household {
+        return Some(component.amount);
+    }
+    Some(crate::domain::allocated_total(&component.amount, &unresolved).unwrap_or(component.amount))
 }
 
 fn free_pool_stock(
@@ -732,12 +834,13 @@ fn free_pool_stock(
 fn resolve_availability(
     stock: &[&StockItem],
     demand: Option<Quantity>,
-    interpretation: MissingStockInterpretation,
+    missing: MissingStock,
 ) -> Availability {
     if stock.is_empty() {
-        return match interpretation {
-            MissingStockInterpretation::Absent => Availability::Absent,
-            MissingStockInterpretation::Unknown => Availability::Unknown,
+        return match missing {
+            MissingStock::Absent => Availability::Absent,
+            MissingStock::Unknown => Availability::Unknown,
+            MissingStock::Assumed => Availability::AssumedAvailable,
         };
     }
 

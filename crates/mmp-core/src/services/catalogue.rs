@@ -46,6 +46,8 @@ impl CatalogueService {
             id: input.id.unwrap_or_default(),
             name,
             default_unit: input.default_unit,
+            shopping_section: input.shopping_section,
+            track_stock: input.track_stock,
             provenance: input.provenance,
             revision: Revision::INITIAL,
             created_at: now,
@@ -123,6 +125,8 @@ impl CatalogueService {
         if let Some(unit) = patch.default_unit {
             current.default_unit = unit;
         }
+        current.shopping_section = patch.shopping_section.apply(current.shopping_section);
+        current.track_stock = patch.track_stock.apply(current.track_stock);
 
         self.stamp_update(
             &mut current.provenance,
@@ -177,6 +181,7 @@ impl CatalogueService {
             barcode,
             retailer: normalise_optional(input.retailer),
             shopping_section: normalise_optional(input.shopping_section),
+            track_stock: input.track_stock,
             package_quantity: input.package_quantity,
             servings_per_pack: input.servings_per_pack,
             mapped_ingredient_id: input.mapped_ingredient_id,
@@ -242,6 +247,7 @@ impl CatalogueService {
             .shopping_section
             .map(|v| v.trim().to_owned())
             .apply(current.shopping_section);
+        current.track_stock = patch.track_stock.apply(current.track_stock);
         current.package_quantity = patch.package_quantity.apply(current.package_quantity);
         current.servings_per_pack = patch.servings_per_pack.apply(current.servings_per_pack);
 

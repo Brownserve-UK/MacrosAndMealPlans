@@ -5,13 +5,15 @@ use mmp_core::domain::{NewHouseholdMember, NewUser, Role};
 use mmp_core::ports::SystemClock;
 use mmp_core::services::{
     CatalogueService, DiaryService, HouseholdService, HouseholdSettingsService, MealPlanService,
-    NutritionTargetService, RecipeService, SeedIngredient, SeedReport, StockService,
+    NutritionTargetService, RecipeService, SeedIngredient, SeedReport, ShoppingService,
+    StockService,
 };
 use mmp_postgres::PgPool;
 use mmp_postgres::{
     PgAccessGrantRepository, PgConsumptionRecordRepository, PgHouseholdMemberRepository,
     PgHouseholdSettingsRepository, PgIngredientRepository, PgMealPlanRepository,
-    PgNutritionTargetRepository, PgProductRepository, PgRecipeRepository, PgStockRepository,
+    PgNutritionTargetRepository, PgProductRepository, PgPurchaseRepository, PgRecipeRepository,
+    PgShoppingCadenceRepository, PgShoppingOpportunityRepository, PgStockRepository,
     PgUserRepository,
 };
 
@@ -133,6 +135,15 @@ pub fn app_state(config: &Config, pool: &PgPool) -> AppState {
         Arc::new(PgHouseholdSettingsRepository::new(pool.clone())),
         Arc::new(SystemClock),
     );
+    let shopping = ShoppingService::new(
+        Arc::new(PgShoppingCadenceRepository::new(pool.clone())),
+        Arc::new(PgShoppingOpportunityRepository::new(pool.clone())),
+        Arc::new(PgPurchaseRepository::new(pool.clone())),
+        Arc::new(PgIngredientRepository::new(pool.clone())),
+        Arc::new(PgProductRepository::new(pool.clone())),
+        stock.clone(),
+        Arc::new(SystemClock),
+    );
     let recipes = RecipeService::new(
         Arc::new(PgRecipeRepository::new(pool.clone())),
         Arc::new(PgProductRepository::new(pool.clone())),
@@ -148,6 +159,7 @@ pub fn app_state(config: &Config, pool: &PgPool) -> AppState {
         nutrition_targets,
         recipes,
         stock,
+        shopping,
         Arc::new(DevBasicAuthProvider::new(
             household,
             config.dev_password.clone(),

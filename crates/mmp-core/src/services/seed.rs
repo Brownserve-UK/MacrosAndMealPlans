@@ -1,4 +1,6 @@
-use crate::domain::{Ingredient, IngredientId, Provenance, Revision, Unit, validate_name};
+use crate::domain::{
+    Ingredient, IngredientId, Provenance, Revision, ShoppingSection, Unit, validate_name,
+};
 use crate::error::{Result, ValidationErrors};
 use crate::services::CatalogueService;
 
@@ -7,6 +9,10 @@ pub struct SeedIngredient {
     pub seed_key: String,
     pub name: String,
     pub default_unit: Unit,
+    #[serde(default)]
+    pub shopping_section: Option<ShoppingSection>,
+    #[serde(default)]
+    pub track_stock: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -58,6 +64,8 @@ impl CatalogueService {
             id: IngredientId::seeded(&seed.seed_key),
             name: seed.name.trim().to_owned(),
             default_unit: seed.default_unit,
+            shopping_section: seed.shopping_section,
+            track_stock: seed.track_stock,
             provenance: Provenance::seeded(&seed.seed_key),
             revision: Revision::INITIAL,
             created_at: now,
@@ -75,6 +83,8 @@ impl CatalogueService {
         let expected = existing.revision;
         existing.name = seed.name.trim().to_owned();
         existing.default_unit = seed.default_unit;
+        existing.shopping_section = seed.shopping_section;
+        existing.track_stock = seed.track_stock;
         existing.revision = expected.next();
         existing.updated_at = self.now();
         self.commit_seeded_ingredient(&existing, expected).await

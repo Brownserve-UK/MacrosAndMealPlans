@@ -6,14 +6,15 @@ use http_body_util::BodyExt;
 use mmp_core::ports::SystemClock;
 use mmp_core::services::{
     CatalogueService, DiaryService, HouseholdService, HouseholdSettingsService, MealPlanService,
-    NutritionTargetService, RecipeService, StockService,
+    NutritionTargetService, RecipeService, ShoppingService, StockService,
 };
 use mmp_core::testing::{
     InMemoryAccessGrantRepository, InMemoryConsumptionRecordRepository,
     InMemoryHouseholdMemberRepository, InMemoryHouseholdSettingsRepository,
     InMemoryIngredientRepository, InMemoryMealPlanRepository, InMemoryNutritionTargetRepository,
-    InMemoryProductRepository, InMemoryRecipeRepository, InMemoryStockRepository,
-    InMemoryUserRepository,
+    InMemoryProductRepository, InMemoryPurchaseRepository, InMemoryRecipeRepository,
+    InMemoryShoppingCadenceRepository, InMemoryShoppingOpportunityRepository,
+    InMemoryStockRepository, InMemoryUserRepository,
 };
 use mmp_server::auth::DevBasicAuthProvider;
 use mmp_server::{AppState, app};
@@ -88,6 +89,24 @@ fn app_with_web(dist: &std::path::Path) -> axum::Router {
             recipes_repo.clone(),
             Arc::new(InMemoryHouseholdMemberRepository::new()),
             Arc::new(InMemoryHouseholdSettingsRepository::new()),
+            Arc::new(SystemClock),
+        ),
+        ShoppingService::new(
+            Arc::new(InMemoryShoppingCadenceRepository::new()),
+            Arc::new(InMemoryShoppingOpportunityRepository::new()),
+            Arc::new(InMemoryPurchaseRepository::new()),
+            Arc::new(InMemoryIngredientRepository::new()),
+            Arc::new(InMemoryProductRepository::new()),
+            StockService::new(
+                Arc::new(InMemoryStockRepository::new()),
+                Arc::new(InMemoryProductRepository::new()),
+                Arc::new(InMemoryIngredientRepository::new()),
+                Arc::new(InMemoryMealPlanRepository::default()),
+                recipes_repo.clone(),
+                Arc::new(InMemoryHouseholdMemberRepository::new()),
+                Arc::new(InMemoryHouseholdSettingsRepository::new()),
+                Arc::new(SystemClock),
+            ),
             Arc::new(SystemClock),
         ),
         Arc::new(DevBasicAuthProvider::new(household, "changeme")),
@@ -237,6 +256,24 @@ async fn without_a_web_build_the_api_still_works() {
             recipes_repo.clone(),
             Arc::new(InMemoryHouseholdMemberRepository::new()),
             Arc::new(InMemoryHouseholdSettingsRepository::new()),
+            Arc::new(SystemClock),
+        ),
+        ShoppingService::new(
+            Arc::new(InMemoryShoppingCadenceRepository::new()),
+            Arc::new(InMemoryShoppingOpportunityRepository::new()),
+            Arc::new(InMemoryPurchaseRepository::new()),
+            Arc::new(InMemoryIngredientRepository::new()),
+            Arc::new(InMemoryProductRepository::new()),
+            StockService::new(
+                Arc::new(InMemoryStockRepository::new()),
+                Arc::new(InMemoryProductRepository::new()),
+                Arc::new(InMemoryIngredientRepository::new()),
+                Arc::new(InMemoryMealPlanRepository::default()),
+                recipes_repo.clone(),
+                Arc::new(InMemoryHouseholdMemberRepository::new()),
+                Arc::new(InMemoryHouseholdSettingsRepository::new()),
+                Arc::new(SystemClock),
+            ),
             Arc::new(SystemClock),
         ),
         Arc::new(DevBasicAuthProvider::new(household, "changeme")),

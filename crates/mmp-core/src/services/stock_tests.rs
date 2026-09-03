@@ -7,8 +7,9 @@ use time::macros::{date, datetime};
 use super::*;
 use crate::domain::{
     Availability, Confidence, ConsumedAmount, DemandGap, HouseholdMember, HouseholdMemberId,
-    MealItemRef, MealPlanComponent, MealPlanEntry, MealSlot, NewStockItem, Product, ProductId,
-    Provenance, Quantity, Revision, StockLevel, StorageLocation, Unit, UserId,
+    MealItemRef, MealPlanComponent, MealPlanEntry, MealSlot, MissingStockInterpretation,
+    NewStockItem, Product, ProductId, Provenance, Quantity, Revision, StockLevel, StorageLocation,
+    Unit, UserId,
 };
 use crate::ports::{FixedClock, MealPlanRepository, StockQuery};
 use crate::testing::{
@@ -24,6 +25,7 @@ struct Harness {
     ingredients: InMemoryIngredientRepository,
     recipes: InMemoryRecipeRepository,
     meal_plans: InMemoryMealPlanRepository,
+    settings: InMemoryHouseholdSettingsRepository,
     member_id: HouseholdMemberId,
     actor_id: UserId,
 }
@@ -54,7 +56,7 @@ fn harness() -> Harness {
         Arc::new(meal_plans.clone()),
         Arc::new(recipes.clone()),
         Arc::new(members),
-        Arc::new(settings),
+        Arc::new(settings.clone()),
         Arc::new(FixedClock::new(datetime!(2026-08-24 09:00 UTC))),
     );
     Harness {
@@ -64,6 +66,7 @@ fn harness() -> Harness {
         ingredients,
         recipes,
         meal_plans,
+        settings,
         member_id,
         actor_id: UserId::new(),
     }
@@ -78,6 +81,7 @@ fn product() -> Product {
         barcode: None,
         retailer: None,
         shopping_section: None,
+        track_stock: None,
         package_quantity: Some(Quantity::new(Decimal::new(1000, 0), Unit::Gram)),
         servings_per_pack: Some(4),
         mapped_ingredient_id: None,
@@ -454,6 +458,8 @@ fn seed_ingredient(h: &Harness, id: crate::domain::IngredientId, name: &str) {
         id,
         name: name.to_owned(),
         default_unit: Unit::Gram,
+        shopping_section: None,
+        track_stock: None,
         provenance: Provenance::local(),
         revision: Revision::INITIAL,
         created_at: now,
@@ -1011,4 +1017,273 @@ async fn a_products_claims_name_both_the_meals_that_asked_for_it_and_the_ones_th
         .await
         .unwrap();
     assert!(overview.claims.is_empty());
+}
+
+fn household_component(product_id: ProductId, g: i64) -> MealPlanComponent {
+    MealPlanComponent {
+        id: crate::domain::MealPlanComponentId::new(),
+        item: MealItemRef::product(product_id),
+        amount: ConsumedAmount::Measure(grams(g)),
+        position: 0,
+        snapshot: None,
+        revision: Revision::INITIAL,
+        display_order: uuid::Uuid::nil(),
+    }
+}
+
+async fn plan_household_shared(
+    h: &Harness,
+    product_id: ProductId,
+    total_g: i64,
+    statuses: [crate::domain::ParticipantStatus; 2],
+    on: time::Date,
+) {
+    let now = OffsetDateTime::UNIX_EPOCH;
+    let component = household_component(product_id, total_g);
+    let participants = statuses
+        .into_iter()
+        .map(|status| crate::domain::MealParticipant {
+            id: crate::domain::MealParticipantId::new(),
+            member_id: HouseholdMemberId::new(),
+            allocations: vec![crate::domain::MealParticipantAllocation {
+                id: crate::domain::MealParticipantAllocationId::new(),
+                component_id: component.id,
+                allocated: ConsumedAmount::Measure(grams(total_g / 2)),
+                status,
+                consumption_record_id: None,
+                resolved_by: None,
+                resolved_at: None,
+            }],
+            revision: Revision::INITIAL,
+            created_at: now,
+            updated_at: now,
+        })
+        .collect();
+
+    let entry = MealPlanEntry {
+        id: crate::domain::MealPlanEntryId::new(),
+        scope: crate::domain::MealPlanScope::Household,
+        member_id: None,
+        planned_on: on,
+        planned_time: None,
+        slot: MealSlot::Dinner,
+        portioning: crate::domain::Portioning::Equal,
+        components: vec![component],
+        participants,
+        guest_groups: Vec::new(),
+        opted_out: Vec::new(),
+        created_by: h.actor_id,
+        updated_by: h.actor_id,
+        revision: Revision::INITIAL,
+        created_at: now,
+        updated_at: now,
+    };
+    h.meal_plans.insert(&entry).await.unwrap();
+}
+
+#[tokio::test]
+async fn a_partly_confirmed_household_meal_keeps_the_unconfirmed_share_as_demand() {
+    use crate::domain::ParticipantStatus;
+    let h = harness();
+    let p = product();
+    h.products.seed(p.clone());
+    h.service
+        .create(
+            new_item(
+                p.id,
+                StockLevel::Exact {
+                    quantity: grams(1000),
+                },
+            ),
+            h.actor_id,
+            Some(h.member_id),
+        )
+        .await
+        .unwrap();
+
+    plan_household_shared(
+        &h,
+        p.id,
+        400,
+        [ParticipantStatus::Eaten, ParticipantStatus::Planned],
+        date!(2026 - 08 - 25),
+    )
+    .await;
+
+    let report = h
+        .service
+        .availability(&[p.id], date!(2026 - 08 - 24), date!(2026 - 08 - 31))
+        .await
+        .unwrap();
+
+    assert_eq!(planned_demand_for(&report, p.id), grams(200));
+}
+
+#[tokio::test]
+async fn a_household_meal_everyone_has_resolved_stops_counting_as_demand() {
+    use crate::domain::ParticipantStatus;
+    let h = harness();
+    let p = product();
+    h.products.seed(p.clone());
+    h.service
+        .create(
+            new_item(
+                p.id,
+                StockLevel::Exact {
+                    quantity: grams(1000),
+                },
+            ),
+            h.actor_id,
+            Some(h.member_id),
+        )
+        .await
+        .unwrap();
+
+    plan_household_shared(
+        &h,
+        p.id,
+        400,
+        [ParticipantStatus::Eaten, ParticipantStatus::NotEaten],
+        date!(2026 - 08 - 25),
+    )
+    .await;
+
+    let report = h
+        .service
+        .availability(&[p.id], date!(2026 - 08 - 24), date!(2026 - 08 - 31))
+        .await
+        .unwrap();
+
+    assert_eq!(planned_demand_for(&report, p.id), grams(0));
+}
+
+#[tokio::test]
+async fn an_assumed_meal_keeps_its_full_hold_and_flags_its_claims() {
+    let h = harness();
+    h.settings.set_assume_eaten_when_time_passes(true);
+    let p = product();
+    h.products.seed(p.clone());
+    h.service
+        .create(
+            new_item(
+                p.id,
+                StockLevel::Exact {
+                    quantity: grams(1000),
+                },
+            ),
+            h.actor_id,
+            Some(h.member_id),
+        )
+        .await
+        .unwrap();
+
+    plan_measured_on(&h, p.id, 300, date!(2026 - 08 - 23)).await;
+    plan_measured_on(&h, p.id, 200, date!(2026 - 08 - 25)).await;
+
+    let report = h
+        .service
+        .availability(&[p.id], date!(2026 - 08 - 23), date!(2026 - 08 - 31))
+        .await
+        .unwrap();
+
+    assert_eq!(planned_demand_for(&report, p.id), grams(500));
+
+    let assumed: Vec<bool> = report.claims.iter().map(|claim| claim.assumed).collect();
+    assert_eq!(assumed.len(), 2);
+    assert!(assumed.contains(&true), "yesterday's meal is assumed");
+    assert!(assumed.contains(&false), "tomorrow's meal is not");
+}
+
+#[tokio::test]
+async fn an_untracked_ingredient_with_no_stock_is_assumed_available() {
+    let h = harness();
+    let paprika = crate::domain::IngredientId::new();
+    seed_ingredient(&h, paprika, "Paprika");
+    h.ingredients.set_track_stock(paprika, Some(false));
+    h.products.seed(mapped("Paprika 50g", paprika));
+
+    let curry = seed_recipe(&h, 1, vec![ingredient_line(paprika, 10)]);
+    plan_servings(&h, curry.id, 1).await;
+
+    let report = h
+        .service
+        .availability_overview(date!(2026 - 08 - 24), date!(2026 - 08 - 31))
+        .await
+        .unwrap();
+
+    let ingredient = report
+        .ingredients
+        .iter()
+        .find(|row| row.ingredient_id == paprika)
+        .expect("demand with no stock is still reported");
+    assert_eq!(ingredient.availability, Availability::AssumedAvailable);
+}
+
+#[tokio::test]
+async fn a_tracked_ingredient_with_no_stock_is_absent_rather_than_unknown() {
+    let h = harness();
+    let apples = crate::domain::IngredientId::new();
+    seed_ingredient(&h, apples, "Apples");
+    h.ingredients.set_track_stock(apples, Some(true));
+    h.products.seed(mapped("Braeburn", apples));
+
+    let crumble = seed_recipe(&h, 1, vec![ingredient_line(apples, 200)]);
+    plan_servings(&h, crumble.id, 1).await;
+
+    let report = h
+        .service
+        .availability_overview(date!(2026 - 08 - 24), date!(2026 - 08 - 31))
+        .await
+        .unwrap();
+
+    let ingredient = report
+        .ingredients
+        .iter()
+        .find(|row| row.ingredient_id == apples)
+        .expect("demand with no stock is still reported");
+    assert_eq!(ingredient.availability, Availability::Absent);
+}
+
+#[tokio::test]
+async fn a_products_own_answer_beats_the_ingredients() {
+    let h = harness();
+    let oil = crate::domain::IngredientId::new();
+    seed_ingredient(&h, oil, "Olive Oil");
+    h.ingredients.set_track_stock(oil, Some(false));
+    let mut p = mapped("Extra virgin 500ml", oil);
+    p.track_stock = Some(true);
+    h.products.seed(p.clone());
+    plan_measured(&h, p.id, 30).await;
+
+    let result = h
+        .service
+        .availability(&[p.id], date!(2026 - 08 - 18), date!(2026 - 08 - 31))
+        .await
+        .unwrap();
+
+    assert_eq!(result.products[0].availability, Availability::Absent);
+}
+
+#[tokio::test]
+async fn with_nobody_having_said_the_household_setting_still_decides() {
+    let h = harness();
+    let p = product();
+    h.products.seed(p.clone());
+    plan_measured(&h, p.id, 200).await;
+
+    let result = h
+        .service
+        .availability(&[p.id], date!(2026 - 08 - 18), date!(2026 - 08 - 31))
+        .await
+        .unwrap();
+    assert_eq!(result.products[0].availability, Availability::Unknown);
+
+    h.settings
+        .set_missing_stock_interpretation(MissingStockInterpretation::Absent);
+    let result = h
+        .service
+        .availability(&[p.id], date!(2026 - 08 - 18), date!(2026 - 08 - 31))
+        .await
+        .unwrap();
+    assert_eq!(result.products[0].availability, Availability::Absent);
 }

@@ -11,14 +11,15 @@ use image::{DynamicImage, ImageFormat, RgbImage};
 use mmp_core::ports::FixedClock;
 use mmp_core::services::{
     CatalogueService, DiaryService, HouseholdService, HouseholdSettingsService, MealPlanService,
-    NutritionTargetService, RecipeService, StockService,
+    NutritionTargetService, RecipeService, ShoppingService, StockService,
 };
 use mmp_core::testing::{
     InMemoryAccessGrantRepository, InMemoryConsumptionRecordRepository,
     InMemoryHouseholdMemberRepository, InMemoryHouseholdSettingsRepository,
     InMemoryIngredientRepository, InMemoryMealPlanRepository, InMemoryNutritionTargetRepository,
-    InMemoryProductRepository, InMemoryRecipeRepository, InMemoryStockRepository,
-    InMemoryUserRepository,
+    InMemoryProductRepository, InMemoryPurchaseRepository, InMemoryRecipeRepository,
+    InMemoryShoppingCadenceRepository, InMemoryShoppingOpportunityRepository,
+    InMemoryStockRepository, InMemoryUserRepository,
 };
 use mmp_server::AppState;
 use mmp_server::auth::DevBasicAuthProvider;
@@ -51,6 +52,10 @@ async fn app() -> Router {
     let targets = InMemoryNutritionTargetRepository::new();
     let meal_plans = InMemoryMealPlanRepository::new(consumption.clone());
     let recipes_repo = Arc::new(InMemoryRecipeRepository::new());
+    let cadence = InMemoryShoppingCadenceRepository::new();
+    let opportunities = InMemoryShoppingOpportunityRepository::new();
+    let purchases = InMemoryPurchaseRepository::new();
+    let products_for_shopping = products.clone();
     let stock = StockService::new(
         Arc::new(stock_repo.clone()),
         Arc::new(products.clone()),
@@ -93,9 +98,18 @@ async fn app() -> Router {
             Arc::new(settings_repo.clone()),
             clock.clone(),
         ),
-        NutritionTargetService::new(Arc::new(targets), clock),
+        NutritionTargetService::new(Arc::new(targets), clock.clone()),
         recipes,
-        stock,
+        stock.clone(),
+        ShoppingService::new(
+            Arc::new(cadence),
+            Arc::new(opportunities),
+            Arc::new(purchases),
+            ingredients,
+            Arc::new(products_for_shopping),
+            stock,
+            clock,
+        ),
         Arc::new(DevBasicAuthProvider::new(household, PASSWORD)),
     );
     mmp_server::app::build(state).0
@@ -3370,4 +3384,83 @@ async fn a_basic_user_cannot_read_stock_history() {
         StatusCode::OK,
         "a basic user may still see the inventory"
     );
+}
+
+#[tokio::test]
+async fn the_shopping_routes_need_the_shopping_permissions() {
+    let app = app().await;
+    create_user(&app, "nina", &["nutritionist"]).await;
+
+    let (status, _, _) = send(
+        &app,
+        Call::new("GET", "/api/v1/shopping/requirements").signed_in_as("nina"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    let (status, _, _) = send(
+        &app,
+        Call::new("POST", "/api/v1/purchases")
+            .signed_in_as("nina")
+            .body(json!({ "product_id": "00000000-0000-0000-0000-0000000000ff" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    create_user(&app, "sam", &["basic_user"]).await;
+    let (status, _, _) = send(
+        &app,
+        Call::new("GET", "/api/v1/shopping/requirements").signed_in_as("sam"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn changing_when_the_household_shops_needs_household_write() {
+    let app = app().await;
+    create_user(&app, "sam", &["basic_user"]).await;
+
+    let cadence = json!({
+        "interval_weeks": 1,
+        "days": [3, 6],
+        "anchor": "2026-08-31",
+    });
+
+    let (status, _, _) = send(
+        &app,
+        Call::new("PUT", "/api/v1/shopping/cadence")
+            .signed_in_as("sam")
+            .body(cadence.clone()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    // The bootstrap admin holds household:write.
+    let (status, body, _) = send(
+        &app,
+        Call::new("PUT", "/api/v1/shopping/cadence").body(cadence),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["days"], json!([3, 6]));
+
+    let (status, _, _) = send(
+        &app,
+        Call::new("GET", "/api/v1/shopping/cadence").signed_in_as("sam"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn with_no_cadence_the_shopping_list_says_so_rather_than_inventing_one() {
+    let app = app().await;
+
+    let (status, body, _) = send(&app, Call::new("GET", "/api/v1/shopping/requirements")).await;
+    assert_eq!(status, StatusCode::OK);
+
+    assert_eq!(body["cadence_configured"], json!(false));
+    assert!(body["opportunities"].as_array().unwrap().is_empty());
+    assert!(body["focus"].is_null());
 }

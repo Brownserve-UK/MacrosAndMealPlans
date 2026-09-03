@@ -10,6 +10,7 @@ fn new_product() -> NewProduct {
         barcode: Some("5000119012345".to_owned()),
         retailer: Some("Tesco".to_owned()),
         shopping_section: Some("Dairy".to_owned()),
+        track_stock: None,
         package_quantity: Some(Quantity::new(Decimal::new(1, 0), Unit::Litre)),
         servings_per_pack: None,
         mapped_ingredient_id: None,

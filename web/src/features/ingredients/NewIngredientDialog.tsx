@@ -11,7 +11,7 @@ import { useCreateIngredient } from '../../api/queries';
 import { FormDialog } from '../../components/FormDialog';
 import { IngredientFields, type IngredientDraft } from './IngredientFields';
 
-const EMPTY: IngredientDraft = { name: '', default_unit: 'g' };
+const EMPTY: IngredientDraft = { name: '', default_unit: 'g', track_stock: true };
 
 export function NewIngredientDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const navigate = useNavigate();
@@ -38,6 +38,7 @@ export function NewIngredientDialog({ open, onClose }: { open: boolean; onClose:
       const created = await create.mutateAsync({
         name: draft.name.trim(),
         default_unit: draft.default_unit,
+        track_stock: draft.track_stock,
       });
       handleClose();
       void navigate({ to: '/ingredients/$id', params: { id: created.id } });

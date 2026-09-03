@@ -10,18 +10,20 @@ use crate::domain::{
     AccessScope, ConsumptionRecord, ConsumptionRecordId, HouseholdMember, HouseholdMemberId,
     HouseholdSettings, Ingredient, IngredientId, MealParticipant, MealPlanEntry, MealPlanEntryId,
     MealTimes, MemberAccessGrant, MissingStockInterpretation, NewStockEvent, NutritionTarget,
-    NutritionTargetId, Product, ProductId, Quantity, Recipe, RecipeId, RecipePhoto, RecipeSummary,
-    RecipeVisibility, Revision, Role, StockEffect, StockEffectSource, StockEvent, StockEventId,
-    StockItem, StockItemId, StockOutcome, Unit, User, UserId,
+    NutritionTargetId, OpportunityException, Product, ProductId, Purchase, PurchaseId,
+    PurchaseState, Quantity, Recipe, RecipeId, RecipePhoto, RecipeSummary, RecipeVisibility,
+    Revision, Role, ShoppingCadence, ShoppingOpportunityId, StockEffect, StockEffectSource,
+    StockEvent, StockEventId, StockItem, StockItemId, StockOutcome, Unit, User, UserId,
 };
 use crate::error::{CoreError, Result};
 use crate::ports::{
     AccessGrantRepository, ConsumptionQuery, ConsumptionRecordRepository,
     HouseholdMemberRepository, HouseholdSettingsRepository, IngredientQuery, IngredientRepository,
     IngredientSort, MealPlanComponentUpdate, MealPlanQuery, MealPlanRepository, MemberQuery,
-    NutritionTargetRepository, Paginated, ProductQuery, ProductRepository, RecipeQuery,
-    RecipeRepository, SnapshotOp, SortDirection, StockQuery, StockRepository, StockWrite,
-    UpdateOutcome, UserQuery, UserRepository,
+    NewStockFromPurchase, NutritionTargetRepository, Paginated, ProductQuery, ProductRepository,
+    PurchaseQuery, PurchaseRepository, RecipeQuery, RecipeRepository, ShoppingCadenceRepository,
+    ShoppingOpportunityRepository, SnapshotOp, SortDirection, StockQuery, StockRepository,
+    StockWrite, UpdateOutcome, UserQuery, UserRepository,
 };
 
 // This _should_ reflect the indexes that a real database would enforce
@@ -117,6 +119,12 @@ impl InMemoryIngredientRepository {
 
     pub fn count(&self) -> usize {
         self.rows.lock().unwrap().len()
+    }
+
+    pub fn set_track_stock(&self, id: IngredientId, value: Option<bool>) {
+        if let Some(ingredient) = self.rows.lock().unwrap().get_mut(&id) {
+            ingredient.track_stock = value;
+        }
     }
 
     pub fn link_products(&self, products: &InMemoryProductRepository) {
@@ -1365,6 +1373,10 @@ impl InMemoryHouseholdSettingsRepository {
         self.row.lock().unwrap().assume_eaten_when_time_passes = value;
     }
 
+    pub fn set_missing_stock_interpretation(&self, value: MissingStockInterpretation) {
+        self.row.lock().unwrap().missing_stock_interpretation = value;
+    }
+
     pub fn set_meal_times(&self, meal_times: MealTimes) {
         self.row.lock().unwrap().meal_times = meal_times;
     }
@@ -1860,5 +1872,222 @@ impl StockRepository for InMemoryStockRepository {
             .filter(|effect| effect.source_kind == source_kind && effect.source_id == source_id)
             .cloned()
             .collect())
+    }
+}
+
+#[derive(Clone, Default)]
+pub struct InMemoryShoppingCadenceRepository {
+    row: Arc<Mutex<Option<ShoppingCadence>>>,
+}
+
+impl InMemoryShoppingCadenceRepository {
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+#[async_trait]
+impl ShoppingCadenceRepository for InMemoryShoppingCadenceRepository {
+    async fn get(&self) -> Result<Option<ShoppingCadence>> {
+        Ok(self.row.lock().unwrap().clone())
+    }
+
+    async fn set(&self, cadence: &ShoppingCadence) -> Result<()> {
+        *self.row.lock().unwrap() = Some(cadence.clone());
+        Ok(())
+    }
+
+    async fn clear(&self) -> Result<()> {
+        *self.row.lock().unwrap() = None;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Default)]
+pub struct InMemoryShoppingOpportunityRepository {
+    rows: Arc<Mutex<Vec<OpportunityException>>>,
+}
+
+impl InMemoryShoppingOpportunityRepository {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn count(&self) -> usize {
+        self.rows.lock().unwrap().len()
+    }
+}
+
+#[async_trait]
+impl ShoppingOpportunityRepository for InMemoryShoppingOpportunityRepository {
+    async fn get(&self, id: ShoppingOpportunityId) -> Result<Option<OpportunityException>> {
+        Ok(self
+            .rows
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|row| row.id == id)
+            .cloned())
+    }
+
+    async fn list_in_range(&self, from: Date, to: Date) -> Result<Vec<OpportunityException>> {
+        Ok(self
+            .rows
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|row| {
+                in_range(row.effective_date, from, to) || in_range(row.generated_for, from, to)
+            })
+            .cloned()
+            .collect())
+    }
+
+    async fn find_for_occurrence(
+        &self,
+        generated_for: Date,
+    ) -> Result<Option<OpportunityException>> {
+        Ok(self
+            .rows
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|row| row.generated_for == Some(generated_for))
+            .cloned())
+    }
+
+    async fn upsert(&self, exception: &OpportunityException) -> Result<()> {
+        let mut rows = self.rows.lock().unwrap();
+        if let Some(generated_for) = exception.generated_for
+            && let Some(existing) = rows
+                .iter_mut()
+                .find(|row| row.generated_for == Some(generated_for))
+        {
+            *existing = exception.clone();
+            return Ok(());
+        }
+        match rows.iter_mut().find(|row| row.id == exception.id) {
+            Some(existing) => *existing = exception.clone(),
+            None => rows.push(exception.clone()),
+        }
+        Ok(())
+    }
+
+    async fn delete(&self, id: ShoppingOpportunityId) -> Result<UpdateOutcome> {
+        let mut rows = self.rows.lock().unwrap();
+        match rows.iter().position(|row| row.id == id) {
+            Some(index) => {
+                rows.remove(index);
+                Ok(UpdateOutcome::Updated)
+            }
+            None => Ok(UpdateOutcome::NotFound),
+        }
+    }
+}
+
+fn in_range(date: Option<Date>, from: Date, to: Date) -> bool {
+    date.is_some_and(|date| date >= from && date <= to)
+}
+
+#[derive(Clone, Default)]
+pub struct InMemoryPurchaseRepository {
+    rows: Arc<Mutex<Vec<Purchase>>>,
+    stock: Arc<Mutex<Vec<StockItem>>>,
+}
+
+impl InMemoryPurchaseRepository {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn count(&self) -> usize {
+        self.rows.lock().unwrap().len()
+    }
+
+    pub fn created_stock(&self) -> Vec<StockItem> {
+        self.stock.lock().unwrap().clone()
+    }
+}
+
+#[async_trait]
+impl PurchaseRepository for InMemoryPurchaseRepository {
+    async fn get(&self, id: PurchaseId) -> Result<Option<Purchase>> {
+        Ok(self
+            .rows
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|row| row.id == id)
+            .cloned())
+    }
+
+    async fn list(&self, query: &PurchaseQuery) -> Result<Paginated<Purchase>> {
+        let rows = self.rows.lock().unwrap();
+        let mut items: Vec<Purchase> = rows
+            .iter()
+            .filter(|row| query.state.is_none_or(|state| row.state == state))
+            .filter(|row| {
+                query
+                    .opportunity_date
+                    .is_none_or(|date| row.opportunity_date == Some(date))
+            })
+            .cloned()
+            .collect();
+        items.sort_by_key(|row| (row.purchased_at, row.id.as_uuid()));
+        if query.sort == SortDirection::Descending {
+            items.reverse();
+        }
+        let total = items.len() as i64;
+        let page: Vec<Purchase> = items
+            .into_iter()
+            .skip(query.page.offset() as usize)
+            .take(query.page.limit() as usize)
+            .collect();
+        Ok(Paginated::new(page, total, query.page))
+    }
+
+    async fn list_open(&self) -> Result<Vec<Purchase>> {
+        Ok(self
+            .rows
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|row| row.state != PurchaseState::Cancelled)
+            .cloned()
+            .collect())
+    }
+
+    async fn insert(
+        &self,
+        purchase: &Purchase,
+        stock: Option<&NewStockFromPurchase>,
+    ) -> Result<()> {
+        if let Some(stock) = stock {
+            self.stock.lock().unwrap().push(stock.item.clone());
+        }
+        self.rows.lock().unwrap().push(purchase.clone());
+        Ok(())
+    }
+
+    async fn update(
+        &self,
+        purchase: &Purchase,
+        expected: Revision,
+        stock: Option<&NewStockFromPurchase>,
+    ) -> Result<UpdateOutcome> {
+        let mut rows = self.rows.lock().unwrap();
+        let Some(existing) = rows.iter_mut().find(|row| row.id == purchase.id) else {
+            return Ok(UpdateOutcome::NotFound);
+        };
+        if existing.revision != expected {
+            return Ok(UpdateOutcome::RevisionMismatch {
+                actual: existing.revision,
+            });
+        }
+        if let Some(stock) = stock {
+            self.stock.lock().unwrap().push(stock.item.clone());
+        }
+        *existing = purchase.clone();
+        Ok(UpdateOutcome::Updated)
     }
 }

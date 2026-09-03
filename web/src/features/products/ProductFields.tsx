@@ -1,4 +1,5 @@
 import Grid from '@mui/material/Grid';
+import MenuItem from '@mui/material/MenuItem';
 import Stack from '@mui/material/Stack';
 import TextField from '@mui/material/TextField';
 import type { Unit } from '../../api/client';
@@ -18,6 +19,7 @@ export type ProductDraft = {
   packAmount: string;
   packUnit: Unit;
   servingsPerPack: string;
+  trackStock: 'default' | 'yes' | 'no';
   nutrition: NutritionDraft;
 };
 
@@ -78,6 +80,20 @@ export function ProductFields({
             </Grid>
           );
         })}
+
+        <Grid size={{ xs: 12, sm: 6 }}>
+          <TextField
+            select
+            label="Track stock"
+            value={draft.trackStock}
+            onChange={(e) => set('trackStock', e.target.value as ProductDraft['trackStock'])}
+            fullWidth
+          >
+            <MenuItem value="default">Default</MenuItem>
+            <MenuItem value="yes">Yes</MenuItem>
+            <MenuItem value="no">No</MenuItem>
+          </TextField>
+        </Grid>
 
         <Grid size={{ xs: 6, sm: 6 }}>
           <TextField

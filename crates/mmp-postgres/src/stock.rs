@@ -80,6 +80,47 @@ fn level_bindings(level: &StockLevel) -> LevelBindings {
     }
 }
 
+pub(crate) async fn insert_stock_item(
+    conn: &mut sqlx::PgConnection,
+    item: &StockItem,
+    event: &NewStockEvent,
+) -> Result<()> {
+    let bindings = level_bindings(&item.level);
+
+    sqlx::query(
+        "INSERT INTO stock_item (
+             id, product_id, tracking_mode, quantity_value, quantity_unit,
+             storage_location,
+             source_date, source_date_kind, usability_deadline, usability_deadline_basis,
+             note, revision, created_at, updated_at
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)",
+    )
+    .bind(item.id.as_uuid())
+    .bind(item.product_id.as_uuid())
+    .bind(bindings.tracking_mode)
+    .bind(bindings.quantity_value)
+    .bind(bindings.quantity_unit)
+    .bind(item.storage_location.code())
+    .bind(item.source_date.as_ref().map(|d| d.date))
+    .bind(item.source_date.as_ref().map(|d| d.kind.code()))
+    .bind(item.usability_deadline.as_ref().map(|d| d.date))
+    .bind(
+        item.usability_deadline
+            .as_ref()
+            .and_then(|d| d.basis.clone()),
+    )
+    .bind(item.note.as_deref())
+    .bind(item.revision.get())
+    .bind(item.created_at)
+    .bind(item.updated_at)
+    .execute(&mut *conn)
+    .await
+    .map_err(|e| map_db_error(e, "creating a stock item"))?;
+
+    write_event(&mut *conn, item.id, event).await?;
+    Ok(())
+}
+
 async fn write_event<'e, E>(exec: E, item_id: StockItemId, event: &NewStockEvent) -> Result<()>
 where
     E: sqlx::PgExecutor<'e>,
@@ -471,44 +512,13 @@ impl StockRepository for PgStockRepository {
     }
 
     async fn insert(&self, item: &StockItem, event: &NewStockEvent) -> Result<()> {
-        let bindings = level_bindings(&item.level);
         let mut tx = self
             .pool
             .begin()
             .await
             .map_err(|e| repository_error("starting a stock insert", e))?;
 
-        sqlx::query(
-            "INSERT INTO stock_item (
-                 id, product_id, tracking_mode, quantity_value, quantity_unit,
-                 storage_location,
-                 source_date, source_date_kind, usability_deadline, usability_deadline_basis,
-                 note, revision, created_at, updated_at
-             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)",
-        )
-        .bind(item.id.as_uuid())
-        .bind(item.product_id.as_uuid())
-        .bind(bindings.tracking_mode)
-        .bind(bindings.quantity_value)
-        .bind(bindings.quantity_unit)
-        .bind(item.storage_location.code())
-        .bind(item.source_date.as_ref().map(|d| d.date))
-        .bind(item.source_date.as_ref().map(|d| d.kind.code()))
-        .bind(item.usability_deadline.as_ref().map(|d| d.date))
-        .bind(
-            item.usability_deadline
-                .as_ref()
-                .and_then(|d| d.basis.clone()),
-        )
-        .bind(item.note.as_deref())
-        .bind(item.revision.get())
-        .bind(item.created_at)
-        .bind(item.updated_at)
-        .execute(&mut *tx)
-        .await
-        .map_err(|e| map_db_error(e, "creating a stock item"))?;
-
-        write_event(&mut *tx, item.id, event).await?;
+        insert_stock_item(&mut tx, item, event).await?;
 
         tx.commit()
             .await

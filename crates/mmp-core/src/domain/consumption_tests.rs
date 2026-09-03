@@ -17,6 +17,7 @@ fn product_with(
         barcode: None,
         retailer: None,
         shopping_section: None,
+        track_stock: None,
         package_quantity,
         servings_per_pack,
         mapped_ingredient_id: None,

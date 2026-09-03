@@ -552,6 +552,8 @@ pub struct DemandClaimDto {
     pub scope: MealPlanScope,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub recipe_name: Option<String>,
+    /// The meal is past its time but nobody has said what happened.
+    pub assumed: bool,
 }
 
 impl From<DemandClaim> for DemandClaimDto {
@@ -564,6 +566,7 @@ impl From<DemandClaim> for DemandClaimDto {
             slot: value.slot,
             scope: value.scope,
             recipe_name: value.recipe_name,
+            assumed: value.assumed,
         }
     }
 }

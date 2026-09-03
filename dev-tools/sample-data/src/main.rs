@@ -53,6 +53,7 @@ async fn main() -> anyhow::Result<()> {
         stock_effects_applied = report.stock_effects_applied,
         household_participants_created = report.household_participants_created,
         diary_entries_created = report.diary_entries_created,
+        shopping_seeded = report.shopping_seeded,
         "sample data loaded"
     );
 

@@ -18,6 +18,7 @@ pub struct Product {
     pub barcode: Option<String>,
     pub retailer: Option<String>,
     pub shopping_section: Option<String>,
+    pub track_stock: Option<bool>,
     pub package_quantity: Option<Quantity>,
     pub servings_per_pack: Option<i32>,
     pub mapped_ingredient_id: Option<IngredientId>,
@@ -62,6 +63,7 @@ pub struct NewProduct {
     pub barcode: Option<String>,
     pub retailer: Option<String>,
     pub shopping_section: Option<String>,
+    pub track_stock: Option<bool>,
     pub package_quantity: Option<Quantity>,
     pub servings_per_pack: Option<i32>,
     pub mapped_ingredient_id: Option<IngredientId>,
@@ -76,6 +78,7 @@ pub struct ProductPatch {
     pub barcode: Patch<String>,
     pub retailer: Patch<String>,
     pub shopping_section: Patch<String>,
+    pub track_stock: Patch<bool>,
     pub package_quantity: Patch<Quantity>,
     pub servings_per_pack: Patch<i32>,
     pub nutrition: Option<NutritionFacts>,
@@ -88,6 +91,7 @@ impl ProductPatch {
             && self.barcode.is_unchanged()
             && self.retailer.is_unchanged()
             && self.shopping_section.is_unchanged()
+            && self.track_stock.is_unchanged()
             && self.package_quantity.is_unchanged()
             && self.servings_per_pack.is_unchanged()
             && self.nutrition.is_none()

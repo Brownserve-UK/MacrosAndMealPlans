@@ -1,6 +1,6 @@
 use mmp_core::domain::{
     CatalogueOrigin, Ingredient, IngredientId, IngredientPatch, IngredientSummary, NewIngredient,
-    NewProduct, Patch, Product, ProductPatch, Provenance, Unit,
+    NewProduct, Patch, Product, ProductPatch, Provenance, ShoppingSection, Unit,
 };
 use mmp_core::ports::Paginated;
 use serde::{Deserialize, Serialize};
@@ -17,6 +17,10 @@ pub struct IngredientDto {
     #[schema(example = "Whole Milk")]
     pub name: String,
     pub default_unit: Unit,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shopping_section: Option<ShoppingSection>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub track_stock: Option<bool>,
     pub provenance: ProvenanceDto,
     #[schema(example = 1)]
     pub revision: i64,
@@ -40,6 +44,8 @@ impl From<Ingredient> for IngredientDto {
             id: value.id.as_uuid(),
             name: value.name,
             default_unit: value.default_unit,
+            shopping_section: value.shopping_section,
+            track_stock: value.track_stock,
             provenance: value.provenance.into(),
             revision: value.revision.get(),
             created_at: value.created_at,
@@ -56,6 +62,10 @@ pub struct CreateIngredientRequest {
     #[schema(example = "Whole Milk")]
     pub name: String,
     pub default_unit: Unit,
+    #[serde(default)]
+    pub shopping_section: Option<ShoppingSection>,
+    #[serde(default)]
+    pub track_stock: Option<bool>,
 }
 
 impl From<CreateIngredientRequest> for NewIngredient {
@@ -64,6 +74,8 @@ impl From<CreateIngredientRequest> for NewIngredient {
             id: value.id.map(IngredientId::from),
             name: value.name,
             default_unit: value.default_unit,
+            shopping_section: value.shopping_section,
+            track_stock: value.track_stock,
             provenance: Provenance::local(),
         }
     }
@@ -75,6 +87,12 @@ pub struct UpdateIngredientRequest {
     pub name: Option<String>,
     #[serde(default)]
     pub default_unit: Option<Unit>,
+    #[serde(default)]
+    #[schema(value_type = Option<ShoppingSection>)]
+    pub shopping_section: Patch<ShoppingSection>,
+    #[serde(default)]
+    #[schema(value_type = Option<bool>)]
+    pub track_stock: Patch<bool>,
 }
 
 impl From<UpdateIngredientRequest> for IngredientPatch {
@@ -82,6 +100,8 @@ impl From<UpdateIngredientRequest> for IngredientPatch {
         Self {
             name: value.name,
             default_unit: value.default_unit,
+            shopping_section: value.shopping_section,
+            track_stock: value.track_stock,
         }
     }
 }
@@ -135,6 +155,8 @@ pub struct ProductDto {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub shopping_section: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub track_stock: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub package_quantity: Option<QuantityDto>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(example = 6)]
@@ -167,6 +189,7 @@ impl From<Product> for ProductDto {
             barcode: value.barcode,
             retailer: value.retailer,
             shopping_section: value.shopping_section,
+            track_stock: value.track_stock,
             package_quantity: value.package_quantity.map(Into::into),
             servings_per_pack: value.servings_per_pack,
             mapped_ingredient_id: value.mapped_ingredient_id.map(|id| id.as_uuid()),
@@ -195,6 +218,8 @@ pub struct CreateProductRequest {
     #[serde(default)]
     pub shopping_section: Option<String>,
     #[serde(default)]
+    pub track_stock: Option<bool>,
+    #[serde(default)]
     pub package_quantity: Option<QuantityDto>,
     #[serde(default)]
     pub servings_per_pack: Option<i32>,
@@ -213,6 +238,7 @@ impl From<CreateProductRequest> for NewProduct {
             barcode: value.barcode,
             retailer: value.retailer,
             shopping_section: value.shopping_section,
+            track_stock: value.track_stock,
             package_quantity: value.package_quantity.map(Into::into),
             servings_per_pack: value.servings_per_pack,
             mapped_ingredient_id: value.mapped_ingredient_id.map(IngredientId::from),
@@ -239,6 +265,9 @@ pub struct UpdateProductRequest {
     #[schema(value_type = Option<String>)]
     pub shopping_section: Patch<String>,
     #[serde(default)]
+    #[schema(value_type = Option<bool>)]
+    pub track_stock: Patch<bool>,
+    #[serde(default)]
     #[schema(value_type = Option<QuantityDto>)]
     pub package_quantity: Patch<QuantityDto>,
     #[serde(default)]
@@ -256,6 +285,7 @@ impl From<UpdateProductRequest> for ProductPatch {
             barcode: value.barcode,
             retailer: value.retailer,
             shopping_section: value.shopping_section,
+            track_stock: value.track_stock,
             package_quantity: value.package_quantity.map(Into::into),
             servings_per_pack: value.servings_per_pack,
             nutrition: value.nutrition.map(Into::into),

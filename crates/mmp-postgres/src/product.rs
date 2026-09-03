@@ -11,7 +11,7 @@ use crate::rows::{ProductRow, nutrition_bindings};
 
 macro_rules! columns {
     () => {
-        "id, name, brand, barcode, retailer, shopping_section, package_quantity_amount, package_quantity_unit, servings_per_pack, mapped_ingredient_id, nutrition_basis_amount, nutrition_basis_unit, energy_kcal, protein_g, carbohydrate_g, sugar_g, fat_g, saturated_fat_g, fibre_g, salt_g, cholesterol_mg, nutrition_extra, origin, seed_key, source_provider, source_external_id, locally_modified, revision, created_at, updated_at, archived_at"
+        "id, name, brand, barcode, retailer, shopping_section, track_stock, package_quantity_amount, package_quantity_unit, servings_per_pack, mapped_ingredient_id, nutrition_basis_amount, nutrition_basis_unit, energy_kcal, protein_g, carbohydrate_g, sugar_g, fat_g, saturated_fat_g, fibre_g, salt_g, cholesterol_mg, nutrition_extra, origin, seed_key, source_provider, source_external_id, locally_modified, revision, created_at, updated_at, archived_at"
     };
 }
 
@@ -190,6 +190,7 @@ impl ProductRepository for PgProductRepository {
                  energy_kcal, protein_g, carbohydrate_g, sugar_g, fat_g,
                  saturated_fat_g, fibre_g, salt_g, cholesterol_mg, nutrition_extra,
                  origin, seed_key, source_provider, source_external_id, locally_modified,
+                 track_stock,
                  revision, created_at, updated_at, archived_at
              ) VALUES (
                  $1, $2, $3, $4, $5, $6,
@@ -199,6 +200,7 @@ impl ProductRepository for PgProductRepository {
                  $13, $14, $15, $16, $17,
                  $18, $19, $20, $21, $22,
                  $23, $24, $25, $26, $27,
+                 $32,
                  $28, $29, $30, $31
              )",
         )
@@ -233,6 +235,7 @@ impl ProductRepository for PgProductRepository {
         .bind(product.created_at)
         .bind(product.updated_at)
         .bind(product.archived_at)
+        .bind(product.track_stock)
         .execute(&self.pool)
         .await
         .map_err(|e| map_db_error(e, "creating a product"))?;
@@ -253,6 +256,7 @@ impl ProductRepository for PgProductRepository {
                  cholesterol_mg = $21, nutrition_extra = $22,
                  origin = $23, seed_key = $24, source_provider = $25, source_external_id = $26,
                  locally_modified = $27,
+                 track_stock = $32,
                  revision = $28, updated_at = $29, archived_at = $30
              WHERE id = $1 AND revision = $31",
         )
@@ -287,6 +291,7 @@ impl ProductRepository for PgProductRepository {
         .bind(product.updated_at)
         .bind(product.archived_at)
         .bind(expected.get())
+        .bind(product.track_stock)
         .execute(&self.pool)
         .await
         .map_err(|e| map_db_error(e, "updating a product"))?
