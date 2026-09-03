@@ -3407,6 +3407,13 @@ async fn the_shopping_routes_need_the_shopping_permissions() {
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN);
 
+    let (status, _, _) = send(
+        &app,
+        Call::new("POST", "/api/v1/shopping/opportunities/2026-09-05/finish").signed_in_as("nina"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
     create_user(&app, "sam", &["basic_user"]).await;
     let (status, _, _) = send(
         &app,
@@ -3414,6 +3421,14 @@ async fn the_shopping_routes_need_the_shopping_permissions() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
+
+    let (status, body, _) = send(
+        &app,
+        Call::new("POST", "/api/v1/shopping/opportunities/2026-09-05/finish").signed_in_as("sam"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["stocked"], 0);
 }
 
 #[tokio::test]

@@ -9,9 +9,10 @@ use uuid::Uuid;
 
 use crate::auth::{Permission, Principal};
 use crate::dto::{
-    CreateOpportunityRequest, CreatePurchaseRequest, MoveOpportunityRequest, OpportunityRangeQuery,
-    PageMeta, PurchaseDto, PurchaseListQuery, PurchasePage, SetShoppingCadenceRequest,
-    ShoppingCadenceDto, ShoppingListDto, ShoppingListQuery, ShoppingOpportunityDto, purchase_id,
+    CreateOpportunityRequest, CreatePurchaseRequest, FinishShopResponse, MoveOpportunityRequest,
+    OpportunityRangeQuery, PageMeta, PurchaseDto, PurchaseListQuery, PurchasePage,
+    SetShoppingCadenceRequest, ShoppingCadenceDto, ShoppingListDto, ShoppingListQuery,
+    ShoppingOpportunityDto, purchase_id,
 };
 use crate::error::ApiResult;
 use crate::http::Created;
@@ -22,6 +23,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(requirements))
         .routes(routes!(opportunities, create_opportunity))
         .routes(routes!(move_opportunity, skip_opportunity))
+        .routes(routes!(finish_shop))
         .routes(routes!(get_cadence, set_cadence, clear_cadence))
         .routes(routes!(list_purchases, create_purchase))
         .routes(routes!(update_purchase))
@@ -293,9 +295,34 @@ async fn update_purchase(
     principal.require(Permission::ShoppingWrite)?;
     let purchase = state
         .shopping
-        .update_purchase(purchase_id(id), revision, body.into(), principal.user_id)
+        .update_purchase(purchase_id(id), revision, body.into())
         .await?;
     Ok(crate::http::Tagged(purchase.revision, purchase.into()))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/shopping/opportunities/{date}/finish",
+    params(("date" = String, Path, description = "The shop being finished, as YYYY-MM-DD")),
+    operation_id = "finishShop",
+    responses(
+        (status = 200, description = "The shop was finished", body = FinishShopResponse),
+        (status = 400, description = "The date could not be read", body = crate::error::Problem),
+    ),
+    tag = "shopping",
+    security(("basic" = []))
+)]
+async fn finish_shop(
+    State(state): State<AppState>,
+    principal: Principal,
+    Path(date): Path<String>,
+) -> ApiResult<Json<FinishShopResponse>> {
+    principal.require(Permission::ShoppingWrite)?;
+    let finished = state
+        .shopping
+        .finish_shop(parse_date(&date)?, principal.user_id)
+        .await?;
+    Ok(Json(finished.into()))
 }
 
 fn parse_date(raw: &str) -> Result<Date, crate::error::ApiError> {

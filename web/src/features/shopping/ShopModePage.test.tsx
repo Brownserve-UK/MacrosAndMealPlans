@@ -5,20 +5,25 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { shoppingList } from './fixtures';
 import { ShopModePage } from './ShopModePage';
 
+const navigate = vi.fn();
 vi.mock('@tanstack/react-router', () => ({
-  Link: ({ children }: { children: React.ReactNode }) => children,
+  useNavigate: () => navigate,
 }));
 
 const record = vi.fn();
 const recordAsync = vi.fn();
 const update = vi.fn();
 const updateAsync = vi.fn();
+const finishAsync = vi.fn();
 
 vi.mock('../../api/queries', () => ({
   useShoppingList: () => ({ isLoading: false, isError: false, data: shoppingList }),
-  useProducts: () => ({ data: { items: [{ id: 'butter-1', name: 'Salted butter' }], total: 1 } }),
+  useProducts: () => ({
+    data: { items: [{ id: 'butter-1', name: 'Salted butter' }], total: 1 },
+  }),
   useRecordPurchase: () => ({ isPending: false, mutate: record, mutateAsync: recordAsync }),
   useUpdatePurchase: () => ({ isPending: false, mutate: update, mutateAsync: updateAsync }),
+  useFinishShop: () => ({ isPending: false, mutateAsync: finishAsync }),
   useUnits: () => ({ data: ['g', 'ml'] }),
 }));
 
@@ -32,10 +37,12 @@ function renderPage() {
 }
 
 beforeEach(() => {
+  navigate.mockReset();
   record.mockReset();
   recordAsync.mockReset();
   update.mockReset();
   updateAsync.mockReset();
+  finishAsync.mockReset();
 });
 
 describe('ShopModePage', () => {
@@ -58,49 +65,88 @@ describe('ShopModePage', () => {
     });
   });
 
-  it('unticking a bought item cancels the purchase', async () => {
+  it('unticking cancels every purchase on that row', async () => {
     const user = userEvent.setup();
     renderPage();
 
     await user.click(screen.getByRole('checkbox', { name: 'Bought Butter' }));
 
+    expect(update).toHaveBeenCalledTimes(2);
     expect(update).toHaveBeenCalledWith({ id: 'p1', revision: 1, cancelled: true });
+    expect(update).toHaveBeenCalledWith({ id: 'p2', revision: 1, cancelled: true });
   });
 
-  it('opening a bought item offers the details of what was bought', async () => {
+  it('shows what is in the trolley, including a line with no details yet', async () => {
     const user = userEvent.setup();
     renderPage();
 
     await user.click(screen.getByText('Butter'));
 
     const dialog = screen.getByRole('dialog');
-    expect(within(dialog).getByLabelText('Amount')).toBeInTheDocument();
-    expect(within(dialog).getByRole('button', { name: 'Add to stock' })).toBeInTheDocument();
+    expect(within(dialog).getByText('In the trolley')).toBeInTheDocument();
+    expect(within(dialog).getByText('Product not said yet')).toBeInTheDocument();
+    expect(within(dialog).getByText('Amount not said yet')).toBeInTheDocument();
+    expect(within(dialog).getByText('Salted butter')).toBeInTheDocument();
+    expect(within(dialog).getByText('500 g')).toBeInTheDocument();
   });
 
-  it('sends the amount actually bought, not the amount needed', async () => {
+  it('lets you change your mind about what you picked up', async () => {
     const user = userEvent.setup();
     renderPage();
 
     await user.click(screen.getByText('Butter'));
-    const dialog = screen.getByRole('dialog');
-    const amount = within(dialog).getByLabelText('Amount');
+    await user.click(screen.getByRole('button', { name: 'Change Salted butter' }));
+
+    const form = screen.getByRole('dialog');
+    const amount = within(form).getByLabelText('Amount');
     await user.clear(amount);
-    await user.type(amount, '500');
-    await user.click(within(dialog).getByRole('button', { name: 'Add to stock' }));
+    await user.type(amount, '750');
+    await user.click(within(form).getByRole('button', { name: 'Save' }));
 
     expect(updateAsync).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'p1', quantity: { amount: 500, unit: 'g' } }),
+      expect.objectContaining({ id: 'p2', quantity: { amount: 750, unit: 'g' } }),
     );
   });
 
-  it('leaves an unbought item read-only until it is ticked', async () => {
+  it('lets you add a second product against one item', async () => {
     const user = userEvent.setup();
     renderPage();
 
-    await user.click(screen.getByText('Whole Milk'));
+    await user.click(screen.getByText('Butter'));
+    await user.click(screen.getByRole('button', { name: 'Add another' }));
 
-    const dialog = screen.getByRole('dialog');
-    expect(within(dialog).queryByLabelText('Amount')).toBeNull();
+    const form = screen.getByRole('dialog');
+    expect(within(form).getByText('Add what you bought')).toBeInTheDocument();
+    await user.click(within(form).getByRole('button', { name: 'Save' }));
+
+    expect(recordAsync).toHaveBeenCalledWith(
+      expect.objectContaining({ ingredient_id: 'butter', product_id: 'butter-1' }),
+    );
+  });
+
+  it('removes a trolley line', async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(screen.getByText('Butter'));
+    await user.click(screen.getByRole('button', { name: 'Remove Salted butter' }));
+
+    expect(updateAsync).toHaveBeenCalledWith({ id: 'p2', revision: 1, cancelled: true });
+  });
+
+  it('finishing the shop says what happens, then reconciles the focused shop', async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(screen.getByRole('button', { name: 'Finish shop' }));
+
+    const confirm = screen.getByRole('dialog');
+    expect(confirm).toHaveTextContent('1 item goes into your stock.');
+    expect(confirm).toHaveTextContent('1 still needs details and will wait.');
+
+    await user.click(within(confirm).getByRole('button', { name: 'Finish' }));
+
+    expect(finishAsync).toHaveBeenCalledWith('2026-09-05');
+    expect(navigate).toHaveBeenCalledWith({ to: '/shopping' });
   });
 });

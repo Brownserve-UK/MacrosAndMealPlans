@@ -1,26 +1,38 @@
 import Button from '@mui/material/Button';
+import DialogActions from '@mui/material/DialogActions';
+import DialogContent from '@mui/material/DialogContent';
+import DialogTitle from '@mui/material/DialogTitle';
 import Divider from '@mui/material/Divider';
 import Paper from '@mui/material/Paper';
 import Stack from '@mui/material/Stack';
 import Typography from '@mui/material/Typography';
-import { Link } from '@tanstack/react-router';
+import { useNavigate } from '@tanstack/react-router';
 import { useMemo, useState } from 'react';
 import type { ShoppingRequirement } from '../../api/client';
-import { useRecordPurchase, useShoppingList, useUpdatePurchase } from '../../api/queries';
+import {
+  useFinishShop,
+  useRecordPurchase,
+  useShoppingList,
+  useUpdatePurchase,
+} from '../../api/queries';
+import { FormDialog } from '../../components/FormDialog';
 import { PageHeader } from '../../components/PageHeader';
 import { EmptyState, ErrorState, Loading } from '../../components/States';
 import { formatFullDate } from '../meal-plan/date';
 import { groupBySection } from './grouping';
 import { RequirementCard } from './RequirementCard';
 import { RequirementDialog } from './RequirementDialog';
-import { requirementKey } from './requirementKey';
+import { purchasesOf, requirementKey } from './requirementKey';
 import { sectionLabel } from './sections';
 
 export function ShopModePage() {
-  const [showing, setShowing] = useState<ShoppingRequirement | null>(null);
+  const [showingKey, setShowingKey] = useState<string | null>(null);
+  const [finishing, setFinishing] = useState(false);
+  const navigate = useNavigate();
   const list = useShoppingList(undefined);
   const record = useRecordPurchase();
   const update = useUpdatePurchase();
+  const finish = useFinishShop();
 
   const grouped = useMemo(() => groupBySection(list.data?.requirements ?? []), [list.data]);
 
@@ -28,13 +40,27 @@ export function ShopModePage() {
   if (list.isError) return <ErrorState error={list.error} onRetry={() => list.refetch()} />;
 
   const data = list.data!;
+  const showing =
+    data.requirements.find((requirement) => requirementKey(requirement) === showingKey) ?? null;
   const nextShopAfter = data.opportunities.find(
     (opportunity) => opportunity.date > (data.focus ?? ''),
   )?.date;
-  const bought = data.requirements.filter((requirement) => requirement.purchase != null).length;
+  const trolley = data.requirements.flatMap(purchasesOf);
+  const bought = data.requirements.filter(
+    (requirement) => purchasesOf(requirement).length > 0,
+  ).length;
+  const ready = trolley.filter((purchase) => purchase.product_id && purchase.quantity).length;
+  const waiting = trolley.length - ready;
+
+  async function onFinish() {
+    if (!data.focus) return;
+    await finish.mutateAsync(data.focus);
+    setFinishing(false);
+    void navigate({ to: '/shopping' });
+  }
 
   function toggle(requirement: ShoppingRequirement, next: boolean) {
-    const purchase = requirement.purchase;
+    const purchases = purchasesOf(requirement);
     if (next) {
       record.mutate({
         ingredient_id:
@@ -43,8 +69,10 @@ export function ShopModePage() {
           requirement.subject.kind === 'product' ? requirement.subject.product_id : undefined,
         opportunity_date: data.focus ?? undefined,
       });
-    } else if (purchase) {
-      update.mutate({ id: purchase.id, revision: purchase.revision, cancelled: true });
+    } else {
+      for (const purchase of purchases) {
+        update.mutate({ id: purchase.id, revision: purchase.revision, cancelled: true });
+      }
     }
   }
 
@@ -54,8 +82,12 @@ export function ShopModePage() {
         title={data.focus ? formatFullDate(data.focus) : 'Shopping'}
         subtitle={`${bought} of ${data.requirements.length} in the trolley`}
         actions={
-          <Button component={Link} to="/shopping" variant="outlined">
-            Done
+          <Button
+            variant="contained"
+            disabled={trolley.length === 0 || !data.focus}
+            onClick={() => setFinishing(true)}
+          >
+            Finish shop
           </Button>
         }
       />
@@ -79,9 +111,9 @@ export function ShopModePage() {
                   <RequirementCard
                     requirement={requirement}
                     nextShopAfter={nextShopAfter}
-                    bought={requirement.purchase != null}
+                    bought={purchasesOf(requirement).length > 0}
                     onToggle={(next) => toggle(requirement, next)}
-                    onOpen={() => setShowing(requirement)}
+                    onOpen={() => setShowingKey(requirementKey(requirement))}
                   />
                 </div>
               ))}
@@ -90,12 +122,38 @@ export function ShopModePage() {
         </Stack>
       )}
 
+      <FormDialog open={finishing} onClose={() => setFinishing(false)} maxWidth="xs" fullWidth>
+        <DialogTitle>Finish shop</DialogTitle>
+        <DialogContent>
+          <Typography variant="body1">
+            {ready === 1 ? '1 item goes into your stock.' : `${ready} items go into your stock.`}
+          </Typography>
+          {waiting > 0 ? (
+            <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+              {waiting === 1
+                ? '1 still needs details and will wait.'
+                : `${waiting} still need details and will wait.`}
+            </Typography>
+          ) : null}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setFinishing(false)}>Cancel</Button>
+          <Button
+            variant="contained"
+            disabled={finish.isPending}
+            onClick={() => void onFinish()}
+          >
+            {finish.isPending ? 'Saving…' : 'Finish'}
+          </Button>
+        </DialogActions>
+      </FormDialog>
+
       <RequirementDialog
         open={showing != null}
         requirement={showing}
         opportunityDate={data.focus}
-        buying={showing?.purchase != null}
-        onClose={() => setShowing(null)}
+        buying
+        onClose={() => setShowingKey(null)}
       />
     </>
   );

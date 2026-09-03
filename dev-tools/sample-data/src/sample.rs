@@ -783,21 +783,36 @@ impl Loader<'_> {
         )
         .await?;
 
-        if self.state.shopping.pending_purchases().await?.is_empty() {
+        if self.state.shopping.pending_purchases().await?.is_empty()
+            && let Some(focus) = self.state.shopping.requirements(None).await?.focus
+        {
             self.state
                 .shopping
                 .record_purchase(
                     NewPurchase {
-                        ingredient_id: Some(IngredientId::seeded("salted-butter")),
+                        ingredient_id: Some(IngredientId::seeded("chicken-breast")),
+                        product_id: Some(product_id("chicken-breast")),
+                        quantity: Some(quantity(600, Unit::Gram)),
+                        opportunity_date: Some(focus),
+                        note: None,
+                    },
+                    self.actor.id,
+                )
+                .await?;
+            self.state
+                .shopping
+                .record_purchase(
+                    NewPurchase {
+                        ingredient_id: Some(IngredientId::seeded("broccoli")),
                         product_id: None,
                         quantity: None,
-                        opportunity_date: None,
+                        opportunity_date: Some(focus),
                         note: Some("grabbed some, forgot to look at the pack".to_owned()),
                     },
                     self.actor.id,
                 )
                 .await?;
-            self.report.shopping_seeded += 1;
+            self.report.shopping_seeded += 2;
         }
 
         Ok(())

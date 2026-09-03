@@ -384,57 +384,13 @@ async fn buying_without_details_records_the_purchase_but_creates_no_stock() {
     let list = h.shopping.requirements(None).await.unwrap();
     let requirement = &list.requirements[0];
     assert_eq!(requirement.quantity, Some(ml(300)));
-    assert!(requirement.purchase.is_some());
+    assert_eq!(requirement.purchases.len(), 1);
 }
 
 #[tokio::test]
-async fn completing_a_purchase_creates_stock_at_the_amount_actually_bought() {
+async fn buying_with_full_details_still_makes_no_stock_until_the_shop_is_finished() {
     let h = harness();
-    let milk = IngredientId::new();
-    seed_ingredient(&h, milk, "Whole Milk");
-    let a = mapped("Sample Whole Milk", milk);
-    h.products.seed(a.clone());
-
-    let purchase = h
-        .shopping
-        .record_purchase(
-            NewPurchase {
-                ingredient_id: Some(milk),
-                product_id: None,
-                quantity: None,
-                opportunity_date: None,
-                note: None,
-            },
-            h.actor_id,
-        )
-        .await
-        .unwrap();
-
-    let completed = h
-        .shopping
-        .update_purchase(
-            purchase.id,
-            purchase.revision,
-            PurchasePatch {
-                product_id: Some(a.id),
-                quantity: Some(ml(2000)),
-                ..Default::default()
-            },
-            h.actor_id,
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(completed.state, PurchaseState::Reconciled);
-    let created = h.purchases.created_stock();
-    assert_eq!(created.len(), 1);
-    assert_eq!(created[0].level, StockLevel::Exact { quantity: ml(2000) });
-    assert_eq!(completed.stock_item_id, Some(created[0].id));
-}
-
-#[tokio::test]
-async fn buying_with_full_details_goes_straight_into_stock() {
-    let h = harness();
+    weekly_saturdays(&h).await;
     let milk = IngredientId::new();
     seed_ingredient(&h, milk, "Whole Milk");
     let a = mapped("Sample Whole Milk", milk);
@@ -447,7 +403,7 @@ async fn buying_with_full_details_goes_straight_into_stock() {
                 ingredient_id: Some(milk),
                 product_id: Some(a.id),
                 quantity: Some(ml(1000)),
-                opportunity_date: None,
+                opportunity_date: Some(date!(2026 - 09 - 05)),
                 note: None,
             },
             h.actor_id,
@@ -455,9 +411,209 @@ async fn buying_with_full_details_goes_straight_into_stock() {
         .await
         .unwrap();
 
-    assert_eq!(purchase.state, PurchaseState::Reconciled);
-    assert!(purchase.stock_item_id.is_some());
+    assert_eq!(purchase.state, PurchaseState::Pending);
+    assert_eq!(purchase.stock_item_id, None);
+    assert!(h.purchases.created_stock().is_empty());
+
+    let finished = h
+        .shopping
+        .finish_shop(date!(2026 - 09 - 05), h.actor_id)
+        .await
+        .unwrap();
+
+    assert_eq!(finished.stocked, 1);
+    assert_eq!(finished.still_pending, 0);
+    let created = h.purchases.created_stock();
+    assert_eq!(created.len(), 1);
+    assert_eq!(created[0].level, StockLevel::Exact { quantity: ml(1000) });
+}
+
+#[tokio::test]
+async fn changing_your_mind_mid_shop_is_allowed_at_every_step() {
+    let h = harness();
+    weekly_saturdays(&h).await;
+    let milk = IngredientId::new();
+    seed_ingredient(&h, milk, "Whole Milk");
+    let a = mapped("Sample Whole Milk", milk);
+    let b = mapped("Sample Value Whole Milk", milk);
+    h.products.seed(a.clone());
+    h.products.seed(b.clone());
+
+    let purchase = h
+        .shopping
+        .record_purchase(
+            NewPurchase {
+                ingredient_id: Some(milk),
+                product_id: Some(a.id),
+                quantity: Some(ml(1000)),
+                opportunity_date: Some(date!(2026 - 09 - 05)),
+                note: None,
+            },
+            h.actor_id,
+        )
+        .await
+        .unwrap();
+
+    let swapped = h
+        .shopping
+        .update_purchase(
+            purchase.id,
+            purchase.revision,
+            PurchasePatch {
+                product_id: Some(b.id),
+                quantity: Some(ml(2000)),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(swapped.product_id, Some(b.id));
+    assert_eq!(swapped.quantity, Some(ml(2000)));
+    assert_eq!(swapped.state, PurchaseState::Pending);
+
+    let dropped = h
+        .shopping
+        .update_purchase(
+            swapped.id,
+            swapped.revision,
+            PurchasePatch {
+                cancelled: Some(true),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(dropped.state, PurchaseState::Cancelled);
+    assert!(h.purchases.created_stock().is_empty());
+}
+
+#[tokio::test]
+async fn two_products_can_answer_one_requirement() {
+    let h = harness();
+    weekly_saturdays(&h).await;
+    let milk = IngredientId::new();
+    seed_ingredient(&h, milk, "Whole Milk");
+    let a = mapped("Sample Whole Milk", milk);
+    let b = mapped("Sample Value Whole Milk", milk);
+    h.products.seed(a.clone());
+    h.products.seed(b.clone());
+    plan_product(&h, a.id, ml(400), date!(2026 - 09 - 06)).await;
+
+    for (product, amount) in [(&a, ml(500)), (&b, ml(750))] {
+        h.shopping
+            .record_purchase(
+                NewPurchase {
+                    ingredient_id: Some(milk),
+                    product_id: Some(product.id),
+                    quantity: Some(amount),
+                    opportunity_date: Some(date!(2026 - 09 - 05)),
+                    note: None,
+                },
+                h.actor_id,
+            )
+            .await
+            .unwrap();
+    }
+
+    let list = h.shopping.requirements(None).await.unwrap();
+    assert_eq!(list.requirements[0].purchases.len(), 2);
+
+    let finished = h
+        .shopping
+        .finish_shop(date!(2026 - 09 - 05), h.actor_id)
+        .await
+        .unwrap();
+
+    assert_eq!(finished.stocked, 2);
+    assert_eq!(h.purchases.created_stock().len(), 2);
+}
+
+#[tokio::test]
+async fn finishing_leaves_a_purchase_with_no_details_waiting() {
+    let h = harness();
+    weekly_saturdays(&h).await;
+    let milk = IngredientId::new();
+    seed_ingredient(&h, milk, "Whole Milk");
+    h.products.seed(mapped("Sample Whole Milk", milk));
+
+    h.shopping
+        .record_purchase(
+            NewPurchase {
+                ingredient_id: Some(milk),
+                product_id: None,
+                quantity: None,
+                opportunity_date: Some(date!(2026 - 09 - 05)),
+                note: None,
+            },
+            h.actor_id,
+        )
+        .await
+        .unwrap();
+
+    let finished = h
+        .shopping
+        .finish_shop(date!(2026 - 09 - 05), h.actor_id)
+        .await
+        .unwrap();
+
+    assert_eq!(finished.stocked, 0);
+    assert_eq!(finished.still_pending, 1);
+    assert!(h.purchases.created_stock().is_empty());
+    assert_eq!(h.shopping.pending_purchases().await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn finishing_a_shop_twice_changes_nothing_and_locks_what_it_stocked() {
+    let h = harness();
+    weekly_saturdays(&h).await;
+    let milk = IngredientId::new();
+    seed_ingredient(&h, milk, "Whole Milk");
+    let a = mapped("Sample Whole Milk", milk);
+    h.products.seed(a.clone());
+
+    let purchase = h
+        .shopping
+        .record_purchase(
+            NewPurchase {
+                ingredient_id: Some(milk),
+                product_id: Some(a.id),
+                quantity: Some(ml(1000)),
+                opportunity_date: Some(date!(2026 - 09 - 05)),
+                note: None,
+            },
+            h.actor_id,
+        )
+        .await
+        .unwrap();
+
+    h.shopping
+        .finish_shop(date!(2026 - 09 - 05), h.actor_id)
+        .await
+        .unwrap();
+    let again = h
+        .shopping
+        .finish_shop(date!(2026 - 09 - 05), h.actor_id)
+        .await
+        .unwrap();
+
+    assert_eq!(again.stocked, 0);
     assert_eq!(h.purchases.created_stock().len(), 1);
+
+    let stocked = h.purchases.get(purchase.id).await.unwrap().unwrap();
+    let refused = h
+        .shopping
+        .update_purchase(
+            stocked.id,
+            stocked.revision,
+            PurchasePatch {
+                quantity: Some(ml(1)),
+                ..Default::default()
+            },
+        )
+        .await;
+    assert!(refused.is_err(), "a finished purchase is the stock record");
 }
 
 #[tokio::test]

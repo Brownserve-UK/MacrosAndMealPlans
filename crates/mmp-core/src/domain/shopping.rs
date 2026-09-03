@@ -386,7 +386,7 @@ pub struct ShoppingRequirement {
     pub assignment: Assignment,
     pub claims: Vec<DemandClaim>,
     pub gaps: Vec<DemandGap>,
-    pub purchase: Option<Purchase>,
+    pub purchases: Vec<Purchase>,
 }
 
 pub fn assign(required_by: Option<Date>, opportunities: &[ShoppingOpportunity]) -> Assignment {

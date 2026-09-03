@@ -51,30 +51,43 @@ describe('ShoppingPage', () => {
     expect(screen.queryByRole('button', { name: 'Why' })).not.toBeInTheDocument();
   });
 
-  it('explains a requirement in the pop-up, with the meals behind it', async () => {
+  it('opens the pop-up with a labelled headline and two distinguishable dates', async () => {
     const user = userEvent.setup();
     renderPage();
 
     await user.click(screen.getByText('Whole Milk'));
 
     const dialog = screen.getByRole('dialog');
-    expect(within(dialog).getByText(/Needed by Mon 7 Sept?/)).toBeInTheDocument();
-    expect(within(dialog).getByText(/Use by at least Wed 9 Sept?/)).toBeInTheDocument();
-    const lines = within(dialog)
-      .getAllByText((_, node) => (node?.textContent ?? '').includes('breakfast'))
-      .map((node) => node.textContent);
-    expect(lines.some((line) => line?.includes('Mon 7 Sep') && line.includes('300 ml'))).toBe(true);
+    expect(within(dialog).getByText('Still to buy')).toBeInTheDocument();
+    expect(within(dialog).getByText('600 ml')).toBeInTheDocument();
+    expect(within(dialog).getByText('Needed by').parentElement).toHaveTextContent(
+      /Needed byMon 7 Sept?/,
+    );
+    expect(within(dialog).getByText('Must keep until').parentElement).toHaveTextContent(
+      /Must keep untilWed 9 Sept?/,
+    );
   });
 
-  it('says in words why something is needed sooner', async () => {
+  it('lists the meals behind it', async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(screen.getByText('Whole Milk'));
+
+    const dialog = screen.getByRole('dialog');
+    expect(within(dialog).getByText('What needs it')).toBeInTheDocument();
+    expect(within(dialog).getAllByText('Breakfast')).toHaveLength(2);
+    expect(within(dialog).getAllByText('300 ml')).toHaveLength(2);
+  });
+
+  it('flags why something is needed sooner', async () => {
     const user = userEvent.setup();
     renderPage();
 
     await user.click(screen.getByText('Plain Flour'));
 
-    expect(
-      within(screen.getByRole('dialog')).getByText('Needed before your next shop.'),
-    ).toBeInTheDocument();
+    const alert = within(screen.getByRole('dialog')).getByRole('alert');
+    expect(alert).toHaveTextContent('Needed before your next shop');
   });
 
   it('offers no way to buy from planning mode', async () => {
@@ -84,6 +97,6 @@ describe('ShoppingPage', () => {
     await user.click(screen.getByText('Whole Milk'));
 
     const dialog = screen.getByRole('dialog');
-    expect(within(dialog).queryByRole('button', { name: /Mark bought|Add to stock/ })).toBeNull();
+    expect(within(dialog).queryByRole('button', { name: 'Add another' })).toBeNull();
   });
 });

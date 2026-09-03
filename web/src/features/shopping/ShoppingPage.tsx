@@ -8,7 +8,6 @@ import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
 import { Link } from '@tanstack/react-router';
 import { useMemo, useState } from 'react';
-import type { ShoppingRequirement } from '../../api/client';
 import { useShoppingList } from '../../api/queries';
 import { PageHeader } from '../../components/PageHeader';
 import { EmptyState, ErrorState, Loading } from '../../components/States';
@@ -17,12 +16,12 @@ import { groupBySection } from './grouping';
 import { OpportunitiesPanel } from './OpportunitiesPanel';
 import { RequirementCard } from './RequirementCard';
 import { RequirementDialog } from './RequirementDialog';
-import { requirementKey } from './requirementKey';
+import { purchasesOf, requirementKey } from './requirementKey';
 import { sectionLabel } from './sections';
 
 export function ShoppingPage() {
   const [focus, setFocus] = useState<string | undefined>(undefined);
-  const [showing, setShowing] = useState<ShoppingRequirement | null>(null);
+  const [showingKey, setShowingKey] = useState<string | null>(null);
   const list = useShoppingList(focus);
 
   const grouped = useMemo(() => groupBySection(list.data?.requirements ?? []), [list.data]);
@@ -31,6 +30,8 @@ export function ShoppingPage() {
   if (list.isError) return <ErrorState error={list.error} onRetry={() => list.refetch()} />;
 
   const data = list.data!;
+  const showing =
+    data.requirements.find((requirement) => requirementKey(requirement) === showingKey) ?? null;
   const nextShopAfter = data.opportunities.find(
     (opportunity) => opportunity.date > (data.focus ?? ''),
   )?.date;
@@ -103,8 +104,8 @@ export function ShoppingPage() {
                   <RequirementCard
                     requirement={requirement}
                     nextShopAfter={nextShopAfter}
-                    bought={requirement.purchase != null}
-                    onOpen={() => setShowing(requirement)}
+                    bought={purchasesOf(requirement).length > 0}
+                    onOpen={() => setShowingKey(requirementKey(requirement))}
                   />
                 </div>
               ))}
@@ -117,7 +118,7 @@ export function ShoppingPage() {
         open={showing != null}
         requirement={showing}
         opportunityDate={data.focus}
-        onClose={() => setShowing(null)}
+        onClose={() => setShowingKey(null)}
       />
     </>
   );

@@ -52,12 +52,22 @@ export const shoppingList: ShoppingList = {
       assignment: { kind: 'opportunity', date: '2026-09-05' },
       claims: [],
       gaps: [],
-      purchase: {
-        id: 'p1',
-        state: 'pending',
-        purchased_at: '2026-09-05T10:00:00Z',
-        revision: 1,
-      },
+      purchases: [
+        {
+          id: 'p1',
+          state: 'pending',
+          purchased_at: '2026-09-05T10:00:00Z',
+          revision: 1,
+        },
+        {
+          id: 'p2',
+          state: 'pending',
+          product_id: 'butter-1',
+          quantity: g(500),
+          purchased_at: '2026-09-05T10:05:00Z',
+          revision: 1,
+        },
+      ],
     },
   ],
 };

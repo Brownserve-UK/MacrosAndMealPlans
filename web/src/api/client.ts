@@ -67,6 +67,7 @@ export type ShoppingRequirement = components['schemas']['ShoppingRequirementDto'
 export type ShoppingOpportunity = components['schemas']['ShoppingOpportunityDto'];
 export type ShoppingCadence = components['schemas']['ShoppingCadenceDto'];
 export type ShoppingSection = components['schemas']['ShoppingSection'];
+export type FinishedShop = components['schemas']['FinishShopResponse'];
 export type Purchase = components['schemas']['PurchaseDto'];
 export type Certainty = components['schemas']['CertaintyDto'];
 export type Assignment = components['schemas']['AssignmentDto'];

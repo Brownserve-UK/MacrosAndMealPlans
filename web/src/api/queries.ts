@@ -1201,6 +1201,19 @@ export function useMoveShoppingOpportunity() {
   });
 }
 
+export function useFinishShop() {
+  const invalidate = useShoppingInvalidation();
+  return useMutation({
+    mutationFn: async (date: string) =>
+      unwrap(
+        await client.POST('/api/v1/shopping/opportunities/{date}/finish', {
+          params: { path: { date } },
+        }),
+      ),
+    onSuccess: invalidate,
+  });
+}
+
 export function useSkipShoppingOpportunity() {
   const invalidate = useShoppingInvalidation();
   return useMutation({

@@ -25,6 +25,6 @@ pub use recipe::{
     ResolveRequirement,
 };
 pub use seed::{SeedIngredient, SeedReport};
-pub use shopping::{ShoppingList, ShoppingService};
+pub use shopping::{FinishedShop, ShoppingList, ShoppingService};
 pub use stock::{ShoppingSnapshot, StockService};
 pub use stock_effects::{StockAffected, StockOutcomeView};

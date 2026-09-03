@@ -26,6 +26,12 @@ const OPPORTUNITY_LOOKAHEAD_DAYS: i64 = 70;
 
 const UNPLANNED_QUERY_DAYS: i64 = 28;
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct FinishedShop {
+    pub stocked: usize,
+    pub still_pending: usize,
+}
+
 #[derive(Debug, Clone)]
 pub struct ShoppingList {
     pub opportunities: Vec<ShoppingOpportunity>,
@@ -185,6 +191,8 @@ impl ShoppingService {
         let exceptions = self.opportunities.list_in_range(today, lookahead).await?;
         let opportunities = expand_opportunities(cadence.as_ref(), &exceptions, today, lookahead);
 
+        let focus = focus.or_else(|| opportunities.first().map(|first| first.date));
+
         let window_end = match opportunities.as_slice() {
             [] => today + Duration::days(UNPLANNED_QUERY_DAYS),
             [only] => only.date + Duration::days(14),
@@ -192,7 +200,16 @@ impl ShoppingService {
         };
 
         let snapshot = self.stock.shopping_snapshot(today, window_end).await?;
-        let open_purchases = self.purchases.list_open().await?;
+        let open_purchases: Vec<Purchase> = self
+            .purchases
+            .list_open()
+            .await?
+            .into_iter()
+            .filter(|purchase| match purchase.opportunity_date {
+                Some(date) => Some(date) == focus,
+                None => purchase.state == PurchaseState::Pending,
+            })
+            .collect();
 
         let mut requirements = Vec::new();
 
@@ -280,7 +297,6 @@ impl ShoppingService {
                 .then_with(|| a.name.cmp(&b.name))
         });
 
-        let focus = focus.or_else(|| opportunities.first().map(|first| first.date));
         if let Some(focus) = focus {
             requirements.retain(|requirement| {
                 matches!(requirement.assignment, Assignment::Opportunity { date } if date == focus)
@@ -335,7 +351,7 @@ impl ShoppingService {
     pub async fn record_purchase(&self, input: NewPurchase, actor: UserId) -> Result<Purchase> {
         input.validate()?;
         let now = self.clock.now();
-        let mut purchase = Purchase {
+        let purchase = Purchase {
             id: PurchaseId::new(),
             ingredient_id: input.ingredient_id,
             product_id: input.product_id,
@@ -351,12 +367,7 @@ impl ShoppingService {
             updated_at: now,
         };
 
-        let stock = self.stock_for(&purchase, actor).await?;
-        if let Some(stock) = &stock {
-            purchase.state = PurchaseState::Reconciled;
-            purchase.stock_item_id = Some(stock.item.id);
-        }
-        self.purchases.insert(&purchase, stock.as_ref()).await?;
+        self.purchases.insert(&purchase, None).await?;
         Ok(purchase)
     }
 
@@ -365,7 +376,6 @@ impl ShoppingService {
         id: PurchaseId,
         expected: Revision,
         patch: PurchasePatch,
-        actor: UserId,
     ) -> Result<Purchase> {
         patch.validate()?;
         let Some(mut purchase) = self.purchases.get(id).await? else {
@@ -391,21 +401,7 @@ impl ShoppingService {
         purchase.updated_at = self.clock.now();
         purchase.revision = expected.next();
 
-        let stock = if purchase.state == PurchaseState::Cancelled {
-            None
-        } else {
-            self.stock_for(&purchase, actor).await?
-        };
-        if let Some(stock) = &stock {
-            purchase.state = PurchaseState::Reconciled;
-            purchase.stock_item_id = Some(stock.item.id);
-        }
-
-        match self
-            .purchases
-            .update(&purchase, expected, stock.as_ref())
-            .await?
-        {
+        match self.purchases.update(&purchase, expected, None).await? {
             UpdateOutcome::Updated => Ok(purchase),
             UpdateOutcome::NotFound => Err(CoreError::not_found(PURCHASE, id.to_string())),
             UpdateOutcome::RevisionMismatch { actual } => Err(CoreError::RevisionMismatch {
@@ -415,6 +411,52 @@ impl ShoppingService {
                 actual,
             }),
         }
+    }
+
+    pub async fn finish_shop(&self, date: Date, actor: UserId) -> Result<FinishedShop> {
+        let pending: Vec<Purchase> = self
+            .purchases
+            .list_open()
+            .await?
+            .into_iter()
+            .filter(|purchase| {
+                purchase.state == PurchaseState::Pending && purchase.opportunity_date == Some(date)
+            })
+            .collect();
+
+        let mut finished = FinishedShop::default();
+        for mut purchase in pending {
+            let Some(stock) = self.stock_for(&purchase, actor).await? else {
+                finished.still_pending += 1;
+                continue;
+            };
+            let expected = purchase.revision;
+            purchase.state = PurchaseState::Reconciled;
+            purchase.stock_item_id = Some(stock.item.id);
+            purchase.updated_at = self.clock.now();
+            purchase.revision = expected.next();
+
+            match self
+                .purchases
+                .update(&purchase, expected, Some(&stock))
+                .await?
+            {
+                UpdateOutcome::Updated => finished.stocked += 1,
+                UpdateOutcome::NotFound => {
+                    return Err(CoreError::not_found(PURCHASE, purchase.id.to_string()));
+                }
+                UpdateOutcome::RevisionMismatch { actual } => {
+                    return Err(CoreError::RevisionMismatch {
+                        resource: PURCHASE,
+                        id: purchase.id.to_string(),
+                        expected,
+                        actual,
+                    });
+                }
+            }
+        }
+
+        Ok(finished)
     }
 
     async fn stock_for(
@@ -525,12 +567,11 @@ fn build(
         _ => Certainty::Definite,
     };
 
-    let purchase = open_purchases
+    let purchases: Vec<Purchase> = open_purchases
         .iter()
-        .find(|purchase| {
-            purchase.state == PurchaseState::Pending && purchase.matches(&subject, pool)
-        })
-        .cloned();
+        .filter(|purchase| purchase.matches(&subject, pool))
+        .cloned()
+        .collect();
 
     Some(ShoppingRequirement {
         subject,
@@ -543,7 +584,7 @@ fn build(
         assignment: assign(coverage.required_by, opportunities),
         claims: coverage.uncovered,
         gaps: coverage.gaps,
-        purchase,
+        purchases,
     })
 }
 

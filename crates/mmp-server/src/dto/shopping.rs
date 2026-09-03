@@ -3,7 +3,7 @@ use mmp_core::domain::{
     Purchase, PurchasePatch, PurchaseState, ShoppingCadence, ShoppingOpportunity,
     ShoppingRequirement, ShoppingSection, SuggestionReason, week_day_from_number, week_day_number,
 };
-use mmp_core::services::ShoppingList;
+use mmp_core::services::{FinishedShop, ShoppingList};
 use serde::{Deserialize, Serialize};
 use time::{Date, OffsetDateTime, Time};
 use utoipa::ToSchema;
@@ -226,8 +226,8 @@ pub struct ShoppingRequirementDto {
     pub claims: Vec<DemandClaimDto>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub gaps: Vec<DemandGapDto>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub purchase: Option<PurchaseDto>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub purchases: Vec<PurchaseDto>,
 }
 
 impl From<ShoppingRequirement> for ShoppingRequirementDto {
@@ -243,7 +243,7 @@ impl From<ShoppingRequirement> for ShoppingRequirementDto {
             assignment: value.assignment.into(),
             claims: value.claims.into_iter().map(Into::into).collect(),
             gaps: value.gaps.into_iter().map(Into::into).collect(),
-            purchase: value.purchase.map(Into::into),
+            purchases: value.purchases.into_iter().map(Into::into).collect(),
         }
     }
 }
@@ -331,6 +331,21 @@ impl From<Purchase> for PurchaseDto {
             purchased_at: value.purchased_at,
             note: value.note,
             revision: value.revision.get(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct FinishShopResponse {
+    pub stocked: usize,
+    pub still_pending: usize,
+}
+
+impl From<FinishedShop> for FinishShopResponse {
+    fn from(value: FinishedShop) -> Self {
+        Self {
+            stocked: value.stocked,
+            still_pending: value.still_pending,
         }
     }
 }

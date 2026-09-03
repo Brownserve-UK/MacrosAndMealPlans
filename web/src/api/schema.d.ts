@@ -916,6 +916,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/shopping/opportunities/{date}/finish": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["finishShop"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/shopping/requirements": {
         parameters: {
             query?: never;
@@ -1420,6 +1436,10 @@ export interface components {
             field: string;
             /** @example Required */
             message: string;
+        };
+        FinishShopResponse: {
+            still_pending: number;
+            stocked: number;
         };
         GrantAccessRequest: {
             scope: components["schemas"]["AccessScope"];
@@ -2298,7 +2318,7 @@ export interface components {
             claims: components["schemas"]["DemandClaimDto"][];
             gaps?: components["schemas"]["DemandGapDto"][];
             name: string;
-            purchase?: null | components["schemas"]["PurchaseDto"];
+            purchases?: components["schemas"]["PurchaseDto"][];
             quantity?: null | components["schemas"]["QuantityDto"];
             /** Format: date */
             required_by?: string | null;
@@ -5349,6 +5369,38 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description The date could not be read */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    finishShop: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The shop being finished, as YYYY-MM-DD */
+                date: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The shop was finished */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FinishShopResponse"];
+                };
             };
             /** @description The date could not be read */
             400: {

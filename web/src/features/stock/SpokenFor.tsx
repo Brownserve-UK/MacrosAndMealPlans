@@ -5,11 +5,27 @@ import type { DemandClaim, Quantity } from '../../api/client';
 import { displayUnit } from '../../components/UnitSelect';
 import { labelForSlot } from '../meal-plan/slots';
 
+const PLURAL: Record<string, string> = {
+  item: 'items',
+  piece: 'pieces',
+  slice: 'slices',
+  clove: 'cloves',
+  can: 'cans',
+  pack: 'packs',
+  bunch: 'bunches',
+  cup: 'cups',
+};
+
+export function formatUnit(unit: string, amount: number): string {
+  if (amount === 1) return displayUnit(unit);
+  return PLURAL[unit] ?? displayUnit(unit);
+}
+
 export function formatQuantity(quantity: Quantity): string {
   const amount = Number.isInteger(quantity.amount)
     ? quantity.amount.toLocaleString('en-GB')
     : quantity.amount.toLocaleString('en-GB', { maximumFractionDigits: 2 });
-  return `${amount} ${displayUnit(quantity.unit)}`;
+  return `${amount} ${formatUnit(quantity.unit, quantity.amount)}`;
 }
 
 function whenLabel(claim: DemandClaim): string {
