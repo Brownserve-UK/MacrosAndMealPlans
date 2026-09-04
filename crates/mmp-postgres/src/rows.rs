@@ -11,7 +11,8 @@ use mmp_core::domain::{
     ShoppingCadence, ShoppingOpportunityId, ShoppingSection, SourceDate, SourceDateKind,
     StockEffect, StockEffectId, StockEffectSource, StockEffectState, StockEvent, StockEventId,
     StockEventKind, StockEventSource, StockItem, StockItemId, StockLevel, StorageLocation,
-    TrackingMode, Unit, UsabilityDeadline, User, UserId, week_day_from_number,
+    TrackingMode, Unit, UsabilityDeadline, User, UserId, WeightDisplay, WeightGoal, WeightGoalId,
+    WeightObjective, WeightRecord, WeightRecordId, WeightSource, week_day_from_number,
 };
 use mmp_core::{CoreError, RepositoryError};
 use rust_decimal::Decimal;
@@ -218,23 +219,96 @@ pub struct HouseholdMemberRow {
     pub id: Uuid,
     pub display_name: String,
     pub linked_user_id: Option<Uuid>,
+    pub weight_display: String,
     pub revision: i64,
     pub created_at: OffsetDateTime,
     pub updated_at: OffsetDateTime,
     pub archived_at: Option<OffsetDateTime>,
 }
 
-impl From<HouseholdMemberRow> for HouseholdMember {
-    fn from(row: HouseholdMemberRow) -> Self {
-        HouseholdMember {
+impl TryFrom<HouseholdMemberRow> for HouseholdMember {
+    type Error = CoreError;
+
+    fn try_from(row: HouseholdMemberRow) -> Result<Self, Self::Error> {
+        Ok(HouseholdMember {
             id: HouseholdMemberId::from(row.id),
             display_name: row.display_name,
             linked_user_id: row.linked_user_id.map(UserId::from),
+            weight_display: WeightDisplay::from_str(&row.weight_display)
+                .map_err(|_| bad_value("weight_display", &row.weight_display))?,
             revision: Revision::new(row.revision),
             created_at: row.created_at,
             updated_at: row.updated_at,
             archived_at: row.archived_at,
-        }
+        })
+    }
+}
+
+#[derive(Debug, sqlx::FromRow)]
+pub struct WeightRecordRow {
+    pub id: Uuid,
+    pub member_id: Uuid,
+    pub weight_kg: Decimal,
+    pub recorded_on: Date,
+    pub recorded_at: Option<OffsetDateTime>,
+    pub source: String,
+    pub recorded_by: Option<Uuid>,
+    pub revision: i64,
+    pub created_at: OffsetDateTime,
+    pub updated_at: OffsetDateTime,
+}
+
+impl TryFrom<WeightRecordRow> for WeightRecord {
+    type Error = CoreError;
+
+    fn try_from(row: WeightRecordRow) -> Result<Self, Self::Error> {
+        Ok(WeightRecord {
+            id: WeightRecordId::from(row.id),
+            member_id: HouseholdMemberId::from(row.member_id),
+            weight_kg: row.weight_kg,
+            recorded_on: row.recorded_on,
+            recorded_at: row.recorded_at,
+            source: WeightSource::from_str(&row.source)
+                .map_err(|_| bad_value("source", &row.source))?,
+            recorded_by: row.recorded_by.map(UserId::from),
+            revision: Revision::new(row.revision),
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+        })
+    }
+}
+
+#[derive(Debug, sqlx::FromRow)]
+pub struct WeightGoalRow {
+    pub id: Uuid,
+    pub member_id: Uuid,
+    pub objective: String,
+    pub starting_weight_kg: Decimal,
+    pub target_weight_kg: Option<Decimal>,
+    pub planned_rate_kg_per_week: Option<Decimal>,
+    pub started_on: Date,
+    pub revision: i64,
+    pub created_at: OffsetDateTime,
+    pub updated_at: OffsetDateTime,
+}
+
+impl TryFrom<WeightGoalRow> for WeightGoal {
+    type Error = CoreError;
+
+    fn try_from(row: WeightGoalRow) -> Result<Self, Self::Error> {
+        Ok(WeightGoal {
+            id: WeightGoalId::from(row.id),
+            member_id: HouseholdMemberId::from(row.member_id),
+            objective: WeightObjective::from_str(&row.objective)
+                .map_err(|_| bad_value("objective", &row.objective))?,
+            starting_weight_kg: row.starting_weight_kg,
+            target_weight_kg: row.target_weight_kg,
+            planned_rate_kg_per_week: row.planned_rate_kg_per_week,
+            started_on: row.started_on,
+            revision: Revision::new(row.revision),
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+        })
     }
 }
 

@@ -13,7 +13,8 @@ use crate::domain::{
     NutritionTargetId, OpportunityException, Product, ProductId, Purchase, PurchaseId,
     PurchaseState, Quantity, Recipe, RecipeId, RecipePhoto, RecipeSummary, RecipeVisibility,
     Revision, Role, ShoppingCadence, ShoppingOpportunityId, StockEffect, StockEffectSource,
-    StockEvent, StockEventId, StockItem, StockItemId, StockOutcome, Unit, User, UserId,
+    StockEvent, StockEventId, StockItem, StockItemId, StockOutcome, Unit, User, UserId, WeightGoal,
+    WeightGoalId, WeightRecord, WeightRecordId,
 };
 use crate::error::{CoreError, Result};
 use crate::ports::{
@@ -23,7 +24,8 @@ use crate::ports::{
     NewStockFromPurchase, NutritionTargetRepository, Paginated, ProductQuery, ProductRepository,
     PurchaseQuery, PurchaseRepository, RecipeQuery, RecipeRepository, ShoppingCadenceRepository,
     ShoppingOpportunityRepository, SnapshotOp, SortDirection, StockQuery, StockRepository,
-    StockWrite, UpdateOutcome, UserQuery, UserRepository,
+    StockWrite, UpdateOutcome, UserQuery, UserRepository, WeightGoalRepository,
+    WeightRecordRepository,
 };
 
 // This _should_ reflect the indexes that a real database would enforce
@@ -1323,6 +1325,183 @@ impl NutritionTargetRepository for InMemoryNutritionTargetRepository {
     }
 
     async fn delete(&self, id: NutritionTargetId, expected: Revision) -> Result<UpdateOutcome> {
+        let mut rows = self.rows.lock().unwrap();
+        match rows.get(&id) {
+            None => Ok(UpdateOutcome::NotFound),
+            Some(existing) if existing.revision != expected => {
+                Ok(UpdateOutcome::RevisionMismatch {
+                    actual: existing.revision,
+                })
+            }
+            Some(_) => {
+                rows.remove(&id);
+                Ok(UpdateOutcome::Updated)
+            }
+        }
+    }
+}
+
+#[derive(Default, Clone)]
+pub struct InMemoryWeightRecordRepository {
+    rows: Arc<Mutex<HashMap<WeightRecordId, WeightRecord>>>,
+}
+
+impl InMemoryWeightRecordRepository {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn seed(&self, record: WeightRecord) {
+        self.rows.lock().unwrap().insert(record.id, record);
+    }
+
+    pub fn count(&self) -> usize {
+        self.rows.lock().unwrap().len()
+    }
+}
+
+#[async_trait]
+impl WeightRecordRepository for InMemoryWeightRecordRepository {
+    async fn get(&self, id: WeightRecordId) -> Result<Option<WeightRecord>> {
+        Ok(self.rows.lock().unwrap().get(&id).copied())
+    }
+
+    async fn list_for_member(&self, member_id: HouseholdMemberId) -> Result<Vec<WeightRecord>> {
+        let mut records: Vec<_> = self
+            .rows
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|record| record.member_id == member_id)
+            .copied()
+            .collect();
+        records.sort_by_key(|record| {
+            (
+                std::cmp::Reverse(record.recorded_on),
+                std::cmp::Reverse(record.recorded_at),
+                std::cmp::Reverse(record.created_at),
+            )
+        });
+        Ok(records)
+    }
+
+    async fn insert(&self, record: &WeightRecord) -> Result<()> {
+        self.rows.lock().unwrap().insert(record.id, *record);
+        Ok(())
+    }
+
+    async fn update(&self, record: &WeightRecord, expected: Revision) -> Result<UpdateOutcome> {
+        let mut rows = self.rows.lock().unwrap();
+        match rows.get(&record.id) {
+            None => Ok(UpdateOutcome::NotFound),
+            Some(existing) if existing.revision != expected => {
+                Ok(UpdateOutcome::RevisionMismatch {
+                    actual: existing.revision,
+                })
+            }
+            Some(_) => {
+                rows.insert(record.id, *record);
+                Ok(UpdateOutcome::Updated)
+            }
+        }
+    }
+
+    async fn delete(&self, id: WeightRecordId, expected: Revision) -> Result<UpdateOutcome> {
+        let mut rows = self.rows.lock().unwrap();
+        match rows.get(&id) {
+            None => Ok(UpdateOutcome::NotFound),
+            Some(existing) if existing.revision != expected => {
+                Ok(UpdateOutcome::RevisionMismatch {
+                    actual: existing.revision,
+                })
+            }
+            Some(_) => {
+                rows.remove(&id);
+                Ok(UpdateOutcome::Updated)
+            }
+        }
+    }
+}
+
+fn enforce_goal_uniqueness(
+    rows: &HashMap<WeightGoalId, WeightGoal>,
+    candidate: &WeightGoal,
+) -> Result<()> {
+    for existing in rows.values() {
+        if existing.id == candidate.id {
+            continue;
+        }
+        if existing.member_id == candidate.member_id {
+            return Err(CoreError::duplicate(
+                "weight goal",
+                "member",
+                candidate.member_id,
+            ));
+        }
+    }
+    Ok(())
+}
+
+#[derive(Default, Clone)]
+pub struct InMemoryWeightGoalRepository {
+    rows: Arc<Mutex<HashMap<WeightGoalId, WeightGoal>>>,
+}
+
+impl InMemoryWeightGoalRepository {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn seed(&self, goal: WeightGoal) {
+        self.rows.lock().unwrap().insert(goal.id, goal);
+    }
+
+    pub fn count(&self) -> usize {
+        self.rows.lock().unwrap().len()
+    }
+}
+
+#[async_trait]
+impl WeightGoalRepository for InMemoryWeightGoalRepository {
+    async fn get(&self, id: WeightGoalId) -> Result<Option<WeightGoal>> {
+        Ok(self.rows.lock().unwrap().get(&id).copied())
+    }
+
+    async fn for_member(&self, member_id: HouseholdMemberId) -> Result<Option<WeightGoal>> {
+        Ok(self
+            .rows
+            .lock()
+            .unwrap()
+            .values()
+            .find(|goal| goal.member_id == member_id)
+            .copied())
+    }
+
+    async fn insert(&self, goal: &WeightGoal) -> Result<()> {
+        let mut rows = self.rows.lock().unwrap();
+        enforce_goal_uniqueness(&rows, goal)?;
+        rows.insert(goal.id, *goal);
+        Ok(())
+    }
+
+    async fn update(&self, goal: &WeightGoal, expected: Revision) -> Result<UpdateOutcome> {
+        let mut rows = self.rows.lock().unwrap();
+        match rows.get(&goal.id) {
+            None => Ok(UpdateOutcome::NotFound),
+            Some(existing) if existing.revision != expected => {
+                Ok(UpdateOutcome::RevisionMismatch {
+                    actual: existing.revision,
+                })
+            }
+            Some(_) => {
+                enforce_goal_uniqueness(&rows, goal)?;
+                rows.insert(goal.id, *goal);
+                Ok(UpdateOutcome::Updated)
+            }
+        }
+    }
+
+    async fn delete(&self, id: WeightGoalId, expected: Revision) -> Result<UpdateOutcome> {
         let mut rows = self.rows.lock().unwrap();
         match rows.get(&id) {
             None => Ok(UpdateOutcome::NotFound),

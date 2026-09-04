@@ -9,6 +9,7 @@ use crate::domain::{
     ConsumedAmount, HouseholdMember, HouseholdMemberId, Ingredient, IngredientId, MealItemRef,
     MealPlanComponent, MealPlanEntry, MealSlot, MissingStockInterpretation, NewStockItem, Product,
     ProductId, Provenance, Quantity, Revision, StockLevel, StorageLocation, Unit, UserId,
+    WeightDisplay,
 };
 use crate::ports::{Clock, FixedClock, MealPlanRepository};
 use crate::testing::{
@@ -51,6 +52,7 @@ fn harness() -> Harness {
         id: member_id,
         display_name: "Sample".to_owned(),
         linked_user_id: None,
+        weight_display: WeightDisplay::default(),
         revision: Revision::INITIAL,
         created_at: now,
         updated_at: now,

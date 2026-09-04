@@ -11,7 +11,7 @@ use crate::rows::HouseholdMemberRow;
 
 macro_rules! columns {
     () => {
-        "id, display_name, linked_user_id, revision, created_at, updated_at, archived_at"
+        "id, display_name, linked_user_id, weight_display, revision, created_at, updated_at, archived_at"
     };
 }
 
@@ -73,7 +73,7 @@ impl HouseholdMemberRepository for PgHouseholdMemberRepository {
             .fetch_optional(&self.pool)
             .await
             .map_err(|e| repository_error("loading a household member", e))?;
-        Ok(row.map(Into::into))
+        row.map(TryInto::try_into).transpose()
     }
 
     async fn find_by_display_name(&self, name: &str) -> Result<Option<HouseholdMember>> {
@@ -82,7 +82,7 @@ impl HouseholdMemberRepository for PgHouseholdMemberRepository {
             .fetch_optional(&self.pool)
             .await
             .map_err(|e| repository_error("looking up a household member by name", e))?;
-        Ok(row.map(Into::into))
+        row.map(TryInto::try_into).transpose()
     }
 
     async fn find_by_linked_user(&self, user_id: UserId) -> Result<Option<HouseholdMember>> {
@@ -91,7 +91,7 @@ impl HouseholdMemberRepository for PgHouseholdMemberRepository {
             .fetch_optional(&self.pool)
             .await
             .map_err(|e| repository_error("looking up a household member by account", e))?;
-        Ok(row.map(Into::into))
+        row.map(TryInto::try_into).transpose()
     }
 
     async fn list(&self, query: &MemberQuery) -> Result<Paginated<HouseholdMember>> {
@@ -119,19 +119,24 @@ impl HouseholdMemberRepository for PgHouseholdMemberRepository {
             .await
             .map_err(|e| repository_error("listing household members", e))?;
 
-        let items = rows.into_iter().map(Into::into).collect();
+        let items = rows
+            .into_iter()
+            .map(TryInto::try_into)
+            .collect::<Result<Vec<_>>>()?;
         Ok(Paginated::new(items, total.0, query.page))
     }
 
     async fn insert(&self, member: &HouseholdMember) -> Result<()> {
         sqlx::query(
             "INSERT INTO household_member (
-                 id, display_name, linked_user_id, revision, created_at, updated_at, archived_at
-             ) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+                 id, display_name, linked_user_id, weight_display,
+                 revision, created_at, updated_at, archived_at
+             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
         )
         .bind(member.id.as_uuid())
         .bind(&member.display_name)
         .bind(member.linked_user_id.map(|id| id.as_uuid()))
+        .bind(member.weight_display.code())
         .bind(member.revision.get())
         .bind(member.created_at)
         .bind(member.updated_at)
@@ -145,13 +150,14 @@ impl HouseholdMemberRepository for PgHouseholdMemberRepository {
     async fn update(&self, member: &HouseholdMember, expected: Revision) -> Result<UpdateOutcome> {
         let affected = sqlx::query(
             "UPDATE household_member SET
-                 display_name = $2, linked_user_id = $3,
-                 revision = $4, updated_at = $5, archived_at = $6
-             WHERE id = $1 AND revision = $7",
+                 display_name = $2, linked_user_id = $3, weight_display = $4,
+                 revision = $5, updated_at = $6, archived_at = $7
+             WHERE id = $1 AND revision = $8",
         )
         .bind(member.id.as_uuid())
         .bind(&member.display_name)
         .bind(member.linked_user_id.map(|id| id.as_uuid()))
+        .bind(member.weight_display.code())
         .bind(member.revision.get())
         .bind(member.updated_at)
         .bind(member.archived_at)

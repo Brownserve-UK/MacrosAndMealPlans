@@ -12,7 +12,7 @@ use crate::domain::{
     OpportunityException, Product, ProductId, Purchase, PurchaseId, PurchaseState, Quantity,
     Recipe, RecipeId, RecipePhoto, RecipeSummary, Revision, Role, ShoppingCadence,
     ShoppingOpportunityId, StockEffect, StockEffectSource, StockEvent, StockItem, StockItemId,
-    StockOutcome, User, UserId,
+    StockOutcome, User, UserId, WeightGoal, WeightGoalId, WeightRecord, WeightRecordId,
 };
 use crate::error::Result;
 
@@ -461,6 +461,32 @@ pub trait NutritionTargetRepository: Send + Sync + 'static {
     async fn update(&self, target: &NutritionTarget, expected: Revision) -> Result<UpdateOutcome>;
 
     async fn delete(&self, id: NutritionTargetId, expected: Revision) -> Result<UpdateOutcome>;
+}
+
+#[async_trait]
+pub trait WeightRecordRepository: Send + Sync + 'static {
+    async fn get(&self, id: WeightRecordId) -> Result<Option<WeightRecord>>;
+
+    async fn list_for_member(&self, member_id: HouseholdMemberId) -> Result<Vec<WeightRecord>>;
+
+    async fn insert(&self, record: &WeightRecord) -> Result<()>;
+
+    async fn update(&self, record: &WeightRecord, expected: Revision) -> Result<UpdateOutcome>;
+
+    async fn delete(&self, id: WeightRecordId, expected: Revision) -> Result<UpdateOutcome>;
+}
+
+#[async_trait]
+pub trait WeightGoalRepository: Send + Sync + 'static {
+    async fn get(&self, id: WeightGoalId) -> Result<Option<WeightGoal>>;
+
+    async fn for_member(&self, member_id: HouseholdMemberId) -> Result<Option<WeightGoal>>;
+
+    async fn insert(&self, goal: &WeightGoal) -> Result<()>;
+
+    async fn update(&self, goal: &WeightGoal, expected: Revision) -> Result<UpdateOutcome>;
+
+    async fn delete(&self, id: WeightGoalId, expected: Revision) -> Result<UpdateOutcome>;
 }
 
 #[async_trait]

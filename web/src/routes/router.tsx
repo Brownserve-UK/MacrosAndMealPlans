@@ -28,6 +28,7 @@ import { StockPage } from '../features/stock/StockPage';
 import { StockItemPage } from '../features/stock/StockItemPage';
 import { ProductStockPage } from '../features/stock/ProductStockPage';
 import { IngredientStockPage } from '../features/stock/IngredientStockPage';
+import { WeightPage } from '../features/weight/WeightPage';
 
 const rootRoute = createRootRoute({ component: AppShell });
 
@@ -284,6 +285,12 @@ const shoppingSettingsRoute = createRoute({
   },
 });
 
+const weightRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/weight',
+  component: WeightPage,
+});
+
 const profileRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/profile',
@@ -322,6 +329,7 @@ const routeTree = rootRoute.addChildren([
   shoppingRoute,
   shopModeRoute,
   shoppingSettingsRoute,
+  weightRoute,
   profileRoute,
 ]);
 

@@ -12,7 +12,7 @@ use crate::domain::{
     NewNutritionTarget, NutritionFacts, NutritionGoals, NutritionQuality, OutcomeActor, Product,
     ProductId, Provenance, Quantity, Recipe, RecipeComponent, RecipeId, RecipeVisibility,
     ReplacementItem, ReviewedMemberOutcome, Revision, StockItem, StockLevel, StorageLocation, Unit,
-    UserId,
+    UserId, WeightDisplay,
 };
 use crate::ports::{FixedClock, StockRepository};
 use crate::services::{DiaryService, NutritionTargetService};
@@ -76,6 +76,7 @@ impl Harness {
             id,
             display_name: name.to_owned(),
             linked_user_id: None,
+            weight_display: WeightDisplay::default(),
             revision: Revision::INITIAL,
             created_at: OffsetDateTime::UNIX_EPOCH,
             updated_at: OffsetDateTime::UNIX_EPOCH,
@@ -100,6 +101,7 @@ fn harness() -> Harness {
         id: member_id,
         display_name: "Test Member".to_owned(),
         linked_user_id: None,
+        weight_display: WeightDisplay::default(),
         revision: Revision::INITIAL,
         created_at: OffsetDateTime::UNIX_EPOCH,
         updated_at: OffsetDateTime::UNIX_EPOCH,

@@ -1,6 +1,8 @@
 use time::OffsetDateTime;
 
-use super::{AccessScope, HouseholdMemberId, Patch, Revision, Role, UserId, validate_name};
+use super::{
+    AccessScope, HouseholdMemberId, Patch, Revision, Role, UserId, WeightDisplay, validate_name,
+};
 use crate::error::ValidationErrors;
 
 pub const MAX_USERNAME_LEN: usize = 64;
@@ -11,6 +13,7 @@ pub struct HouseholdMember {
     pub id: HouseholdMemberId,
     pub display_name: String,
     pub linked_user_id: Option<UserId>,
+    pub weight_display: WeightDisplay,
     pub revision: Revision,
     pub created_at: OffsetDateTime,
     pub updated_at: OffsetDateTime,
@@ -45,11 +48,12 @@ impl NewHouseholdMember {
 #[derive(Debug, Clone, Default)]
 pub struct HouseholdMemberPatch {
     pub display_name: Option<String>,
+    pub weight_display: Option<WeightDisplay>,
 }
 
 impl HouseholdMemberPatch {
     pub fn is_empty(&self) -> bool {
-        self.display_name.is_none()
+        self.display_name.is_none() && self.weight_display.is_none()
     }
 
     pub fn validate(&self) -> crate::error::Result<()> {

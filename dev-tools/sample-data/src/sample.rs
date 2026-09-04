@@ -10,13 +10,15 @@ use mmp_core::domain::{
     MealSlot, NewConsumptionRecord, NewHouseholdMember, NewMealGuestAllocation, NewMealGuestGroup,
     NewMealParticipant, NewMealParticipantAllocation, NewMealPlanComponent, NewMealPlanEntry,
     NewNutritionTarget, NewProduct, NewPurchase, NewRecipe, NewRecipeComponent,
+    NewWeightGoal, NewWeightRecord,
     NewRecipeInstruction, NewShoppingCadence, NewStockItem, NewUser, NutritionFacts,
     NutritionGoals, OutcomeActor, Patch, ProductId, Provenance, Quantity, RecipeId, RecipePatch,
     RecipeRequirement, Role, ShoppingSection, SourceDate, SourceDateKind, StockLevel,
-    StorageLocation, Unit, UsabilityDeadline, User, UserId,
+    StorageLocation, Unit, UsabilityDeadline, User, UserId, WeightObjective, WeightSource,
 };
 use mmp_server::state::AppState;
 use rust_decimal::Decimal;
+use time::macros::time;
 use time::{Date, Duration, PrimitiveDateTime, Time, Weekday};
 use uuid::Uuid;
 
@@ -57,6 +59,8 @@ pub struct Report {
     pub products_created: usize,
     pub recipes_created: usize,
     pub targets_created: usize,
+    pub weigh_ins_created: usize,
+    pub weight_goals_created: usize,
     pub stock_items_created: usize,
     pub meals_created: usize,
     pub meals_resolved: usize,
@@ -132,6 +136,7 @@ pub async fn load(
     loader.load_products().await?;
     loader.load_recipes().await?;
     loader.load_targets().await?;
+    loader.load_weight().await?;
     loader.load_stock().await?;
 
     match scenario {
@@ -425,6 +430,78 @@ impl Loader<'_> {
             })
             .await?;
         self.report.targets_created += 1;
+        Ok(())
+    }
+
+    async fn load_weight(&mut self) -> anyhow::Result<()> {
+        let readings: [(i64, &str, Option<Time>); 10] = [
+            (8, "82.4", None),
+            (7, "82.0", None),
+            (6, "82.3", None),
+            (5, "81.5", None),
+            (4, "81.1", None),
+            (3, "81.4", None),
+            (2, "80.6", None),
+            (1, "80.2", Some(time!(07:15))),
+            (1, "80.9", Some(time!(21:40))),
+            (0, "79.8", None),
+        ];
+
+        for (weeks_ago, weight, at) in readings {
+            let on = self.week_start - Duration::weeks(weeks_ago);
+            let recorded_at = at.map(|at| PrimitiveDateTime::new(on, at).assume_utc());
+            self.ensure_weigh_in(on, recorded_at, weight).await?;
+        }
+
+        self.ensure_weight_goal().await
+    }
+
+    async fn ensure_weigh_in(
+        &mut self,
+        recorded_on: Date,
+        recorded_at: Option<time::OffsetDateTime>,
+        weight: &str,
+    ) -> anyhow::Result<()> {
+        let existing = self.state.weight.list_records(self.member.id).await?;
+        if existing
+            .iter()
+            .any(|record| record.recorded_on == recorded_on && record.recorded_at == recorded_at)
+        {
+            return Ok(());
+        }
+
+        self.state
+            .weight
+            .record(NewWeightRecord {
+                member_id: self.member.id,
+                weight: Quantity::new(Decimal::from_str(weight)?, Unit::Kilogram),
+                recorded_on,
+                recorded_at,
+                source: WeightSource::Manual,
+                recorded_by: Some(self.actor.id),
+            })
+            .await?;
+        self.report.weigh_ins_created += 1;
+        Ok(())
+    }
+
+    async fn ensure_weight_goal(&mut self) -> anyhow::Result<()> {
+        if self.state.weight.goal(self.member.id).await?.is_some() {
+            return Ok(());
+        }
+
+        self.state
+            .weight
+            .set_goal(NewWeightGoal {
+                member_id: self.member.id,
+                objective: WeightObjective::Lose,
+                starting_weight: Quantity::new(Decimal::from_str("82.4")?, Unit::Kilogram),
+                target_weight: Some(Quantity::new(Decimal::from_str("76.0")?, Unit::Kilogram)),
+                planned_rate: Some(Quantity::new(Decimal::from_str("0.5")?, Unit::Kilogram)),
+                started_on: self.week_start - Duration::weeks(8),
+            })
+            .await?;
+        self.report.weight_goals_created += 1;
         Ok(())
     }
 
@@ -1262,7 +1339,9 @@ impl Loader<'_> {
         }
 
         let recipe_day = self.today + Duration::days(1);
-        if recipe_day <= week_end {
+        let household_lunch_window =
+            self.week_start + Duration::days(3)..=self.week_start + Duration::days(6);
+        if recipe_day <= week_end && !household_lunch_window.contains(&recipe_day) {
             self.ensure_recipe_meal(recipe_day, MealSlot::Lunch, "chicken-and-rice", servings(1))
                 .await?;
         }

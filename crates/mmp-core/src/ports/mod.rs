@@ -10,6 +10,7 @@ pub use repository::{
     PurchaseQuery, PurchaseRepository, RecipeQuery, RecipeRepository, ShoppingCadenceRepository,
     ShoppingOpportunityRepository, SnapshotOp, SortDirection, StockDeduction, StockQuery,
     StockRelease, StockRepository, StockWrite, UpdateOutcome, UserQuery, UserRepository,
+    WeightGoalRepository, WeightRecordRepository,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

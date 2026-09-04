@@ -11,7 +11,7 @@ use image::{DynamicImage, ImageFormat, RgbImage};
 use mmp_core::ports::FixedClock;
 use mmp_core::services::{
     CatalogueService, DiaryService, HouseholdService, HouseholdSettingsService, MealPlanService,
-    NutritionTargetService, RecipeService, ShoppingService, StockService,
+    NutritionTargetService, RecipeService, ShoppingService, StockService, WeightService,
 };
 use mmp_core::testing::{
     InMemoryAccessGrantRepository, InMemoryConsumptionRecordRepository,
@@ -19,7 +19,8 @@ use mmp_core::testing::{
     InMemoryIngredientRepository, InMemoryMealPlanRepository, InMemoryNutritionTargetRepository,
     InMemoryProductRepository, InMemoryPurchaseRepository, InMemoryRecipeRepository,
     InMemoryShoppingCadenceRepository, InMemoryShoppingOpportunityRepository,
-    InMemoryStockRepository, InMemoryUserRepository,
+    InMemoryStockRepository, InMemoryUserRepository, InMemoryWeightGoalRepository,
+    InMemoryWeightRecordRepository,
 };
 use mmp_server::AppState;
 use mmp_server::auth::DevBasicAuthProvider;
@@ -108,7 +109,12 @@ async fn app() -> Router {
             ingredients,
             Arc::new(products_for_shopping),
             stock,
-            clock,
+            clock.clone(),
+        ),
+        WeightService::new(
+            Arc::new(InMemoryWeightRecordRepository::new()),
+            Arc::new(InMemoryWeightGoalRepository::new()),
+            clock.clone(),
         ),
         Arc::new(DevBasicAuthProvider::new(household, PASSWORD)),
     );

@@ -1,6 +1,7 @@
 import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettingsOutlined';
 import DarkModeIcon from '@mui/icons-material/DarkModeOutlined';
 import CalendarMonthIcon from '@mui/icons-material/CalendarMonthOutlined';
+import MonitorWeightIcon from '@mui/icons-material/MonitorWeightOutlined';
 import HelpIcon from '@mui/icons-material/HelpOutlineOutlined';
 import MenuBookIcon from '@mui/icons-material/MenuBookOutlined';
 import InventoryIcon from '@mui/icons-material/Inventory2Outlined';
@@ -50,6 +51,7 @@ const NAV = [
     needs: 'shopping:read',
   },
   { to: '/household', label: 'Household', icon: <PeopleIcon fontSize="small" />, needs: 'household:read' },
+  { to: '/weight', label: 'Weight', icon: <MonitorWeightIcon fontSize="small" />, needs: undefined },
   { to: '/needs-review', label: 'Needs review', icon: <HelpIcon fontSize="small" />, needs: undefined },
 ] as const;
 

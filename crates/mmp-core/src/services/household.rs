@@ -5,6 +5,7 @@ use time::OffsetDateTime;
 use crate::domain::{
     AccessScope, HouseholdMember, HouseholdMemberId, HouseholdMemberPatch, MemberAccessGrant,
     NewHouseholdMember, NewUser, Permission, Revision, Role, User, UserId, UserPatch,
+    WeightDisplay,
 };
 use crate::error::{CoreError, Result, ValidationErrors};
 use crate::ports::{
@@ -52,6 +53,7 @@ impl HouseholdService {
             id: input.id.unwrap_or_default(),
             display_name,
             linked_user_id: input.linked_user_id,
+            weight_display: WeightDisplay::default(),
             revision: Revision::INITIAL,
             created_at: now,
             updated_at: now,
@@ -101,6 +103,10 @@ impl HouseholdService {
                     .await?;
             }
             current.display_name = display_name;
+        }
+
+        if let Some(weight_display) = patch.weight_display {
+            current.weight_display = weight_display;
         }
 
         self.stamp(&mut current.revision, &mut current.updated_at);

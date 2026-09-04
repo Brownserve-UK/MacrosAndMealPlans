@@ -99,6 +99,7 @@ async fn renaming_a_member_advances_the_revision() {
             member.revision,
             HouseholdMemberPatch {
                 display_name: Some("Joseph".to_owned()),
+                weight_display: None,
             },
         )
         .await
@@ -120,6 +121,7 @@ async fn a_stale_revision_is_rejected() {
             Revision::new(99),
             HouseholdMemberPatch {
                 display_name: Some("Joseph".to_owned()),
+                weight_display: None,
             },
         )
         .await
@@ -140,6 +142,7 @@ async fn keeping_a_members_own_name_is_allowed() {
             member.revision,
             HouseholdMemberPatch {
                 display_name: Some("JOE".to_owned()),
+                weight_display: None,
             },
         )
         .await

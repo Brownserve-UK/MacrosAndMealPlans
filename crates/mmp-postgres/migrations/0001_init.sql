@@ -141,6 +141,7 @@ CREATE TABLE household_member (
     id              UUID PRIMARY KEY,
     display_name    TEXT NOT NULL,
     linked_user_id  UUID UNIQUE REFERENCES app_user (id) ON DELETE SET NULL,
+    weight_display  TEXT NOT NULL DEFAULT 'kilograms',
 
     revision        BIGINT NOT NULL DEFAULT 1,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -148,7 +149,9 @@ CREATE TABLE household_member (
     archived_at     TIMESTAMPTZ,
 
     CONSTRAINT household_member_display_name_not_blank
-        CHECK (btrim(display_name) <> '')
+        CHECK (btrim(display_name) <> ''),
+    CONSTRAINT household_member_weight_display_known
+        CHECK (weight_display IN ('kilograms', 'stones_pounds', 'pounds'))
 );
 
 CREATE UNIQUE INDEX household_member_display_name_unique
@@ -1033,3 +1036,63 @@ CREATE TABLE purchase (
 CREATE INDEX purchase_state ON purchase (state);
 CREATE INDEX purchase_opportunity_date ON purchase (opportunity_date)
     WHERE opportunity_date IS NOT NULL;
+
+CREATE TABLE weight_record (
+    id           UUID PRIMARY KEY,
+    member_id    UUID NOT NULL REFERENCES household_member (id) ON DELETE CASCADE,
+    weight_kg    NUMERIC(6, 3) NOT NULL,
+    recorded_on  DATE NOT NULL,
+    recorded_at  TIMESTAMPTZ,
+    source       TEXT NOT NULL,
+    recorded_by  UUID REFERENCES app_user (id) ON DELETE SET NULL,
+
+    revision     BIGINT NOT NULL DEFAULT 1,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    CONSTRAINT weight_record_source_known
+        CHECK (source IN ('manual', 'health_connect')),
+    CONSTRAINT weight_record_weight_plausible
+        CHECK (weight_kg > 0 AND weight_kg <= 635)
+);
+
+CREATE INDEX weight_record_member_recorded
+    ON weight_record (member_id, recorded_on DESC, recorded_at DESC NULLS LAST);
+
+CREATE TABLE weight_goal (
+    id                       UUID PRIMARY KEY,
+    member_id                UUID NOT NULL REFERENCES household_member (id) ON DELETE CASCADE,
+    objective                TEXT NOT NULL,
+    starting_weight_kg       NUMERIC(6, 3) NOT NULL,
+    target_weight_kg         NUMERIC(6, 3),
+    planned_rate_kg_per_week NUMERIC(5, 3),
+    started_on               DATE NOT NULL,
+
+    revision                 BIGINT NOT NULL DEFAULT 1,
+    created_at               TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at               TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    CONSTRAINT weight_goal_objective_known
+        CHECK (objective IN ('lose', 'maintain', 'gain')),
+    CONSTRAINT weight_goal_weights_plausible
+        CHECK (
+            starting_weight_kg > 0 AND starting_weight_kg <= 635
+            AND (target_weight_kg IS NULL OR (target_weight_kg > 0 AND target_weight_kg <= 635))
+        ),
+    CONSTRAINT weight_goal_directed
+        CHECK (
+            (objective = 'maintain'
+                AND target_weight_kg IS NULL
+                AND planned_rate_kg_per_week IS NULL)
+            OR (objective = 'lose'
+                AND target_weight_kg IS NOT NULL
+                AND target_weight_kg < starting_weight_kg
+                AND planned_rate_kg_per_week > 0)
+            OR (objective = 'gain'
+                AND target_weight_kg IS NOT NULL
+                AND target_weight_kg > starting_weight_kg
+                AND planned_rate_kg_per_week > 0)
+        )
+);
+
+CREATE UNIQUE INDEX weight_goal_member_unique ON weight_goal (member_id);

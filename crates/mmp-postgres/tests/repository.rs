@@ -14,7 +14,8 @@ use mmp_core::domain::{
     RecipeComponent, RecipeComponentId, RecipeId, RecipeInstruction, RecipeInstructionId,
     RecipePhoto, RecipePhotoDerivatives, RecipeRequirement, RecipeVisibility, Revision, Role,
     ShoppingCadence, ShoppingOpportunityId, StockEventKind, StockItem, StockItemId, StockLevel,
-    StorageLocation, Unit, User, UserId,
+    StorageLocation, Unit, User, UserId, WeightDisplay, WeightGoal, WeightGoalId, WeightObjective,
+    WeightRecord, WeightRecordId, WeightSource,
 };
 use mmp_core::domain::{DeductionTarget, StockEffectSource, StockEventSource};
 use mmp_core::ports::{
@@ -24,7 +25,8 @@ use mmp_core::ports::{
     NewStockFromPurchase, NutritionTargetRepository, PageRequest, ProductQuery, ProductRepository,
     PurchaseRepository, RecipeQuery, RecipeRepository, ShoppingCadenceRepository,
     ShoppingOpportunityRepository, SnapshotOp, SortDirection, StockDeduction, StockQuery,
-    StockRepository, StockWrite, UpdateOutcome, UserRepository,
+    StockRepository, StockWrite, UpdateOutcome, UserRepository, WeightGoalRepository,
+    WeightRecordRepository,
 };
 
 fn no_stock() -> StockWrite {
@@ -35,7 +37,7 @@ use mmp_postgres::{
     PgHouseholdSettingsRepository, PgIngredientRepository, PgMealPlanRepository,
     PgNutritionTargetRepository, PgProductRepository, PgPurchaseRepository, PgRecipeRepository,
     PgShoppingCadenceRepository, PgShoppingOpportunityRepository, PgStockRepository,
-    PgUserRepository,
+    PgUserRepository, PgWeightGoalRepository, PgWeightRecordRepository,
 };
 use rust_decimal::Decimal;
 use sqlx::PgPool;
@@ -675,6 +677,7 @@ fn member(name: &str) -> HouseholdMember {
         id: HouseholdMemberId::new(),
         display_name: name.to_owned(),
         linked_user_id: None,
+        weight_display: WeightDisplay::default(),
         revision: Revision::INITIAL,
         created_at: now,
         updated_at: now,
@@ -3346,5 +3349,315 @@ async fn stock_tracking_round_trips_on_both_catalogue_tables(pool: PgPool) {
     assert_eq!(
         products.get(bottle.id).await.unwrap().unwrap().track_stock,
         Some(false)
+    );
+}
+
+fn weigh_in(
+    member_id: HouseholdMemberId,
+    on: Date,
+    at: Option<OffsetDateTime>,
+    weight: Decimal,
+) -> WeightRecord {
+    let now = OffsetDateTime::now_utc();
+    WeightRecord {
+        id: WeightRecordId::new(),
+        member_id,
+        weight_kg: weight,
+        recorded_on: on,
+        recorded_at: at,
+        source: WeightSource::Manual,
+        recorded_by: None,
+        revision: Revision::INITIAL,
+        created_at: now,
+        updated_at: now,
+    }
+}
+
+fn weight_goal(
+    member_id: HouseholdMemberId,
+    objective: WeightObjective,
+    starting: Decimal,
+    target: Option<Decimal>,
+    rate: Option<Decimal>,
+) -> WeightGoal {
+    let now = OffsetDateTime::now_utc();
+    WeightGoal {
+        id: WeightGoalId::new(),
+        member_id,
+        objective,
+        starting_weight_kg: starting,
+        target_weight_kg: target,
+        planned_rate_kg_per_week: rate,
+        started_on: date!(2026 - 08 - 01),
+        revision: Revision::INITIAL,
+        created_at: now,
+        updated_at: now,
+    }
+}
+
+#[sqlx::test]
+async fn round_trips_and_orders_weight_records(pool: PgPool) {
+    let members = PgHouseholdMemberRepository::new(pool.clone());
+    let repo = PgWeightRecordRepository::new(pool);
+    let joe = member("Joe");
+    members.insert(&joe).await.unwrap();
+
+    let older = weigh_in(joe.id, date!(2026 - 09 - 01), None, Decimal::new(805, 1));
+    let newer = weigh_in(
+        joe.id,
+        date!(2026 - 09 - 03),
+        Some(OffsetDateTime::now_utc()),
+        Decimal::new(799, 1),
+    );
+    repo.insert(&older).await.unwrap();
+    repo.insert(&newer).await.unwrap();
+
+    let listed = repo.list_for_member(joe.id).await.unwrap();
+    let dates: Vec<_> = listed.iter().map(|r| r.recorded_on).collect();
+    assert_eq!(dates, vec![date!(2026 - 09 - 03), date!(2026 - 09 - 01)]);
+    assert_eq!(listed[0].weight_kg, Decimal::new(799, 1));
+    assert_eq!(listed[0].source, WeightSource::Manual);
+    assert_eq!(listed[1].recorded_at, None);
+}
+
+#[sqlx::test]
+async fn several_weight_records_are_allowed_on_one_day(pool: PgPool) {
+    let members = PgHouseholdMemberRepository::new(pool.clone());
+    let repo = PgWeightRecordRepository::new(pool);
+    let joe = member("Joe");
+    members.insert(&joe).await.unwrap();
+    let day = date!(2026 - 09 - 03);
+
+    repo.insert(&weigh_in(joe.id, day, None, Decimal::new(805, 1)))
+        .await
+        .unwrap();
+    repo.insert(&weigh_in(joe.id, day, None, Decimal::new(809, 1)))
+        .await
+        .unwrap();
+
+    assert_eq!(repo.list_for_member(joe.id).await.unwrap().len(), 2);
+}
+
+#[sqlx::test]
+async fn an_implausible_weight_is_refused_by_the_database(pool: PgPool) {
+    let members = PgHouseholdMemberRepository::new(pool.clone());
+    let repo = PgWeightRecordRepository::new(pool);
+    let joe = member("Joe");
+    members.insert(&joe).await.unwrap();
+
+    let too_heavy = weigh_in(joe.id, date!(2026 - 09 - 03), None, Decimal::new(700, 0));
+    assert!(matches!(
+        repo.insert(&too_heavy).await,
+        Err(CoreError::Repository(_))
+    ));
+
+    let nothing = weigh_in(joe.id, date!(2026 - 09 - 03), None, Decimal::ZERO);
+    assert!(matches!(
+        repo.insert(&nothing).await,
+        Err(CoreError::Repository(_))
+    ));
+}
+
+#[sqlx::test]
+async fn weight_record_updates_report_revision_outcomes(pool: PgPool) {
+    let members = PgHouseholdMemberRepository::new(pool.clone());
+    let repo = PgWeightRecordRepository::new(pool);
+    let joe = member("Joe");
+    members.insert(&joe).await.unwrap();
+
+    let record = weigh_in(joe.id, date!(2026 - 09 - 03), None, Decimal::new(805, 1));
+    repo.insert(&record).await.unwrap();
+
+    let mut updated = record;
+    updated.weight_kg = Decimal::new(801, 1);
+    updated.revision = record.revision.next();
+    assert_eq!(
+        repo.update(&updated, record.revision).await.unwrap(),
+        UpdateOutcome::Updated
+    );
+
+    assert!(matches!(
+        repo.update(&updated, record.revision).await.unwrap(),
+        UpdateOutcome::RevisionMismatch { .. }
+    ));
+
+    let missing = weigh_in(joe.id, date!(2026 - 09 - 03), None, Decimal::new(800, 1));
+    assert_eq!(
+        repo.update(&missing, Revision::INITIAL).await.unwrap(),
+        UpdateOutcome::NotFound
+    );
+
+    assert_eq!(
+        repo.delete(updated.id, updated.revision).await.unwrap(),
+        UpdateOutcome::Updated
+    );
+    assert!(repo.get(updated.id).await.unwrap().is_none());
+}
+
+#[sqlx::test]
+async fn round_trips_a_weight_goal(pool: PgPool) {
+    let members = PgHouseholdMemberRepository::new(pool.clone());
+    let repo = PgWeightGoalRepository::new(pool);
+    let joe = member("Joe");
+    members.insert(&joe).await.unwrap();
+
+    let goal = weight_goal(
+        joe.id,
+        WeightObjective::Lose,
+        Decimal::new(80, 0),
+        Some(Decimal::new(76, 0)),
+        Some(Decimal::new(5, 1)),
+    );
+    repo.insert(&goal).await.unwrap();
+
+    let loaded = repo.for_member(joe.id).await.unwrap().unwrap();
+    assert_eq!(loaded.objective, WeightObjective::Lose);
+    assert_eq!(loaded.starting_weight_kg, Decimal::new(80, 0));
+    assert_eq!(loaded.planned_rate_kg_per_week, Some(Decimal::new(5, 1)));
+    assert_eq!(repo.get(goal.id).await.unwrap().unwrap().id, goal.id);
+}
+
+#[sqlx::test]
+async fn a_member_can_only_hold_one_weight_goal(pool: PgPool) {
+    let members = PgHouseholdMemberRepository::new(pool.clone());
+    let repo = PgWeightGoalRepository::new(pool);
+    let joe = member("Joe");
+    members.insert(&joe).await.unwrap();
+
+    repo.insert(&weight_goal(
+        joe.id,
+        WeightObjective::Maintain,
+        Decimal::new(80, 0),
+        None,
+        None,
+    ))
+    .await
+    .unwrap();
+
+    let second = weight_goal(
+        joe.id,
+        WeightObjective::Maintain,
+        Decimal::new(81, 0),
+        None,
+        None,
+    );
+    assert!(matches!(
+        repo.insert(&second).await,
+        Err(CoreError::Duplicate { .. })
+    ));
+}
+
+#[sqlx::test]
+async fn the_database_refuses_a_goal_that_contradicts_its_objective(pool: PgPool) {
+    let members = PgHouseholdMemberRepository::new(pool.clone());
+    let repo = PgWeightGoalRepository::new(pool);
+    let joe = member("Joe");
+    members.insert(&joe).await.unwrap();
+
+    // Losing towards a heavier target.
+    let backwards = weight_goal(
+        joe.id,
+        WeightObjective::Lose,
+        Decimal::new(80, 0),
+        Some(Decimal::new(84, 0)),
+        Some(Decimal::new(5, 1)),
+    );
+    assert!(matches!(
+        repo.insert(&backwards).await,
+        Err(CoreError::Repository(_))
+    ));
+
+    // Gaining towards a lighter target.
+    let also_backwards = weight_goal(
+        joe.id,
+        WeightObjective::Gain,
+        Decimal::new(80, 0),
+        Some(Decimal::new(76, 0)),
+        Some(Decimal::new(5, 1)),
+    );
+    assert!(matches!(
+        repo.insert(&also_backwards).await,
+        Err(CoreError::Repository(_))
+    ));
+
+    // Losing with no rate to lose at.
+    let rateless = weight_goal(
+        joe.id,
+        WeightObjective::Lose,
+        Decimal::new(80, 0),
+        Some(Decimal::new(76, 0)),
+        None,
+    );
+    assert!(matches!(
+        repo.insert(&rateless).await,
+        Err(CoreError::Repository(_))
+    ));
+
+    // Maintaining at a rate.
+    let busy_maintenance = weight_goal(
+        joe.id,
+        WeightObjective::Maintain,
+        Decimal::new(80, 0),
+        None,
+        Some(Decimal::new(5, 1)),
+    );
+    assert!(matches!(
+        repo.insert(&busy_maintenance).await,
+        Err(CoreError::Repository(_))
+    ));
+}
+
+#[sqlx::test]
+async fn weight_goal_updates_report_revision_outcomes(pool: PgPool) {
+    let members = PgHouseholdMemberRepository::new(pool.clone());
+    let repo = PgWeightGoalRepository::new(pool);
+    let joe = member("Joe");
+    members.insert(&joe).await.unwrap();
+
+    let goal = weight_goal(
+        joe.id,
+        WeightObjective::Lose,
+        Decimal::new(80, 0),
+        Some(Decimal::new(76, 0)),
+        Some(Decimal::new(5, 1)),
+    );
+    repo.insert(&goal).await.unwrap();
+
+    let mut updated = goal;
+    updated.target_weight_kg = Some(Decimal::new(74, 0));
+    updated.revision = goal.revision.next();
+    assert_eq!(
+        repo.update(&updated, goal.revision).await.unwrap(),
+        UpdateOutcome::Updated
+    );
+    assert!(matches!(
+        repo.update(&updated, goal.revision).await.unwrap(),
+        UpdateOutcome::RevisionMismatch { .. }
+    ));
+    assert_eq!(
+        repo.delete(updated.id, updated.revision).await.unwrap(),
+        UpdateOutcome::Updated
+    );
+    assert!(repo.for_member(joe.id).await.unwrap().is_none());
+}
+
+#[sqlx::test]
+async fn a_member_carries_their_weight_display_preference(pool: PgPool) {
+    let members = PgHouseholdMemberRepository::new(pool);
+    let mut joe = member("Joe");
+    members.insert(&joe).await.unwrap();
+
+    assert_eq!(
+        members.get(joe.id).await.unwrap().unwrap().weight_display,
+        WeightDisplay::Kilograms
+    );
+
+    joe.weight_display = WeightDisplay::StonesPounds;
+    joe.revision = joe.revision.next();
+    members.update(&joe, Revision::INITIAL).await.unwrap();
+
+    assert_eq!(
+        members.get(joe.id).await.unwrap().unwrap().weight_display,
+        WeightDisplay::StonesPounds
     );
 }

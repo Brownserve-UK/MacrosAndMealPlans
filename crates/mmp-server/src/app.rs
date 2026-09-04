@@ -27,6 +27,7 @@ pub fn build(state: AppState) -> (Router, utoipa::openapi::OpenApi) {
         .merge(routes::settings::router())
         .merge(routes::shopping::router())
         .merge(routes::stock::router())
+        .merge(routes::weight::router())
         .split_for_parts();
 
     let router = router
@@ -124,6 +125,11 @@ pub fn stub_state() -> AppState {
             Arc::new(NoopIngredients),
             Arc::new(NoopProducts),
             stock,
+            Arc::new(SystemClock),
+        ),
+        mmp_core::services::WeightService::new(
+            Arc::new(NoopWeightRecords),
+            Arc::new(NoopWeightGoals),
             Arc::new(SystemClock),
         ),
         Arc::new(crate::auth::DevBasicAuthProvider::new(household, "")),
@@ -264,6 +270,8 @@ struct NoopGrants;
 struct NoopConsumptionRecords;
 struct NoopMealPlans;
 struct NoopNutritionTargets;
+struct NoopWeightRecords;
+struct NoopWeightGoals;
 struct NoopRecipes;
 
 #[async_trait::async_trait]
@@ -293,6 +301,72 @@ impl mmp_core::ports::NutritionTargetRepository for NoopNutritionTargets {
     async fn delete(
         &self,
         _: mmp_core::domain::NutritionTargetId,
+        _: mmp_core::domain::Revision,
+    ) -> mmp_core::Result<mmp_core::ports::UpdateOutcome> {
+        Ok(mmp_core::ports::UpdateOutcome::NotFound)
+    }
+}
+
+#[async_trait::async_trait]
+impl mmp_core::ports::WeightRecordRepository for NoopWeightRecords {
+    async fn get(
+        &self,
+        _: mmp_core::domain::WeightRecordId,
+    ) -> mmp_core::Result<Option<mmp_core::domain::WeightRecord>> {
+        Ok(None)
+    }
+    async fn list_for_member(
+        &self,
+        _: mmp_core::domain::HouseholdMemberId,
+    ) -> mmp_core::Result<Vec<mmp_core::domain::WeightRecord>> {
+        Ok(vec![])
+    }
+    async fn insert(&self, _: &mmp_core::domain::WeightRecord) -> mmp_core::Result<()> {
+        Ok(())
+    }
+    async fn update(
+        &self,
+        _: &mmp_core::domain::WeightRecord,
+        _: mmp_core::domain::Revision,
+    ) -> mmp_core::Result<mmp_core::ports::UpdateOutcome> {
+        Ok(mmp_core::ports::UpdateOutcome::NotFound)
+    }
+    async fn delete(
+        &self,
+        _: mmp_core::domain::WeightRecordId,
+        _: mmp_core::domain::Revision,
+    ) -> mmp_core::Result<mmp_core::ports::UpdateOutcome> {
+        Ok(mmp_core::ports::UpdateOutcome::NotFound)
+    }
+}
+
+#[async_trait::async_trait]
+impl mmp_core::ports::WeightGoalRepository for NoopWeightGoals {
+    async fn get(
+        &self,
+        _: mmp_core::domain::WeightGoalId,
+    ) -> mmp_core::Result<Option<mmp_core::domain::WeightGoal>> {
+        Ok(None)
+    }
+    async fn for_member(
+        &self,
+        _: mmp_core::domain::HouseholdMemberId,
+    ) -> mmp_core::Result<Option<mmp_core::domain::WeightGoal>> {
+        Ok(None)
+    }
+    async fn insert(&self, _: &mmp_core::domain::WeightGoal) -> mmp_core::Result<()> {
+        Ok(())
+    }
+    async fn update(
+        &self,
+        _: &mmp_core::domain::WeightGoal,
+        _: mmp_core::domain::Revision,
+    ) -> mmp_core::Result<mmp_core::ports::UpdateOutcome> {
+        Ok(mmp_core::ports::UpdateOutcome::NotFound)
+    }
+    async fn delete(
+        &self,
+        _: mmp_core::domain::WeightGoalId,
         _: mmp_core::domain::Revision,
     ) -> mmp_core::Result<mmp_core::ports::UpdateOutcome> {
         Ok(mmp_core::ports::UpdateOutcome::NotFound)

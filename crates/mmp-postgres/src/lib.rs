@@ -12,6 +12,7 @@ mod rows;
 mod shopping;
 mod stock;
 mod user;
+mod weight;
 
 pub use access_grant::PgAccessGrantRepository;
 pub use consumption_record::PgConsumptionRecordRepository;
@@ -27,6 +28,7 @@ pub use shopping::{
 };
 pub use stock::PgStockRepository;
 pub use user::PgUserRepository;
+pub use weight::{PgWeightGoalRepository, PgWeightRecordRepository};
 
 use std::time::Duration;
 

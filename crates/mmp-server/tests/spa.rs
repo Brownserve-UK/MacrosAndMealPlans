@@ -6,7 +6,7 @@ use http_body_util::BodyExt;
 use mmp_core::ports::SystemClock;
 use mmp_core::services::{
     CatalogueService, DiaryService, HouseholdService, HouseholdSettingsService, MealPlanService,
-    NutritionTargetService, RecipeService, ShoppingService, StockService,
+    NutritionTargetService, RecipeService, ShoppingService, StockService, WeightService,
 };
 use mmp_core::testing::{
     InMemoryAccessGrantRepository, InMemoryConsumptionRecordRepository,
@@ -14,7 +14,8 @@ use mmp_core::testing::{
     InMemoryIngredientRepository, InMemoryMealPlanRepository, InMemoryNutritionTargetRepository,
     InMemoryProductRepository, InMemoryPurchaseRepository, InMemoryRecipeRepository,
     InMemoryShoppingCadenceRepository, InMemoryShoppingOpportunityRepository,
-    InMemoryStockRepository, InMemoryUserRepository,
+    InMemoryStockRepository, InMemoryUserRepository, InMemoryWeightGoalRepository,
+    InMemoryWeightRecordRepository,
 };
 use mmp_server::auth::DevBasicAuthProvider;
 use mmp_server::{AppState, app};
@@ -107,6 +108,11 @@ fn app_with_web(dist: &std::path::Path) -> axum::Router {
                 Arc::new(InMemoryHouseholdSettingsRepository::new()),
                 Arc::new(SystemClock),
             ),
+            Arc::new(SystemClock),
+        ),
+        WeightService::new(
+            Arc::new(InMemoryWeightRecordRepository::new()),
+            Arc::new(InMemoryWeightGoalRepository::new()),
             Arc::new(SystemClock),
         ),
         Arc::new(DevBasicAuthProvider::new(household, "changeme")),
@@ -274,6 +280,11 @@ async fn without_a_web_build_the_api_still_works() {
                 Arc::new(InMemoryHouseholdSettingsRepository::new()),
                 Arc::new(SystemClock),
             ),
+            Arc::new(SystemClock),
+        ),
+        WeightService::new(
+            Arc::new(InMemoryWeightRecordRepository::new()),
+            Arc::new(InMemoryWeightGoalRepository::new()),
             Arc::new(SystemClock),
         ),
         Arc::new(DevBasicAuthProvider::new(household, "changeme")),

@@ -16,6 +16,7 @@ mod quantity;
 mod recipe;
 mod shopping;
 mod stock;
+mod weight;
 
 pub use access::{AccessScope, Permission, Role, UnknownAccessScope, UnknownRole};
 pub use consumption::{
@@ -37,6 +38,7 @@ pub use ids::{
     MealGuestAllocationId, MealGuestGroupId, MealParticipantAllocationId, MealParticipantId,
     MealPlanComponentId, MealPlanEntryId, NutritionTargetId, PurchaseId, RecipeComponentId,
     RecipeId, RecipeInstructionId, ShoppingOpportunityId, StockEffectId, StockEventId, StockItemId,
+    WeightGoalId, WeightRecordId,
 };
 pub use ingredient::{
     Ingredient, IngredientPatch, IngredientSummary, MAX_NAME_LEN, NewIngredient, validate_name,
@@ -91,4 +93,10 @@ pub use stock::{
     StorageLocation, TrackingMode, UnknownSourceDateKind, UnknownStockEffectSource,
     UnknownStockEffectState, UnknownStockEventKind, UnknownStorageLocation, UnknownTrackingMode,
     UsabilityDeadline, apply_take, plan_deduction, plan_release,
+};
+pub use weight::{
+    GoalAmounts, GoalProjection, NewWeightGoal, NewWeightRecord, UnknownWeightDisplay,
+    UnknownWeightObjective, UnknownWeightSource, WeightDisplay, WeightGoal, WeightGoalPatch,
+    WeightObjective, WeightRecord, WeightRecordPatch, WeightSource, current_weight, latest_per_day,
+    project_goal,
 };

@@ -47,6 +47,8 @@ async fn main() -> anyhow::Result<()> {
         products_created = report.products_created,
         recipes_created = report.recipes_created,
         targets_created = report.targets_created,
+        weigh_ins_created = report.weigh_ins_created,
+        weight_goals_created = report.weight_goals_created,
         stock_items_created = report.stock_items_created,
         meals_created = report.meals_created,
         meals_resolved = report.meals_resolved,

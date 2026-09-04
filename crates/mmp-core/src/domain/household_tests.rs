@@ -86,6 +86,7 @@ fn a_member_reports_whether_it_has_an_account() {
         id: HouseholdMemberId::new(),
         display_name: "Joe".to_owned(),
         linked_user_id: None,
+        weight_display: WeightDisplay::default(),
         revision: Revision::INITIAL,
         created_at: now,
         updated_at: now,

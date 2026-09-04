@@ -8,6 +8,7 @@ use time::OffsetDateTime;
 use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
+use super::weight::WeightDisplayDto;
 use super::{PageMeta, SortDirectionDto};
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
@@ -18,6 +19,7 @@ pub struct HouseholdMemberDto {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub linked_user_id: Option<Uuid>,
     pub has_account: bool,
+    pub weight_display: WeightDisplayDto,
     pub revision: i64,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
@@ -37,6 +39,7 @@ impl From<HouseholdMember> for HouseholdMemberDto {
             display_name: value.display_name,
             linked_user_id: value.linked_user_id.map(|id| id.as_uuid()),
             has_account: value.linked_user_id.is_some(),
+            weight_display: value.weight_display.into(),
             revision: value.revision.get(),
             created_at: value.created_at,
             updated_at: value.updated_at,
@@ -170,12 +173,15 @@ impl From<CreateMemberRequest> for NewHouseholdMember {
 pub struct UpdateMemberRequest {
     #[serde(default)]
     pub display_name: Option<String>,
+    #[serde(default)]
+    pub weight_display: Option<WeightDisplayDto>,
 }
 
 impl From<UpdateMemberRequest> for HouseholdMemberPatch {
     fn from(value: UpdateMemberRequest) -> Self {
         Self {
             display_name: value.display_name,
+            weight_display: value.weight_display.map(Into::into),
         }
     }
 }

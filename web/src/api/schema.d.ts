@@ -532,6 +532,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/members/{member_id}/weight-goal": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getWeightGoal"];
+        put?: never;
+        post: operations["setWeightGoal"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/members/{member_id}/weight-records": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listWeightRecords"];
+        put?: never;
+        post: operations["recordWeight"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/members/{member_id}/weight-summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getWeightSummary"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/meta": {
         parameters: {
             query?: never;
@@ -1124,6 +1172,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/weight-goals/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete: operations["clearWeightGoal"];
+        options?: never;
+        head?: never;
+        patch: operations["updateWeightGoal"];
+        trace?: never;
+    };
+    "/api/v1/weight-records/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getWeightRecord"];
+        put?: never;
+        post?: never;
+        delete: operations["deleteWeightRecord"];
+        options?: never;
+        head?: never;
+        patch: operations["updateWeightRecord"];
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1381,6 +1461,28 @@ export interface components {
             /** @example joe */
             username: string;
         };
+        CreateWeightGoalRequest: {
+            objective: components["schemas"]["WeightObjectiveDto"];
+            planned_rate?: null | components["schemas"]["QuantityDto"];
+            /**
+             * Format: date
+             * @example 2026-08-01
+             */
+            started_on: string;
+            starting_weight: components["schemas"]["QuantityDto"];
+            target_weight?: null | components["schemas"]["QuantityDto"];
+        };
+        /** @description A weigh-in. The weight may be sent in any mass unit and is stored in kilograms. */
+        CreateWeightRecordRequest: {
+            /** Format: date-time */
+            recorded_at?: string | null;
+            /**
+             * Format: date
+             * @example 2026-09-03
+             */
+            recorded_on: string;
+            weight: components["schemas"]["QuantityDto"];
+        };
         DayTotalsDto: {
             /** Format: int64 */
             entry_count: number;
@@ -1441,6 +1543,27 @@ export interface components {
             still_pending: number;
             stocked: number;
         };
+        /** @description What the member's plan says about reaching their goal. */
+        GoalProjectionDto: {
+            /** @enum {string} */
+            status: "reached";
+        } | {
+            /** @enum {string} */
+            status: "steady";
+        } | {
+            /**
+             * Format: date
+             * @example 2026-12-01
+             */
+            on: string;
+            /**
+             * Format: double
+             * @example 2
+             */
+            remaining_kg: number;
+            /** @enum {string} */
+            status: "projected";
+        };
         GrantAccessRequest: {
             scope: components["schemas"]["AccessScope"];
             /** Format: uuid */
@@ -1465,6 +1588,7 @@ export interface components {
             revision: number;
             /** Format: date-time */
             updated_at: string;
+            weight_display: components["schemas"]["WeightDisplayDto"];
         };
         HouseholdSettingsDto: components["schemas"]["MealTimesDto"] & {
             assume_eaten_when_time_passes: boolean;
@@ -2488,6 +2612,7 @@ export interface components {
         };
         UpdateMemberRequest: {
             display_name?: string | null;
+            weight_display?: null | components["schemas"]["WeightDisplayDto"];
         };
         UpdateNutritionTargetRequest: {
             /** Format: double */
@@ -2559,6 +2684,21 @@ export interface components {
             display_name?: string | null;
             username?: string | null;
         };
+        UpdateWeightGoalRequest: {
+            objective?: null | components["schemas"]["WeightObjectiveDto"];
+            planned_rate?: null | components["schemas"]["QuantityDto"];
+            /** Format: date */
+            started_on?: string | null;
+            starting_weight?: null | components["schemas"]["QuantityDto"];
+            target_weight?: null | components["schemas"]["QuantityDto"];
+        };
+        UpdateWeightRecordRequest: {
+            /** Format: date-time */
+            recorded_at?: string | null;
+            /** Format: date */
+            recorded_on?: string | null;
+            weight?: null | components["schemas"]["QuantityDto"];
+        };
         UsabilityDeadlineDto: {
             basis?: string | null;
             /**
@@ -2586,6 +2726,97 @@ export interface components {
         };
         UserPage: components["schemas"]["PageMeta"] & {
             items: components["schemas"]["UserDto"][];
+        };
+        /** @enum {string} */
+        WeightDisplayDto: "kilograms" | "stones_pounds" | "pounds";
+        WeightGoalDto: {
+            /** Format: date-time */
+            created_at: string;
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            member_id: string;
+            objective: components["schemas"]["WeightObjectiveDto"];
+            /**
+             * Format: double
+             * @example 0.5
+             */
+            planned_rate_kg_per_week?: number | null;
+            /** Format: int64 */
+            revision: number;
+            /**
+             * Format: date
+             * @example 2026-08-01
+             */
+            started_on: string;
+            /**
+             * Format: double
+             * @example 80
+             */
+            starting_weight_kg: number;
+            /**
+             * Format: double
+             * @example 76
+             */
+            target_weight_kg?: number | null;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        /** @enum {string} */
+        WeightObjectiveDto: "lose" | "maintain" | "gain";
+        WeightPointDto: {
+            /**
+             * Format: date
+             * @example 2026-09-03
+             */
+            on: string;
+            /**
+             * Format: double
+             * @example 72.4
+             */
+            weight_kg: number;
+        };
+        WeightRecordDto: {
+            /** Format: date-time */
+            created_at: string;
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            member_id: string;
+            /** Format: date-time */
+            recorded_at?: string | null;
+            /** Format: uuid */
+            recorded_by?: string | null;
+            /**
+             * Format: date
+             * @example 2026-09-03
+             */
+            recorded_on: string;
+            /** Format: int64 */
+            revision: number;
+            source: components["schemas"]["WeightSourceDto"];
+            /** Format: date-time */
+            updated_at: string;
+            /**
+             * Format: double
+             * @example 72.4
+             */
+            weight_kg: number;
+        };
+        /** @enum {string} */
+        WeightSourceDto: "manual" | "health_connect";
+        /** @description Everything the weight screen needs in one read. */
+        WeightSummaryDto: {
+            /**
+             * Format: double
+             * @example -2
+             */
+            change_since_start_kg?: number | null;
+            goal?: null | components["schemas"]["WeightGoalDto"];
+            latest?: null | components["schemas"]["WeightRecordDto"];
+            projection?: null | components["schemas"]["GoalProjectionDto"];
+            /** @description One point per day, oldest first. */
+            series: components["schemas"]["WeightPointDto"][];
         };
     };
     responses: never;
@@ -4080,6 +4311,212 @@ export interface operations {
             };
             /** @description Validation failed */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    getWeightGoal: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Household member id */
+                member_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The member's goal */
+            200: {
+                headers: {
+                    /** @description The revision to send back as If-Match */
+                    ETag?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WeightGoalDto"];
+                };
+            };
+            /** @description Not permitted */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No goal set */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    setWeightGoal: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Household member id */
+                member_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateWeightGoalRequest"];
+            };
+        };
+        responses: {
+            /** @description Set */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WeightGoalDto"];
+                };
+            };
+            /** @description Not permitted */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A goal is already set */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    listWeightRecords: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Household member id */
+                member_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The member's weigh-ins, newest first */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WeightRecordDto"][];
+                };
+            };
+            /** @description Not permitted */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    recordWeight: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Household member id */
+                member_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateWeightRecordRequest"];
+            };
+        };
+        responses: {
+            /** @description Recorded */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WeightRecordDto"];
+                };
+            };
+            /** @description Not permitted */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    getWeightSummary: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Household member id */
+                member_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Current weight, goal, projection and trend */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WeightSummaryDto"];
+                };
+            };
+            /** @description Not permitted */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -5954,6 +6391,265 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["UserDto"];
+                };
+            };
+        };
+    };
+    clearWeightGoal: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The revision you loaded */
+                "If-Match": string;
+            };
+            path: {
+                /** @description Weight goal id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Cleared */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not permitted */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Someone else changed it first */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    updateWeightGoal: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The revision you loaded */
+                "If-Match": string;
+            };
+            path: {
+                /** @description Weight goal id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateWeightGoalRequest"];
+            };
+        };
+        responses: {
+            /** @description Updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WeightGoalDto"];
+                };
+            };
+            /** @description Not permitted */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Someone else changed it first */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description If-Match is required */
+            428: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    getWeightRecord: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Weight record id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The weigh-in */
+            200: {
+                headers: {
+                    /** @description The revision to send back as If-Match */
+                    ETag?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WeightRecordDto"];
+                };
+            };
+            /** @description Not permitted */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    deleteWeightRecord: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The revision you loaded */
+                "If-Match": string;
+            };
+            path: {
+                /** @description Weight record id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not permitted */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Someone else changed it first */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    updateWeightRecord: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The revision you loaded */
+                "If-Match": string;
+            };
+            path: {
+                /** @description Weight record id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateWeightRecordRequest"];
+            };
+        };
+        responses: {
+            /** @description Updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WeightRecordDto"];
+                };
+            };
+            /** @description Not permitted */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Someone else changed it first */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description If-Match is required */
+            428: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
         };

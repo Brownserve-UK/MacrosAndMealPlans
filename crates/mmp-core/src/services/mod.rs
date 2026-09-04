@@ -10,6 +10,7 @@ mod seed;
 mod shopping;
 mod stock;
 mod stock_effects;
+mod weight;
 
 pub use catalogue::CatalogueService;
 pub use diary::{DayTotals, DiaryDay, DiaryEntry, DiaryService};
@@ -28,3 +29,4 @@ pub use seed::{SeedIngredient, SeedReport};
 pub use shopping::{FinishedShop, ShoppingList, ShoppingService};
 pub use stock::{ShoppingSnapshot, StockService};
 pub use stock_effects::{StockAffected, StockOutcomeView};
+pub use weight::{WeightPoint, WeightService, WeightSummary};

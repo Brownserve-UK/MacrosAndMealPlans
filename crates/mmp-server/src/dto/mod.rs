@@ -9,6 +9,7 @@ pub mod recipe;
 pub mod settings;
 pub mod shopping;
 pub mod stock;
+pub mod weight;
 
 pub use catalogue::*;
 pub use common::*;
@@ -21,3 +22,4 @@ pub use recipe::*;
 pub use settings::*;
 pub use shopping::*;
 pub use stock::*;
+pub use weight::*;

@@ -12,6 +12,7 @@ pub mod settings;
 pub mod shopping;
 pub mod stock;
 pub mod users;
+pub mod weight;
 
 use mmp_core::domain::HouseholdMemberId;
 

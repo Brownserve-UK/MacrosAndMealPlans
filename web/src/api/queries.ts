@@ -62,6 +62,9 @@ export const keys = {
   shoppingOpportunities: () => ['shopping', 'opportunities'] as const,
   shoppingCadence: () => ['shopping', 'cadence'] as const,
   purchases: (state?: string) => ['shopping', 'purchases', state] as const,
+  weightSummary: (memberId: string) => ['weight', 'summary', memberId] as const,
+  weightRecords: (memberId: string) => ['weight', 'records', memberId] as const,
+  weightGoal: (memberId: string) => ['weight', 'goal', memberId] as const,
 };
 
 export type StockListParams = {
@@ -866,6 +869,137 @@ export function useDeleteNutritionTarget() {
     mutationFn: async (input: { id: string; revision: number; memberId: string }) =>
       unwrap(
         await client.DELETE('/api/v1/nutrition-targets/{id}', {
+          params: { path: { id: input.id }, header: ifMatch(input.revision) },
+        }),
+      ),
+    onSuccess: (_data, variables) => invalidate(variables.memberId),
+  });
+}
+
+function useWeightInvalidation() {
+  const qc = useQueryClient();
+  return (memberId: string) => {
+    void qc.invalidateQueries({ queryKey: keys.weightSummary(memberId) });
+    void qc.invalidateQueries({ queryKey: keys.weightRecords(memberId) });
+    void qc.invalidateQueries({ queryKey: keys.weightGoal(memberId) });
+  };
+}
+
+export function useWeightSummary(memberId: string) {
+  return useQuery({
+    queryKey: keys.weightSummary(memberId),
+    enabled: Boolean(memberId),
+    queryFn: async () =>
+      unwrap(
+        await client.GET('/api/v1/members/{member_id}/weight-summary', {
+          params: { path: { member_id: memberId } },
+        }),
+      ),
+  });
+}
+
+export function useWeightRecords(memberId: string) {
+  return useQuery({
+    queryKey: keys.weightRecords(memberId),
+    enabled: Boolean(memberId),
+    queryFn: async () =>
+      unwrap(
+        await client.GET('/api/v1/members/{member_id}/weight-records', {
+          params: { path: { member_id: memberId } },
+        }),
+      ),
+  });
+}
+
+export function useRecordWeighIn() {
+  const invalidate = useWeightInvalidation();
+  return useMutation({
+    mutationFn: async (input: {
+      memberId: string;
+      body: components['schemas']['CreateWeightRecordRequest'];
+    }) =>
+      unwrap(
+        await client.POST('/api/v1/members/{member_id}/weight-records', {
+          params: { path: { member_id: input.memberId } },
+          body: input.body,
+        }),
+      ),
+    onSuccess: (record) => invalidate(record.member_id),
+  });
+}
+
+export function useUpdateWeighIn() {
+  const invalidate = useWeightInvalidation();
+  return useMutation({
+    mutationFn: async (input: {
+      id: string;
+      revision: number;
+      body: components['schemas']['UpdateWeightRecordRequest'];
+    }) =>
+      unwrap(
+        await client.PATCH('/api/v1/weight-records/{id}', {
+          params: { path: { id: input.id }, header: ifMatch(input.revision) },
+          body: input.body,
+        }),
+      ),
+    onSuccess: (record) => invalidate(record.member_id),
+  });
+}
+
+export function useDeleteWeighIn() {
+  const invalidate = useWeightInvalidation();
+  return useMutation({
+    mutationFn: async (input: { id: string; revision: number; memberId: string }) =>
+      unwrap(
+        await client.DELETE('/api/v1/weight-records/{id}', {
+          params: { path: { id: input.id }, header: ifMatch(input.revision) },
+        }),
+      ),
+    onSuccess: (_data, variables) => invalidate(variables.memberId),
+  });
+}
+
+export function useSetWeightGoal() {
+  const invalidate = useWeightInvalidation();
+  return useMutation({
+    mutationFn: async (input: {
+      memberId: string;
+      body: components['schemas']['CreateWeightGoalRequest'];
+    }) =>
+      unwrap(
+        await client.POST('/api/v1/members/{member_id}/weight-goal', {
+          params: { path: { member_id: input.memberId } },
+          body: input.body,
+        }),
+      ),
+    onSuccess: (goal) => invalidate(goal.member_id),
+  });
+}
+
+export function useUpdateWeightGoal() {
+  const invalidate = useWeightInvalidation();
+  return useMutation({
+    mutationFn: async (input: {
+      id: string;
+      revision: number;
+      body: components['schemas']['UpdateWeightGoalRequest'];
+    }) =>
+      unwrap(
+        await client.PATCH('/api/v1/weight-goals/{id}', {
+          params: { path: { id: input.id }, header: ifMatch(input.revision) },
+          body: input.body,
+        }),
+      ),
+    onSuccess: (goal) => invalidate(goal.member_id),
+  });
+}
+
+export function useClearWeightGoal() {
+  const invalidate = useWeightInvalidation();
+  return useMutation({
+    mutationFn: async (input: { id: string; revision: number; memberId: string }) =>
+      unwrap(
+        await client.DELETE('/api/v1/weight-goals/{id}', {
           params: { path: { id: input.id }, header: ifMatch(input.revision) },
         }),
       ),

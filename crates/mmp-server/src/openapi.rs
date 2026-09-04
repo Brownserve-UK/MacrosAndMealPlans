@@ -22,6 +22,7 @@ use utoipa::{Modify, OpenApi};
         (name = "recipes", description = "Reusable multi-component recipes with derived nutrition"),
         (name = "stock", description = "Physical household stock and its availability against plans"),
         (name = "shopping", description = "What needs buying, when the household shops, and what they bought"),
+        (name = "weight", description = "A member's weigh-ins and weight goal"),
     ),
     components(schemas(
         crate::dto::SortDirectionDto,

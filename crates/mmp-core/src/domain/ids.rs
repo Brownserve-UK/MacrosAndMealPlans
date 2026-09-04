@@ -90,6 +90,8 @@ entity_id!(StockItemId, "stock_item");
 entity_id!(StockEventId, "stock_event");
 entity_id!(StockEffectId, "stock_effect");
 entity_id!(ShoppingOpportunityId, "shopping_opportunity");
+entity_id!(WeightRecordId, "weight_record");
+entity_id!(WeightGoalId, "weight_goal");
 entity_id!(PurchaseId, "purchase");
 
 // This should give a stable UUID for a seeded resource
