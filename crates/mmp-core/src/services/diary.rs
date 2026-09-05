@@ -76,10 +76,10 @@ impl DiaryService {
         input: NewConsumptionRecord,
     ) -> Result<StockAffected<ConsumptionRecord>> {
         ensure_not_future(&*self.clock, input.consumed_on)?;
-        self.record_unchecked(input).await
+        self.record_backdated(input).await
     }
 
-    pub async fn record_unchecked(
+    pub async fn record_backdated(
         &self,
         input: NewConsumptionRecord,
     ) -> Result<StockAffected<ConsumptionRecord>> {

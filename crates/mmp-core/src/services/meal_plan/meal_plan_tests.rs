@@ -6,15 +6,17 @@ use time::macros::{date, datetime, time};
 
 use super::*;
 use crate::domain::{
-    ActualMealPlanComponent, ChangedMealOutcome, ConfirmMealPlanComponent, ConsumedAmount,
-    HouseholdMember, HouseholdMemberId, MealItemRef, MealPlanEntryPatch, MealPlanScope,
-    MealPlanStatus, MealSlot, NewConsumptionRecord, NewMealPlanComponent, NewMealPlanEntry,
-    NewNutritionTarget, NutritionFacts, NutritionGoals, NutritionQuality, OutcomeActor, Product,
-    ProductId, Provenance, Quantity, Recipe, RecipeComponent, RecipeId, RecipeVisibility,
-    ReplacementItem, ReviewedMemberOutcome, Revision, StockItem, StockLevel, StorageLocation, Unit,
-    UserId, WeightDisplay,
+    ActualMealPlanComponent, ChangedMealOutcome, ConfirmMealPlanComponent, ConfirmMealPlanEntry,
+    ConsumedAmount, HouseholdMember, HouseholdMemberId, MealItemRef, MealPlanEntryPatch,
+    MealPlanScope, MealPlanStatus, MealSlot, NewConsumptionRecord, NewMealPlanComponent,
+    NewMealPlanEntry, NewNutritionTarget, NutritionFacts, NutritionGoals, NutritionQuality,
+    OutcomeActor, ParticipantStatus, Portioning, Product, ProductId, Provenance, Quantity, Recipe,
+    RecipeComponent, RecipeId, RecipeVisibility, ReplacementItem, ReviewMealOutcomes,
+    ReviewedMealOutcome, ReviewedMemberOutcome, Revision, StockItem, StockLevel, StorageLocation,
+    Unit, UserId, WeightDisplay,
 };
 use crate::ports::{FixedClock, StockRepository};
+use crate::services::stock_effects::StockAffected;
 use crate::services::{DiaryService, NutritionTargetService};
 use crate::testing::{
     InMemoryConsumptionRecordRepository, InMemoryHouseholdMemberRepository,
@@ -538,7 +540,7 @@ async fn confirming_one_component_does_not_resolve_its_siblings() {
 
     let updated = h
         .service
-        .mark_component_eaten_unchecked(
+        .mark_component_eaten_backdated(
             entry.entry.id,
             banana_component.id,
             banana_component.revision,
@@ -747,7 +749,7 @@ async fn marking_remaining_eaten_skips_an_item_marked_not_eaten() {
     .await;
     let rejected = h
         .service
-        .mark_component_not_eaten_unchecked(
+        .mark_component_not_eaten_backdated(
             entry.entry.id,
             entry.components[0].component.id,
             entry.components[0].component.revision,
@@ -767,7 +769,7 @@ async fn marking_remaining_eaten_skips_an_item_marked_not_eaten() {
 
     let resolved = h
         .service
-        .mark_eaten_unchecked(
+        .mark_eaten_backdated(
             rejected.entry.id,
             rejected.entry.revision,
             ConfirmMealPlanEntry {
@@ -1658,7 +1660,7 @@ async fn editing_a_recipe_moves_planned_numbers_but_not_eaten_history() {
     let component_id = reloaded.components[0].component.id;
     let eaten = h
         .service
-        .mark_component_eaten_unchecked(
+        .mark_component_eaten_backdated(
             entry.entry.id,
             component_id,
             reloaded.components[0].component.revision,
@@ -1709,7 +1711,7 @@ async fn confirming_a_recipe_component_writes_a_recipe_referencing_record() {
     let component_id = entry.components[0].component.id;
 
     h.service
-        .mark_component_eaten_unchecked(
+        .mark_component_eaten_backdated(
             entry.entry.id,
             component_id,
             entry.components[0].component.revision,
@@ -1841,7 +1843,7 @@ async fn a_participant_sees_only_their_own_share_and_outcome() {
 
     let component = with_taylor.components[0].component.clone();
     h.service
-        .mark_component_eaten_unchecked(
+        .mark_component_eaten_backdated(
             with_taylor.entry.id,
             component.id,
             component.revision,
@@ -1898,7 +1900,7 @@ async fn confirm_component(
     amount: ConsumedAmount,
 ) -> StockAffected<MealPlanEntryView> {
     h.service
-        .mark_component_eaten_unchecked(
+        .mark_component_eaten_backdated(
             entry_id,
             component_id,
             revision,
@@ -1966,7 +1968,7 @@ async fn a_second_participant_confirming_does_not_draw_stock_again() {
     let component = created.components[0].component.clone();
 
     let confirm = |subject, revision| {
-        h.service.mark_component_eaten_unchecked(
+        h.service.mark_component_eaten_backdated(
             created.entry.id,
             component.id,
             revision,
@@ -2004,7 +2006,7 @@ async fn marking_a_component_not_eaten_draws_no_stock() {
     let component = entry.components[0].component.clone();
 
     h.service
-        .mark_component_not_eaten_unchecked(
+        .mark_component_not_eaten_backdated(
             entry.entry.id,
             component.id,
             component.revision,
@@ -2342,7 +2344,7 @@ async fn opting_out_is_refused_once_the_portion_is_resolved() {
     let component = household.components[0].component.clone();
 
     h.service
-        .mark_component_eaten_unchecked(
+        .mark_component_eaten_backdated(
             household.entry.id,
             component.id,
             component.revision,
@@ -2506,7 +2508,7 @@ async fn one_member_resolving_does_not_freeze_the_meal_for_a_manager() {
     let component = household.components[0].component.clone();
 
     h.service
-        .mark_component_eaten_unchecked(
+        .mark_component_eaten_backdated(
             household.entry.id,
             component.id,
             component.revision,
@@ -2557,7 +2559,7 @@ async fn planned_at(
     components: Vec<NewMealPlanComponent>,
 ) -> MealPlanEntryView {
     h.service
-        .create_unchecked(NewMealPlanEntry {
+        .create_backdated(NewMealPlanEntry {
             id: None,
             scope: MealPlanScope::Member,
             member_id: Some(h.member_id),

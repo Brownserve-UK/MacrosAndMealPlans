@@ -199,7 +199,7 @@ impl ShoppingService {
             [_, second, ..] => second.date,
         };
 
-        let snapshot = self.stock.shopping_snapshot(today, window_end).await?;
+        let snapshot = self.stock.snapshot(today, window_end).await?;
         let open_purchases: Vec<Purchase> = self
             .purchases
             .list_open()

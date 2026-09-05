@@ -22,7 +22,7 @@ use crate::ports::{
 const STOCK_ITEM: &str = "stock item";
 
 #[derive(Clone)]
-pub struct ShoppingSnapshot {
+pub(crate) struct StockSnapshot {
     pub report: AvailabilityReport,
     pub pools: HashMap<IngredientId, Vec<ProductId>>,
     pub items: Vec<StockItem>,
@@ -237,7 +237,7 @@ impl StockService {
         self.report(product_ids, false, from, to).await
     }
 
-    pub async fn shopping_snapshot(&self, from: Date, to: Date) -> Result<ShoppingSnapshot> {
+    pub(crate) async fn snapshot(&self, from: Date, to: Date) -> Result<StockSnapshot> {
         let demand = self.planned_demand(from, to).await?;
 
         let mut ids: Vec<ProductId> = demand
@@ -259,7 +259,7 @@ impl StockService {
         ids.extend(held.items.iter().map(|item| item.product_id));
         sort_dedup(&mut ids, ProductId::as_uuid);
 
-        self.snapshot(demand, &ids, true).await
+        self.build_snapshot(demand, &ids, true).await
     }
 
     async fn report(
@@ -270,19 +270,21 @@ impl StockService {
         to: Date,
     ) -> Result<AvailabilityReport> {
         let demand = self.planned_demand(from, to).await?;
-        let mut snapshot = self.snapshot(demand, product_ids, all_ingredients).await?;
+        let mut snapshot = self
+            .build_snapshot(demand, product_ids, all_ingredients)
+            .await?;
         if all_ingredients {
             snapshot.report.claims = Vec::new();
         }
         Ok(snapshot.report)
     }
 
-    async fn snapshot(
+    async fn build_snapshot(
         &self,
         mut demand: Demand,
         product_ids: &[ProductId],
         all_ingredients: bool,
-    ) -> Result<ShoppingSnapshot> {
+    ) -> Result<StockSnapshot> {
         let interpretation = self.settings.get().await?.missing_stock_interpretation;
 
         if all_ingredients {
@@ -464,7 +466,7 @@ impl StockService {
             );
         }
 
-        Ok(ShoppingSnapshot {
+        Ok(StockSnapshot {
             report: AvailabilityReport {
                 products,
                 ingredients,

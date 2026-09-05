@@ -54,10 +54,17 @@ pub use meal_plan::{
     ParticipantStatus, Portioning, ReplacementItem, ReviewMealOutcomes, ReviewedGuestOutcome,
     ReviewedMealOutcome, ReviewedMemberOutcome, SetMealParticipants, SlotAttendance,
     UnknownMealPlanScope, UnknownMealPlanStatus, UnknownMealSlot, UnknownParticipantStatus,
-    UnknownPortioning, allocated_total, derive_component_status, derive_entry_status,
-    derive_guest_status, derive_participant_status, effective_consumption, equal_split,
-    preparation_for, validate_components, validate_participants,
+    UnknownPortioning, actual_components_for_member, allocated_total, apply_equal_portioning,
+    build_guest_results, build_participant, component_still_eaten, derive_component_status,
+    derive_entry_status, derive_guest_status, derive_participant_status, effective_consumption,
+    equal_split, find_component, has_explicit_allocations, make_components, merge_components,
+    merge_guest_group, merge_participant, outcomes_for_component, participant_status_to_meal,
+    pending_component_ids, preparation_for, replacements_for, require_allocation_planned,
+    require_editable, require_household_attendance, require_planned, require_subject_pending,
+    set_allocation, sync_allocations, validate_actual_components, validate_components,
+    validate_guest_groups, validate_participants,
 };
+pub(crate) use meal_plan::{MEAL_PLAN_COMPONENT, MEAL_PLAN_ENTRY};
 pub use nutrition::NutritionFacts;
 pub use nutrition_target::{
     NUTRIENT_KEYS, NewNutritionTarget, NutritionGoals, NutritionGoalsPatch, NutritionTarget,

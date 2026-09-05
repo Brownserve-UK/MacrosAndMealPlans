@@ -27,6 +27,6 @@ pub use recipe::{
 };
 pub use seed::{SeedIngredient, SeedReport};
 pub use shopping::{FinishedShop, ShoppingList, ShoppingService};
-pub use stock::{ShoppingSnapshot, StockService};
+pub use stock::StockService;
 pub use stock_effects::{StockAffected, StockOutcomeView};
 pub use weight::{WeightPoint, WeightService, WeightSummary};

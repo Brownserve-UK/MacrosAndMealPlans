@@ -761,7 +761,7 @@ impl Loader<'_> {
         }
         self.state
             .meal_plan
-            .create_unchecked(NewMealPlanEntry {
+            .create_backdated(NewMealPlanEntry {
                 id: Some(id),
                 scope: MealPlanScope::Member,
                 member_id: Some(self.member.id),
@@ -1020,7 +1020,7 @@ impl Loader<'_> {
         }
         self.state
             .meal_plan
-            .review_outcomes_unchecked(
+            .review_outcomes_backdated(
                 id,
                 view.entry.revision,
                 mmp_core::domain::ReviewMealOutcomes {
@@ -1163,7 +1163,7 @@ impl Loader<'_> {
         let created = self
             .state
             .meal_plan
-            .create_unchecked(NewMealPlanEntry {
+            .create_backdated(NewMealPlanEntry {
                 id: Some(id),
                 scope: MealPlanScope::Member,
                 member_id: Some(member_id),
@@ -1249,7 +1249,7 @@ impl Loader<'_> {
         let created = self
             .state
             .meal_plan
-            .create_unchecked(NewMealPlanEntry {
+            .create_backdated(NewMealPlanEntry {
                 id: Some(id),
                 scope: MealPlanScope::Household,
                 member_id: None,
@@ -1430,7 +1430,7 @@ impl Loader<'_> {
         self.report.meals_created += 1;
         self.state
             .meal_plan
-            .create_unchecked(NewMealPlanEntry {
+            .create_backdated(NewMealPlanEntry {
                 id: Some(id),
                 scope: MealPlanScope::Member,
                 member_id: Some(self.member.id),
@@ -1469,7 +1469,7 @@ impl Loader<'_> {
                 self.report.meals_created += 1;
                 self.state
                     .meal_plan
-                    .create_unchecked(NewMealPlanEntry {
+                    .create_backdated(NewMealPlanEntry {
                         id: Some(id),
                         scope: MealPlanScope::Member,
                         member_id: Some(self.member.id),
@@ -1518,7 +1518,7 @@ impl Loader<'_> {
                     .context("sample partial meal component does not exist")?;
                 self.state
                     .meal_plan
-                    .mark_component_eaten_unchecked(
+                    .mark_component_eaten_backdated(
                         view.entry.id,
                         component.component.id,
                         component.component.revision,
@@ -1537,7 +1537,7 @@ impl Loader<'_> {
             Outcome::NotEaten => {
                 self.state
                     .meal_plan
-                    .mark_not_eaten_unchecked(
+                    .mark_not_eaten_backdated(
                         view.entry.id,
                         view.entry.revision,
                         OutcomeActor::own(self.actor.id),
@@ -1563,7 +1563,7 @@ impl Loader<'_> {
                 let resolved = self
                     .state
                     .meal_plan
-                    .mark_eaten_unchecked(
+                    .mark_eaten_backdated(
                         view.entry.id,
                         view.entry.revision,
                         ConfirmMealPlanEntry {
@@ -1621,7 +1621,7 @@ impl Loader<'_> {
         self.report.meals_created += 1;
         self.state
             .meal_plan
-            .create_unchecked(NewMealPlanEntry {
+            .create_backdated(NewMealPlanEntry {
                 id: Some(id),
                 scope: MealPlanScope::Member,
                 member_id: Some(self.member.id),
@@ -1661,7 +1661,7 @@ impl Loader<'_> {
         }
         self.state
             .diary
-            .record_unchecked(NewConsumptionRecord {
+            .record_backdated(NewConsumptionRecord {
                 id: Some(id),
                 member_id: self.member.id,
                 item: MealItemRef::recipe(recipe_id(recipe_key)),
@@ -1699,7 +1699,7 @@ impl Loader<'_> {
         }
         self.state
             .diary
-            .record_unchecked(NewConsumptionRecord {
+            .record_backdated(NewConsumptionRecord {
                 id: Some(id),
                 member_id: self.member.id,
                 item: MealItemRef::product(product_id(product_key)),
