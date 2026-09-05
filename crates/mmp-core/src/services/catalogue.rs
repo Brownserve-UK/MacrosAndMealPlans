@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use time::OffsetDateTime;
 
+use super::revision::{commit_outcome, require_revision};
 use crate::domain::{
     CatalogueOrigin, ConsumedAmount, ConsumedNutrition, Ingredient, IngredientId, IngredientPatch,
     IngredientSummary, NewIngredient, NewProduct, Product, ProductId, ProductPatch, Provenance,
@@ -10,7 +11,6 @@ use crate::domain::{
 use crate::error::{CoreError, Result, ValidationErrors};
 use crate::ports::{
     Clock, IngredientQuery, IngredientRepository, Paginated, ProductQuery, ProductRepository,
-    UpdateOutcome,
 };
 
 const INGREDIENT: &str = "ingredient";
@@ -351,29 +351,21 @@ impl CatalogueService {
     }
 
     async fn commit_ingredient(&self, ingredient: &Ingredient, expected: Revision) -> Result<()> {
-        match self.ingredients.update(ingredient, expected).await? {
-            UpdateOutcome::Updated => Ok(()),
-            UpdateOutcome::RevisionMismatch { actual } => Err(CoreError::RevisionMismatch {
-                resource: INGREDIENT,
-                id: ingredient.id.to_string(),
-                expected,
-                actual,
-            }),
-            UpdateOutcome::NotFound => Err(CoreError::not_found(INGREDIENT, ingredient.id)),
-        }
+        commit_outcome(
+            INGREDIENT,
+            ingredient.id,
+            expected,
+            self.ingredients.update(ingredient, expected).await?,
+        )
     }
 
     async fn commit_product(&self, product: &Product, expected: Revision) -> Result<()> {
-        match self.products.update(product, expected).await? {
-            UpdateOutcome::Updated => Ok(()),
-            UpdateOutcome::RevisionMismatch { actual } => Err(CoreError::RevisionMismatch {
-                resource: PRODUCT,
-                id: product.id.to_string(),
-                expected,
-                actual,
-            }),
-            UpdateOutcome::NotFound => Err(CoreError::not_found(PRODUCT, product.id)),
-        }
+        commit_outcome(
+            PRODUCT,
+            product.id,
+            expected,
+            self.products.update(product, expected).await?,
+        )
     }
 
     fn stamp_update(
@@ -419,24 +411,6 @@ impl CatalogueService {
             return errors.into_result();
         }
         Ok(())
-    }
-}
-
-fn require_revision(
-    resource: &'static str,
-    id: impl std::fmt::Display,
-    expected: Revision,
-    actual: Revision,
-) -> Result<()> {
-    if expected == actual {
-        Ok(())
-    } else {
-        Err(CoreError::RevisionMismatch {
-            resource,
-            id: id.to_string(),
-            expected,
-            actual,
-        })
     }
 }
 

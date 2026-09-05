@@ -4,9 +4,9 @@ use time::OffsetDateTime;
 
 use crate::domain::{
     Assumption, ConfirmMealPlanComponent, ConfirmMealPlanEntry, ConsumedAmount, ConsumptionRecord,
-    ConsumptionRecordId, HouseholdMemberId, MealItemRef, MealPlanComponentId,
-    MealPlanComponentSnapshot, MealPlanEntry, MealPlanEntryId, MealPlanStatus, MealSlot,
-    NewConsumptionRecord, OutcomeActor, ParticipantStatus, ReviewMealOutcomes, Revision,
+    ConsumptionRecordId, HouseholdMemberId, MEAL_PLAN_COMPONENT, MEAL_PLAN_ENTRY, MealItemRef,
+    MealPlanComponentId, MealPlanComponentSnapshot, MealPlanEntry, MealPlanEntryId, MealPlanStatus,
+    MealSlot, NewConsumptionRecord, OutcomeActor, ParticipantStatus, ReviewMealOutcomes, Revision,
     StockEffectSource, StockOutcome, UserId, actual_components_for_member, apply_equal_portioning,
     build_guest_results, component_still_eaten, derive_component_status, find_component,
     pending_component_ids, replacements_for, require_allocation_planned, require_subject_pending,
@@ -17,10 +17,8 @@ use crate::ports::{MealPlanComponentUpdate, SnapshotOp, StockDeduction, StockRel
 
 use super::catalogue::ItemCatalogue;
 use super::view::MealPlanEntryView;
-use super::{
-    MealPlanService, PRODUCT, RECIPE, commit_component_outcome, commit_outcome, ensure_due,
-    require_component_revision, require_revision,
-};
+use super::{MealPlanService, PRODUCT, RECIPE, ensure_due};
+use crate::services::revision::{commit_outcome, require_revision};
 use crate::services::stock_effects::{
     StockAffected, component_release, name_outcomes, product_deduction, record_deduction,
     requirement_deduction,
@@ -50,7 +48,12 @@ impl MealPlanService {
         let mut entry = self.get_entry(id).await?;
         let subject = self.resolve_subject(&entry, input.subject_member_id)?;
         let component = find_component(&entry, component_id)?;
-        require_component_revision(component_id, expected, component.revision)?;
+        require_revision(
+            MEAL_PLAN_COMPONENT,
+            component_id,
+            expected,
+            component.revision,
+        )?;
         let component_item = component.item;
         let planned_amount = component.amount;
         let old_component_revision = component.revision;
@@ -134,7 +137,7 @@ impl MealPlanService {
                 &write,
             )
             .await?;
-        commit_component_outcome(outcome, component_id, expected)?;
+        commit_outcome(MEAL_PLAN_COMPONENT, component_id, expected, outcome)?;
         self.stock_affected(id, stock_outcomes).await
     }
 
@@ -161,7 +164,12 @@ impl MealPlanService {
         let mut entry = self.get_entry(id).await?;
         let subject = self.resolve_subject(&entry, actor.subject_member_id)?;
         let component = find_component(&entry, component_id)?;
-        require_component_revision(component_id, expected, component.revision)?;
+        require_revision(
+            MEAL_PLAN_COMPONENT,
+            component_id,
+            expected,
+            component.revision,
+        )?;
         let component_item = component.item;
         let planned_amount = component.amount;
         let old_component_revision = component.revision;
@@ -204,7 +212,7 @@ impl MealPlanService {
                 &StockWrite::default(),
             )
             .await?;
-        commit_component_outcome(outcome, component_id, expected)?;
+        commit_outcome(MEAL_PLAN_COMPONENT, component_id, expected, outcome)?;
         self.stock_affected(id, stock_outcomes).await
     }
 
@@ -218,7 +226,12 @@ impl MealPlanService {
         let mut entry = self.get_entry(id).await?;
         let subject = self.resolve_subject(&entry, actor.subject_member_id)?;
         let component = find_component(&entry, component_id)?;
-        require_component_revision(component_id, expected, component.revision)?;
+        require_revision(
+            MEAL_PLAN_COMPONENT,
+            component_id,
+            expected,
+            component.revision,
+        )?;
         let old_component_revision = component.revision;
         let component_item = component.item;
 
@@ -286,7 +299,7 @@ impl MealPlanService {
                 &write,
             )
             .await?;
-        commit_component_outcome(outcome, component_id, expected)?;
+        commit_outcome(MEAL_PLAN_COMPONENT, component_id, expected, outcome)?;
         self.stock_affected(id, stock_outcomes).await
     }
 
@@ -308,7 +321,7 @@ impl MealPlanService {
         actor: OutcomeActor,
     ) -> Result<StockAffected<MealPlanEntryView>> {
         let mut entry = self.get_entry(id).await?;
-        require_revision(id, expected, entry.revision)?;
+        require_revision(MEAL_PLAN_ENTRY, id, expected, entry.revision)?;
         let subject = self.resolve_subject(&entry, actor.subject_member_id)?;
         require_subject_pending(&entry, subject)?;
         self.freeze(&mut entry).await?;
@@ -332,7 +345,7 @@ impl MealPlanService {
             .plans
             .resolve(&entry, expected, &[], &StockWrite::default())
             .await?;
-        commit_outcome(outcome, id, expected)?;
+        commit_outcome(MEAL_PLAN_ENTRY, id, expected, outcome)?;
         self.stock_affected(id, stock_outcomes).await
     }
 
@@ -354,7 +367,7 @@ impl MealPlanService {
         input: ConfirmMealPlanEntry,
     ) -> Result<StockAffected<MealPlanEntryView>> {
         let mut entry = self.get_entry(id).await?;
-        require_revision(id, expected, entry.revision)?;
+        require_revision(MEAL_PLAN_ENTRY, id, expected, entry.revision)?;
         let subject = self.resolve_subject(&entry, input.subject_member_id)?;
         require_subject_pending(&entry, subject)?;
         let pending = pending_component_ids(&entry, subject);
@@ -436,7 +449,7 @@ impl MealPlanService {
             .plans
             .resolve(&entry, expected, &records, &write)
             .await?;
-        commit_outcome(outcome, id, expected)?;
+        commit_outcome(MEAL_PLAN_ENTRY, id, expected, outcome)?;
         self.stock_affected(id, stock_outcomes).await
     }
 
@@ -458,7 +471,7 @@ impl MealPlanService {
         input: ReviewMealOutcomes,
     ) -> Result<StockAffected<MealPlanEntryView>> {
         let mut entry = self.get_entry(id).await?;
-        require_revision(id, expected, entry.revision)?;
+        require_revision(MEAL_PLAN_ENTRY, id, expected, entry.revision)?;
         if input.members.is_empty() && input.guests.is_empty() {
             return Err(CoreError::conflict("Choose at least one person."));
         }
@@ -632,7 +645,7 @@ impl MealPlanService {
             .plans
             .resolve(&entry, expected, &records, &write)
             .await?;
-        commit_outcome(outcome, id, expected)?;
+        commit_outcome(MEAL_PLAN_ENTRY, id, expected, outcome)?;
         self.stock_affected(id, stock_outcomes).await
     }
 
@@ -643,7 +656,7 @@ impl MealPlanService {
         actor: OutcomeActor,
     ) -> Result<StockAffected<MealPlanEntryView>> {
         let mut entry = self.get_entry(id).await?;
-        require_revision(id, expected, entry.revision)?;
+        require_revision(MEAL_PLAN_ENTRY, id, expected, entry.revision)?;
         let subject = self.resolve_subject(&entry, actor.subject_member_id)?;
         let (resolved, record_ids): (Vec<MealPlanComponentId>, Vec<ConsumptionRecordId>) = entry
             .participant_for(subject)
@@ -729,7 +742,7 @@ impl MealPlanService {
             .plans
             .reopen(&entry, expected, &record_ids, &write)
             .await?;
-        commit_outcome(outcome, id, expected)?;
+        commit_outcome(MEAL_PLAN_ENTRY, id, expected, outcome)?;
         self.stock_affected(id, stock_outcomes).await
     }
 

@@ -4,9 +4,9 @@ use anyhow::Context;
 use mmp_core::domain::{NewHouseholdMember, NewUser, Role};
 use mmp_core::ports::SystemClock;
 use mmp_core::services::{
-    CatalogueService, DiaryService, HouseholdService, HouseholdSettingsService, MealPlanService,
-    NutritionTargetService, RecipeService, SeedIngredient, SeedReport, ShoppingService,
-    StockService, WeightService,
+    CatalogueService, ConsumptionService, HouseholdService, HouseholdSettingsService,
+    MealPlanService, NutritionTargetService, RecipeService, SeedIngredient, SeedReport,
+    ShoppingService, StockService, WeightService,
 };
 use mmp_postgres::PgPool;
 use mmp_postgres::{
@@ -85,8 +85,8 @@ pub fn household_service(pool: &PgPool) -> Arc<HouseholdService> {
     ))
 }
 
-pub fn diary_service(pool: &PgPool) -> DiaryService {
-    DiaryService::new(
+pub fn consumption_service(pool: &PgPool) -> ConsumptionService {
+    ConsumptionService::new(
         Arc::new(PgConsumptionRecordRepository::new(pool.clone())),
         Arc::new(PgProductRepository::new(pool.clone())),
         Arc::new(PgIngredientRepository::new(pool.clone())),
@@ -100,9 +100,9 @@ pub fn app_state(config: &Config, pool: &PgPool) -> AppState {
     let products = Arc::new(PgProductRepository::new(pool.clone()));
     let ingredients = Arc::new(PgIngredientRepository::new(pool.clone()));
     let recipes_repo = Arc::new(PgRecipeRepository::new(pool.clone()));
-    let consumption = Arc::new(PgConsumptionRecordRepository::new(pool.clone()));
-    let diary = DiaryService::new(
-        consumption.clone(),
+    let consumption_records = Arc::new(PgConsumptionRecordRepository::new(pool.clone()));
+    let consumption = ConsumptionService::new(
+        consumption_records.clone(),
         products.clone(),
         ingredients.clone(),
         recipes_repo.clone(),
@@ -114,7 +114,7 @@ pub fn app_state(config: &Config, pool: &PgPool) -> AppState {
         products,
         ingredients,
         recipes_repo.clone(),
-        consumption,
+        consumption_records,
         targets.clone(),
         Arc::new(PgHouseholdMemberRepository::new(pool.clone())),
         Arc::new(PgHouseholdSettingsRepository::new(pool.clone())),
@@ -159,7 +159,7 @@ pub fn app_state(config: &Config, pool: &PgPool) -> AppState {
         catalogue_service(pool),
         household.clone(),
         household_settings,
-        diary,
+        consumption,
         meal_plan,
         nutrition_targets,
         recipes,

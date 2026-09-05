@@ -1,7 +1,9 @@
+use super::str_enum::str_enum;
 use std::fmt;
-use std::str::FromStr;
 
 use rust_decimal::Decimal;
+
+str_enum!(Unit, UnknownUnit, "unit");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -161,27 +163,6 @@ impl Unit {
             _ => return None,
         };
         Some(factor)
-    }
-}
-
-impl fmt::Display for Unit {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.code())
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error("`{0}` is not a known unit")]
-pub struct UnknownUnit(pub String);
-
-impl FromStr for Unit {
-    type Err = UnknownUnit;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Unit::ALL
-            .into_iter()
-            .find(|u| u.code() == s)
-            .ok_or_else(|| UnknownUnit(s.to_owned()))
     }
 }
 

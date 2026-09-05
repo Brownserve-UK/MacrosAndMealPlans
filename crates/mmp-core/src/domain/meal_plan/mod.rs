@@ -1,5 +1,5 @@
+use crate::domain::str_enum::str_enum;
 use std::fmt;
-use std::str::FromStr;
 
 use time::{Date, OffsetDateTime, Time};
 use uuid::Uuid;
@@ -12,6 +12,16 @@ use super::{
     MealPlanComponentId, MealPlanEntryId, MealTimes, NutritionFacts, NutritionQuality, Revision,
     UserId,
 };
+
+str_enum!(MealPlanScope, UnknownMealPlanScope, "meal plan scope");
+str_enum!(MealPlanStatus, UnknownMealPlanStatus, "meal plan status");
+str_enum!(MealSlot, UnknownMealSlot, "meal slot");
+str_enum!(
+    ParticipantStatus,
+    UnknownParticipantStatus,
+    "participant status"
+);
+str_enum!(Portioning, UnknownPortioning, "portioning mode");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -50,27 +60,6 @@ impl MealSlot {
     }
 }
 
-impl fmt::Display for MealSlot {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.code())
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error("`{0}` is not a known meal slot")]
-pub struct UnknownMealSlot(pub String);
-
-impl FromStr for MealSlot {
-    type Err = UnknownMealSlot;
-
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        Self::ALL
-            .into_iter()
-            .find(|slot| slot.code() == value)
-            .ok_or_else(|| UnknownMealSlot(value.to_owned()))
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
@@ -103,27 +92,6 @@ impl MealPlanStatus {
 
     pub const fn is_unresolved(self) -> bool {
         matches!(self, MealPlanStatus::Planned | MealPlanStatus::Assumed)
-    }
-}
-
-impl fmt::Display for MealPlanStatus {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.code())
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error("`{0}` is not a known meal plan status")]
-pub struct UnknownMealPlanStatus(pub String);
-
-impl FromStr for MealPlanStatus {
-    type Err = UnknownMealPlanStatus;
-
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        Self::ALL
-            .into_iter()
-            .find(|status| status.code() == value)
-            .ok_or_else(|| UnknownMealPlanStatus(value.to_owned()))
     }
 }
 
@@ -161,27 +129,6 @@ impl Portioning {
             Portioning::Equal => "equal",
             Portioning::Custom => "custom",
         }
-    }
-}
-
-impl fmt::Display for Portioning {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.code())
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error("`{0}` is not a known portioning mode")]
-pub struct UnknownPortioning(pub String);
-
-impl FromStr for Portioning {
-    type Err = UnknownPortioning;
-
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        Self::ALL
-            .into_iter()
-            .find(|mode| mode.code() == value)
-            .ok_or_else(|| UnknownPortioning(value.to_owned()))
     }
 }
 
@@ -506,27 +453,6 @@ impl MealPlanScope {
     }
 }
 
-impl fmt::Display for MealPlanScope {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.code())
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error("`{0}` is not a known meal plan scope")]
-pub struct UnknownMealPlanScope(pub String);
-
-impl FromStr for MealPlanScope {
-    type Err = UnknownMealPlanScope;
-
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        Self::ALL
-            .into_iter()
-            .find(|scope| scope.code() == value)
-            .ok_or_else(|| UnknownMealPlanScope(value.to_owned()))
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
@@ -553,27 +479,6 @@ impl ParticipantStatus {
 
     pub const fn is_resolved(self) -> bool {
         !matches!(self, ParticipantStatus::Planned)
-    }
-}
-
-impl fmt::Display for ParticipantStatus {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.code())
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error("`{0}` is not a known participant status")]
-pub struct UnknownParticipantStatus(pub String);
-
-impl FromStr for ParticipantStatus {
-    type Err = UnknownParticipantStatus;
-
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        Self::ALL
-            .into_iter()
-            .find(|status| status.code() == value)
-            .ok_or_else(|| UnknownParticipantStatus(value.to_owned()))
     }
 }
 

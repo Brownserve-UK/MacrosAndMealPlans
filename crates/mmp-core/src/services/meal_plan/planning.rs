@@ -3,18 +3,19 @@ use std::collections::HashSet;
 use time::{Date, Time};
 
 use crate::domain::{
-    HouseholdMemberId, MealOptOut, MealPlanEntry, MealPlanEntryId, MealPlanEntryPatch,
-    MealPlanScope, MealSlot, NewMealPlanEntry, Portioning, Revision, SetMealParticipants,
-    SlotAttendance, UserId, apply_equal_portioning, build_participant, has_explicit_allocations,
-    make_components, merge_components, merge_guest_group, merge_participant,
-    require_household_attendance, require_planned, sync_allocations, validate_components,
-    validate_guest_groups, validate_participants,
+    HouseholdMemberId, MEAL_PLAN_ENTRY, MealOptOut, MealPlanEntry, MealPlanEntryId,
+    MealPlanEntryPatch, MealPlanScope, MealSlot, NewMealPlanEntry, Portioning, Revision,
+    SetMealParticipants, SlotAttendance, UserId, apply_equal_portioning, build_participant,
+    has_explicit_allocations, make_components, merge_components, merge_guest_group,
+    merge_participant, require_editable, require_household_attendance, require_planned,
+    sync_allocations, validate_components, validate_guest_groups, validate_participants,
 };
 use crate::error::{CoreError, Result, ValidationErrors};
 use crate::ports::{MealPlanQuery, MemberQuery, PageRequest};
 
 use super::view::MealPlanEntryView;
-use super::{MealPlanService, commit_outcome, ensure_not_past, require_editable, require_revision};
+use super::{MealPlanService, ensure_not_past};
+use crate::services::revision::{commit_outcome, require_revision};
 
 impl MealPlanService {
     pub async fn create(&self, input: NewMealPlanEntry) -> Result<MealPlanEntryView> {
@@ -150,7 +151,7 @@ impl MealPlanService {
         input: SetMealParticipants,
     ) -> Result<MealPlanEntryView> {
         let mut entry = self.get_entry(id).await?;
-        require_revision(id, expected, entry.revision)?;
+        require_revision(MEAL_PLAN_ENTRY, id, expected, entry.revision)?;
         require_editable(&entry)?;
         validate_participants(&input.participants, &entry.components)?;
         validate_guest_groups(&input.guest_groups, &entry.components)?;
@@ -225,9 +226,10 @@ impl MealPlanService {
         entry.revision = entry.revision.next();
         apply_equal_portioning(&mut entry);
         commit_outcome(
-            self.plans.set_participants(&entry, expected).await?,
+            MEAL_PLAN_ENTRY,
             id,
             expected,
+            self.plans.set_participants(&entry, expected).await?,
         )?;
         self.get(id).await
     }
@@ -240,7 +242,7 @@ impl MealPlanService {
         member_id: HouseholdMemberId,
     ) -> Result<MealPlanEntryView> {
         let mut entry = self.get_entry(id).await?;
-        require_revision(id, expected, entry.revision)?;
+        require_revision(MEAL_PLAN_ENTRY, id, expected, entry.revision)?;
         if entry.scope != MealPlanScope::Household {
             return Err(CoreError::conflict(
                 "You can only opt out of a household meal.",
@@ -276,9 +278,10 @@ impl MealPlanService {
         entry.revision = entry.revision.next();
         apply_equal_portioning(&mut entry);
         commit_outcome(
-            self.plans.set_participants(&entry, expected).await?,
+            MEAL_PLAN_ENTRY,
             id,
             expected,
+            self.plans.set_participants(&entry, expected).await?,
         )?;
         self.get(id).await
     }
@@ -291,7 +294,7 @@ impl MealPlanService {
         member_id: HouseholdMemberId,
     ) -> Result<MealPlanEntryView> {
         let mut entry = self.get_entry(id).await?;
-        require_revision(id, expected, entry.revision)?;
+        require_revision(MEAL_PLAN_ENTRY, id, expected, entry.revision)?;
         if entry.scope != MealPlanScope::Household {
             return Err(CoreError::conflict(
                 "You can only opt in to a household meal.",
@@ -329,9 +332,10 @@ impl MealPlanService {
         entry.revision = entry.revision.next();
         apply_equal_portioning(&mut entry);
         commit_outcome(
-            self.plans.set_participants(&entry, expected).await?,
+            MEAL_PLAN_ENTRY,
             id,
             expected,
+            self.plans.set_participants(&entry, expected).await?,
         )?;
         self.get(id).await
     }
@@ -440,7 +444,7 @@ impl MealPlanService {
         actor_id: crate::domain::UserId,
     ) -> Result<MealPlanEntryView> {
         let mut entry = self.get_entry(id).await?;
-        require_revision(id, expected, entry.revision)?;
+        require_revision(MEAL_PLAN_ENTRY, id, expected, entry.revision)?;
         require_editable(&entry)?;
 
         let now = self.clock.now();
@@ -534,14 +538,24 @@ impl MealPlanService {
         entry.updated_at = now;
         entry.revision = entry.revision.next();
         apply_equal_portioning(&mut entry);
-        commit_outcome(self.plans.update(&entry, expected).await?, id, expected)?;
+        commit_outcome(
+            MEAL_PLAN_ENTRY,
+            id,
+            expected,
+            self.plans.update(&entry, expected).await?,
+        )?;
         self.get(id).await
     }
 
     pub async fn delete(&self, id: MealPlanEntryId, expected: Revision) -> Result<()> {
         let entry = self.get_entry(id).await?;
-        require_revision(id, expected, entry.revision)?;
+        require_revision(MEAL_PLAN_ENTRY, id, expected, entry.revision)?;
         require_planned(&entry)?;
-        commit_outcome(self.plans.delete(id, expected).await?, id, expected)
+        commit_outcome(
+            MEAL_PLAN_ENTRY,
+            id,
+            expected,
+            self.plans.delete(id, expected).await?,
+        )
     }
 }

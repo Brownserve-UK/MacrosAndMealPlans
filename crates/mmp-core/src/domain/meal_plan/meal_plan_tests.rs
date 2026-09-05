@@ -1,6 +1,7 @@
 use super::*;
 use crate::domain::{MealItemRef, NutritionFacts, ProductId, Quantity, RecipeId, Unit};
 use rust_decimal::Decimal;
+use std::str::FromStr;
 use time::OffsetDateTime;
 
 fn servings(value: i64) -> ConsumedAmount {

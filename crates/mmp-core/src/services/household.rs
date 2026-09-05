@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use time::OffsetDateTime;
 
+use super::revision::{commit_outcome, require_revision};
 use crate::domain::{
     AccessScope, HouseholdMember, HouseholdMemberId, HouseholdMemberPatch, MemberAccessGrant,
     NewHouseholdMember, NewUser, Permission, Revision, Role, User, UserId, UserPatch,
@@ -9,8 +10,8 @@ use crate::domain::{
 };
 use crate::error::{CoreError, Result, ValidationErrors};
 use crate::ports::{
-    AccessGrantRepository, Clock, HouseholdMemberRepository, MemberQuery, Paginated, UpdateOutcome,
-    UserQuery, UserRepository,
+    AccessGrantRepository, Clock, HouseholdMemberRepository, MemberQuery, Paginated, UserQuery,
+    UserRepository,
 };
 
 const MEMBER: &str = "household member";
@@ -375,29 +376,21 @@ impl HouseholdService {
     }
 
     async fn commit_member(&self, member: &HouseholdMember, expected: Revision) -> Result<()> {
-        match self.members.update(member, expected).await? {
-            UpdateOutcome::Updated => Ok(()),
-            UpdateOutcome::RevisionMismatch { actual } => Err(CoreError::RevisionMismatch {
-                resource: MEMBER,
-                id: member.id.to_string(),
-                expected,
-                actual,
-            }),
-            UpdateOutcome::NotFound => Err(CoreError::not_found(MEMBER, member.id)),
-        }
+        commit_outcome(
+            MEMBER,
+            member.id,
+            expected,
+            self.members.update(member, expected).await?,
+        )
     }
 
     async fn commit_user(&self, user: &User, expected: Revision) -> Result<()> {
-        match self.users.update(user, expected).await? {
-            UpdateOutcome::Updated => Ok(()),
-            UpdateOutcome::RevisionMismatch { actual } => Err(CoreError::RevisionMismatch {
-                resource: USER,
-                id: user.id.to_string(),
-                expected,
-                actual,
-            }),
-            UpdateOutcome::NotFound => Err(CoreError::not_found(USER, user.id)),
-        }
+        commit_outcome(
+            USER,
+            user.id,
+            expected,
+            self.users.update(user, expected).await?,
+        )
     }
 
     fn stamp(&self, revision: &mut Revision, updated_at: &mut OffsetDateTime) {
@@ -464,24 +457,6 @@ impl HouseholdService {
             return errors.into_result();
         }
         Ok(())
-    }
-}
-
-fn require_revision(
-    resource: &'static str,
-    id: impl std::fmt::Display,
-    expected: Revision,
-    actual: Revision,
-) -> Result<()> {
-    if expected == actual {
-        Ok(())
-    } else {
-        Err(CoreError::RevisionMismatch {
-            resource,
-            id: id.to_string(),
-            expected,
-            actual,
-        })
     }
 }
 

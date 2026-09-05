@@ -19,7 +19,7 @@ pub fn build(state: AppState) -> (Router, utoipa::openapi::OpenApi) {
         .merge(routes::products::router())
         .merge(routes::members::router())
         .merge(routes::users::router())
-        .merge(routes::diary::router())
+        .merge(routes::consumption::router())
         .merge(routes::meal_plan::router())
         .merge(routes::nutrition_target::router())
         .merge(routes::recipes::router())
@@ -92,7 +92,7 @@ pub fn stub_state() -> AppState {
             Arc::new(NoopHouseholdSettings),
             Arc::new(SystemClock),
         ),
-        mmp_core::services::DiaryService::new(
+        mmp_core::services::ConsumptionService::new(
             consumption.clone(),
             products.clone(),
             Arc::new(NoopIngredients),

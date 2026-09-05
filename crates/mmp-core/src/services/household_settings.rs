@@ -1,8 +1,9 @@
 use std::sync::Arc;
 
+use super::revision::{commit_outcome, require_revision};
 use crate::domain::{HouseholdSettings, HouseholdSettingsPatch, Revision};
-use crate::error::{CoreError, Result};
-use crate::ports::{Clock, HouseholdSettingsRepository, UpdateOutcome};
+use crate::error::Result;
+use crate::ports::{Clock, HouseholdSettingsRepository};
 
 const HOUSEHOLD_SETTINGS: &str = "household settings";
 const HOUSEHOLD_ID: &str = "household";
@@ -28,7 +29,7 @@ impl HouseholdSettingsService {
         patch: HouseholdSettingsPatch,
     ) -> Result<HouseholdSettings> {
         let mut current = self.settings.get().await?;
-        require_revision(expected, current.revision)?;
+        require_revision(HOUSEHOLD_SETTINGS, HOUSEHOLD_ID, expected, current.revision)?;
 
         if patch.is_empty() {
             return Ok(current);
@@ -46,34 +47,13 @@ impl HouseholdSettingsService {
         }
         current.revision = current.revision.next();
         current.updated_at = self.clock.now();
-        commit_outcome(self.settings.update(&current, expected).await?, expected)?;
+        commit_outcome(
+            HOUSEHOLD_SETTINGS,
+            HOUSEHOLD_ID,
+            expected,
+            self.settings.update(&current, expected).await?,
+        )?;
         Ok(current)
-    }
-}
-
-fn require_revision(expected: Revision, actual: Revision) -> Result<()> {
-    if expected == actual {
-        Ok(())
-    } else {
-        Err(CoreError::RevisionMismatch {
-            resource: HOUSEHOLD_SETTINGS,
-            id: HOUSEHOLD_ID.to_owned(),
-            expected,
-            actual,
-        })
-    }
-}
-
-fn commit_outcome(outcome: UpdateOutcome, expected: Revision) -> Result<()> {
-    match outcome {
-        UpdateOutcome::Updated => Ok(()),
-        UpdateOutcome::RevisionMismatch { actual } => Err(CoreError::RevisionMismatch {
-            resource: HOUSEHOLD_SETTINGS,
-            id: HOUSEHOLD_ID.to_owned(),
-            expected,
-            actual,
-        }),
-        UpdateOutcome::NotFound => Err(CoreError::not_found(HOUSEHOLD_SETTINGS, HOUSEHOLD_ID)),
     }
 }
 

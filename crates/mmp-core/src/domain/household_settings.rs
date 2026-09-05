@@ -1,9 +1,14 @@
-use std::fmt;
-use std::str::FromStr;
+use super::str_enum::str_enum;
 
 use time::{OffsetDateTime, Time};
 
 use super::{MealSlot, Revision};
+
+str_enum!(
+    MissingStockInterpretation,
+    UnknownMissingStockInterpretation,
+    "missing stock interpretation"
+);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MealTimes {
@@ -41,27 +46,6 @@ impl MissingStockInterpretation {
             MissingStockInterpretation::Absent => "absent",
             MissingStockInterpretation::Unknown => "unknown",
         }
-    }
-}
-
-impl fmt::Display for MissingStockInterpretation {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.code())
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error("`{0}` is not a known missing stock interpretation")]
-pub struct UnknownMissingStockInterpretation(pub String);
-
-impl FromStr for MissingStockInterpretation {
-    type Err = UnknownMissingStockInterpretation;
-
-    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        MissingStockInterpretation::ALL
-            .into_iter()
-            .find(|i| i.code() == s)
-            .ok_or_else(|| UnknownMissingStockInterpretation(s.to_owned()))
     }
 }
 

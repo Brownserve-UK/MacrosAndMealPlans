@@ -5,6 +5,7 @@ use rust_decimal::Decimal;
 use time::Date;
 
 use super::fulfilment::{RecipeFulfilments, RecipeWant, expand_recipe};
+use super::revision::{commit_outcome, require_revision};
 use crate::domain::{
     Availability, AvailabilityReport, Confidence, ConsumedAmount, DeductionPlan, DemandClaim,
     DemandGap, DemandSubject, HouseholdMemberId, IngredientAvailability, IngredientId, MealItemRef,
@@ -16,7 +17,7 @@ use crate::error::{CoreError, Result};
 use crate::ports::{
     Clock, HouseholdMemberRepository, HouseholdSettingsRepository, IngredientRepository,
     MealPlanQuery, MealPlanRepository, MemberQuery, PageRequest, Paginated, ProductRepository,
-    RecipeRepository, StockQuery, StockRepository, UpdateOutcome,
+    RecipeRepository, StockQuery, StockRepository,
 };
 
 const STOCK_ITEM: &str = "stock item";
@@ -141,7 +142,7 @@ impl StockService {
     ) -> Result<StockItem> {
         patch.validate()?;
         let mut current = self.get(id).await?;
-        require_revision(id, expected, current.revision)?;
+        require_revision(STOCK_ITEM, id, expected, current.revision)?;
 
         if patch.is_empty() {
             return Ok(current);
@@ -176,10 +177,11 @@ impl StockService {
             reverses_event_id: None,
             note: None,
         };
-        commit(
-            self.stock.update(&current, expected, &event).await?,
+        commit_outcome(
+            STOCK_ITEM,
             id,
             expected,
+            self.stock.update(&current, expected, &event).await?,
         )?;
         Ok(current)
     }
@@ -191,7 +193,7 @@ impl StockService {
         actor: UserId,
     ) -> Result<StockItem> {
         let mut current = self.get(id).await?;
-        require_revision(id, expected, current.revision)?;
+        require_revision(STOCK_ITEM, id, expected, current.revision)?;
         if current.archived_at.is_none() {
             current.archived_at = Some(self.clock.now());
         }
@@ -206,10 +208,11 @@ impl StockService {
             reverses_event_id: None,
             note: None,
         };
-        commit(
-            self.stock.update(&current, expected, &event).await?,
+        commit_outcome(
+            STOCK_ITEM,
             id,
             expected,
+            self.stock.update(&current, expected, &event).await?,
         )?;
         Ok(current)
     }
@@ -905,32 +908,6 @@ fn level_delta(before: StockLevel, after: StockLevel) -> Option<Quantity> {
         (None, Some(after)) => Some(after),
         (Some(before), None) => Some(Quantity::new(-before.amount, before.unit)),
         (None, None) => None,
-    }
-}
-
-fn require_revision(id: StockItemId, expected: Revision, actual: Revision) -> Result<()> {
-    if expected == actual {
-        Ok(())
-    } else {
-        Err(CoreError::RevisionMismatch {
-            resource: STOCK_ITEM,
-            id: id.to_string(),
-            expected,
-            actual,
-        })
-    }
-}
-
-fn commit(outcome: UpdateOutcome, id: StockItemId, expected: Revision) -> Result<()> {
-    match outcome {
-        UpdateOutcome::Updated => Ok(()),
-        UpdateOutcome::RevisionMismatch { actual } => Err(CoreError::RevisionMismatch {
-            resource: STOCK_ITEM,
-            id: id.to_string(),
-            expected,
-            actual,
-        }),
-        UpdateOutcome::NotFound => Err(CoreError::not_found(STOCK_ITEM, id)),
     }
 }
 

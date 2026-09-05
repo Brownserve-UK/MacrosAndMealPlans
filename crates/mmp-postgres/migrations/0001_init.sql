@@ -1,9 +1,19 @@
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
+CREATE DOMAIN unit_code AS TEXT
+    CONSTRAINT unit_code_valid CHECK (VALUE IN
+        ('mg', 'g', 'kg', 'oz', 'lb', 'ml', 'l', 'tsp', 'tbsp', 'fl_oz', 'cup', 'item',
+         'piece', 'slice', 'clove', 'can', 'pack', 'bunch'));
+
+CREATE DOMAIN shopping_section_code AS TEXT
+    CONSTRAINT shopping_section_code_valid CHECK (VALUE IN
+        ('fresh_produce', 'meat_fish', 'dairy', 'bakery', 'frozen', 'ambient', 'drinks',
+         'household', 'other'));
+
 CREATE TABLE ingredient (
     id                  UUID PRIMARY KEY,
     name                TEXT NOT NULL,
-    default_unit        TEXT NOT NULL,
+    default_unit        unit_code NOT NULL,
 
     origin              TEXT NOT NULL,
     seed_key            TEXT,
@@ -20,8 +30,6 @@ CREATE TABLE ingredient (
         CHECK (btrim(name) <> ''),
     CONSTRAINT ingredient_origin_valid
         CHECK (origin IN ('seeded', 'local', 'external')),
-    CONSTRAINT ingredient_default_unit_valid
-        CHECK (default_unit IN ('mg', 'g', 'kg', 'oz', 'lb', 'ml', 'l', 'tsp', 'tbsp', 'fl_oz', 'cup', 'item', 'piece', 'slice', 'clove', 'can', 'pack', 'bunch')),
     CONSTRAINT ingredient_seeded_has_key
         CHECK (origin <> 'seeded' OR seed_key IS NOT NULL)
 );
@@ -36,14 +44,14 @@ CREATE TABLE product (
     brand                    TEXT,
     barcode                  TEXT,
     retailer                 TEXT,
-    shopping_section         TEXT,
+    shopping_section         shopping_section_code,
     package_quantity_amount  NUMERIC(16, 4),
-    package_quantity_unit    TEXT,
+    package_quantity_unit    unit_code,
     servings_per_pack        INTEGER,
     mapped_ingredient_id     UUID REFERENCES ingredient (id) ON DELETE RESTRICT,
 
     nutrition_basis_amount  NUMERIC(16, 4),
-    nutrition_basis_unit    TEXT,
+    nutrition_basis_unit    unit_code,
     energy_kcal         NUMERIC(12, 3),
     protein_g           NUMERIC(12, 3),
     carbohydrate_g      NUMERIC(12, 3),
@@ -72,16 +80,12 @@ CREATE TABLE product (
         CHECK (origin IN ('seeded', 'local', 'external')),
     CONSTRAINT product_barcode_valid
         CHECK (barcode IS NULL OR barcode ~ '^[0-9]{4,18}$'),
-    CONSTRAINT product_package_unit_valid
-        CHECK (package_quantity_unit IS NULL OR package_quantity_unit IN ('mg', 'g', 'kg', 'oz', 'lb', 'ml', 'l', 'tsp', 'tbsp', 'fl_oz', 'cup', 'item', 'piece', 'slice', 'clove', 'can', 'pack', 'bunch')),
     CONSTRAINT product_package_quantity_complete
         CHECK (num_nonnulls(package_quantity_amount, package_quantity_unit) <> 1),
     CONSTRAINT product_package_quantity_positive
         CHECK (package_quantity_amount IS NULL OR package_quantity_amount > 0),
     CONSTRAINT product_servings_per_pack_positive
         CHECK (servings_per_pack IS NULL OR servings_per_pack > 0),
-    CONSTRAINT product_basis_unit_valid
-        CHECK (nutrition_basis_unit IS NULL OR nutrition_basis_unit IN ('mg', 'g', 'kg', 'oz', 'lb', 'ml', 'l', 'tsp', 'tbsp', 'fl_oz', 'cup', 'item', 'piece', 'slice', 'clove', 'can', 'pack', 'bunch')),
     CONSTRAINT product_basis_complete
         CHECK (num_nonnulls(nutrition_basis_amount, nutrition_basis_unit) <> 1),
     CONSTRAINT product_basis_positive
@@ -196,14 +200,14 @@ CREATE TABLE consumption_record (
 
     amount_kind   TEXT NOT NULL,
     amount_value  NUMERIC(16, 4) NOT NULL,
-    amount_unit   TEXT,
+    amount_unit   unit_code,
 
     consumed_on   DATE NOT NULL,
     consumed_at   TIMESTAMPTZ,
     slot          TEXT NOT NULL,
 
     nutrition_basis_amount  NUMERIC(16, 4),
-    nutrition_basis_unit    TEXT,
+    nutrition_basis_unit    unit_code,
     energy_kcal         NUMERIC(12, 3),
     protein_g           NUMERIC(12, 3),
     carbohydrate_g      NUMERIC(12, 3),
@@ -226,10 +230,6 @@ CREATE TABLE consumption_record (
         CHECK (amount_value > 0),
     CONSTRAINT consumption_record_amount_unit_present
         CHECK ((amount_kind = 'measure') = (amount_unit IS NOT NULL)),
-    CONSTRAINT consumption_record_amount_unit_valid
-        CHECK (amount_unit IS NULL OR amount_unit IN ('mg', 'g', 'kg', 'oz', 'lb', 'ml', 'l', 'tsp', 'tbsp', 'fl_oz', 'cup', 'item', 'piece', 'slice', 'clove', 'can', 'pack', 'bunch')),
-    CONSTRAINT consumption_record_basis_unit_valid
-        CHECK (nutrition_basis_unit IS NULL OR nutrition_basis_unit IN ('mg', 'g', 'kg', 'oz', 'lb', 'ml', 'l', 'tsp', 'tbsp', 'fl_oz', 'cup', 'item', 'piece', 'slice', 'clove', 'can', 'pack', 'bunch')),
     CONSTRAINT consumption_record_basis_complete
         CHECK (num_nonnulls(nutrition_basis_amount, nutrition_basis_unit) <> 1),
     CONSTRAINT consumption_record_basis_positive
@@ -309,10 +309,10 @@ CREATE TABLE meal_plan_component (
     recipe_id     UUID,
     amount_kind   TEXT NOT NULL,
     amount_value  NUMERIC(16, 4) NOT NULL,
-    amount_unit   TEXT,
+    amount_unit   unit_code,
     frozen_item_name TEXT,
     nutrition_basis_amount  NUMERIC(16, 4),
-    nutrition_basis_unit    TEXT,
+    nutrition_basis_unit    unit_code,
     energy_kcal         NUMERIC(12, 3),
     protein_g           NUMERIC(12, 3),
     carbohydrate_g      NUMERIC(12, 3),
@@ -342,10 +342,6 @@ CREATE TABLE meal_plan_component (
         CHECK (amount_value > 0),
     CONSTRAINT meal_plan_component_amount_unit_present
         CHECK ((amount_kind = 'measure') = (amount_unit IS NOT NULL)),
-    CONSTRAINT meal_plan_component_amount_unit_valid
-        CHECK (amount_unit IS NULL OR amount_unit IN ('mg', 'g', 'kg', 'oz', 'lb', 'ml', 'l', 'tsp', 'tbsp', 'fl_oz', 'cup', 'item', 'piece', 'slice', 'clove', 'can', 'pack', 'bunch')),
-    CONSTRAINT meal_plan_component_basis_unit_valid
-        CHECK (nutrition_basis_unit IS NULL OR nutrition_basis_unit IN ('mg', 'g', 'kg', 'oz', 'lb', 'ml', 'l', 'tsp', 'tbsp', 'fl_oz', 'cup', 'item', 'piece', 'slice', 'clove', 'can', 'pack', 'bunch')),
     CONSTRAINT meal_plan_component_basis_complete
         CHECK (num_nonnulls(nutrition_basis_amount, nutrition_basis_unit) <> 1),
     CONSTRAINT meal_plan_component_basis_positive
@@ -502,7 +498,7 @@ CREATE TABLE recipe_component (
     source_text      TEXT,
     amount_kind      TEXT NOT NULL,
     amount_value     NUMERIC(16, 4) NOT NULL,
-    amount_unit      TEXT,
+    amount_unit      unit_code,
 
     CONSTRAINT recipe_component_position_non_negative
         CHECK (position >= 0),
@@ -522,8 +518,6 @@ CREATE TABLE recipe_component (
         CHECK (amount_value > 0),
     CONSTRAINT recipe_component_amount_unit_present
         CHECK ((amount_kind = 'measure') = (amount_unit IS NOT NULL)),
-    CONSTRAINT recipe_component_amount_unit_valid
-        CHECK (amount_unit IS NULL OR amount_unit IN ('mg', 'g', 'kg', 'oz', 'lb', 'ml', 'l', 'tsp', 'tbsp', 'fl_oz', 'cup', 'item', 'piece', 'slice', 'clove', 'can', 'pack', 'bunch')),
     UNIQUE (recipe_id, position)
 );
 
@@ -636,7 +630,7 @@ CREATE TABLE stock_item (
 
     tracking_mode     TEXT NOT NULL,
     quantity_value    NUMERIC(16, 4),
-    quantity_unit     TEXT,
+    quantity_unit     unit_code,
 
     storage_location  TEXT NOT NULL,
 
@@ -656,8 +650,6 @@ CREATE TABLE stock_item (
         CHECK (tracking_mode IN ('exact', 'estimated', 'not_tracked')),
     CONSTRAINT stock_item_storage_location_valid
         CHECK (storage_location IN ('ambient', 'chilled', 'frozen')),
-    CONSTRAINT stock_item_quantity_unit_valid
-        CHECK (quantity_unit IS NULL OR quantity_unit IN ('mg', 'g', 'kg', 'oz', 'lb', 'ml', 'l', 'tsp', 'tbsp', 'fl_oz', 'cup', 'item', 'piece', 'slice', 'clove', 'can', 'pack', 'bunch')),
     CONSTRAINT stock_item_quantity_matches_mode
         CHECK ((tracking_mode <> 'not_tracked')
             = (quantity_value IS NOT NULL AND quantity_unit IS NOT NULL)),
@@ -677,7 +669,7 @@ CREATE TABLE stock_event (
 
     event_kind        TEXT NOT NULL,
     quantity_delta    NUMERIC(16, 4),
-    quantity_unit     TEXT,
+    quantity_unit     unit_code,
 
     actor_user_id     UUID REFERENCES app_user (id) ON DELETE SET NULL,
     subject_member_id UUID REFERENCES household_member (id) ON DELETE SET NULL,
@@ -687,9 +679,7 @@ CREATE TABLE stock_event (
 
     CONSTRAINT stock_event_kind_valid
         CHECK (event_kind IN ('added', 'consumed', 'discarded', 'corrected', 'observed',
-                              'moved', 'mode_changed', 'archived')),
-    CONSTRAINT stock_event_unit_valid
-        CHECK (quantity_unit IS NULL OR quantity_unit IN ('mg', 'g', 'kg', 'oz', 'lb', 'ml', 'l', 'tsp', 'tbsp', 'fl_oz', 'cup', 'item', 'piece', 'slice', 'clove', 'can', 'pack', 'bunch'))
+                              'moved', 'mode_changed', 'archived'))
 );
 
 CREATE INDEX stock_event_item ON stock_event (stock_item_id, occurred_at DESC);
@@ -743,7 +733,7 @@ CREATE TABLE meal_plan_participant_allocation (
 
     allocated_kind        TEXT NOT NULL,
     allocated_value       NUMERIC(16, 4) NOT NULL,
-    allocated_unit        TEXT,
+    allocated_unit        unit_code,
 
     status                TEXT NOT NULL DEFAULT 'planned',
     consumption_record_id UUID REFERENCES consumption_record (id) ON DELETE SET NULL,
@@ -768,8 +758,6 @@ CREATE TABLE meal_plan_participant_allocation (
         CHECK (allocated_value > 0),
     CONSTRAINT meal_plan_participant_allocation_unit_present
         CHECK ((allocated_kind = 'measure') = (allocated_unit IS NOT NULL)),
-    CONSTRAINT meal_plan_participant_allocation_unit_valid
-        CHECK (allocated_unit IS NULL OR allocated_unit IN ('mg', 'g', 'kg', 'oz', 'lb', 'ml', 'l', 'tsp', 'tbsp', 'fl_oz', 'cup', 'item', 'piece', 'slice', 'clove', 'can', 'pack', 'bunch')),
     CONSTRAINT meal_plan_participant_allocation_resolution_complete
         CHECK ((status = 'planned') = (resolved_by IS NULL AND resolved_at IS NULL)),
     CONSTRAINT meal_plan_participant_allocation_eaten_has_record
@@ -869,7 +857,7 @@ CREATE TABLE stock_effect (
     state             TEXT NOT NULL DEFAULT 'applied',
 
     applied_mode      TEXT NOT NULL,
-    applied_unit      TEXT NOT NULL,
+    applied_unit      unit_code NOT NULL,
     exact_delta       NUMERIC(16, 4),
     estimated_delta   NUMERIC(16, 4),
     requested_value   NUMERIC(16, 4) NOT NULL,
@@ -885,8 +873,6 @@ CREATE TABLE stock_effect (
         CHECK (state IN ('applied', 'released', 'release_failed')),
     CONSTRAINT stock_effect_mode_valid
         CHECK (applied_mode IN ('exact', 'estimated')),
-    CONSTRAINT stock_effect_unit_valid
-        CHECK (applied_unit IN ('mg', 'g', 'kg', 'oz', 'lb', 'ml', 'l', 'tsp', 'tbsp', 'fl_oz', 'cup', 'item', 'piece', 'slice', 'clove', 'can', 'pack', 'bunch')),
     CONSTRAINT stock_effect_exact_delta_matches_mode
         CHECK ((applied_mode = 'exact') = (exact_delta IS NOT NULL)),
     CONSTRAINT stock_effect_estimated_delta_matches_mode
@@ -927,19 +913,11 @@ CREATE INDEX consumption_record_meal_plan_entry
 -- Shopping ---------------------------------------------------------------------------------
 
 ALTER TABLE ingredient
-    ADD COLUMN shopping_section TEXT,
-    ADD COLUMN track_stock BOOLEAN,
-    ADD CONSTRAINT ingredient_shopping_section_valid
-        CHECK (shopping_section IS NULL OR shopping_section IN
-               ('fresh_produce', 'meat_fish', 'dairy', 'bakery', 'frozen', 'ambient', 'drinks',
-                'household', 'other'));
+    ADD COLUMN shopping_section shopping_section_code,
+    ADD COLUMN track_stock BOOLEAN;
 
 ALTER TABLE product
-    ADD COLUMN track_stock BOOLEAN,
-    ADD CONSTRAINT product_shopping_section_valid
-        CHECK (shopping_section IS NULL OR shopping_section IN
-               ('fresh_produce', 'meat_fish', 'dairy', 'bakery', 'frozen', 'ambient', 'drinks',
-                'household', 'other'));
+    ADD COLUMN track_stock BOOLEAN;
 
 ALTER TABLE stock_event
     DROP CONSTRAINT stock_event_source_kind_valid,
@@ -1003,7 +981,7 @@ CREATE TABLE purchase (
     ingredient_id     UUID REFERENCES ingredient (id) ON DELETE RESTRICT,
     product_id        UUID REFERENCES product (id) ON DELETE RESTRICT,
     quantity_value    NUMERIC(16, 4),
-    quantity_unit     TEXT,
+    quantity_unit     unit_code,
 
     opportunity_date  DATE,
     state             TEXT NOT NULL,
@@ -1026,11 +1004,7 @@ CREATE TABLE purchase (
     CONSTRAINT purchase_quantity_complete
         CHECK ((quantity_value IS NULL) = (quantity_unit IS NULL)),
     CONSTRAINT purchase_quantity_positive
-        CHECK (quantity_value IS NULL OR quantity_value > 0),
-    CONSTRAINT purchase_quantity_unit_valid
-        CHECK (quantity_unit IS NULL OR quantity_unit IN
-               ('mg', 'g', 'kg', 'oz', 'lb', 'ml', 'l', 'tsp', 'tbsp', 'fl_oz', 'cup', 'item',
-                'piece', 'slice', 'clove', 'can', 'pack', 'bunch'))
+        CHECK (quantity_value IS NULL OR quantity_value > 0)
 );
 
 CREATE INDEX purchase_state ON purchase (state);

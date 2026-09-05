@@ -66,7 +66,7 @@ pub struct Report {
     pub meals_resolved: usize,
     pub stock_effects_applied: usize,
     pub household_participants_created: usize,
-    pub diary_entries_created: usize,
+    pub consumption_entries_created: usize,
     pub shopping_seeded: usize,
 }
 
@@ -1313,7 +1313,7 @@ impl Loader<'_> {
             .await?;
 
         let thursday = week + Duration::days(3);
-        self.ensure_diary_entry(
+        self.ensure_consumption_entry(
             thursday,
             MealSlot::Lunch,
             "bakery-lunch",
@@ -1321,7 +1321,7 @@ impl Loader<'_> {
             servings(1),
         )
         .await?;
-        self.ensure_diary_entry(
+        self.ensure_consumption_entry(
             thursday,
             MealSlot::Snacks,
             "mystery-snack",
@@ -1376,7 +1376,7 @@ impl Loader<'_> {
         )
         .await?;
 
-        self.ensure_diary_entry(
+        self.ensure_consumption_entry(
             self.today,
             MealSlot::Snacks,
             "extra-snack",
@@ -1384,7 +1384,7 @@ impl Loader<'_> {
             servings(1),
         )
         .await?;
-        self.ensure_recipe_diary_entry(
+        self.ensure_recipe_consumption_entry(
             self.today,
             MealSlot::Lunch,
             "leftover-porridge",
@@ -1642,7 +1642,7 @@ impl Loader<'_> {
         Ok(())
     }
 
-    async fn ensure_recipe_diary_entry(
+    async fn ensure_recipe_consumption_entry(
         &mut self,
         date: Date,
         slot: MealSlot,
@@ -1654,13 +1654,13 @@ impl Loader<'_> {
             "consumption-record",
             &format!("{date}:{key}"),
         ));
-        match self.state.diary.get(id).await {
+        match self.state.consumption.get(id).await {
             Ok(_) => return Ok(()),
             Err(CoreError::NotFound { .. }) => {}
             Err(error) => return Err(error.into()),
         }
         self.state
-            .diary
+            .consumption
             .record_backdated(NewConsumptionRecord {
                 id: Some(id),
                 member_id: self.member.id,
@@ -1676,11 +1676,11 @@ impl Loader<'_> {
                 ),
             })
             .await?;
-        self.report.diary_entries_created += 1;
+        self.report.consumption_entries_created += 1;
         Ok(())
     }
 
-    async fn ensure_diary_entry(
+    async fn ensure_consumption_entry(
         &mut self,
         date: Date,
         slot: MealSlot,
@@ -1692,13 +1692,13 @@ impl Loader<'_> {
             "consumption-record",
             &format!("{date}:{key}"),
         ));
-        match self.state.diary.get(id).await {
+        match self.state.consumption.get(id).await {
             Ok(_) => return Ok(()),
             Err(CoreError::NotFound { .. }) => {}
             Err(error) => return Err(error.into()),
         }
         self.state
-            .diary
+            .consumption
             .record_backdated(NewConsumptionRecord {
                 id: Some(id),
                 member_id: self.member.id,
@@ -1714,7 +1714,7 @@ impl Loader<'_> {
                 ),
             })
             .await?;
-        self.report.diary_entries_created += 1;
+        self.report.consumption_entries_created += 1;
         Ok(())
     }
 }

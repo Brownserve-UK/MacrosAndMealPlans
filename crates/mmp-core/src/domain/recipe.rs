@@ -1,6 +1,5 @@
+use super::str_enum::str_enum;
 use std::collections::HashSet;
-use std::fmt;
-use std::str::FromStr;
 
 use rust_decimal::Decimal;
 use time::OffsetDateTime;
@@ -11,6 +10,13 @@ use super::{
     mean_nutrition, nutrition_for, sum_nutrition, validate_name,
 };
 use crate::error::ValidationErrors;
+
+str_enum!(MealCategory, UnknownMealCategory, "meal category");
+str_enum!(
+    RecipeVisibility,
+    UnknownRecipeVisibility,
+    "recipe visibility"
+);
 
 pub const MAX_SERVINGS: i32 = 10_000;
 pub const MAX_RECIPE_MINUTES: i32 = 10_080;
@@ -39,27 +45,6 @@ impl RecipeVisibility {
     }
 }
 
-impl fmt::Display for RecipeVisibility {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.code())
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error("`{0}` is not a known recipe visibility")]
-pub struct UnknownRecipeVisibility(pub String);
-
-impl FromStr for RecipeVisibility {
-    type Err = UnknownRecipeVisibility;
-
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        Self::ALL
-            .into_iter()
-            .find(|visibility| visibility.code() == value)
-            .ok_or_else(|| UnknownRecipeVisibility(value.to_owned()))
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
@@ -85,27 +70,6 @@ impl MealCategory {
             MealCategory::Dinner => "dinner",
             MealCategory::Snack => "snack",
         }
-    }
-}
-
-impl fmt::Display for MealCategory {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.code())
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error("`{0}` is not a known meal category")]
-pub struct UnknownMealCategory(pub String);
-
-impl FromStr for MealCategory {
-    type Err = UnknownMealCategory;
-
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        Self::ALL
-            .into_iter()
-            .find(|category| category.code() == value)
-            .ok_or_else(|| UnknownMealCategory(value.to_owned()))
     }
 }
 

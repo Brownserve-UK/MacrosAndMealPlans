@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use time::{Date, Duration};
 
+use super::revision::{commit_outcome, require_revision};
 use crate::domain::{
     ConsumedAmount, ConsumedNutrition, ConsumptionRecord, ConsumptionRecordId,
     ConsumptionRecordPatch, HouseholdMemberId, MealItemRef, NewConsumptionRecord, NutritionFacts,
@@ -11,7 +12,7 @@ use crate::domain::{
 use crate::error::{CoreError, Result, ValidationErrors};
 use crate::ports::{
     Clock, ConsumptionQuery, ConsumptionRecordRepository, IngredientRepository, PageRequest,
-    ProductRepository, RecipeRepository, StockWrite, UpdateOutcome,
+    ProductRepository, RecipeRepository, StockWrite,
 };
 
 use super::fulfilment::{RecipeFulfilments, expand_recipe};
@@ -32,21 +33,21 @@ pub struct DayTotals {
 }
 
 #[derive(Debug, Clone)]
-pub struct DiaryEntry {
+pub struct ConsumptionEntry {
     pub record: ConsumptionRecord,
     pub product_name: String,
 }
 
 #[derive(Debug, Clone)]
-pub struct DiaryDay {
+pub struct ConsumptionDay {
     pub member_id: HouseholdMemberId,
     pub date: Date,
-    pub entries: Vec<DiaryEntry>,
+    pub entries: Vec<ConsumptionEntry>,
     pub totals: DayTotals,
 }
 
 #[derive(Clone)]
-pub struct DiaryService {
+pub struct ConsumptionService {
     records: Arc<dyn ConsumptionRecordRepository>,
     products: Arc<dyn ProductRepository>,
     ingredients: Arc<dyn IngredientRepository>,
@@ -54,7 +55,7 @@ pub struct DiaryService {
     clock: Arc<dyn Clock>,
 }
 
-impl DiaryService {
+impl ConsumptionService {
     pub fn new(
         records: Arc<dyn ConsumptionRecordRepository>,
         products: Arc<dyn ProductRepository>,
@@ -163,7 +164,7 @@ impl DiaryService {
     ) -> Result<StockAffected<ConsumptionRecord>> {
         patch.validate()?;
         let mut current = self.get(id).await?;
-        require_revision(id, expected, current.revision)?;
+        require_revision(CONSUMPTION_RECORD, id, expected, current.revision)?;
 
         if patch.is_empty() {
             return Ok(StockAffected::bare(current));
@@ -222,7 +223,7 @@ impl DiaryService {
         expected: Revision,
     ) -> Result<StockAffected<()>> {
         let current = self.get(id).await?;
-        require_revision(id, expected, current.revision)?;
+        require_revision(CONSUMPTION_RECORD, id, expected, current.revision)?;
         if current.meal_plan_component_id.is_some() {
             return Err(CoreError::conflict(
                 "This food came from a planned meal. Reopen the meal in your plan to remove it.",
@@ -235,22 +236,14 @@ impl DiaryService {
             .push(record_release(&current, self.log_label(&current).await?));
 
         let (outcome, stock_outcomes) = self.records.delete(id, expected, &write).await?;
-        match outcome {
-            UpdateOutcome::Updated => Ok(StockAffected::new(
-                (),
-                name_outcomes(&*self.products, &*self.ingredients, stock_outcomes).await?,
-            )),
-            UpdateOutcome::RevisionMismatch { actual } => Err(CoreError::RevisionMismatch {
-                resource: CONSUMPTION_RECORD,
-                id: id.to_string(),
-                expected,
-                actual,
-            }),
-            UpdateOutcome::NotFound => Err(CoreError::not_found(CONSUMPTION_RECORD, id)),
-        }
+        commit_outcome(CONSUMPTION_RECORD, id, expected, outcome)?;
+        Ok(StockAffected::new(
+            (),
+            name_outcomes(&*self.products, &*self.ingredients, stock_outcomes).await?,
+        ))
     }
 
-    pub async fn day(&self, member_id: HouseholdMemberId, date: Date) -> Result<DiaryDay> {
+    pub async fn day(&self, member_id: HouseholdMemberId, date: Date) -> Result<ConsumptionDay> {
         let query = ConsumptionQuery {
             member_id: Some(member_id),
             from: Some(date),
@@ -264,13 +257,13 @@ impl DiaryService {
         let mut entries = Vec::with_capacity(page.items.len());
         for record in page.items {
             let product_name = self.item_name(record.item).await?;
-            entries.push(DiaryEntry {
+            entries.push(ConsumptionEntry {
                 record,
                 product_name,
             });
         }
 
-        Ok(DiaryDay {
+        Ok(ConsumptionDay {
             member_id,
             date,
             entries,
@@ -367,16 +360,8 @@ impl DiaryService {
         stock: &StockWrite,
     ) -> Result<Vec<crate::domain::StockOutcome>> {
         let (outcome, stock_outcomes) = self.records.update(record, expected, stock).await?;
-        match outcome {
-            UpdateOutcome::Updated => Ok(stock_outcomes),
-            UpdateOutcome::RevisionMismatch { actual } => Err(CoreError::RevisionMismatch {
-                resource: CONSUMPTION_RECORD,
-                id: record.id.to_string(),
-                expected,
-                actual,
-            }),
-            UpdateOutcome::NotFound => Err(CoreError::not_found(CONSUMPTION_RECORD, record.id)),
-        }
+        commit_outcome(CONSUMPTION_RECORD, record.id, expected, outcome)?;
+        Ok(stock_outcomes)
     }
 }
 
@@ -426,23 +411,6 @@ fn totals_for(entries: &[ConsumptionRecord]) -> DayTotals {
     }
 }
 
-fn require_revision(
-    id: impl std::fmt::Display,
-    expected: Revision,
-    actual: Revision,
-) -> Result<()> {
-    if expected == actual {
-        Ok(())
-    } else {
-        Err(CoreError::RevisionMismatch {
-            resource: CONSUMPTION_RECORD,
-            id: id.to_string(),
-            expected,
-            actual,
-        })
-    }
-}
-
 #[cfg(test)]
-#[path = "diary_tests.rs"]
+#[path = "consumption_tests.rs"]
 mod tests;

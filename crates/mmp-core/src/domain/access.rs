@@ -1,5 +1,8 @@
+use super::str_enum::str_enum;
 use std::fmt;
-use std::str::FromStr;
+
+str_enum!(AccessScope, UnknownAccessScope, "access scope");
+str_enum!(Role, UnknownRole, "role");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Permission {
@@ -122,27 +125,6 @@ impl Role {
     }
 }
 
-impl fmt::Display for Role {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.code())
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error("`{0}` is not a known role")]
-pub struct UnknownRole(pub String);
-
-impl FromStr for Role {
-    type Err = UnknownRole;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Role::ALL
-            .into_iter()
-            .find(|r| r.code() == s)
-            .ok_or_else(|| UnknownRole(s.to_owned()))
-    }
-}
-
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
 )]
@@ -168,27 +150,6 @@ impl AccessScope {
             AccessScope::HealthData => Permission::MemberHealthData,
             AccessScope::MealPlan => Permission::HouseholdRead,
         }
-    }
-}
-
-impl fmt::Display for AccessScope {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.code())
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error("`{0}` is not a known access scope")]
-pub struct UnknownAccessScope(pub String);
-
-impl FromStr for AccessScope {
-    type Err = UnknownAccessScope;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        AccessScope::ALL
-            .into_iter()
-            .find(|s2| s2.code() == s)
-            .ok_or_else(|| UnknownAccessScope(s.to_owned()))
     }
 }
 

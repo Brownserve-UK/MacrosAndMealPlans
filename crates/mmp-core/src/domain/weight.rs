@@ -1,4 +1,4 @@
-use std::fmt;
+use super::str_enum::str_enum;
 use std::str::FromStr;
 
 use rust_decimal::Decimal;
@@ -9,6 +9,10 @@ use super::{
     HouseholdMemberId, Patch, Quantity, Revision, Unit, UserId, WeightGoalId, WeightRecordId,
 };
 use crate::error::{CoreError, Result, ValidationErrors};
+
+str_enum!(WeightDisplay, UnknownWeightDisplay, "weight display");
+str_enum!(WeightObjective, UnknownWeightObjective, "weight objective");
+str_enum!(WeightSource, UnknownWeightSource, "weight source");
 
 const WEIGHT_DP: u32 = 3;
 const MAX_WEIGHT_KG: i64 = 635;
@@ -30,27 +34,6 @@ impl WeightSource {
             WeightSource::Manual => "manual",
             WeightSource::HealthConnect => "health_connect",
         }
-    }
-}
-
-impl fmt::Display for WeightSource {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.code())
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error("`{0}` is not a known weight source")]
-pub struct UnknownWeightSource(pub String);
-
-impl FromStr for WeightSource {
-    type Err = UnknownWeightSource;
-
-    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        WeightSource::ALL
-            .into_iter()
-            .find(|source| source.code() == s)
-            .ok_or_else(|| UnknownWeightSource(s.to_owned()))
     }
 }
 
@@ -78,27 +61,6 @@ impl WeightObjective {
     }
 }
 
-impl fmt::Display for WeightObjective {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.code())
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error("`{0}` is not a known weight objective")]
-pub struct UnknownWeightObjective(pub String);
-
-impl FromStr for WeightObjective {
-    type Err = UnknownWeightObjective;
-
-    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        WeightObjective::ALL
-            .into_iter()
-            .find(|objective| objective.code() == s)
-            .ok_or_else(|| UnknownWeightObjective(s.to_owned()))
-    }
-}
-
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WeightDisplay {
@@ -121,27 +83,6 @@ impl WeightDisplay {
             WeightDisplay::StonesPounds => "stones_pounds",
             WeightDisplay::Pounds => "pounds",
         }
-    }
-}
-
-impl fmt::Display for WeightDisplay {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.code())
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error("`{0}` is not a known weight display")]
-pub struct UnknownWeightDisplay(pub String);
-
-impl FromStr for WeightDisplay {
-    type Err = UnknownWeightDisplay;
-
-    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        WeightDisplay::ALL
-            .into_iter()
-            .find(|display| display.code() == s)
-            .ok_or_else(|| UnknownWeightDisplay(s.to_owned()))
     }
 }
 

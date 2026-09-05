@@ -1,6 +1,5 @@
+use super::str_enum::str_enum;
 use std::collections::BTreeSet;
-use std::fmt;
-use std::str::FromStr;
 
 use rust_decimal::Decimal;
 use time::{Date, OffsetDateTime};
@@ -10,6 +9,12 @@ use super::{
     MealSlot, NutritionFacts, Product, Quantity, Revision, UserId,
 };
 use crate::error::ValidationErrors;
+
+str_enum!(
+    NutritionQuality,
+    UnknownNutritionQuality,
+    "nutrition quality"
+);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ConsumedAmount {
@@ -86,27 +91,6 @@ impl NutritionQuality {
             NutritionQuality::Partial => "partial",
             NutritionQuality::Unknown => "unknown",
         }
-    }
-}
-
-impl fmt::Display for NutritionQuality {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.code())
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error("`{0}` is not a known nutrition quality")]
-pub struct UnknownNutritionQuality(pub String);
-
-impl FromStr for NutritionQuality {
-    type Err = UnknownNutritionQuality;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        NutritionQuality::ALL
-            .into_iter()
-            .find(|q| q.code() == s)
-            .ok_or_else(|| UnknownNutritionQuality(s.to_owned()))
     }
 }
 

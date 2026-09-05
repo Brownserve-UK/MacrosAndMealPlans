@@ -9,7 +9,7 @@ use super::require_member_access;
 use crate::auth::Principal;
 use crate::dto::common::iso_date;
 use crate::dto::{
-    ConsumptionRecordDto, CreateConsumptionRequest, DiaryDayDto, StockOutcomesResponse,
+    ConsumptionDayDto, ConsumptionRecordDto, CreateConsumptionRequest, StockOutcomesResponse,
     UpdateConsumptionRequest, consumption_id, member_id,
 };
 use crate::error::{ApiError, ApiResult};
@@ -38,7 +38,7 @@ fn parse_path_date(raw: &str) -> ApiResult<Date> {
         (status = 403, description = "Not permitted", body = crate::error::Problem),
         (status = 422, description = "Validation failed", body = crate::error::Problem),
     ),
-    tag = "diary",
+    tag = "consumption",
     security(("basic" = []))
 )]
 async fn create(
@@ -52,7 +52,7 @@ async fn create(
     let mut input: mmp_core::domain::NewConsumptionRecord = body.into();
     input.recorded_by = Some(principal.user_id);
 
-    let created = state.diary.record(input).await?;
+    let created = state.consumption.record(input).await?;
     Ok(Created(created.revision, created.into()))
 }
 
@@ -67,7 +67,7 @@ async fn create(
         (status = 403, description = "Not permitted", body = crate::error::Problem),
         (status = 404, description = "Not found", body = crate::error::Problem),
     ),
-    tag = "diary",
+    tag = "consumption",
     security(("basic" = []))
 )]
 async fn get_one(
@@ -75,7 +75,7 @@ async fn get_one(
     principal: Principal,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Tagged<ConsumptionRecordDto>> {
-    let record = state.diary.get(consumption_id(id)).await?;
+    let record = state.consumption.get(consumption_id(id)).await?;
     require_member_access(&state, &principal, record.member_id).await?;
     Ok(Tagged(record.revision, record.into()))
 }
@@ -95,7 +95,7 @@ async fn get_one(
         (status = 409, description = "Someone else changed it first", body = crate::error::Problem),
         (status = 428, description = "If-Match is required", body = crate::error::Problem),
     ),
-    tag = "diary",
+    tag = "consumption",
     security(("basic" = []))
 )]
 async fn update(
@@ -106,7 +106,7 @@ async fn update(
     Json(body): Json<UpdateConsumptionRequest>,
 ) -> ApiResult<Tagged<ConsumptionRecordDto>> {
     let id = consumption_id(id);
-    let existing = state.diary.get(id).await?;
+    let existing = state.consumption.get(id).await?;
     require_member_access(&state, &principal, existing.member_id).await?;
 
     let patch = body.into_domain().map_err(|message| {
@@ -114,7 +114,7 @@ async fn update(
         errors.push("consumed_at", message);
         mmp_core::CoreError::Validation(errors)
     })?;
-    let updated = state.diary.amend(id, revision, patch).await?;
+    let updated = state.consumption.amend(id, revision, patch).await?;
     Ok(Tagged(updated.revision, updated.into()))
 }
 
@@ -131,7 +131,7 @@ async fn update(
         (status = 403, description = "Not permitted", body = crate::error::Problem),
         (status = 409, description = "Someone else changed it first", body = crate::error::Problem),
     ),
-    tag = "diary",
+    tag = "consumption",
     security(("basic" = []))
 )]
 async fn delete(
@@ -141,10 +141,10 @@ async fn delete(
     IfMatch(revision): IfMatch,
 ) -> ApiResult<Json<StockOutcomesResponse>> {
     let id = consumption_id(id);
-    let existing = state.diary.get(id).await?;
+    let existing = state.consumption.get(id).await?;
     require_member_access(&state, &principal, existing.member_id).await?;
 
-    let removed = state.diary.remove(id, revision).await?;
+    let removed = state.consumption.remove(id, revision).await?;
     Ok(Json(StockOutcomesResponse {
         stock_outcomes: removed.stock.into_iter().map(Into::into).collect(),
     }))
@@ -154,29 +154,29 @@ async fn delete(
     get,
     // 2026-08-28 - SB: This is currently only used in regression tests and not exposed to users
     // (just in case you wonder why it doesn't seem to get used anywhere 😛)
-    path = "/api/v1/diary/{member_id}/{date}",
-    operation_id = "getDiaryDay",
+    path = "/api/v1/consumption/{member_id}/{date}",
+    operation_id = "getConsumptionDay",
     params(
         ("member_id" = Uuid, Path, description = "Household member id"),
         ("date" = String, Path, description = "ISO date (YYYY-MM-DD)", example = "2026-08-22"),
     ),
     responses(
-        (status = 200, description = "The day's entries and totals", body = DiaryDayDto),
+        (status = 200, description = "The day's entries and totals", body = ConsumptionDayDto),
         (status = 400, description = "The date could not be parsed", body = crate::error::Problem),
         (status = 403, description = "Not permitted", body = crate::error::Problem),
     ),
-    tag = "diary",
+    tag = "consumption",
     security(("basic" = []))
 )]
 async fn get_day(
     State(state): State<AppState>,
     principal: Principal,
     Path((member, date)): Path<(Uuid, String)>,
-) -> ApiResult<Json<DiaryDayDto>> {
+) -> ApiResult<Json<ConsumptionDayDto>> {
     let target = member_id(member);
     require_member_access(&state, &principal, target).await?;
 
     let date = parse_path_date(&date)?;
-    let day = state.diary.day(target, date).await?;
+    let day = state.consumption.day(target, date).await?;
     Ok(Json(day.into()))
 }

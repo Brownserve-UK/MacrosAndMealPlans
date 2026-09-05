@@ -1,5 +1,4 @@
-use std::fmt;
-use std::str::FromStr;
+use super::str_enum::str_enum;
 
 use time::{Date, OffsetDateTime, Time, Weekday};
 
@@ -8,6 +7,15 @@ use super::{
     ShoppingOpportunityId, StockItemId, UserId,
 };
 use crate::error::{Result, ValidationErrors};
+
+str_enum!(ExceptionState, UnknownExceptionState, "exception state");
+str_enum!(
+    OpportunityState,
+    UnknownOpportunityState,
+    "opportunity state"
+);
+str_enum!(PurchaseState, UnknownPurchaseState, "purchase state");
+str_enum!(ShoppingSection, UnknownShoppingSection, "shopping section");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -56,27 +64,6 @@ impl ShoppingSection {
             .iter()
             .position(|section| section == self)
             .unwrap_or(usize::MAX)
-    }
-}
-
-impl fmt::Display for ShoppingSection {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.code())
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error("unknown shopping section: {0}")]
-pub struct UnknownShoppingSection(pub String);
-
-impl FromStr for ShoppingSection {
-    type Err = UnknownShoppingSection;
-
-    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        ShoppingSection::ALL
-            .into_iter()
-            .find(|section| section.code() == s)
-            .ok_or_else(|| UnknownShoppingSection(s.to_owned()))
     }
 }
 
@@ -187,27 +174,6 @@ impl OpportunityState {
     }
 }
 
-impl fmt::Display for OpportunityState {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.code())
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error("unknown opportunity state: {0}")]
-pub struct UnknownOpportunityState(pub String);
-
-impl FromStr for OpportunityState {
-    type Err = UnknownOpportunityState;
-
-    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        OpportunityState::ALL
-            .into_iter()
-            .find(|state| state.code() == s)
-            .ok_or_else(|| UnknownOpportunityState(s.to_owned()))
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ShoppingOpportunity {
     pub id: Option<ShoppingOpportunityId>,
@@ -252,27 +218,6 @@ impl ExceptionState {
             ExceptionState::Skipped => "skipped",
             ExceptionState::OneOff => "one_off",
         }
-    }
-}
-
-impl fmt::Display for ExceptionState {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.code())
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error("unknown exception state: {0}")]
-pub struct UnknownExceptionState(pub String);
-
-impl FromStr for ExceptionState {
-    type Err = UnknownExceptionState;
-
-    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        ExceptionState::ALL
-            .into_iter()
-            .find(|state| state.code() == s)
-            .ok_or_else(|| UnknownExceptionState(s.to_owned()))
     }
 }
 
@@ -430,27 +375,6 @@ impl PurchaseState {
             PurchaseState::Reconciled => "reconciled",
             PurchaseState::Cancelled => "cancelled",
         }
-    }
-}
-
-impl fmt::Display for PurchaseState {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.code())
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error("unknown purchase state: {0}")]
-pub struct UnknownPurchaseState(pub String);
-
-impl FromStr for PurchaseState {
-    type Err = UnknownPurchaseState;
-
-    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        PurchaseState::ALL
-            .into_iter()
-            .find(|state| state.code() == s)
-            .ok_or_else(|| UnknownPurchaseState(s.to_owned()))
     }
 }
 

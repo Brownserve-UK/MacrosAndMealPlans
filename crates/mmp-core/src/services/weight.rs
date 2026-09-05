@@ -3,13 +3,14 @@ use std::sync::Arc;
 use rust_decimal::Decimal;
 use time::Date;
 
+use super::revision::{commit_outcome, require_revision};
 use crate::domain::{
     GoalProjection, HouseholdMemberId, NewWeightGoal, NewWeightRecord, Revision, WeightGoal,
     WeightGoalId, WeightGoalPatch, WeightRecord, WeightRecordId, WeightRecordPatch, current_weight,
     latest_per_day, project_goal,
 };
 use crate::error::{CoreError, Result};
-use crate::ports::{Clock, UpdateOutcome, WeightGoalRepository, WeightRecordRepository};
+use crate::ports::{Clock, WeightGoalRepository, WeightRecordRepository};
 
 const WEIGHT_RECORD: &str = "weight record";
 const WEIGHT_GOAL: &str = "weight goal";
@@ -86,7 +87,7 @@ impl WeightService {
         patch: WeightRecordPatch,
     ) -> Result<WeightRecord> {
         let mut current = self.get_record(id).await?;
-        require_record_revision(id, expected, current.revision)?;
+        require_revision(WEIGHT_RECORD, id, expected, current.revision)?;
 
         if patch.is_empty() {
             return Ok(current);
@@ -110,14 +111,24 @@ impl WeightService {
 
         current.revision = current.revision.next();
         current.updated_at = self.clock.now();
-        record_outcome(self.records.update(&current, expected).await?, id, expected)?;
+        commit_outcome(
+            WEIGHT_RECORD,
+            id,
+            expected,
+            self.records.update(&current, expected).await?,
+        )?;
         Ok(current)
     }
 
     pub async fn delete_record(&self, id: WeightRecordId, expected: Revision) -> Result<()> {
         let current = self.get_record(id).await?;
-        require_record_revision(id, expected, current.revision)?;
-        record_outcome(self.records.delete(id, expected).await?, id, expected)
+        require_revision(WEIGHT_RECORD, id, expected, current.revision)?;
+        commit_outcome(
+            WEIGHT_RECORD,
+            id,
+            expected,
+            self.records.delete(id, expected).await?,
+        )
     }
 
     pub async fn goal(&self, member_id: HouseholdMemberId) -> Result<Option<WeightGoal>> {
@@ -157,7 +168,7 @@ impl WeightService {
         patch: WeightGoalPatch,
     ) -> Result<WeightGoal> {
         let mut current = self.get_goal(id).await?;
-        require_goal_revision(id, expected, current.revision)?;
+        require_revision(WEIGHT_GOAL, id, expected, current.revision)?;
 
         if patch.is_empty() {
             return Ok(current);
@@ -188,14 +199,24 @@ impl WeightService {
 
         current.revision = current.revision.next();
         current.updated_at = self.clock.now();
-        goal_outcome(self.goals.update(&current, expected).await?, id, expected)?;
+        commit_outcome(
+            WEIGHT_GOAL,
+            id,
+            expected,
+            self.goals.update(&current, expected).await?,
+        )?;
         Ok(current)
     }
 
     pub async fn clear_goal(&self, id: WeightGoalId, expected: Revision) -> Result<()> {
         let current = self.get_goal(id).await?;
-        require_goal_revision(id, expected, current.revision)?;
-        goal_outcome(self.goals.delete(id, expected).await?, id, expected)
+        require_revision(WEIGHT_GOAL, id, expected, current.revision)?;
+        commit_outcome(
+            WEIGHT_GOAL,
+            id,
+            expected,
+            self.goals.delete(id, expected).await?,
+        )
     }
 
     pub async fn summary(&self, member_id: HouseholdMemberId) -> Result<WeightSummary> {
@@ -231,58 +252,6 @@ impl WeightService {
 
 fn kilograms(amount: Decimal) -> crate::domain::Quantity {
     crate::domain::Quantity::new(amount, crate::domain::Unit::Kilogram)
-}
-
-fn require_record_revision(id: WeightRecordId, expected: Revision, actual: Revision) -> Result<()> {
-    if expected == actual {
-        Ok(())
-    } else {
-        Err(CoreError::RevisionMismatch {
-            resource: WEIGHT_RECORD,
-            id: id.to_string(),
-            expected,
-            actual,
-        })
-    }
-}
-
-fn require_goal_revision(id: WeightGoalId, expected: Revision, actual: Revision) -> Result<()> {
-    if expected == actual {
-        Ok(())
-    } else {
-        Err(CoreError::RevisionMismatch {
-            resource: WEIGHT_GOAL,
-            id: id.to_string(),
-            expected,
-            actual,
-        })
-    }
-}
-
-fn record_outcome(outcome: UpdateOutcome, id: WeightRecordId, expected: Revision) -> Result<()> {
-    match outcome {
-        UpdateOutcome::Updated => Ok(()),
-        UpdateOutcome::RevisionMismatch { actual } => Err(CoreError::RevisionMismatch {
-            resource: WEIGHT_RECORD,
-            id: id.to_string(),
-            expected,
-            actual,
-        }),
-        UpdateOutcome::NotFound => Err(CoreError::not_found(WEIGHT_RECORD, id)),
-    }
-}
-
-fn goal_outcome(outcome: UpdateOutcome, id: WeightGoalId, expected: Revision) -> Result<()> {
-    match outcome {
-        UpdateOutcome::Updated => Ok(()),
-        UpdateOutcome::RevisionMismatch { actual } => Err(CoreError::RevisionMismatch {
-            resource: WEIGHT_GOAL,
-            id: id.to_string(),
-            expected,
-            actual,
-        }),
-        UpdateOutcome::NotFound => Err(CoreError::not_found(WEIGHT_GOAL, id)),
-    }
 }
 
 #[cfg(test)]

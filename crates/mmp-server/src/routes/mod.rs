@@ -1,5 +1,5 @@
 pub mod auth;
-pub mod diary;
+pub mod consumption;
 pub mod ingredients;
 pub mod meal_plan;
 pub mod members;

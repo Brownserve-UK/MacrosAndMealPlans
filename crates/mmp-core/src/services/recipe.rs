@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use super::revision::{commit_outcome, require_revision};
 use crate::domain::{
     ConsumedAmount, ConsumedNutrition, IngredientId, NewRecipe, NewRecipeComponent,
     NewRecipeInstruction, NutritionQuality, ProductId, Recipe, RecipeComponent, RecipeComponentId,
@@ -12,7 +13,6 @@ use crate::domain::{
 use crate::error::{CoreError, Result, ValidationErrors};
 use crate::ports::{
     Clock, IngredientRepository, Paginated, ProductRepository, RecipeQuery, RecipeRepository,
-    UpdateOutcome,
 };
 
 use super::fulfilment::RecipeFulfilments;
@@ -200,7 +200,7 @@ impl RecipeService {
     ) -> Result<Recipe> {
         patch.validate()?;
         let mut current = self.get_recipe(id, actor).await?;
-        require_revision(id, expected, current.revision)?;
+        require_revision(RECIPE, id, expected, current.revision)?;
 
         if patch.is_empty() {
             return Ok(current);
@@ -250,7 +250,7 @@ impl RecipeService {
         actor: UserId,
     ) -> Result<Recipe> {
         let mut current = self.get_recipe(id, actor).await?;
-        require_revision(id, expected, current.revision)?;
+        require_revision(RECIPE, id, expected, current.revision)?;
 
         let index = current
             .components
@@ -305,7 +305,7 @@ impl RecipeService {
         actor: UserId,
     ) -> Result<Recipe> {
         let mut current = self.get_recipe(id, actor).await?;
-        require_revision(id, expected, current.revision)?;
+        require_revision(RECIPE, id, expected, current.revision)?;
 
         if current.is_archived() == archived {
             return Ok(current);
@@ -352,7 +352,7 @@ impl RecipeService {
         actor: UserId,
     ) -> Result<Recipe> {
         let mut current = self.get_recipe(id, actor).await?;
-        require_revision(id, expected, current.revision)?;
+        require_revision(RECIPE, id, expected, current.revision)?;
         let now = self.clock.now();
         let version = current.photo_version.unwrap_or(0) + 1;
         current.photo_version = Some(version);
@@ -376,7 +376,7 @@ impl RecipeService {
         actor: UserId,
     ) -> Result<Recipe> {
         let mut current = self.get_recipe(id, actor).await?;
-        require_revision(id, expected, current.revision)?;
+        require_revision(RECIPE, id, expected, current.revision)?;
         if current.photo_version.is_none() {
             return Ok(current);
         }
@@ -527,16 +527,12 @@ impl RecipeService {
     }
 
     async fn commit(&self, recipe: &Recipe, expected: Revision) -> Result<()> {
-        match self.recipes.update(recipe, expected).await? {
-            UpdateOutcome::Updated => Ok(()),
-            UpdateOutcome::RevisionMismatch { actual } => Err(CoreError::RevisionMismatch {
-                resource: RECIPE,
-                id: recipe.id.to_string(),
-                expected,
-                actual,
-            }),
-            UpdateOutcome::NotFound => Err(CoreError::not_found(RECIPE, recipe.id)),
-        }
+        commit_outcome(
+            RECIPE,
+            recipe.id,
+            expected,
+            self.recipes.update(recipe, expected).await?,
+        )
     }
 
     async fn commit_photo(
@@ -545,16 +541,12 @@ impl RecipeService {
         expected: Revision,
         photo: Option<&RecipePhoto>,
     ) -> Result<()> {
-        match self.recipes.update_photo(recipe, expected, photo).await? {
-            UpdateOutcome::Updated => Ok(()),
-            UpdateOutcome::RevisionMismatch { actual } => Err(CoreError::RevisionMismatch {
-                resource: RECIPE,
-                id: recipe.id.to_string(),
-                expected,
-                actual,
-            }),
-            UpdateOutcome::NotFound => Err(CoreError::not_found(RECIPE, recipe.id)),
-        }
+        commit_outcome(
+            RECIPE,
+            recipe.id,
+            expected,
+            self.recipes.update_photo(recipe, expected, photo).await?,
+        )
     }
 }
 
@@ -596,19 +588,6 @@ fn assemble_instructions(
     }
     errors.into_result()?;
     Ok(instructions)
-}
-
-fn require_revision(id: RecipeId, expected: Revision, actual: Revision) -> Result<()> {
-    if expected == actual {
-        Ok(())
-    } else {
-        Err(CoreError::RevisionMismatch {
-            resource: RECIPE,
-            id: id.to_string(),
-            expected,
-            actual,
-        })
-    }
 }
 
 fn gap_for(

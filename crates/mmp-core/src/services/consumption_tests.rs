@@ -16,7 +16,7 @@ use time::OffsetDateTime;
 use time::macros::{date, datetime};
 
 struct Harness {
-    service: DiaryService,
+    service: ConsumptionService,
     records: InMemoryConsumptionRecordRepository,
     products: InMemoryProductRepository,
     recipes: InMemoryRecipeRepository,
@@ -63,7 +63,7 @@ fn harness_at(now: OffsetDateTime) -> Harness {
     let products = InMemoryProductRepository::new();
     let recipes = InMemoryRecipeRepository::new();
     let ingredients = InMemoryIngredientRepository::new();
-    let service = DiaryService::new(
+    let service = ConsumptionService::new(
         Arc::new(records.clone()),
         Arc::new(products.clone()),
         Arc::new(ingredients.clone()),

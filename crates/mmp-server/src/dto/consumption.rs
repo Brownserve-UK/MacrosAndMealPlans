@@ -2,7 +2,7 @@ use mmp_core::domain::{
     ConsumedAmount, ConsumptionRecord, ConsumptionRecordId, ConsumptionRecordPatch, MealSlot,
     NewConsumptionRecord, NutritionQuality, Patch, Quantity, Unit,
 };
-use mmp_core::services::{DayTotals, DiaryDay, DiaryEntry, StockAffected};
+use mmp_core::services::{ConsumptionDay, ConsumptionEntry, DayTotals, StockAffected};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use time::{Date, OffsetDateTime};
@@ -233,15 +233,15 @@ impl From<DayTotals> for DayTotalsDto {
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
-pub struct DiaryEntryDto {
+pub struct ConsumptionEntryDto {
     #[serde(flatten)]
     pub record: ConsumptionRecordDto,
     #[schema(example = "Tesco Whole Milk 1L")]
     pub product_name: String,
 }
 
-impl From<DiaryEntry> for DiaryEntryDto {
-    fn from(value: DiaryEntry) -> Self {
+impl From<ConsumptionEntry> for ConsumptionEntryDto {
+    fn from(value: ConsumptionEntry) -> Self {
         Self {
             record: value.record.into(),
             product_name: value.product_name,
@@ -250,17 +250,17 @@ impl From<DiaryEntry> for DiaryEntryDto {
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
-pub struct DiaryDayDto {
+pub struct ConsumptionDayDto {
     pub member_id: Uuid,
     #[serde(with = "iso_date")]
     #[schema(value_type = String, format = Date, example = "2026-08-22")]
     pub date: Date,
-    pub entries: Vec<DiaryEntryDto>,
+    pub entries: Vec<ConsumptionEntryDto>,
     pub totals: DayTotalsDto,
 }
 
-impl From<DiaryDay> for DiaryDayDto {
-    fn from(value: DiaryDay) -> Self {
+impl From<ConsumptionDay> for ConsumptionDayDto {
+    fn from(value: ConsumptionDay) -> Self {
         Self {
             member_id: value.member_id.as_uuid(),
             date: value.date,

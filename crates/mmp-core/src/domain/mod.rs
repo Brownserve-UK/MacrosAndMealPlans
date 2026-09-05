@@ -16,6 +16,7 @@ mod quantity;
 mod recipe;
 mod shopping;
 mod stock;
+mod str_enum;
 mod weight;
 
 pub use access::{AccessScope, Permission, Role, UnknownAccessScope, UnknownRole};

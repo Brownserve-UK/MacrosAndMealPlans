@@ -1,11 +1,12 @@
 use std::sync::Arc;
 
+use super::revision::{commit_outcome, require_revision};
 use crate::domain::{
     HouseholdMemberId, NewNutritionTarget, NutritionTarget, NutritionTargetId,
     NutritionTargetPatch, Revision, validate_goals,
 };
 use crate::error::{CoreError, Result, ValidationErrors};
-use crate::ports::{Clock, NutritionTargetRepository, UpdateOutcome};
+use crate::ports::{Clock, NutritionTargetRepository};
 
 const NUTRITION_TARGET: &str = "nutrition target";
 
@@ -54,7 +55,7 @@ impl NutritionTargetService {
         patch: NutritionTargetPatch,
     ) -> Result<NutritionTarget> {
         let mut current = self.get(id).await?;
-        require_revision(id, expected, current.revision)?;
+        require_revision(NUTRITION_TARGET, id, expected, current.revision)?;
 
         if patch.is_empty() {
             return Ok(current);
@@ -71,40 +72,24 @@ impl NutritionTargetService {
 
         current.revision = current.revision.next();
         current.updated_at = self.clock.now();
-        commit_outcome(self.targets.update(&current, expected).await?, id, expected)?;
+        commit_outcome(
+            NUTRITION_TARGET,
+            id,
+            expected,
+            self.targets.update(&current, expected).await?,
+        )?;
         Ok(current)
     }
 
     pub async fn delete(&self, id: NutritionTargetId, expected: Revision) -> Result<()> {
         let current = self.get(id).await?;
-        require_revision(id, expected, current.revision)?;
-        commit_outcome(self.targets.delete(id, expected).await?, id, expected)
-    }
-}
-
-fn require_revision(id: NutritionTargetId, expected: Revision, actual: Revision) -> Result<()> {
-    if expected == actual {
-        Ok(())
-    } else {
-        Err(CoreError::RevisionMismatch {
-            resource: NUTRITION_TARGET,
-            id: id.to_string(),
+        require_revision(NUTRITION_TARGET, id, expected, current.revision)?;
+        commit_outcome(
+            NUTRITION_TARGET,
+            id,
             expected,
-            actual,
-        })
-    }
-}
-
-fn commit_outcome(outcome: UpdateOutcome, id: NutritionTargetId, expected: Revision) -> Result<()> {
-    match outcome {
-        UpdateOutcome::Updated => Ok(()),
-        UpdateOutcome::RevisionMismatch { actual } => Err(CoreError::RevisionMismatch {
-            resource: NUTRITION_TARGET,
-            id: id.to_string(),
-            expected,
-            actual,
-        }),
-        UpdateOutcome::NotFound => Err(CoreError::not_found(NUTRITION_TARGET, id)),
+            self.targets.delete(id, expected).await?,
+        )
     }
 }
 

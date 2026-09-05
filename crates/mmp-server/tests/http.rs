@@ -10,8 +10,9 @@ use http_body_util::BodyExt;
 use image::{DynamicImage, ImageFormat, RgbImage};
 use mmp_core::ports::FixedClock;
 use mmp_core::services::{
-    CatalogueService, DiaryService, HouseholdService, HouseholdSettingsService, MealPlanService,
-    NutritionTargetService, RecipeService, ShoppingService, StockService, WeightService,
+    CatalogueService, ConsumptionService, HouseholdService, HouseholdSettingsService,
+    MealPlanService, NutritionTargetService, RecipeService, ShoppingService, StockService,
+    WeightService,
 };
 use mmp_core::testing::{
     InMemoryAccessGrantRepository, InMemoryConsumptionRecordRepository,
@@ -81,7 +82,7 @@ async fn app() -> Router {
         ),
         household.clone(),
         HouseholdSettingsService::new(Arc::new(settings_repo.clone()), clock.clone()),
-        DiaryService::new(
+        ConsumptionService::new(
             Arc::new(consumption.clone()),
             Arc::new(products.clone()),
             ingredients.clone(),
@@ -1608,7 +1609,7 @@ async fn deleting_a_consumption_record_removes_it() {
 }
 
 #[tokio::test]
-async fn the_diary_day_endpoint_returns_entries_and_totals() {
+async fn the_consumption_day_endpoint_returns_entries_and_totals() {
     let app = app().await;
     let me = send(&app, Call::new("GET", "/api/v1/auth/me")).await.1;
     let member_id = me["member_id"].as_str().unwrap();
@@ -1630,7 +1631,7 @@ async fn the_diary_day_endpoint_returns_entries_and_totals() {
 
     let (status, day, _) = send(
         &app,
-        Call::new("GET", format!("/api/v1/diary/{member_id}/2026-08-22")),
+        Call::new("GET", format!("/api/v1/consumption/{member_id}/2026-08-22")),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{day}");
@@ -2259,7 +2260,7 @@ async fn the_week_slots_projection_flattens_planned_and_logged_food_together() {
 }
 
 #[tokio::test]
-async fn confirming_a_planned_meal_creates_locked_diary_records() {
+async fn confirming_a_planned_meal_creates_locked_consumption_records() {
     let app = app().await;
     let me = send(&app, Call::new("GET", "/api/v1/auth/me")).await.1;
     let member_id = me["member_id"].as_str().unwrap();
@@ -2301,13 +2302,13 @@ async fn confirming_a_planned_meal_creates_locked_diary_records() {
         entry["components"][0]["id"]
     );
 
-    let (status, diary, _) = send(
+    let (status, consumption, _) = send(
         &app,
-        Call::new("GET", format!("/api/v1/diary/{member_id}/2026-08-26")),
+        Call::new("GET", format!("/api/v1/consumption/{member_id}/2026-08-26")),
     )
     .await;
-    assert_eq!(status, StatusCode::OK, "{diary}");
-    assert_eq!(diary["entries"].as_array().unwrap().len(), 1);
+    assert_eq!(status, StatusCode::OK, "{consumption}");
+    assert_eq!(consumption["entries"].as_array().unwrap().len(), 1);
 
     let record_id = record["id"].as_str().unwrap();
     let (status, _, _) = send(
@@ -2320,7 +2321,7 @@ async fn confirming_a_planned_meal_creates_locked_diary_records() {
 }
 
 #[tokio::test]
-async fn reopening_a_confirmed_meal_removes_the_diary_entries_and_allows_reconfirmation() {
+async fn reopening_a_confirmed_meal_removes_the_consumption_entries_and_allows_reconfirmation() {
     let app = app().await;
     let me = send(&app, Call::new("GET", "/api/v1/auth/me")).await.1;
     let member_id = me["member_id"].as_str().unwrap();
@@ -2365,13 +2366,13 @@ async fn reopening_a_confirmed_meal_removes_the_diary_entries_and_allows_reconfi
     assert_eq!(status, StatusCode::OK, "{reopened}");
     assert_eq!(reopened["status"], "planned");
 
-    let (status, diary, _) = send(
+    let (status, consumption, _) = send(
         &app,
-        Call::new("GET", format!("/api/v1/diary/{member_id}/2026-08-26")),
+        Call::new("GET", format!("/api/v1/consumption/{member_id}/2026-08-26")),
     )
     .await;
-    assert_eq!(status, StatusCode::OK, "{diary}");
-    assert_eq!(diary["entries"].as_array().unwrap().len(), 0);
+    assert_eq!(status, StatusCode::OK, "{consumption}");
+    assert_eq!(consumption["entries"].as_array().unwrap().len(), 0);
 
     let component_id = reopened["components"][0]["id"].as_str().unwrap();
     let (status, reconfirmed, _) = send(

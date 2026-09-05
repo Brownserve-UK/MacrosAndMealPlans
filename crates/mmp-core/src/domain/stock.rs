@@ -1,5 +1,5 @@
+use super::str_enum::str_enum;
 use std::fmt;
-use std::str::FromStr;
 
 use rust_decimal::Decimal;
 use time::{Date, OffsetDateTime};
@@ -9,6 +9,21 @@ use super::{
     Quantity, Revision, StockEffectId, StockEventId, StockItemId, Unit, UserId,
 };
 use crate::error::{Result, ValidationErrors};
+
+str_enum!(SourceDateKind, UnknownSourceDateKind, "source date kind");
+str_enum!(
+    StockEffectSource,
+    UnknownStockEffectSource,
+    "stock effect source"
+);
+str_enum!(
+    StockEffectState,
+    UnknownStockEffectState,
+    "stock effect state"
+);
+str_enum!(StockEventKind, UnknownStockEventKind, "stock event kind");
+str_enum!(StorageLocation, UnknownStorageLocation, "storage location");
+str_enum!(TrackingMode, UnknownTrackingMode, "tracking mode");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -31,27 +46,6 @@ impl TrackingMode {
             TrackingMode::Estimated => "estimated",
             TrackingMode::NotTracked => "not_tracked",
         }
-    }
-}
-
-impl fmt::Display for TrackingMode {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.code())
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error("`{0}` is not a known tracking mode")]
-pub struct UnknownTrackingMode(pub String);
-
-impl FromStr for TrackingMode {
-    type Err = UnknownTrackingMode;
-
-    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        TrackingMode::ALL
-            .into_iter()
-            .find(|m| m.code() == s)
-            .ok_or_else(|| UnknownTrackingMode(s.to_owned()))
     }
 }
 
@@ -79,27 +73,6 @@ impl StorageLocation {
     }
 }
 
-impl fmt::Display for StorageLocation {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.code())
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error("`{0}` is not a known storage location")]
-pub struct UnknownStorageLocation(pub String);
-
-impl FromStr for StorageLocation {
-    type Err = UnknownStorageLocation;
-
-    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        StorageLocation::ALL
-            .into_iter()
-            .find(|l| l.code() == s)
-            .ok_or_else(|| UnknownStorageLocation(s.to_owned()))
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SourceDateKind {
@@ -115,27 +88,6 @@ impl SourceDateKind {
             SourceDateKind::UseBy => "use_by",
             SourceDateKind::BestBefore => "best_before",
         }
-    }
-}
-
-impl fmt::Display for SourceDateKind {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.code())
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error("`{0}` is not a known source date kind")]
-pub struct UnknownSourceDateKind(pub String);
-
-impl FromStr for SourceDateKind {
-    type Err = UnknownSourceDateKind;
-
-    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        SourceDateKind::ALL
-            .into_iter()
-            .find(|k| k.code() == s)
-            .ok_or_else(|| UnknownSourceDateKind(s.to_owned()))
     }
 }
 
@@ -309,27 +261,6 @@ impl StockEventKind {
             StockEventKind::ModeChanged => "mode_changed",
             StockEventKind::Archived => "archived",
         }
-    }
-}
-
-impl fmt::Display for StockEventKind {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.code())
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error("`{0}` is not a known stock event kind")]
-pub struct UnknownStockEventKind(pub String);
-
-impl FromStr for StockEventKind {
-    type Err = UnknownStockEventKind;
-
-    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        StockEventKind::ALL
-            .into_iter()
-            .find(|k| k.code() == s)
-            .ok_or_else(|| UnknownStockEventKind(s.to_owned()))
     }
 }
 
@@ -581,27 +512,6 @@ impl StockEffectSource {
     }
 }
 
-impl fmt::Display for StockEffectSource {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.code())
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error("`{0}` is not a known stock effect source")]
-pub struct UnknownStockEffectSource(pub String);
-
-impl FromStr for StockEffectSource {
-    type Err = UnknownStockEffectSource;
-
-    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        StockEffectSource::ALL
-            .into_iter()
-            .find(|k| k.code() == s)
-            .ok_or_else(|| UnknownStockEffectSource(s.to_owned()))
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StockEffectState {
@@ -623,27 +533,6 @@ impl StockEffectState {
             StockEffectState::Released => "released",
             StockEffectState::ReleaseFailed => "release_failed",
         }
-    }
-}
-
-impl fmt::Display for StockEffectState {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.code())
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error("`{0}` is not a known stock effect state")]
-pub struct UnknownStockEffectState(pub String);
-
-impl FromStr for StockEffectState {
-    type Err = UnknownStockEffectState;
-
-    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        StockEffectState::ALL
-            .into_iter()
-            .find(|k| k.code() == s)
-            .ok_or_else(|| UnknownStockEffectState(s.to_owned()))
     }
 }
 

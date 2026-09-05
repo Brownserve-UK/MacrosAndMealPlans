@@ -68,14 +68,14 @@ export interface paths {
         patch: operations["updateConsumptionRecord"];
         trace?: never;
     };
-    "/api/v1/diary/{member_id}/{date}": {
+    "/api/v1/consumption/{member_id}/{date}": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        get: operations["getDiaryDay"];
+        get: operations["getConsumptionDay"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1304,6 +1304,21 @@ export interface components {
         };
         /** @enum {string} */
         ConfidenceDto: "exact" | "estimated";
+        ConsumptionDayDto: {
+            /**
+             * Format: date
+             * @example 2026-08-22
+             */
+            date: string;
+            entries: components["schemas"]["ConsumptionEntryDto"][];
+            /** Format: uuid */
+            member_id: string;
+            totals: components["schemas"]["DayTotalsDto"];
+        };
+        ConsumptionEntryDto: components["schemas"]["ConsumptionRecordDto"] & {
+            /** @example Tesco Whole Milk 1L */
+            product_name: string;
+        };
         ConsumptionRecordDto: components["schemas"]["MealItemRefDto"] & {
             amount: components["schemas"]["AmountDto"];
             /** Format: date-time */
@@ -1472,7 +1487,6 @@ export interface components {
             starting_weight: components["schemas"]["QuantityDto"];
             target_weight?: null | components["schemas"]["QuantityDto"];
         };
-        /** @description A weigh-in. The weight may be sent in any mass unit and is stored in kilograms. */
         CreateWeightRecordRequest: {
             /** Format: date-time */
             recorded_at?: string | null;
@@ -1518,21 +1532,6 @@ export interface components {
             /** @enum {string} */
             kind: "ingredient";
         };
-        DiaryDayDto: {
-            /**
-             * Format: date
-             * @example 2026-08-22
-             */
-            date: string;
-            entries: components["schemas"]["DiaryEntryDto"][];
-            /** Format: uuid */
-            member_id: string;
-            totals: components["schemas"]["DayTotalsDto"];
-        };
-        DiaryEntryDto: components["schemas"]["ConsumptionRecordDto"] & {
-            /** @example Tesco Whole Milk 1L */
-            product_name: string;
-        };
         FieldProblem: {
             /** @example name */
             field: string;
@@ -1543,7 +1542,6 @@ export interface components {
             still_pending: number;
             stocked: number;
         };
-        /** @description What the member's plan says about reaching their goal. */
         GoalProjectionDto: {
             /** @enum {string} */
             status: "reached";
@@ -2805,7 +2803,6 @@ export interface components {
         };
         /** @enum {string} */
         WeightSourceDto: "manual" | "health_connect";
-        /** @description Everything the weight screen needs in one read. */
         WeightSummaryDto: {
             /**
              * Format: double
@@ -2815,7 +2812,6 @@ export interface components {
             goal?: null | components["schemas"]["WeightGoalDto"];
             latest?: null | components["schemas"]["WeightRecordDto"];
             projection?: null | components["schemas"]["GoalProjectionDto"];
-            /** @description One point per day, oldest first. */
             series: components["schemas"]["WeightPointDto"][];
         };
     };
@@ -3089,7 +3085,7 @@ export interface operations {
             };
         };
     };
-    getDiaryDay: {
+    getConsumptionDay: {
         parameters: {
             query?: never;
             header?: never;
@@ -3112,7 +3108,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["DiaryDayDto"];
+                    "application/json": components["schemas"]["ConsumptionDayDto"];
                 };
             };
             /** @description The date could not be parsed */

@@ -1,4 +1,5 @@
 use super::*;
+use std::str::FromStr;
 use time::macros::{date, datetime};
 
 fn kg(amount: &str) -> Quantity {

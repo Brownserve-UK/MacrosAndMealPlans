@@ -3,6 +3,7 @@ use crate::domain::{
     Fulfilment, MealItemRef, ProductId, Provenance, Recipe, RecipeComponent, RecipeComponentId,
     RecipeId, RecipeRequirement, RecipeVisibility, Unit, UserId,
 };
+use std::str::FromStr;
 
 fn product_with(
     package_quantity: Option<Quantity>,

@@ -5,8 +5,6 @@ use mmp_core::domain::{
     StockLevel, StockOutcome, StorageLocation, TrackingMode, UsabilityDeadline,
 };
 use mmp_core::services::StockOutcomeView;
-use rust_decimal::Decimal;
-use rust_decimal::prelude::FromPrimitive;
 use serde::{Deserialize, Serialize};
 use time::{Date, OffsetDateTime};
 use utoipa::ToSchema;
@@ -601,9 +599,4 @@ pub struct StockAvailabilityQuery {
 
 pub fn stock_item_id(id: Uuid) -> StockItemId {
     StockItemId::from(id)
-}
-
-#[allow(dead_code)]
-fn to_decimal(value: f64) -> Decimal {
-    Decimal::from_f64(value).unwrap_or(Decimal::ZERO)
 }

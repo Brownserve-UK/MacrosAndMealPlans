@@ -1,5 +1,6 @@
-use std::fmt;
-use std::str::FromStr;
+use super::str_enum::str_enum;
+
+str_enum!(CatalogueOrigin, UnknownOrigin, "catalogue origin");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -23,27 +24,6 @@ impl CatalogueOrigin {
             CatalogueOrigin::Local => "local",
             CatalogueOrigin::External => "external",
         }
-    }
-}
-
-impl fmt::Display for CatalogueOrigin {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.code())
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error("`{0}` is not a known catalogue origin")]
-pub struct UnknownOrigin(pub String);
-
-impl FromStr for CatalogueOrigin {
-    type Err = UnknownOrigin;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        CatalogueOrigin::ALL
-            .into_iter()
-            .find(|o| o.code() == s)
-            .ok_or_else(|| UnknownOrigin(s.to_owned()))
     }
 }
 

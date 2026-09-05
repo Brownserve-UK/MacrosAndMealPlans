@@ -11,7 +11,7 @@ use crate::dto::{
     CreateIngredientRequest, IngredientDto, IngredientListQuery, IngredientPage, ProductPage,
     UpdateIngredientRequest,
 };
-use crate::error::{ApiError, ApiResult};
+use crate::error::ApiResult;
 use crate::http::{Created, IfMatch, Tagged};
 use crate::state::AppState;
 
@@ -223,6 +223,3 @@ async fn products_for_ingredient(
     let page = state.catalogue.list_products(&product_query).await?;
     Ok(Json(page.into()))
 }
-
-#[allow(unused)]
-fn _assert_error_type(_: ApiError) {}

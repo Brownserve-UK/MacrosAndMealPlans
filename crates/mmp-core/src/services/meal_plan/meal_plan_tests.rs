@@ -17,7 +17,7 @@ use crate::domain::{
 };
 use crate::ports::{FixedClock, StockRepository};
 use crate::services::stock_effects::StockAffected;
-use crate::services::{DiaryService, NutritionTargetService};
+use crate::services::{ConsumptionService, NutritionTargetService};
 use crate::testing::{
     InMemoryConsumptionRecordRepository, InMemoryHouseholdMemberRepository,
     InMemoryHouseholdSettingsRepository, InMemoryIngredientRepository, InMemoryMealPlanRepository,
@@ -27,7 +27,7 @@ use crate::testing::{
 
 struct Harness {
     service: MealPlanService,
-    diary: DiaryService,
+    consumption: ConsumptionService,
     targets: NutritionTargetService,
     products: InMemoryProductRepository,
     ingredients: InMemoryIngredientRepository,
@@ -121,7 +121,7 @@ fn harness() -> Harness {
         Arc::new(settings.clone()),
         clock.clone(),
     );
-    let diary = DiaryService::new(
+    let consumption = ConsumptionService::new(
         Arc::new(records.clone()),
         Arc::new(products.clone()),
         Arc::new(ingredients.clone()),
@@ -131,7 +131,7 @@ fn harness() -> Harness {
     let targets = NutritionTargetService::new(Arc::new(target_repo.clone()), clock);
     Harness {
         service,
-        diary,
+        consumption,
         targets,
         products,
         ingredients,
@@ -440,7 +440,7 @@ async fn weekly_actuals_include_food_logged_outside_the_meal_plan() {
     let food = product("Food", 200);
     h.products.seed(food.clone());
     planned(&h, vec![measured(food.id, 100)]).await;
-    h.diary
+    h.consumption
         .record(NewConsumptionRecord {
             id: None,
             member_id: h.member_id,
@@ -477,7 +477,7 @@ async fn weekly_actuals_include_food_logged_outside_the_meal_plan() {
 }
 
 #[tokio::test]
-async fn confirming_eaten_creates_one_linked_diary_record_per_component() {
+async fn confirming_eaten_creates_one_linked_consumption_record_per_component() {
     let h = harness();
     let first = product("Pasta", 200);
     let second = product("Sauce", 100);
@@ -670,7 +670,7 @@ async fn later_planned_components_append_after_food_already_logged_in_the_slot()
     h.products.seed(latte.clone());
     let entry = planned(&h, vec![measured(oats.id, 80), measured(milk.id, 250)]).await;
 
-    h.diary
+    h.consumption
         .record(NewConsumptionRecord {
             id: None,
             member_id: h.member_id,
@@ -862,7 +862,7 @@ async fn resolved_entries_are_locked() {
 }
 
 #[tokio::test]
-async fn linked_diary_records_can_be_amended_but_not_deleted() {
+async fn linked_consumption_records_can_be_amended_but_not_deleted() {
     let h = harness();
     let food = product("Food", 200);
     h.products.seed(food.clone());
@@ -889,7 +889,7 @@ async fn linked_diary_records_can_be_amended_but_not_deleted() {
     assert_eq!(record.slot, entry.entry.slot);
 
     let amended = h
-        .diary
+        .consumption
         .amend(
             record.id,
             record.revision,
@@ -906,7 +906,7 @@ async fn linked_diary_records_can_be_amended_but_not_deleted() {
     assert_eq!(amended.revision, record.revision.next());
 
     let error = h
-        .diary
+        .consumption
         .amend(
             amended.id,
             amended.revision,
@@ -920,7 +920,7 @@ async fn linked_diary_records_can_be_amended_but_not_deleted() {
     assert!(matches!(error, CoreError::Conflict { .. }));
 
     let error = h
-        .diary
+        .consumption
         .remove(amended.id, amended.revision)
         .await
         .unwrap_err();
@@ -970,7 +970,7 @@ async fn an_archived_product_may_be_retained_but_not_newly_added() {
 }
 
 #[tokio::test]
-async fn reopening_an_eaten_entry_removes_its_diary_records() {
+async fn reopening_an_eaten_entry_removes_its_consumption_records() {
     let h = harness();
     let food = product("Food", 200);
     h.products.seed(food.clone());
@@ -1466,7 +1466,7 @@ async fn the_week_projects_directly_logged_food_on_its_own_date() {
     let h = harness();
     let food = product("Food", 200);
     h.products.seed(food.clone());
-    h.diary
+    h.consumption
         .record(NewConsumptionRecord {
             id: None,
             member_id: h.member_id,

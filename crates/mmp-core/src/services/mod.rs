@@ -1,11 +1,12 @@
 mod catalogue;
-mod diary;
+mod consumption;
 mod fulfilment;
 mod household;
 mod household_settings;
 mod meal_plan;
 mod nutrition_target;
 mod recipe;
+mod revision;
 mod seed;
 mod shopping;
 mod stock;
@@ -13,7 +14,7 @@ mod stock_effects;
 mod weight;
 
 pub use catalogue::CatalogueService;
-pub use diary::{DayTotals, DiaryDay, DiaryEntry, DiaryService};
+pub use consumption::{ConsumptionDay, ConsumptionEntry, ConsumptionService, DayTotals};
 pub use household::HouseholdService;
 pub use household_settings::HouseholdSettingsService;
 pub use meal_plan::{

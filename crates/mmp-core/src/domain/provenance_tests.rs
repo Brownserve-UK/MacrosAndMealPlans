@@ -1,4 +1,5 @@
 use super::*;
+use std::str::FromStr;
 
 #[test]
 fn a_clean_seeded_record_accepts_refresh() {

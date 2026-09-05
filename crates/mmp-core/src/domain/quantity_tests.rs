@@ -1,5 +1,6 @@
 use super::*;
 use std::cmp::Ordering;
+use std::str::FromStr;
 
 fn q(amount: i64, scale: u32, unit: Unit) -> Quantity {
     Quantity::new(Decimal::new(amount, scale), unit)

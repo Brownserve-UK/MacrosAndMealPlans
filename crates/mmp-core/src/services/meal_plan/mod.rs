@@ -4,15 +4,14 @@ use std::sync::Arc;
 use time::{Date, Duration};
 
 use crate::domain::{
-    AssumptionRules, ConsumptionRecord, HouseholdMemberId, MEAL_PLAN_COMPONENT, MEAL_PLAN_ENTRY,
-    MealItemRef, MealPlanComponentId, MealPlanEntry, MealPlanEntryId, NewMealPlanComponent,
-    RecipeVisibility, Revision, UserId, require_editable,
+    AssumptionRules, ConsumptionRecord, HouseholdMemberId, MEAL_PLAN_ENTRY, MealItemRef,
+    MealPlanEntry, MealPlanEntryId, NewMealPlanComponent, RecipeVisibility, UserId,
 };
 use crate::error::{CoreError, Result, ValidationErrors};
 use crate::ports::{
     Clock, ConsumptionRecordRepository, HouseholdMemberRepository, HouseholdSettingsRepository,
     IngredientRepository, MealPlanRepository, NutritionTargetRepository, ProductRepository,
-    RecipeRepository, UpdateOutcome,
+    RecipeRepository,
 };
 
 mod catalogue;
@@ -171,66 +170,6 @@ fn ensure_due(clock: &dyn Clock, planned_on: Date) -> Result<()> {
         return Err(CoreError::conflict("This meal is not due yet."));
     }
     Ok(())
-}
-
-fn require_revision(id: MealPlanEntryId, expected: Revision, actual: Revision) -> Result<()> {
-    if expected == actual {
-        Ok(())
-    } else {
-        Err(CoreError::RevisionMismatch {
-            resource: MEAL_PLAN_ENTRY,
-            id: id.to_string(),
-            expected,
-            actual,
-        })
-    }
-}
-
-fn require_component_revision(
-    id: MealPlanComponentId,
-    expected: Revision,
-    actual: Revision,
-) -> Result<()> {
-    if expected == actual {
-        Ok(())
-    } else {
-        Err(CoreError::RevisionMismatch {
-            resource: MEAL_PLAN_COMPONENT,
-            id: id.to_string(),
-            expected,
-            actual,
-        })
-    }
-}
-
-fn commit_component_outcome(
-    outcome: UpdateOutcome,
-    id: MealPlanComponentId,
-    expected: Revision,
-) -> Result<()> {
-    match outcome {
-        UpdateOutcome::Updated => Ok(()),
-        UpdateOutcome::RevisionMismatch { actual } => Err(CoreError::RevisionMismatch {
-            resource: MEAL_PLAN_COMPONENT,
-            id: id.to_string(),
-            expected,
-            actual,
-        }),
-        UpdateOutcome::NotFound => Err(CoreError::not_found(MEAL_PLAN_COMPONENT, id)),
-    }
-}
-
-fn commit_outcome(outcome: UpdateOutcome, id: MealPlanEntryId, expected: Revision) -> Result<()> {
-    match outcome {
-        UpdateOutcome::Updated => Ok(()),
-        UpdateOutcome::RevisionMismatch { actual } => Err(CoreError::RevisionMismatch {
-            resource: MEAL_PLAN_ENTRY,
-            id: id.to_string(),
-            expected,
-            actual,
-        }),
-        UpdateOutcome::NotFound => Err(CoreError::not_found(MEAL_PLAN_ENTRY, id)),
-    }
 }
 
 #[cfg(test)]

@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use time::{Date, Duration};
 
+use super::revision::commit_outcome;
 use crate::domain::{
     Assignment, Availability, Certainty, DemandClaim, DemandSubject, ExceptionState, IngredientId,
     NewPurchase, NewShoppingCadence, NewStockEvent, NewStockItem, OpportunityException, ProductId,
@@ -401,16 +402,9 @@ impl ShoppingService {
         purchase.updated_at = self.clock.now();
         purchase.revision = expected.next();
 
-        match self.purchases.update(&purchase, expected, None).await? {
-            UpdateOutcome::Updated => Ok(purchase),
-            UpdateOutcome::NotFound => Err(CoreError::not_found(PURCHASE, id.to_string())),
-            UpdateOutcome::RevisionMismatch { actual } => Err(CoreError::RevisionMismatch {
-                resource: PURCHASE,
-                id: id.to_string(),
-                expected,
-                actual,
-            }),
-        }
+        let outcome = self.purchases.update(&purchase, expected, None).await?;
+        commit_outcome(PURCHASE, id, expected, outcome)?;
+        Ok(purchase)
     }
 
     pub async fn finish_shop(&self, date: Date, actor: UserId) -> Result<FinishedShop> {
