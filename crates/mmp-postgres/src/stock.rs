@@ -288,12 +288,19 @@ pub(crate) async fn apply_stock_write(
                     .execute(&mut *conn)
                     .await
                     .map_err(|e| map_db_error(e, "releasing a stock effect"))?;
+                    let restored = effect
+                        .exact_delta
+                        .or(effect.estimated_delta)
+                        .unwrap_or(Decimal::ZERO);
                     insert_stock_event(
                         conn,
                         Uuid::now_v7(),
                         effect.stock_item_id,
                         StockEventKind::Released,
-                        None,
+                        Some(mmp_core::domain::Quantity::new(
+                            -restored,
+                            effect.applied_unit,
+                        )),
                         &source,
                         Some(effect.apply_event_id.as_uuid()),
                         release.subject_member_id,

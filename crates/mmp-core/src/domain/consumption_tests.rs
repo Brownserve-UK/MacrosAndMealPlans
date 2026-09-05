@@ -430,3 +430,56 @@ fn a_product_component_accepts_any_amount() {
     );
     assert!(errors.is_empty());
 }
+
+fn new_record(id: Option<ConsumptionRecordId>) -> NewConsumptionRecord {
+    NewConsumptionRecord {
+        id,
+        member_id: HouseholdMemberId::new(),
+        item: MealItemRef::product(ProductId::new()),
+        recorded_by: Some(UserId::new()),
+        meal_plan_entry_id: None,
+        meal_plan_component_id: None,
+        slot: MealSlot::Lunch,
+        amount: ConsumedAmount::Measure(Quantity::new(Decimal::from(150), Unit::Gram)),
+        consumed_on: time::macros::date!(2026 - 09 - 04),
+        consumed_at: None,
+    }
+}
+
+#[test]
+fn a_new_record_starts_at_the_initial_revision_and_is_stamped_once() {
+    let now = OffsetDateTime::now_utc();
+
+    let record = ConsumptionRecord::create(
+        new_record(None),
+        NutritionFacts::default(),
+        NutritionQuality::Known,
+        now,
+    );
+
+    assert_eq!(record.revision, Revision::INITIAL);
+    assert_eq!(record.created_at, now);
+    assert_eq!(record.updated_at, now);
+}
+
+#[test]
+fn a_record_takes_the_id_it_was_given_and_otherwise_makes_one() {
+    let now = OffsetDateTime::now_utc();
+    let chosen = ConsumptionRecordId::new();
+
+    let given = ConsumptionRecord::create(
+        new_record(Some(chosen)),
+        NutritionFacts::default(),
+        NutritionQuality::Known,
+        now,
+    );
+    let generated = ConsumptionRecord::create(
+        new_record(None),
+        NutritionFacts::default(),
+        NutritionQuality::Known,
+        now,
+    );
+
+    assert_eq!(given.id, chosen);
+    assert_ne!(generated.id, chosen);
+}

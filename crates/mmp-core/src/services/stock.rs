@@ -10,7 +10,7 @@ use crate::domain::{
     DemandGap, DemandSubject, HouseholdMemberId, IngredientAvailability, IngredientId, MealItemRef,
     MissingStock, NewStockEvent, NewStockItem, ProductAvailability, ProductId, Quantity, Recipe,
     RecipeId, RecipeRequirement, Revision, StockEvent, StockEventKind, StockItem, StockItemId,
-    StockItemPatch, UserId, apply_take, plan_deduction,
+    StockItemPatch, StockLevel, UserId, apply_take, plan_deduction,
 };
 use crate::error::{CoreError, Result};
 use crate::ports::{
@@ -148,6 +148,7 @@ impl StockService {
         }
 
         let previous_mode = current.tracking_mode();
+        let previous_level = current.level;
         if let Some(level) = patch.level {
             current.level = level;
         }
@@ -168,7 +169,7 @@ impl StockService {
 
         let event = NewStockEvent {
             kind,
-            quantity_delta: current.level.conservative_quantity(),
+            quantity_delta: level_delta(previous_level, current.level),
             actor_user_id: Some(actor),
             subject_member_id: subject,
             source: None,
@@ -888,6 +889,21 @@ fn resolve_availability(
 
 fn normalise(value: Option<String>) -> Option<String> {
     value.map(|v| v.trim().to_owned()).filter(|v| !v.is_empty())
+}
+
+fn level_delta(before: StockLevel, after: StockLevel) -> Option<Quantity> {
+    match (
+        before.conservative_quantity(),
+        after.conservative_quantity(),
+    ) {
+        (Some(before), Some(after)) => {
+            let before = before.convert_to(after.unit).ok()?;
+            Some(Quantity::new(after.amount - before.amount, after.unit))
+        }
+        (None, Some(after)) => Some(after),
+        (Some(before), None) => Some(Quantity::new(-before.amount, before.unit)),
+        (None, None) => None,
+    }
 }
 
 fn require_revision(id: StockItemId, expected: Revision, actual: Revision) -> Result<()> {

@@ -1288,3 +1288,161 @@ async fn with_nobody_having_said_the_household_setting_still_decides() {
         .unwrap();
     assert_eq!(result.products[0].availability, Availability::Absent);
 }
+
+#[tokio::test]
+async fn a_correction_records_how_much_moved_not_the_level_it_landed_on() {
+    let h = harness();
+    let p = product();
+    h.products.seed(p.clone());
+    let created = h
+        .service
+        .create(
+            new_item(
+                p.id,
+                StockLevel::Exact {
+                    quantity: grams(400),
+                },
+            ),
+            h.actor_id,
+            Some(h.member_id),
+        )
+        .await
+        .unwrap();
+
+    let patch = crate::domain::StockItemPatch {
+        level: Some(StockLevel::Exact {
+            quantity: grams(150),
+        }),
+        ..Default::default()
+    };
+    h.service
+        .update(
+            created.id,
+            created.revision,
+            patch,
+            h.actor_id,
+            Some(h.member_id),
+        )
+        .await
+        .unwrap();
+
+    let events = h.service.events(created.id).await.unwrap();
+    let correction = events
+        .iter()
+        .find(|event| event.kind == StockEventKind::Corrected)
+        .expect("correcting the level writes a corrected event");
+    assert_eq!(correction.quantity_delta, Some(grams(-250)));
+}
+
+#[tokio::test]
+async fn correcting_a_level_upwards_records_a_positive_movement() {
+    let h = harness();
+    let p = product();
+    h.products.seed(p.clone());
+    let created = h
+        .service
+        .create(
+            new_item(
+                p.id,
+                StockLevel::Exact {
+                    quantity: grams(100),
+                },
+            ),
+            h.actor_id,
+            Some(h.member_id),
+        )
+        .await
+        .unwrap();
+
+    let patch = crate::domain::StockItemPatch {
+        level: Some(StockLevel::Exact {
+            quantity: grams(250),
+        }),
+        ..Default::default()
+    };
+    h.service
+        .update(
+            created.id,
+            created.revision,
+            patch,
+            h.actor_id,
+            Some(h.member_id),
+        )
+        .await
+        .unwrap();
+
+    let events = h.service.events(created.id).await.unwrap();
+    let correction = events
+        .iter()
+        .find(|event| event.kind == StockEventKind::Corrected)
+        .expect("correcting the level writes a corrected event");
+    assert_eq!(correction.quantity_delta, Some(grams(150)));
+}
+
+#[tokio::test]
+async fn adding_an_item_records_the_amount_that_arrived() {
+    let h = harness();
+    let p = product();
+    h.products.seed(p.clone());
+    let created = h
+        .service
+        .create(
+            new_item(
+                p.id,
+                StockLevel::Exact {
+                    quantity: grams(400),
+                },
+            ),
+            h.actor_id,
+            Some(h.member_id),
+        )
+        .await
+        .unwrap();
+
+    let events = h.service.events(created.id).await.unwrap();
+    assert_eq!(events[0].kind, StockEventKind::Added);
+    assert_eq!(events[0].quantity_delta, Some(grams(400)));
+}
+
+#[tokio::test]
+async fn turning_tracking_off_records_the_stock_leaving_the_ledger() {
+    let h = harness();
+    let p = product();
+    h.products.seed(p.clone());
+    let created = h
+        .service
+        .create(
+            new_item(
+                p.id,
+                StockLevel::Exact {
+                    quantity: grams(300),
+                },
+            ),
+            h.actor_id,
+            Some(h.member_id),
+        )
+        .await
+        .unwrap();
+
+    let patch = crate::domain::StockItemPatch {
+        level: Some(StockLevel::NotTracked),
+        ..Default::default()
+    };
+    h.service
+        .update(
+            created.id,
+            created.revision,
+            patch,
+            h.actor_id,
+            Some(h.member_id),
+        )
+        .await
+        .unwrap();
+
+    let events = h.service.events(created.id).await.unwrap();
+    let changed = events
+        .iter()
+        .find(|event| event.kind == StockEventKind::ModeChanged)
+        .expect("changing the tracking mode writes a mode_changed event");
+    assert_eq!(changed.quantity_delta, Some(grams(-300)));
+}

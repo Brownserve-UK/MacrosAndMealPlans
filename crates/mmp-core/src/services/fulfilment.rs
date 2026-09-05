@@ -147,3 +147,7 @@ fn scale_amount(amount: &ConsumedAmount, scale: Decimal) -> ConsumedAmount {
         ConsumedAmount::Packs(value) => ConsumedAmount::Packs(value * scale),
     }
 }
+
+#[cfg(test)]
+#[path = "fulfilment_tests.rs"]
+mod tests;

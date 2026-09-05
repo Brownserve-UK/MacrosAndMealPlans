@@ -271,6 +271,33 @@ pub struct ConsumptionRecord {
     pub updated_at: OffsetDateTime,
 }
 
+impl ConsumptionRecord {
+    pub fn create(
+        input: NewConsumptionRecord,
+        nutrition: NutritionFacts,
+        quality: NutritionQuality,
+        now: OffsetDateTime,
+    ) -> Self {
+        Self {
+            id: input.id.unwrap_or_default(),
+            member_id: input.member_id,
+            item: input.item,
+            recorded_by: input.recorded_by,
+            meal_plan_entry_id: input.meal_plan_entry_id,
+            meal_plan_component_id: input.meal_plan_component_id,
+            slot: input.slot,
+            amount: input.amount,
+            consumed_on: input.consumed_on,
+            consumed_at: input.consumed_at,
+            nutrition,
+            quality,
+            revision: Revision::INITIAL,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct NewConsumptionRecord {
     pub id: Option<ConsumptionRecordId>,

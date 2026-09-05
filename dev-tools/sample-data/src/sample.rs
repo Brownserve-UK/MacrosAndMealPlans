@@ -10,11 +10,11 @@ use mmp_core::domain::{
     MealSlot, NewConsumptionRecord, NewHouseholdMember, NewMealGuestAllocation, NewMealGuestGroup,
     NewMealParticipant, NewMealParticipantAllocation, NewMealPlanComponent, NewMealPlanEntry,
     NewNutritionTarget, NewProduct, NewPurchase, NewRecipe, NewRecipeComponent,
-    NewWeightGoal, NewWeightRecord,
-    NewRecipeInstruction, NewShoppingCadence, NewStockItem, NewUser, NutritionFacts,
-    NutritionGoals, OutcomeActor, Patch, ProductId, Provenance, Quantity, RecipeId, RecipePatch,
-    RecipeRequirement, Role, ShoppingSection, SourceDate, SourceDateKind, StockLevel,
-    StorageLocation, Unit, UsabilityDeadline, User, UserId, WeightObjective, WeightSource,
+    NewRecipeInstruction, NewShoppingCadence, NewStockItem, NewUser, NewWeightGoal,
+    NewWeightRecord, NutritionFacts, NutritionGoals, OutcomeActor, Patch, ProductId, Provenance,
+    Quantity, RecipeId, RecipePatch, RecipeRequirement, Role, ShoppingSection, SourceDate,
+    SourceDateKind, StockLevel, StorageLocation, Unit, UsabilityDeadline, User, UserId,
+    WeightObjective, WeightSource,
 };
 use mmp_server::state::AppState;
 use rust_decimal::Decimal;
@@ -613,6 +613,7 @@ impl Loader<'_> {
     async fn load_full(&mut self) -> anyhow::Result<()> {
         for week_offset in [-3_i64, -2] {
             let week = self.week_start + Duration::weeks(week_offset);
+            self.load_weekly_shop(week, 7).await?;
             for day_offset in 0..7 {
                 let date = week + Duration::days(day_offset);
                 for slot in MealSlot::ALL {
@@ -622,12 +623,71 @@ impl Loader<'_> {
             }
         }
 
+        self.load_weekly_shop(self.week_start - Duration::weeks(1), 2)
+            .await?;
         self.load_previous_partial_week().await?;
+        let eaten_this_week = (self.today - self.week_start).whole_days() + 1;
+        self.load_weekly_shop(self.week_start, eaten_this_week)
+            .await?;
         self.load_current_partial_week().await?;
         self.load_household_meals().await?;
         self.load_assumed_meals().await?;
         self.load_pooled_ingredient_demand().await?;
         self.load_shopping().await
+    }
+
+    async fn load_weekly_shop(&mut self, week: Date, days: i64) -> anyhow::Result<()> {
+        let per_day = [
+            ("rolled-oats", 65, Unit::Gram, StorageLocation::Ambient),
+            ("chicken-breast", 120, Unit::Gram, StorageLocation::Chilled),
+            ("broccoli", 240, Unit::Gram, StorageLocation::Chilled),
+            (
+                "whole-milk",
+                250,
+                Unit::Millilitre,
+                StorageLocation::Chilled,
+            ),
+        ];
+
+        let specs = per_day.map(|(product_key, amount, unit, storage_location)| {
+            (product_key, quantity(amount * days, unit), storage_location)
+        });
+
+        for (product_key, amount, storage_location) in specs {
+            let note = format!("shopped for the week of {week}");
+            let product = product_id(product_key);
+            let held = self
+                .state
+                .stock
+                .list(&mmp_core::ports::StockQuery {
+                    product_id: Some(product),
+                    ..Default::default()
+                })
+                .await?
+                .items
+                .iter()
+                .any(|item| item.note.as_deref() == Some(note.as_str()));
+            if held {
+                continue;
+            }
+            self.state
+                .stock
+                .create(
+                    NewStockItem {
+                        product_id: product,
+                        level: StockLevel::Exact { quantity: amount },
+                        storage_location,
+                        source_date: None,
+                        usability_deadline: None,
+                        note: Some(note),
+                    },
+                    self.actor.id,
+                    Some(self.member.id),
+                )
+                .await?;
+            self.report.stock_items_created += 1;
+        }
+        Ok(())
     }
 
     async fn load_pooled_ingredient_demand(&mut self) -> anyhow::Result<()> {
@@ -1067,6 +1127,9 @@ impl Loader<'_> {
     ) -> anyhow::Result<()> {
         let entry_id = meal_id(date, slot);
         let view = self.state.meal_plan.get(entry_id).await?;
+        if view.entry.scope != MealPlanScope::Household {
+            return Ok(());
+        }
         if view.entry.has_opted_out(member_id) {
             return Ok(());
         }

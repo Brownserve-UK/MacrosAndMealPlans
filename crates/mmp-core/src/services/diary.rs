@@ -88,23 +88,7 @@ impl DiaryService {
             .resolve_item(input.item, &input.amount, input.recorded_by)
             .await?;
         let now = self.clock.now();
-        let record = ConsumptionRecord {
-            id: input.id.unwrap_or_default(),
-            member_id: input.member_id,
-            item: input.item,
-            recorded_by: input.recorded_by,
-            meal_plan_entry_id: input.meal_plan_entry_id,
-            meal_plan_component_id: input.meal_plan_component_id,
-            slot: input.slot,
-            amount: input.amount,
-            consumed_on: input.consumed_on,
-            consumed_at: input.consumed_at,
-            nutrition: scaled.facts,
-            quality: scaled.quality,
-            revision: Revision::INITIAL,
-            created_at: now,
-            updated_at: now,
-        };
+        let record = ConsumptionRecord::create(input, scaled.facts, scaled.quality, now);
 
         let write = StockWrite {
             deductions: self.deductions_for(&record).await?,

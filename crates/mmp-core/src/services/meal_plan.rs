@@ -12,13 +12,13 @@ use crate::domain::{
     MealOptOut, MealParticipant, MealParticipantAllocation, MealParticipantAllocationId,
     MealParticipantId, MealPlanComponent, MealPlanComponentId, MealPlanComponentSnapshot,
     MealPlanEntry, MealPlanEntryId, MealPlanEntryPatch, MealPlanScope, MealPlanStatus, MealSlot,
-    NUTRIENT_KEYS, NewMealGuestGroup, NewMealParticipant, NewMealPlanComponent, NewMealPlanEntry,
-    NutritionFacts, NutritionGoals, NutritionQuality, OutcomeActor, ParticipantStatus, Portioning,
-    Product, ProductId, Recipe, RecipeId, RecipeRequirement, RecipeVisibility, ReplacementItem,
-    ReviewMealOutcomes, ReviewedMealOutcome, Revision, SetMealParticipants, SlotAttendance, UserId,
-    derive_component_status, derive_participant_status, equal_split, nutrition_for,
-    preparation_for, recipe_nutrition, recipe_nutrition_for, resolve_on, sum_nutrition,
-    validate_components, validate_participants,
+    NUTRIENT_KEYS, NewConsumptionRecord, NewMealGuestGroup, NewMealParticipant,
+    NewMealPlanComponent, NewMealPlanEntry, NutritionFacts, NutritionGoals, NutritionQuality,
+    OutcomeActor, ParticipantStatus, Portioning, Product, ProductId, Recipe, RecipeId,
+    RecipeRequirement, RecipeVisibility, ReplacementItem, ReviewMealOutcomes, ReviewedMealOutcome,
+    Revision, SetMealParticipants, SlotAttendance, UserId, derive_component_status,
+    derive_participant_status, equal_split, nutrition_for, preparation_for, recipe_nutrition,
+    recipe_nutrition_for, resolve_on, sum_nutrition, validate_components, validate_participants,
 };
 use crate::domain::{StockEffectSource, StockOutcome};
 use crate::error::{CoreError, Result, ValidationErrors};
@@ -870,23 +870,23 @@ impl MealPlanService {
             releases: Vec::new(),
         };
         let now = self.clock.now();
-        let record = ConsumptionRecord {
-            id: Default::default(),
-            member_id: subject,
-            item: component_item,
-            recorded_by: Some(input.actor_id),
-            meal_plan_entry_id: Some(entry.id),
-            meal_plan_component_id: Some(component_id),
-            slot: entry.slot,
-            amount: input.amount,
-            consumed_on: input.consumed_on,
-            consumed_at: input.consumed_at,
-            nutrition: actual.nutrition.facts,
-            quality: actual.nutrition.quality,
-            revision: Revision::INITIAL,
-            created_at: now,
-            updated_at: now,
-        };
+        let record = ConsumptionRecord::create(
+            NewConsumptionRecord {
+                id: None,
+                member_id: subject,
+                item: component_item,
+                recorded_by: Some(input.actor_id),
+                meal_plan_entry_id: Some(entry.id),
+                meal_plan_component_id: Some(component_id),
+                slot: entry.slot,
+                amount: input.amount,
+                consumed_on: input.consumed_on,
+                consumed_at: input.consumed_at,
+            },
+            actual.nutrition.facts,
+            actual.nutrition.quality,
+            now,
+        );
 
         set_allocation(
             &mut entry,
@@ -1185,23 +1185,23 @@ impl MealPlanService {
                     Some(subject),
                 ));
             }
-            let record = ConsumptionRecord {
-                id: Default::default(),
-                member_id: subject,
-                item: component.item,
-                recorded_by: Some(input.actor_id),
-                meal_plan_entry_id: Some(entry.id),
-                meal_plan_component_id: Some(component.id),
-                slot: entry.slot,
-                amount,
-                consumed_on: input.consumed_on,
-                consumed_at: input.consumed_at,
-                nutrition: scaled.nutrition.facts,
-                quality: scaled.nutrition.quality,
-                revision: Revision::INITIAL,
-                created_at: now,
-                updated_at: now,
-            };
+            let record = ConsumptionRecord::create(
+                NewConsumptionRecord {
+                    id: None,
+                    member_id: subject,
+                    item: component.item,
+                    recorded_by: Some(input.actor_id),
+                    meal_plan_entry_id: Some(entry.id),
+                    meal_plan_component_id: Some(component.id),
+                    slot: entry.slot,
+                    amount,
+                    consumed_on: input.consumed_on,
+                    consumed_at: input.consumed_at,
+                },
+                scaled.nutrition.facts,
+                scaled.nutrition.quality,
+                now,
+            );
             set_allocation(
                 &mut entry,
                 subject,
@@ -1305,23 +1305,23 @@ impl MealPlanService {
                             Some(reviewed.member_id),
                         ));
                     }
-                    let record = ConsumptionRecord {
-                        id: Default::default(),
-                        member_id: reviewed.member_id,
-                        item: component.item,
-                        recorded_by: Some(input.actor_id),
-                        meal_plan_entry_id: Some(entry.id),
-                        meal_plan_component_id: Some(component.id),
-                        slot: entry.slot,
-                        amount,
-                        consumed_on: input.consumed_on,
-                        consumed_at: input.consumed_at,
-                        nutrition: scaled.nutrition.facts,
-                        quality: scaled.nutrition.quality,
-                        revision: Revision::INITIAL,
-                        created_at: now,
-                        updated_at: now,
-                    };
+                    let record = ConsumptionRecord::create(
+                        NewConsumptionRecord {
+                            id: None,
+                            member_id: reviewed.member_id,
+                            item: component.item,
+                            recorded_by: Some(input.actor_id),
+                            meal_plan_entry_id: Some(entry.id),
+                            meal_plan_component_id: Some(component.id),
+                            slot: entry.slot,
+                            amount,
+                            consumed_on: input.consumed_on,
+                            consumed_at: input.consumed_at,
+                        },
+                        scaled.nutrition.facts,
+                        scaled.nutrition.quality,
+                        now,
+                    );
                     set_allocation(
                         &mut entry,
                         reviewed.member_id,
@@ -1355,23 +1355,23 @@ impl MealPlanService {
                     );
                     return Err(errors.into());
                 }
-                let record = ConsumptionRecord {
-                    id: Default::default(),
-                    member_id: reviewed.member_id,
-                    item: replacement.item,
-                    recorded_by: Some(input.actor_id),
-                    meal_plan_entry_id: Some(entry.id),
-                    meal_plan_component_id: None,
-                    slot: entry.slot,
-                    amount: replacement.amount,
-                    consumed_on: input.consumed_on,
-                    consumed_at: input.consumed_at,
-                    nutrition: scaled.nutrition.facts,
-                    quality: scaled.nutrition.quality,
-                    revision: Revision::INITIAL,
-                    created_at: now,
-                    updated_at: now,
-                };
+                let record = ConsumptionRecord::create(
+                    NewConsumptionRecord {
+                        id: None,
+                        member_id: reviewed.member_id,
+                        item: replacement.item,
+                        recorded_by: Some(input.actor_id),
+                        meal_plan_entry_id: Some(entry.id),
+                        meal_plan_component_id: None,
+                        slot: entry.slot,
+                        amount: replacement.amount,
+                        consumed_on: input.consumed_on,
+                        consumed_at: input.consumed_at,
+                    },
+                    scaled.nutrition.facts,
+                    scaled.nutrition.quality,
+                    now,
+                );
                 deductions.extend(self.record_deduction_for(&catalogue, &record));
                 records.push(record);
             }

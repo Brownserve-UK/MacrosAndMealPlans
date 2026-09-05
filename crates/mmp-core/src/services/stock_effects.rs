@@ -197,3 +197,7 @@ pub async fn name_outcomes(
         })
         .collect())
 }
+
+#[cfg(test)]
+#[path = "stock_effects_tests.rs"]
+mod tests;

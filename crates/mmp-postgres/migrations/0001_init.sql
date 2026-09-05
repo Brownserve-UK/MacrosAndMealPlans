@@ -1087,10 +1087,12 @@ CREATE TABLE weight_goal (
             OR (objective = 'lose'
                 AND target_weight_kg IS NOT NULL
                 AND target_weight_kg < starting_weight_kg
+                AND planned_rate_kg_per_week IS NOT NULL
                 AND planned_rate_kg_per_week > 0)
             OR (objective = 'gain'
                 AND target_weight_kg IS NOT NULL
                 AND target_weight_kg > starting_weight_kg
+                AND planned_rate_kg_per_week IS NOT NULL
                 AND planned_rate_kg_per_week > 0)
         )
 );
