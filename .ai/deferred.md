@@ -34,6 +34,8 @@ specification or ADRs.
       conversion.
 - [ ] Populate `get_planner_week` values for `can_opt_out`, `can_join`, and `owner_name` when the web
       client has a consumer for them.
+- [ ] `MyPlannerPage` maps `preparation.shortage` into its meal shape but never renders it, so only
+      the household planner warns that fewer servings were cooked than people are due.
 - [ ] Align the `ensure_slot_free` error with the database-constraint fallback error.
 - [ ] Seed an opted-out member with a genuinely free personal slot for manual testing.
 - [ ] Validate `meal_guest_allocation.allocated_unit` and `confirmed_unit` with `unit_code`, or
@@ -49,7 +51,7 @@ specification or ADRs.
 
 ## Stock
 
-- [ ] `MealPlanService::ensure_prepared` silently records a preparation when a recipe component is
+- [x] `MealPlanService::ensure_prepared` silently records a preparation when a recipe component is
       confirmed and no batch exists, so preparation never has to be recorded explicitly. Remove the
       fallback once it is.
 
@@ -63,6 +65,9 @@ specification or ADRs.
 - [ ] Surface `DemandGapDto` warnings in the stock UI.
 - [ ] Avoid `get_many` plus `list_by_ingredient` on every stock overview request.
 - [ ] Add server-side stock search when the list needs pagination.
+- [ ] `PgPreparedBatchRepository` has no database tests, so its SQL is only exercised by hand.
+- [ ] Putting leftovers away moves only the first stock item belonging to a cook, so a batch stored
+      in more than one place leaves the rest behind.
 - [ ] Remove the late pooled-stock sample-data workaround once the pooled scenario can be seeded
       before historical consumption.
 
@@ -91,3 +96,6 @@ specification or ADRs.
 - [ ] Reformat the oversized Instructions line in `RecipeFormPage.tsx` and decide whether formatting
       should be enforced.
 - [ ] Add a committed Playwright end-to-end suite covering real queries, authentication, and routing.
+- [ ] Settle what kind-chip colour is for. `DESIGN_STANDARDS.md` reserves green for the primary
+      action and amber for food needing attention, yet also assigns chip colour by kind, so the
+      Recipe chip currently shares green with the primary button.

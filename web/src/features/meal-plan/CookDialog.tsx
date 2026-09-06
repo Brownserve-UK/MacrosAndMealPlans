@@ -12,94 +12,81 @@ import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
 import { useState } from 'react';
 import { ApiError, type PlannerMeal } from '../../api/client';
-import { useRecordPreparation } from '../../api/queries';
+import { useRecipe, useRecordPreparation } from '../../api/queries';
 import { FormDialog } from '../../components/FormDialog';
+import { ConceptIcon, type Concept } from '../../components/ConceptIcon';
+import { displayUnit } from '../../components/UnitSelect';
 
-type Place = 'chilled' | 'frozen';
+type Place = 'serving' | 'fridge' | 'freezer';
 
-const PLACES: { value: Place; label: string; hint: string }[] = [
-  { value: 'chilled', label: 'Fridge', hint: 'Eat within a few days' },
-  { value: 'frozen', label: 'Freezer', hint: 'Keeps for months' },
+const PLACES: { value: Place; label: string; hint: string; concept: Concept; location: 'ambient' | 'chilled' | 'frozen' }[] = [
+  { value: 'serving', label: 'Serving now', hint: 'Stays out for the meal', concept: 'dish', location: 'ambient' },
+  { value: 'fridge', label: 'Fridge', hint: 'Eat within a few days', concept: 'fridge', location: 'chilled' },
+  { value: 'freezer', label: 'Freezer', hint: 'Keeps for months', concept: 'freezer', location: 'frozen' },
 ];
 
-function Stepper({
-  label,
-  value,
-  onChange,
-  min = 0,
-  max,
-}: {
-  label: string;
-  value: number;
-  onChange: (next: number) => void;
-  min?: number;
-  max?: number;
-}) {
+export function scaledAmount(amount: PlannerMeal['foods'][number]['amount'], factor: number): string {
+  const value = Math.round(amount.value * factor * 10) / 10;
+  if (amount.kind === 'measure') return `${value} ${displayUnit(amount.unit)}`;
+  if (amount.kind === 'packs') return value === 1 ? '1 pack' : `${value} packs`;
+  return value === 1 ? '1 serving' : `${value} servings`;
+}
+
+function ComingOutOfStock({ recipeId, made }: { recipeId: string; made: number }) {
+  const recipe = useRecipe(recipeId);
+  const yields = recipe.data?.servings ?? 0;
+  const lines = recipe.data?.components ?? [];
+  if (!recipe.data || yields <= 0 || lines.length === 0) return null;
+
   return (
-    <Stack direction="row" spacing={0.5} sx={{ alignItems: 'center' }}>
-      <IconButton size="small" aria-label={`Fewer ${label}`} disabled={value <= min} onClick={() => onChange(value - 1)}>
-        <RemoveIcon fontSize="small" />
-      </IconButton>
-      <Typography className="numeral" sx={{ minWidth: 22, textAlign: 'center', fontWeight: 600 }}>{value}</Typography>
-      <IconButton size="small" aria-label={`More ${label}`} disabled={max != null && value >= max} onClick={() => onChange(value + 1)}>
-        <AddIcon fontSize="small" />
-      </IconButton>
-    </Stack>
+    <Box sx={{ borderTop: '1px solid', borderColor: 'divider', pt: 2 }}>
+      <Typography
+        variant="caption"
+        sx={{ fontWeight: 600, letterSpacing: '0.04em', textTransform: 'uppercase', color: 'text.secondary' }}
+      >
+        Coming out of stock
+      </Typography>
+      <Stack spacing={0.75} sx={{ mt: 1 }}>
+        {lines.map((line) => (
+          <Stack key={line.id} direction="row" spacing={2} sx={{ justifyContent: 'space-between' }}>
+            <Typography variant="body2">{line.name}</Typography>
+            <Typography variant="body2" color="text.secondary" className="numeral">
+              {scaledAmount(line.amount, made / yields)}
+            </Typography>
+          </Stack>
+        ))}
+      </Stack>
+    </Box>
   );
 }
 
-export function CookDialog({
-  meal,
-  onClose,
-}: {
-  meal: PlannerMeal;
-  onClose: () => void;
-}) {
+export function CookDialog({ meal, onClose }: { meal: PlannerMeal; onClose: () => void }) {
   const record = useRecordPreparation();
   const food = meal.foods.find((candidate) => candidate.item_kind === 'recipe' && candidate.needs_cooking);
   const recipe = food?.item_kind === 'recipe' ? food : null;
   const planned = Math.max(1, Math.round(recipe?.amount.value ?? 1));
-  const eating = meal.people.length + meal.guest_groups.reduce((sum, group) => sum + group.count, 0);
 
   const [made, setMade] = useState(planned);
-  const [fridge, setFridge] = useState(0);
+  const [place, setPlace] = useState<Place>('serving');
   const [useBy, setUseBy] = useState('');
   const [error, setError] = useState<string | null>(null);
 
   if (!recipe) return null;
 
-  const keeping = Math.max(0, made - eating);
-  const inFridge = Math.min(fridge, keeping);
-  const inFreezer = keeping - inFridge;
-  const forNow = made - keeping;
+  const chosen = PLACES.find((candidate) => candidate.value === place)!;
 
   async function cook() {
     if (!recipe) return;
     setError(null);
-    const wanted: { place: Place; servings: number; useBy: string }[] = [
-      { place: 'chilled', servings: forNow, useBy: '' },
-      { place: 'chilled', servings: inFridge, useBy },
-      { place: 'frozen', servings: inFreezer, useBy },
-    ];
-    const merged = new Map<string, { place: Place; servings: number; useBy: string }>();
-    for (const entry of wanted) {
-      if (entry.servings <= 0) continue;
-      const key = `${entry.place}|${entry.useBy}`;
-      const existing = merged.get(key);
-      if (existing) existing.servings += entry.servings;
-      else merged.set(key, { ...entry });
-    }
-    const placements = [...merged.values()].map((entry) => ({
-      storage_location: entry.place,
-      servings: entry.servings,
-      ...(entry.useBy ? { usability_deadline: { date: entry.useBy } } : {}),
-    }));
-
     try {
       await record.mutateAsync({
         recipe_id: recipe.recipe_id,
         servings_produced: made,
-        placements,
+        placements: [{
+          storage_location: chosen.location,
+          servings: made,
+          ...(useBy && place !== 'serving' ? { usability_deadline: { date: useBy } } : {}),
+        }],
         meal_plan_entry_id: meal.id,
         meal_plan_component_id: recipe.id,
       });
@@ -123,51 +110,74 @@ export function CookDialog({
 
           <Stack direction="row" spacing={2} sx={{ alignItems: 'center', bgcolor: 'action.hover', borderRadius: 2.5, px: 1.75, py: 1.5 }}>
             <Box sx={{ flex: 1, minWidth: 0 }}>
-              <Typography variant="subtitle2">How many did it make?</Typography>
-              <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
-                {made === planned ? `You planned ${planned}` : `You planned ${planned}`}
+              <Typography variant="subtitle2">How much did you make?</Typography>
+              <Typography variant="caption" color="text.secondary" className="numeral" sx={{ display: 'block' }}>
+                {`You planned ${planned}`}
               </Typography>
             </Box>
-            <Stepper label="made" value={made} onChange={setMade} min={1} />
+            <Stack direction="row" spacing={0.5} sx={{ alignItems: 'center' }}>
+              <IconButton size="small" aria-label="Fewer made" disabled={made <= 1} onClick={() => setMade(made - 1)}>
+                <RemoveIcon fontSize="small" />
+              </IconButton>
+              <Typography className="numeral" sx={{ minWidth: 24, textAlign: 'center', fontWeight: 600 }}>{made}</Typography>
+              <IconButton size="small" aria-label="More made" onClick={() => setMade(made + 1)}>
+                <AddIcon fontSize="small" />
+              </IconButton>
+            </Stack>
           </Stack>
 
-          {keeping > 0 ? (
-            <Box>
-              <Typography variant="h3" sx={{ mb: 1 }}>
-                {keeping === 1 ? 'Keeping 1 portion for later' : `Keeping ${keeping} portions for later`}
-              </Typography>
-              <Stack spacing={1}>
-                {PLACES.map((place) => {
-                  const count = place.value === 'chilled' ? inFridge : inFreezer;
-                  return (
-                    <Stack
-                      key={place.value}
-                      direction="row"
-                      spacing={2}
+          <Box>
+            <Typography variant="h3" sx={{ mb: 1 }}>Where is it going?</Typography>
+            <Stack spacing={1}>
+              {PLACES.map((candidate) => {
+                const active = candidate.value === place;
+                return (
+                  <Stack
+                    key={candidate.value}
+                    component="button"
+                    type="button"
+                    aria-pressed={active}
+                    onClick={() => setPlace(candidate.value)}
+                    direction="row"
+                    spacing={2}
+                    sx={{
+                      alignItems: 'center',
+                      textAlign: 'left',
+                      width: '100%',
+                      cursor: 'pointer',
+                      font: 'inherit',
+                      border: '1px solid',
+                      borderColor: active ? 'primary.main' : 'divider',
+                      bgcolor: active ? 'action.selected' : 'transparent',
+                      color: 'text.primary',
+                      borderRadius: 2.5,
+                      px: 1.75,
+                      py: 1.25,
+                    }}
+                  >
+                    <Box
                       sx={{
-                        alignItems: 'center',
-                        border: '1px solid',
-                        borderColor: count > 0 ? 'primary.main' : 'divider',
-                        bgcolor: count > 0 ? 'action.selected' : 'transparent',
-                        borderRadius: 2.5,
-                        px: 1.75,
-                        py: 1.25,
+                        width: 32,
+                        height: 32,
+                        borderRadius: '10px',
+                        display: 'grid',
+                        placeItems: 'center',
+                        flexShrink: 0,
+                        bgcolor: active ? 'action.selected' : 'background.default',
+                        color: active ? 'primary.main' : 'text.disabled',
                       }}
                     >
-                      <Box sx={{ flex: 1, minWidth: 0 }}>
-                        <Typography variant="subtitle2">{place.label}</Typography>
-                        <Typography variant="caption" color="text.secondary">{place.hint}</Typography>
-                      </Box>
-                      <Stepper
-                        label={place.label}
-                        value={count}
-                        max={keeping}
-                        onChange={(next) => setFridge(place.value === 'chilled' ? next : keeping - next)}
-                      />
-                    </Stack>
-                  );
-                })}
-              </Stack>
+                      <ConceptIcon concept={candidate.concept} />
+                    </Box>
+                    <Box sx={{ flex: 1, minWidth: 0 }}>
+                      <Typography variant="subtitle2">{candidate.label}</Typography>
+                      <Typography variant="caption" color="text.secondary">{candidate.hint}</Typography>
+                    </Box>
+                  </Stack>
+                );
+              })}
+            </Stack>
+            {place !== 'serving' ? (
               <TextField
                 label="Use by"
                 type="date"
@@ -177,12 +187,10 @@ export function CookDialog({
                 helperText="Optional"
                 sx={{ mt: 1.5, width: { xs: '100%', sm: 200 } }}
               />
-            </Box>
-          ) : (
-            <Typography variant="body2" color="text.secondary">
-              Nothing left over. It all gets eaten now.
-            </Typography>
-          )}
+            ) : null}
+          </Box>
+
+          <ComingOutOfStock recipeId={recipe.recipe_id} made={made} />
         </Stack>
       </DialogContent>
       <DialogActions>

@@ -5,10 +5,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PlannerMeal } from '../../api/client';
 import { MealOutcomeDialog } from './MealOutcomeDialog';
 
-const mocks = vi.hoisted(() => ({ review: vi.fn() }));
+const mocks = vi.hoisted(() => ({ review: vi.fn(), moveStock: vi.fn(), stockItems: [] as unknown[] }));
 
 vi.mock('../../api/queries', () => ({
   useReviewMealOutcomes: () => ({ mutateAsync: mocks.review, isPending: false }),
+  useStock: () => ({ data: { items: mocks.stockItems } }),
+  useUpdateStockItem: () => ({ mutateAsync: mocks.moveStock, isPending: false }),
 }));
 
 function mealWith(overrides: Partial<PlannerMeal>): PlannerMeal {
@@ -34,6 +36,24 @@ function mealWith(overrides: Partial<PlannerMeal>): PlannerMeal {
   } as PlannerMeal;
 }
 
+function cookedMeal(servingsProduced: number): PlannerMeal {
+  return mealWith({
+    foods: [{
+      id: 'c1',
+      item_kind: 'recipe',
+      recipe_id: 'r1',
+      item_name: 'Curry',
+      amount: { kind: 'servings', value: 4 },
+      cooked: { prepared_batch_id: 'b1', prepared_at: '2026-08-25T17:00:00Z', servings_produced: servingsProduced },
+      shortage: false,
+    }],
+    people: [
+      { member_id: 'm1', display_name: 'Alex', status: 'planned', can_record: true, allocations: [{ component_id: 'c1', allocated: { kind: 'servings', value: '1' }, status: 'planned' }] },
+      { member_id: 'm2', display_name: 'Morgan', status: 'planned', can_record: true, allocations: [{ component_id: 'c1', allocated: { kind: 'servings', value: '1' }, status: 'planned' }] },
+    ],
+  } as Partial<PlannerMeal>);
+}
+
 function renderDialog(meal: PlannerMeal) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   const onClose = vi.fn();
@@ -46,22 +66,29 @@ function renderDialog(meal: PlannerMeal) {
 }
 
 describe('MealOutcomeDialog', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.stockItems = [];
+  });
 
-  it('only offers the still-pending participants and defaults them to as planned', async () => {
+  it('only offers the still-pending participants and records what they ate', async () => {
     mocks.review.mockResolvedValue({});
     renderDialog(mealWith({}));
 
     expect(screen.getByText('Alex')).toBeInTheDocument();
     expect(screen.queryByText('Morgan')).not.toBeInTheDocument();
 
-    await userEvent.setup().click(screen.getByRole('button', { name: 'Confirm meal' }));
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Record meal' }));
     expect(mocks.review).toHaveBeenCalledWith(
       expect.objectContaining({
         id: 'meal-1',
         revision: 4,
         body: expect.objectContaining({
-          members: [{ member_id: 'm1', result: 'as_planned' }],
+          members: [{
+            member_id: 'm1',
+            result: 'changed',
+            components: [{ component_id: 'c1', amount: { kind: 'measure', unit: 'g', value: 300 } }],
+          }],
         }),
       }),
     );
@@ -72,9 +99,10 @@ describe('MealOutcomeDialog', () => {
     renderDialog(mealWith({}));
     const user = userEvent.setup();
 
-    await user.click(screen.getByRole('combobox', { name: 'What happened?' }));
-    await user.click(screen.getByRole('option', { name: 'Did not eat' }));
-    await user.click(screen.getByRole('button', { name: 'Confirm meal' }));
+    const field = screen.getByRole('spinbutton', { name: 'Chilli' });
+    await user.clear(field);
+    await user.type(field, '0');
+    await user.click(screen.getByRole('button', { name: 'Record meal' }));
 
     expect(mocks.review).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -85,6 +113,54 @@ describe('MealOutcomeDialog', () => {
     );
   });
 
+  it('shares out only what was actually cooked', async () => {
+    renderDialog(cookedMeal(1));
+
+    expect(screen.getByText('1 serving of Curry made')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'More for Alex' })).toBeDisabled();
+    expect(screen.getByText('Did not eat')).toBeInTheDocument();
+    expect(screen.getByText('Nothing left over')).toBeInTheDocument();
+  });
+
+  it('reports what is left when more was cooked than eaten', () => {
+    renderDialog(cookedMeal(4));
+    expect(screen.getByText('2 left over')).toBeInTheDocument();
+    expect(screen.getByText('Put it away')).toBeInTheDocument();
+  });
+
+  it('moves the leftover portion where you put it', async () => {
+    mocks.review.mockResolvedValue({});
+    mocks.moveStock.mockResolvedValue({ id: 's1' });
+    mocks.stockItems = [
+      { id: 's1', prepared_batch_id: 'b1', revision: 2, storage_location: 'chilled' },
+    ];
+    renderDialog(cookedMeal(4));
+    const user = userEvent.setup();
+
+    await user.click(screen.getByRole('button', { name: 'Freezer' }));
+    await user.click(screen.getByRole('button', { name: 'Record meal' }));
+
+    expect(mocks.moveStock).toHaveBeenCalledWith({
+      id: 's1',
+      revision: 2,
+      body: { storage_location: 'frozen' },
+    });
+  });
+
+  it('leaves the leftover alone when it is already where you want it', async () => {
+    mocks.review.mockResolvedValue({});
+    mocks.stockItems = [
+      { id: 's1', prepared_batch_id: 'b1', revision: 2, storage_location: 'chilled' },
+    ];
+    renderDialog(cookedMeal(4));
+    const user = userEvent.setup();
+
+    await user.click(screen.getByRole('button', { name: 'Fridge' }));
+    await user.click(screen.getByRole('button', { name: 'Record meal' }));
+
+    expect(mocks.moveStock).not.toHaveBeenCalled();
+  });
+
   it('shows nothing to record once everyone is resolved', () => {
     renderDialog(mealWith({
       people: [
@@ -92,6 +168,6 @@ describe('MealOutcomeDialog', () => {
       ],
     }));
     expect(screen.getByText(/already been recorded/i)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Confirm meal' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Record meal' })).toBeDisabled();
   });
 });
