@@ -83,8 +83,7 @@ impl PreparedBatchRepository for PgPreparedBatchRepository {
     async fn insert(
         &self,
         batch: &PreparedBatch,
-        portion: &StockItem,
-        event: &NewStockEvent,
+        portions: &[(StockItem, NewStockEvent)],
         stock: &StockWrite,
     ) -> Result<Vec<StockOutcome>> {
         let mut tx = self
@@ -132,7 +131,9 @@ impl PreparedBatchRepository for PgPreparedBatchRepository {
         .await
         .map_err(|e| map_db_error(e, "recording a preparation"))?;
 
-        insert_stock_item(&mut tx, portion, event).await?;
+        for (portion, event) in portions {
+            insert_stock_item(&mut tx, portion, event).await?;
+        }
         let outcomes = apply_stock_write(&mut tx, stock, batch.prepared_at).await?;
 
         tx.commit()

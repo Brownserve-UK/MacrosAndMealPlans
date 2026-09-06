@@ -6,12 +6,12 @@ use crate::domain::{
     Assumption, ConfirmMealPlanComponent, ConfirmMealPlanEntry, ConsumedAmount, ConsumptionRecord,
     ConsumptionRecordId, HouseholdMemberId, MEAL_PLAN_COMPONENT, MEAL_PLAN_ENTRY, MealItemRef,
     MealPlanComponentId, MealPlanComponentSnapshot, MealPlanEntry, MealPlanEntryId, MealPlanStatus,
-    MealSlot, NewConsumptionRecord, OutcomeActor, ParticipantStatus, PreparationSource,
-    PreparedBatch, Quantity, RecipeId, ReviewMealOutcomes, Revision, StockEffectSource,
-    StockOutcome, StorageLocation, Unit, UserId, actual_components_for_member, apply_equal_shares,
-    build_guest_results, component_still_eaten, derive_component_status, find_component,
-    pending_component_ids, replacements_for, require_allocation_planned, require_subject_pending,
-    set_allocation, validate_actual_components,
+    MealSlot, NewConsumptionRecord, OutcomeActor, ParticipantStatus, PortionPlacement,
+    PreparationSource, PreparedBatch, Quantity, RecipeId, ReviewMealOutcomes, Revision,
+    StockEffectSource, StockOutcome, StorageLocation, Unit, UserId, actual_components_for_member,
+    apply_equal_shares, build_guest_results, component_still_eaten, derive_component_status,
+    find_component, pending_component_ids, replacements_for, require_allocation_planned,
+    require_subject_pending, set_allocation, validate_actual_components,
 };
 use crate::error::{CoreError, Result, ValidationErrors};
 use crate::ports::{MealPlanComponentUpdate, SnapshotOp, StockDeduction, StockRelease, StockWrite};
@@ -858,9 +858,7 @@ impl MealPlanService {
                     component_id,
                 },
                 servings_produced: servings,
-                storage_location: StorageLocation::Chilled,
-                usability_deadline: None,
-                note: None,
+                placements: vec![PortionPlacement::new(StorageLocation::Chilled, servings)],
                 prepared_at: None,
                 actor,
             })

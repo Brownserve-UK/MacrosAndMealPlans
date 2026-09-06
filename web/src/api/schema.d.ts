@@ -2082,6 +2082,13 @@ export interface components {
             /** Format: date */
             week_start: string;
         };
+        PortionPlacementRequest: {
+            note?: string | null;
+            /** Format: double */
+            servings: number;
+            storage_location: components["schemas"]["StorageLocationDto"];
+            usability_deadline?: null | components["schemas"]["UsabilityDeadlineDto"];
+        };
         PreparationResponse: components["schemas"]["PreparedBatchDto"] & {
             stock_outcomes?: components["schemas"]["StockOutcomeDto"][];
         };
@@ -2367,13 +2374,11 @@ export interface components {
             meal_plan_component_id?: string | null;
             /** Format: uuid */
             meal_plan_entry_id?: string | null;
-            note?: string | null;
+            placements: components["schemas"]["PortionPlacementRequest"][];
             /** Format: uuid */
             recipe_id: string;
             /** Format: double */
             servings_produced: number;
-            storage_location: components["schemas"]["StorageLocationDto"];
-            usability_deadline?: null | components["schemas"]["UsabilityDeadlineDto"];
         };
         ReplacementItemRequest: components["schemas"]["MealItemRefDto"] & {
             amount: components["schemas"]["AmountDto"];

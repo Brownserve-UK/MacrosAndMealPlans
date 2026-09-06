@@ -6,10 +6,10 @@ use time::OffsetDateTime;
 use super::fulfilment::{RecipeFulfilments, expand_recipe};
 use super::stock_effects::{StockAffected, name_outcomes, requirement_deduction};
 use crate::domain::{
-    ConsumedNutrition, MealPlanComponentId, NewPreparedBatch, NewStockEvent, PreparationSource,
-    PreparedBatch, PreparedBatchId, Quantity, Recipe, RecipeId, RecipeRequirement, Revision,
-    StockEffectSource, StockEventKind, StockEventSource, StockItem, StockItemId, StockLevel,
-    StockSubject, StorageLocation, Unit, UsabilityDeadline, UserId, recipe_nutrition,
+    ConsumedNutrition, MealPlanComponentId, NewPreparedBatch, NewStockEvent, PortionPlacement,
+    PreparationSource, PreparedBatch, PreparedBatchId, Quantity, Recipe, RecipeId,
+    RecipeRequirement, Revision, StockEffectSource, StockEventKind, StockEventSource, StockItem,
+    StockItemId, StockLevel, StockSubject, Unit, UserId, recipe_nutrition, validate_placements,
 };
 use crate::error::{CoreError, Result};
 use crate::ports::{
@@ -24,9 +24,7 @@ pub struct RecordPreparation {
     pub recipe_id: RecipeId,
     pub source: PreparationSource,
     pub servings_produced: Decimal,
-    pub storage_location: StorageLocation,
-    pub usability_deadline: Option<UsabilityDeadline>,
-    pub note: Option<String>,
+    pub placements: Vec<PortionPlacement>,
     pub prepared_at: Option<OffsetDateTime>,
     pub actor: UserId,
 }
@@ -94,11 +92,8 @@ impl PreparationService {
             return Err(CoreError::conflict("That recipe is archived."));
         }
 
-        let (batch, portion, event, write) = self.plan(&recipe, &input).await?;
-        let outcomes = self
-            .batches
-            .insert(&batch, &portion, &event, &write)
-            .await?;
+        let (batch, portions, write) = self.plan(&recipe, &input).await?;
+        let outcomes = self.batches.insert(&batch, &portions, &write).await?;
         let named = name_outcomes(
             &*self.products,
             &*self.ingredients,
@@ -113,8 +108,9 @@ impl PreparationService {
         &self,
         recipe: &Recipe,
         input: &RecordPreparation,
-    ) -> Result<(PreparedBatch, StockItem, NewStockEvent, StockWrite)> {
+    ) -> Result<(PreparedBatch, Vec<(StockItem, NewStockEvent)>, StockWrite)> {
         let servings = input.servings_produced;
+        validate_placements(&input.placements, servings)?;
         let new_batch = NewPreparedBatch {
             recipe_id: Some(recipe.id),
             source: input.source,
@@ -140,41 +136,48 @@ impl PreparationService {
             updated_at: now,
         };
 
-        let level = StockLevel::Exact {
-            quantity: Quantity::new(servings, Unit::Serving),
-        };
-        let portion = StockItem {
-            id: StockItemId::new(),
-            subject: StockSubject::prepared_portion(batch.id),
-            level,
-            storage_location: input.storage_location,
-            source_date: None,
-            usability_deadline: input.usability_deadline.clone(),
-            note: input.note.clone(),
-            revision: Revision::INITIAL,
-            created_at: now,
-            updated_at: now,
-            archived_at: None,
-        };
-        let event = NewStockEvent {
-            kind: StockEventKind::Added,
-            quantity_delta: level.conservative_quantity(),
-            actor_user_id: Some(input.actor),
-            subject_member_id: None,
-            source: Some(StockEventSource {
-                kind: StockEffectSource::PreparedBatch,
-                id: batch.id.as_uuid(),
-                label: batch.item_name.clone(),
-            }),
-            reverses_event_id: None,
-            note: None,
-        };
+        let portions = input
+            .placements
+            .iter()
+            .map(|placement| {
+                let level = StockLevel::Exact {
+                    quantity: Quantity::new(placement.servings, Unit::Serving),
+                };
+                let item = StockItem {
+                    id: StockItemId::new(),
+                    subject: StockSubject::prepared_portion(batch.id),
+                    level,
+                    storage_location: placement.storage_location,
+                    source_date: None,
+                    usability_deadline: placement.usability_deadline.clone(),
+                    note: placement.note.clone(),
+                    revision: Revision::INITIAL,
+                    created_at: now,
+                    updated_at: now,
+                    archived_at: None,
+                };
+                let event = NewStockEvent {
+                    kind: StockEventKind::Added,
+                    quantity_delta: level.conservative_quantity(),
+                    actor_user_id: Some(input.actor),
+                    subject_member_id: None,
+                    source: Some(StockEventSource {
+                        kind: StockEffectSource::PreparedBatch,
+                        id: batch.id.as_uuid(),
+                        label: batch.item_name.clone(),
+                    }),
+                    reverses_event_id: None,
+                    note: None,
+                };
+                (item, event)
+            })
+            .collect();
 
         let write = StockWrite {
             deductions: self.raw_deductions(recipe, &batch, servings, input).await?,
             releases: Vec::new(),
         };
-        Ok((batch, portion, event, write))
+        Ok((batch, portions, write))
     }
 
     async fn raw_deductions(
@@ -224,3 +227,7 @@ impl PreparationService {
         ))
     }
 }
+
+#[cfg(test)]
+#[path = "preparation_tests.rs"]
+mod tests;

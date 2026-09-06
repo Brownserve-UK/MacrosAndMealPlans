@@ -455,8 +455,7 @@ pub trait PreparedBatchRepository: Send + Sync + 'static {
     async fn insert(
         &self,
         batch: &PreparedBatch,
-        portion: &StockItem,
-        event: &NewStockEvent,
+        portions: &[(StockItem, NewStockEvent)],
         stock: &StockWrite,
     ) -> Result<Vec<StockOutcome>>;
 }

@@ -1,37 +1,11 @@
 use rust_decimal::Decimal;
 use time::OffsetDateTime;
 
-use super::str_enum::str_enum;
 use super::{
     ConsumedNutrition, MealPlanComponentId, MealPlanEntryId, PreparedBatchId, RecipeId, Revision,
-    StockItemId, UserId,
+    StorageLocation, UsabilityDeadline, UserId,
 };
 use crate::error::{Result, ValidationErrors};
-
-str_enum!(
-    LeftoverDisposition,
-    UnknownLeftoverDisposition,
-    "leftover disposition"
-);
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum LeftoverDisposition {
-    Retain,
-    Discard,
-}
-
-impl LeftoverDisposition {
-    pub const ALL: [LeftoverDisposition; 2] =
-        [LeftoverDisposition::Retain, LeftoverDisposition::Discard];
-
-    pub const fn code(&self) -> &'static str {
-        match self {
-            LeftoverDisposition::Retain => "retain",
-            LeftoverDisposition::Discard => "discard",
-        }
-    }
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -57,6 +31,47 @@ impl PreparationSource {
             PreparationSource::Standalone => None,
         }
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct PortionPlacement {
+    pub storage_location: StorageLocation,
+    pub servings: Decimal,
+    pub usability_deadline: Option<UsabilityDeadline>,
+    pub note: Option<String>,
+}
+
+impl PortionPlacement {
+    pub fn new(storage_location: StorageLocation, servings: Decimal) -> Self {
+        Self {
+            storage_location,
+            servings,
+            usability_deadline: None,
+            note: None,
+        }
+    }
+}
+
+pub fn validate_placements(placements: &[PortionPlacement], produced: Decimal) -> Result<()> {
+    let mut errors = ValidationErrors::new();
+    if placements.is_empty() {
+        errors.push("placements", "Say where the food went");
+        return errors.into_result();
+    }
+    if placements
+        .iter()
+        .any(|placement| placement.servings <= Decimal::ZERO)
+    {
+        errors.push("placements", "Every place needs more than zero servings");
+    }
+    let placed: Decimal = placements.iter().map(|placement| placement.servings).sum();
+    if placed != produced {
+        errors.push(
+            "placements",
+            "The servings placed must add up to what was made",
+        );
+    }
+    errors.into_result()
 }
 
 #[derive(Debug, Clone)]
@@ -95,10 +110,4 @@ impl NewPreparedBatch {
         }
         errors.into_result()
     }
-}
-
-#[derive(Debug, Clone)]
-pub struct PreparedPortion {
-    pub batch: PreparedBatch,
-    pub stock_item_id: StockItemId,
 }

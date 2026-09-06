@@ -664,17 +664,31 @@ impl Loader<'_> {
                 recipe_id: recipe_id("chicken-and-rice"),
                 source: mmp_core::domain::PreparationSource::Standalone,
                 servings_produced: rust_decimal::Decimal::new(6, 0),
-                storage_location: StorageLocation::Frozen,
-                usability_deadline: Some(UsabilityDeadline {
-                    date: self.today + Duration::days(60),
-                    basis: Some("frozen on the day it was cooked".to_owned()),
-                }),
-                note: Some(BATCH_COOK_NOTE.to_owned()),
+                placements: vec![
+                    mmp_core::domain::PortionPlacement {
+                        storage_location: StorageLocation::Chilled,
+                        servings: rust_decimal::Decimal::new(2, 0),
+                        usability_deadline: Some(UsabilityDeadline {
+                            date: self.today + Duration::days(3),
+                            basis: Some("eat within three days of cooking".to_owned()),
+                        }),
+                        note: Some(BATCH_COOK_NOTE.to_owned()),
+                    },
+                    mmp_core::domain::PortionPlacement {
+                        storage_location: StorageLocation::Frozen,
+                        servings: rust_decimal::Decimal::new(4, 0),
+                        usability_deadline: Some(UsabilityDeadline {
+                            date: self.today + Duration::days(60),
+                            basis: Some("frozen on the day it was cooked".to_owned()),
+                        }),
+                        note: Some(BATCH_COOK_NOTE.to_owned()),
+                    },
+                ],
                 prepared_at: None,
                 actor: self.actor.id,
             })
             .await?;
-        self.report.stock_items_created += 1;
+        self.report.stock_items_created += 2;
         self.report.stock_effects_applied += prepared.stock.len();
         Ok(())
     }

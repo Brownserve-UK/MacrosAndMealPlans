@@ -44,9 +44,7 @@ async fn record(
             recipe_id: RecipeId::from(body.recipe_id),
             source,
             servings_produced: body.servings_produced,
-            storage_location: body.storage_location.into(),
-            usability_deadline: body.usability_deadline.map(Into::into),
-            note: body.note,
+            placements: body.placements.into_iter().map(Into::into).collect(),
             prepared_at: None,
             actor: principal.user_id,
         })

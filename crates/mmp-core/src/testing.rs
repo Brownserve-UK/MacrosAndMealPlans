@@ -924,12 +924,13 @@ impl crate::ports::PreparedBatchRepository for InMemoryPreparedBatchRepository {
     async fn insert(
         &self,
         batch: &PreparedBatch,
-        portion: &StockItem,
-        event: &NewStockEvent,
+        portions: &[(StockItem, NewStockEvent)],
         stock: &crate::ports::StockWrite,
     ) -> Result<Vec<StockOutcome>> {
         self.rows.lock().unwrap().push(batch.clone());
-        self.stock.insert_item(portion, event);
+        for (portion, event) in portions {
+            self.stock.insert_item(portion, event);
+        }
         Ok(self.stock.apply_write(stock, batch.prepared_at))
     }
 }

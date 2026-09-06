@@ -313,8 +313,7 @@ impl mmp_core::ports::PreparedBatchRepository for NoopPreparedBatches {
     async fn insert(
         &self,
         _: &mmp_core::domain::PreparedBatch,
-        _: &mmp_core::domain::StockItem,
-        _: &mmp_core::domain::NewStockEvent,
+        _: &[(mmp_core::domain::StockItem, mmp_core::domain::NewStockEvent)],
         _: &mmp_core::ports::StockWrite,
     ) -> mmp_core::Result<Vec<mmp_core::domain::StockOutcome>> {
         Ok(Vec::new())

@@ -1,5 +1,6 @@
 use mmp_core::domain::{
-    MealPlanComponentId, MealPlanEntryId, NutritionQuality, PreparationSource, PreparedBatch,
+    MealPlanComponentId, MealPlanEntryId, NutritionQuality, PortionPlacement, PreparationSource,
+    PreparedBatch,
 };
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
@@ -48,16 +49,35 @@ impl From<PreparedBatch> for PreparedBatchDto {
 }
 
 #[derive(Debug, Clone, Deserialize, ToSchema)]
+pub struct PortionPlacementRequest {
+    pub storage_location: StorageLocationDto,
+    #[serde(with = "rust_decimal::serde::float")]
+    #[schema(value_type = f64)]
+    pub servings: Decimal,
+    #[serde(default)]
+    pub usability_deadline: Option<UsabilityDeadlineDto>,
+    #[serde(default)]
+    pub note: Option<String>,
+}
+
+impl From<PortionPlacementRequest> for PortionPlacement {
+    fn from(value: PortionPlacementRequest) -> Self {
+        Self {
+            storage_location: value.storage_location.into(),
+            servings: value.servings,
+            usability_deadline: value.usability_deadline.map(Into::into),
+            note: value.note,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, ToSchema)]
 pub struct RecordPreparationRequest {
     pub recipe_id: Uuid,
     #[serde(with = "rust_decimal::serde::float")]
     #[schema(value_type = f64)]
     pub servings_produced: Decimal,
-    pub storage_location: StorageLocationDto,
-    #[serde(default)]
-    pub usability_deadline: Option<UsabilityDeadlineDto>,
-    #[serde(default)]
-    pub note: Option<String>,
+    pub placements: Vec<PortionPlacementRequest>,
     #[serde(default)]
     pub meal_plan_entry_id: Option<Uuid>,
     #[serde(default)]
