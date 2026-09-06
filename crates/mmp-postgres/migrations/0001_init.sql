@@ -1072,3 +1072,105 @@ CREATE TABLE weight_goal (
 );
 
 CREATE UNIQUE INDEX weight_goal_member_unique ON weight_goal (member_id);
+
+-- Batch cooking and prepared portions -------------------------------------------------------
+
+ALTER DOMAIN unit_code DROP CONSTRAINT unit_code_valid;
+ALTER DOMAIN unit_code ADD CONSTRAINT unit_code_valid CHECK (VALUE IN
+    ('mg', 'g', 'kg', 'oz', 'lb', 'ml', 'l', 'tsp', 'tbsp', 'fl_oz', 'cup', 'item',
+     'piece', 'slice', 'clove', 'can', 'pack', 'bunch', 'serving'));
+
+
+CREATE TABLE prepared_batch (
+    id                      UUID PRIMARY KEY,
+
+    recipe_id               UUID REFERENCES recipe (id) ON DELETE RESTRICT,
+    meal_plan_entry_id      UUID REFERENCES meal_plan_entry (id) ON DELETE SET NULL,
+    meal_plan_component_id  UUID REFERENCES meal_plan_component (id) ON DELETE SET NULL,
+
+    prepared_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
+    servings_produced       NUMERIC(16, 4) NOT NULL,
+
+    frozen_item_name        TEXT NOT NULL,
+    nutrition_basis_amount  NUMERIC(16, 4),
+    nutrition_basis_unit    unit_code,
+    energy_kcal             NUMERIC(12, 3),
+    protein_g               NUMERIC(12, 3),
+    carbohydrate_g          NUMERIC(12, 3),
+    sugar_g                 NUMERIC(12, 3),
+    fat_g                   NUMERIC(12, 3),
+    saturated_fat_g         NUMERIC(12, 3),
+    fibre_g                 NUMERIC(12, 3),
+    salt_g                  NUMERIC(12, 3),
+    cholesterol_mg          NUMERIC(12, 3),
+    nutrition_extra         JSONB NOT NULL,
+    nutrition_quality       TEXT NOT NULL,
+
+    created_by              UUID NOT NULL REFERENCES app_user (id) ON DELETE RESTRICT,
+    revision                BIGINT NOT NULL DEFAULT 1,
+    created_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    CONSTRAINT prepared_batch_name_not_blank
+        CHECK (btrim(frozen_item_name) <> ''),
+    CONSTRAINT prepared_batch_servings_positive
+        CHECK (servings_produced > 0),
+    CONSTRAINT prepared_batch_component_needs_entry
+        CHECK (meal_plan_component_id IS NULL OR meal_plan_entry_id IS NOT NULL),
+    CONSTRAINT prepared_batch_basis_complete
+        CHECK (num_nonnulls(nutrition_basis_amount, nutrition_basis_unit) <> 1),
+    CONSTRAINT prepared_batch_basis_positive
+        CHECK (nutrition_basis_amount IS NULL OR nutrition_basis_amount > 0),
+    CONSTRAINT prepared_batch_extra_is_object
+        CHECK (jsonb_typeof(nutrition_extra) = 'object'),
+    CONSTRAINT prepared_batch_quality_valid
+        CHECK (nutrition_quality IN ('known', 'estimated', 'partial', 'unknown')),
+    CONSTRAINT prepared_batch_energy_non_negative
+        CHECK (energy_kcal IS NULL OR energy_kcal >= 0),
+    CONSTRAINT prepared_batch_protein_non_negative
+        CHECK (protein_g IS NULL OR protein_g >= 0),
+    CONSTRAINT prepared_batch_carbohydrate_non_negative
+        CHECK (carbohydrate_g IS NULL OR carbohydrate_g >= 0),
+    CONSTRAINT prepared_batch_sugar_non_negative
+        CHECK (sugar_g IS NULL OR sugar_g >= 0),
+    CONSTRAINT prepared_batch_fat_non_negative
+        CHECK (fat_g IS NULL OR fat_g >= 0),
+    CONSTRAINT prepared_batch_saturated_fat_non_negative
+        CHECK (saturated_fat_g IS NULL OR saturated_fat_g >= 0),
+    CONSTRAINT prepared_batch_fibre_non_negative
+        CHECK (fibre_g IS NULL OR fibre_g >= 0),
+    CONSTRAINT prepared_batch_salt_non_negative
+        CHECK (salt_g IS NULL OR salt_g >= 0),
+    CONSTRAINT prepared_batch_cholesterol_non_negative
+        CHECK (cholesterol_mg IS NULL OR cholesterol_mg >= 0)
+);
+
+CREATE INDEX prepared_batch_recipe ON prepared_batch (recipe_id)
+    WHERE recipe_id IS NOT NULL;
+CREATE INDEX prepared_batch_component ON prepared_batch (meal_plan_component_id)
+    WHERE meal_plan_component_id IS NOT NULL;
+
+ALTER TABLE stock_item
+    ALTER COLUMN product_id DROP NOT NULL,
+    ADD COLUMN prepared_batch_id UUID REFERENCES prepared_batch (id) ON DELETE RESTRICT,
+    ADD CONSTRAINT stock_item_subject_exclusive
+        CHECK (num_nonnulls(product_id, prepared_batch_id) = 1);
+
+CREATE INDEX stock_item_prepared_batch ON stock_item (prepared_batch_id)
+    WHERE prepared_batch_id IS NOT NULL;
+
+ALTER TABLE stock_effect
+    ALTER COLUMN product_id DROP NOT NULL,
+    ADD COLUMN prepared_batch_id UUID REFERENCES prepared_batch (id) ON DELETE RESTRICT,
+    ADD CONSTRAINT stock_effect_subject_exclusive
+        CHECK (num_nonnulls(product_id, prepared_batch_id) = 1),
+    DROP CONSTRAINT stock_effect_source_kind_valid,
+    ADD CONSTRAINT stock_effect_source_kind_valid
+        CHECK (source_kind IN
+               ('meal_plan_component', 'consumption_record', 'purchase', 'prepared_batch'));
+
+ALTER TABLE stock_event
+    DROP CONSTRAINT stock_event_source_kind_valid,
+    ADD CONSTRAINT stock_event_source_kind_valid
+        CHECK (source_kind IS NULL OR source_kind IN
+               ('meal_plan_component', 'consumption_record', 'purchase', 'prepared_batch'));

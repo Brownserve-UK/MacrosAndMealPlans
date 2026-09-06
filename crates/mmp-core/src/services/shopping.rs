@@ -9,8 +9,8 @@ use crate::domain::{
     NewPurchase, NewShoppingCadence, NewStockEvent, NewStockItem, OpportunityException, ProductId,
     Purchase, PurchaseId, PurchasePatch, PurchaseState, Revision, ShoppingCadence,
     ShoppingOpportunity, ShoppingOpportunityId, ShoppingRequirement, ShoppingSection,
-    StockEffectSource, StockEventKind, StockEventSource, StockItem, StockLevel, StorageLocation,
-    SuggestionReason, UserId, assign, cover, expand_opportunities,
+    StockEffectSource, StockEventKind, StockEventSource, StockItem, StockLevel, StockSubject,
+    StorageLocation, SuggestionReason, UserId, assign, cover, expand_opportunities,
 };
 use crate::error::{CoreError, Result};
 use crate::ports::{
@@ -469,7 +469,7 @@ impl ShoppingService {
         }
 
         let input = NewStockItem {
-            product_id,
+            subject: StockSubject::product(product_id),
             level: StockLevel::Exact { quantity },
             storage_location: StorageLocation::Ambient,
             source_date: None,
@@ -481,7 +481,7 @@ impl ShoppingService {
         let now = self.clock.now();
         let item = StockItem {
             id: crate::domain::StockItemId::new(),
-            product_id,
+            subject: input.subject,
             level: input.level,
             storage_location: input.storage_location,
             source_date: None,
@@ -512,7 +512,7 @@ impl ShoppingService {
 fn items_for(items: &[StockItem], pool: &[ProductId]) -> Vec<StockItem> {
     items
         .iter()
-        .filter(|item| pool.contains(&item.product_id))
+        .filter(|item| item.product_id().is_some_and(|id| pool.contains(&id)))
         .cloned()
         .collect()
 }
@@ -527,6 +527,7 @@ fn claims_for_pool(
         .filter(|claim| match claim.subject {
             DemandSubject::Ingredient { ingredient_id: id } => id == ingredient_id,
             DemandSubject::Product { product_id } => pool.contains(&product_id),
+            DemandSubject::PreparedPortion { .. } => false,
         })
         .cloned()
         .collect()

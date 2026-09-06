@@ -37,6 +37,7 @@ export function IngredientStockPage({ ingredientId }: { ingredientId: string }) 
   const pool = products.data?.items ?? [];
   const itemsByProduct = new Map<string, StockItem[]>();
   for (const item of stock.data?.items ?? []) {
+    if (!item.product_id) continue;
     const held = itemsByProduct.get(item.product_id) ?? [];
     held.push(item);
     itemsByProduct.set(item.product_id, held);

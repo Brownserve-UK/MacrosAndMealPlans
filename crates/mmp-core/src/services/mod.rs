@@ -5,6 +5,7 @@ mod household;
 mod household_settings;
 mod meal_plan;
 mod nutrition_target;
+mod preparation;
 mod recipe;
 mod revision;
 mod seed;
@@ -22,6 +23,7 @@ pub use meal_plan::{
     MealPlanEntryView, MealPlanService, MealPlanWeek, MealSlotView, NeedsReview, NutritionSummary,
 };
 pub use nutrition_target::NutritionTargetService;
+pub use preparation::{PreparationService, RecordPreparation};
 pub use recipe::{
     NutritionGapReason, RecipeNames, RecipeNutrition, RecipeNutritionGap, RecipeService,
     ResolveRequirement,

@@ -53,10 +53,12 @@ pub enum Unit {
     Pack,
     #[serde(rename = "bunch")]
     Bunch,
+    #[serde(rename = "serving")]
+    Serving,
 }
 
 impl Unit {
-    pub const ALL: [Unit; 18] = [
+    pub const ALL: [Unit; 19] = [
         Unit::Milligram,
         Unit::Gram,
         Unit::Kilogram,
@@ -75,6 +77,7 @@ impl Unit {
         Unit::Can,
         Unit::Pack,
         Unit::Bunch,
+        Unit::Serving,
     ];
 
     pub const fn dimension(&self) -> Dimension {
@@ -94,7 +97,8 @@ impl Unit {
             | Unit::Clove
             | Unit::Can
             | Unit::Pack
-            | Unit::Bunch => Dimension::Count,
+            | Unit::Bunch
+            | Unit::Serving => Dimension::Count,
         }
     }
 
@@ -118,6 +122,7 @@ impl Unit {
             Unit::Can => "can",
             Unit::Pack => "pack",
             Unit::Bunch => "bunch",
+            Unit::Serving => "serving",
         }
     }
 
@@ -141,6 +146,7 @@ impl Unit {
             Unit::Can => "can",
             Unit::Pack => "pack",
             Unit::Bunch => "bunch",
+            Unit::Serving => "serving",
         }
     }
 

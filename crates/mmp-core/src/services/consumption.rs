@@ -12,7 +12,7 @@ use crate::domain::{
 use crate::error::{CoreError, Result, ValidationErrors};
 use crate::ports::{
     Clock, ConsumptionQuery, ConsumptionRecordRepository, IngredientRepository, PageRequest,
-    ProductRepository, RecipeRepository, StockWrite,
+    PreparedBatchRepository, ProductRepository, RecipeRepository, StockWrite,
 };
 
 use super::fulfilment::{RecipeFulfilments, expand_recipe};
@@ -52,6 +52,7 @@ pub struct ConsumptionService {
     products: Arc<dyn ProductRepository>,
     ingredients: Arc<dyn IngredientRepository>,
     recipes: Arc<dyn RecipeRepository>,
+    batches: Arc<dyn PreparedBatchRepository>,
     clock: Arc<dyn Clock>,
 }
 
@@ -61,6 +62,7 @@ impl ConsumptionService {
         products: Arc<dyn ProductRepository>,
         ingredients: Arc<dyn IngredientRepository>,
         recipes: Arc<dyn RecipeRepository>,
+        batches: Arc<dyn PreparedBatchRepository>,
         clock: Arc<dyn Clock>,
     ) -> Self {
         Self {
@@ -68,6 +70,7 @@ impl ConsumptionService {
             products,
             ingredients,
             recipes,
+            batches,
             clock,
         }
     }
@@ -98,7 +101,13 @@ impl ConsumptionService {
         let outcomes = self.records.insert(&record, &write).await?;
         Ok(StockAffected::new(
             record,
-            name_outcomes(&*self.products, &*self.ingredients, outcomes).await?,
+            name_outcomes(
+                &*self.products,
+                &*self.ingredients,
+                &*self.batches,
+                outcomes,
+            )
+            .await?,
         ))
     }
 
@@ -213,7 +222,13 @@ impl ConsumptionService {
         let outcomes = self.commit(&current, expected, &write).await?;
         Ok(StockAffected::new(
             current,
-            name_outcomes(&*self.products, &*self.ingredients, outcomes).await?,
+            name_outcomes(
+                &*self.products,
+                &*self.ingredients,
+                &*self.batches,
+                outcomes,
+            )
+            .await?,
         ))
     }
 
@@ -239,7 +254,13 @@ impl ConsumptionService {
         commit_outcome(CONSUMPTION_RECORD, id, expected, outcome)?;
         Ok(StockAffected::new(
             (),
-            name_outcomes(&*self.products, &*self.ingredients, stock_outcomes).await?,
+            name_outcomes(
+                &*self.products,
+                &*self.ingredients,
+                &*self.batches,
+                stock_outcomes,
+            )
+            .await?,
         ))
     }
 

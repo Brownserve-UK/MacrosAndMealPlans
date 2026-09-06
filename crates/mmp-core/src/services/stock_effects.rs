@@ -3,10 +3,13 @@ use std::ops::{Deref, DerefMut};
 
 use crate::domain::{
     ConsumedAmount, ConsumptionRecord, DeductionTarget, DemandSubject, HouseholdMemberId,
-    IngredientId, Product, ProductId, Quantity, Shortfall, StockEffectSource, StockOutcome, UserId,
+    IngredientId, PreparedBatchId, Product, ProductId, Quantity, Shortfall, StockEffectSource,
+    StockOutcome, UserId,
 };
 use crate::error::Result;
-use crate::ports::{IngredientRepository, ProductRepository, StockDeduction, StockRelease};
+use crate::ports::{
+    IngredientRepository, PreparedBatchRepository, ProductRepository, StockDeduction, StockRelease,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct StockOutcomeView {
@@ -101,8 +104,30 @@ pub fn requirement_deduction(
     }
 }
 
+pub fn portion_deduction(
+    component_id: uuid::Uuid,
+    eater_id: uuid::Uuid,
+    prepared_batch_id: PreparedBatchId,
+    want: Quantity,
+    source_label: String,
+    actor: Option<UserId>,
+    subject: Option<HouseholdMemberId>,
+) -> StockDeduction {
+    StockDeduction {
+        source_kind: StockEffectSource::MealPlanComponent,
+        source_id: component_id,
+        source_detail_id: Some(eater_id),
+        target: DeductionTarget::prepared_portion(prepared_batch_id),
+        want,
+        actor_user_id: actor,
+        subject_member_id: subject,
+        source_label,
+    }
+}
+
 pub fn component_release(
     component_id: uuid::Uuid,
+    eater_id: Option<uuid::Uuid>,
     source_label: String,
     actor: Option<UserId>,
     subject: Option<HouseholdMemberId>,
@@ -110,6 +135,7 @@ pub fn component_release(
     StockRelease {
         source_kind: StockEffectSource::MealPlanComponent,
         source_id: component_id,
+        source_detail_id: eater_id,
         actor_user_id: actor,
         subject_member_id: subject,
         source_label,
@@ -136,6 +162,7 @@ pub fn record_release(record: &ConsumptionRecord, source_label: String) -> Stock
     StockRelease {
         source_kind: StockEffectSource::ConsumptionRecord,
         source_id: record.id.as_uuid(),
+        source_detail_id: None,
         actor_user_id: record.recorded_by,
         subject_member_id: Some(record.member_id),
         source_label,
@@ -145,6 +172,7 @@ pub fn record_release(record: &ConsumptionRecord, source_label: String) -> Stock
 pub async fn name_outcomes(
     products: &dyn ProductRepository,
     ingredients: &dyn IngredientRepository,
+    batches: &dyn PreparedBatchRepository,
     outcomes: Vec<StockOutcome>,
 ) -> Result<Vec<StockOutcomeView>> {
     if outcomes.is_empty() {
@@ -162,6 +190,12 @@ pub async fn name_outcomes(
         .collect();
     ingredient_ids.sort_unstable_by_key(|id| id.as_uuid());
     ingredient_ids.dedup();
+    let mut batch_ids: Vec<PreparedBatchId> = outcomes
+        .iter()
+        .filter_map(|o| o.subject.prepared_batch_id())
+        .collect();
+    batch_ids.sort_unstable_by_key(|id| id.as_uuid());
+    batch_ids.dedup();
 
     let product_names: HashMap<ProductId, String> = products
         .get_many(&product_ids)
@@ -174,6 +208,12 @@ pub async fn name_outcomes(
         .await?
         .into_iter()
         .map(|i| (i.id, i.name))
+        .collect();
+    let batch_names: HashMap<PreparedBatchId, String> = batches
+        .get_many(&batch_ids)
+        .await?
+        .into_iter()
+        .map(|b| (b.id, b.item_name))
         .collect();
 
     Ok(outcomes
@@ -189,6 +229,10 @@ pub async fn name_outcomes(
                     .get(&ingredient_id)
                     .cloned()
                     .unwrap_or_else(|| "Unknown ingredient".to_owned()),
+                DemandSubject::PreparedPortion { prepared_batch_id } => batch_names
+                    .get(&prepared_batch_id)
+                    .cloned()
+                    .unwrap_or_else(|| "Unknown prepared portion".to_owned()),
             },
             wanted: o.wanted,
             deducted: o.deducted,

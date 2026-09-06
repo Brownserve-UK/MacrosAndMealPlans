@@ -89,6 +89,7 @@ entity_id!(RecipeInstructionId, "recipe_instruction");
 entity_id!(StockItemId, "stock_item");
 entity_id!(StockEventId, "stock_event");
 entity_id!(StockEffectId, "stock_effect");
+entity_id!(PreparedBatchId, "prepared_batch");
 entity_id!(ShoppingOpportunityId, "shopping_opportunity");
 entity_id!(WeightRecordId, "weight_record");
 entity_id!(WeightGoalId, "weight_goal");

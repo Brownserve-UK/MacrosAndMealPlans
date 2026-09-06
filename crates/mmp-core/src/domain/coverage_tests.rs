@@ -5,7 +5,7 @@ use time::macros::date;
 use super::*;
 use crate::domain::{
     DemandSubject, MealPlanEntryId, MealPlanScope, MealSlot, ProductId, Revision, SourceDate,
-    SourceDateKind, StockItemId, StorageLocation, Unit, UsabilityDeadline,
+    SourceDateKind, StockItemId, StockSubject, StorageLocation, Unit, UsabilityDeadline,
 };
 
 fn ml(value: i64) -> Quantity {
@@ -16,7 +16,7 @@ fn item(quantity: Quantity, deadline: Option<Date>) -> StockItem {
     let now = OffsetDateTime::UNIX_EPOCH;
     StockItem {
         id: StockItemId::new(),
-        product_id: ProductId::new(),
+        subject: StockSubject::product(ProductId::new()),
         level: StockLevel::Exact { quantity },
         storage_location: StorageLocation::Chilled,
         source_date: Some(SourceDate {

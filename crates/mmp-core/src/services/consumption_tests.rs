@@ -3,13 +3,14 @@ use std::sync::Arc;
 use super::*;
 use crate::domain::{
     ConsumptionRecordId, HouseholdMemberId, MealItemRef, MealSlot, NutritionQuality, Provenance,
-    Quantity, Unit,
+    Quantity, StockSubject, Unit,
 };
 use crate::domain::{StockItem, StockItemId, StockLevel, StorageLocation};
 use crate::ports::{FixedClock, StockRepository};
 use crate::testing::{
-    InMemoryConsumptionRecordRepository, InMemoryIngredientRepository, InMemoryProductRepository,
-    InMemoryRecipeRepository, InMemoryStockRepository,
+    InMemoryConsumptionRecordRepository, InMemoryIngredientRepository,
+    InMemoryPreparedBatchRepository, InMemoryProductRepository, InMemoryRecipeRepository,
+    InMemoryStockRepository,
 };
 use rust_decimal::Decimal;
 use time::OffsetDateTime;
@@ -27,7 +28,7 @@ impl Harness {
     fn seed_stock_grams(&self, product_id: ProductId, grams: i64) -> StockItemId {
         let item = StockItem {
             id: StockItemId::new(),
-            product_id,
+            subject: StockSubject::product(product_id),
             level: StockLevel::Exact {
                 quantity: Quantity::new(Decimal::new(grams, 0), Unit::Gram),
             },
@@ -68,6 +69,7 @@ fn harness_at(now: OffsetDateTime) -> Harness {
         Arc::new(products.clone()),
         Arc::new(ingredients.clone()),
         Arc::new(recipes.clone()),
+        Arc::new(InMemoryPreparedBatchRepository::new()),
         Arc::new(FixedClock::new(now)),
     );
     Harness {

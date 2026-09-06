@@ -644,6 +644,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/preparations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["recordPreparation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/preparations/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getPreparation"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/products": {
         parameters: {
             query?: never;
@@ -1531,6 +1563,11 @@ export interface components {
             ingredient_id: string;
             /** @enum {string} */
             kind: "ingredient";
+        } | {
+            /** @enum {string} */
+            kind: "prepared_portion";
+            /** Format: uuid */
+            prepared_batch_id: string;
         };
         FieldProblem: {
             /** @example name */
@@ -2050,6 +2087,28 @@ export interface components {
         };
         /** @enum {string} */
         Portioning: "equal" | "custom";
+        PreparationResponse: components["schemas"]["PreparedBatchDto"] & {
+            stock_outcomes?: components["schemas"]["StockOutcomeDto"][];
+        };
+        PreparedBatchDto: {
+            /** Format: uuid */
+            id: string;
+            item_name: string;
+            /** Format: uuid */
+            meal_plan_component_id?: string | null;
+            /** Format: uuid */
+            meal_plan_entry_id?: string | null;
+            nutrition: components["schemas"]["NutritionDto"];
+            nutrition_quality: components["schemas"]["NutritionQuality"];
+            /** Format: date-time */
+            prepared_at: string;
+            /** Format: uuid */
+            recipe_id?: string | null;
+            /** Format: int64 */
+            revision: number;
+            /** Format: double */
+            servings_produced: number;
+        };
         PrincipalDto: {
             /** Format: uuid */
             member_id?: string | null;
@@ -2308,6 +2367,19 @@ export interface components {
         };
         /** @enum {string} */
         RecipeVisibility: "private" | "shared";
+        RecordPreparationRequest: {
+            /** Format: uuid */
+            meal_plan_component_id?: string | null;
+            /** Format: uuid */
+            meal_plan_entry_id?: string | null;
+            note?: string | null;
+            /** Format: uuid */
+            recipe_id: string;
+            /** Format: double */
+            servings_produced: number;
+            storage_location: components["schemas"]["StorageLocationDto"];
+            usability_deadline?: null | components["schemas"]["UsabilityDeadlineDto"];
+        };
         ReplacementItemRequest: components["schemas"]["MealItemRefDto"] & {
             amount: components["schemas"]["AmountDto"];
         };
@@ -2514,11 +2586,15 @@ export interface components {
             level: components["schemas"]["StockLevelDto"];
             note?: string | null;
             /** Format: uuid */
-            product_id: string;
+            prepared_batch_id?: string | null;
+            prepared_batch_name?: string | null;
+            /** Format: uuid */
+            product_id?: string | null;
             /** Format: int64 */
             revision: number;
             source_date?: null | components["schemas"]["SourceDateDto"];
             storage_location: components["schemas"]["StorageLocationDto"];
+            subject_kind: components["schemas"]["StockSubjectKindDto"];
             tracking_mode: components["schemas"]["TrackingModeDto"];
             /** Format: date-time */
             updated_at: string;
@@ -2552,6 +2628,8 @@ export interface components {
             page: components["schemas"]["PageMeta"];
         };
         /** @enum {string} */
+        StockSubjectKindDto: "product" | "prepared_portion";
+        /** @enum {string} */
         StorageLocationDto: "ambient" | "chilled" | "frozen";
         /** @enum {string} */
         SuggestionReasonDto: "unknown_availability" | "assumption_only";
@@ -2560,7 +2638,7 @@ export interface components {
         /** @enum {string} */
         TrackingModeDto: "exact" | "estimated" | "not_tracked";
         /** @enum {string} */
-        Unit: "mg" | "g" | "kg" | "oz" | "lb" | "ml" | "l" | "tsp" | "tbsp" | "fl_oz" | "cup" | "item" | "piece" | "slice" | "clove" | "can" | "pack" | "bunch";
+        Unit: "mg" | "g" | "kg" | "oz" | "lb" | "ml" | "l" | "tsp" | "tbsp" | "fl_oz" | "cup" | "item" | "piece" | "slice" | "clove" | "can" | "pack" | "bunch" | "serving";
         UnitDto: {
             /** @example g */
             code: string;
@@ -4730,6 +4808,80 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PlannerWeekDto"];
+                };
+            };
+        };
+    };
+    recordPreparation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RecordPreparationRequest"];
+            };
+        };
+        responses: {
+            /** @description Cooked, with any stock shortfalls it ran into */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PreparationResponse"];
+                };
+            };
+            /** @description No such recipe */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description That recipe is archived */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    getPreparation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Prepared batch id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The cooking event */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PreparedBatchDto"];
+                };
+            };
+            /** @description No such preparation */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
         };

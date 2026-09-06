@@ -51,6 +51,7 @@ export function NewStockDialog({
         product_id: draft.product!.id,
         level: draftToLevel(draft),
         storage_location: draft.storageLocation,
+        usability_deadline: draft.useBy ? { date: draft.useBy } : null,
         note: draft.note.trim() || null,
       });
       handleClose();

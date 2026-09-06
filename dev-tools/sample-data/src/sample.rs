@@ -15,6 +15,7 @@ use mmp_core::domain::{
     Quantity, RecipeId, RecipePatch, RecipeRequirement, Role, ShoppingSection, SourceDate,
     SourceDateKind, StockLevel, StorageLocation, Unit, UsabilityDeadline, User, UserId,
     WeightObjective, WeightSource,
+StockSubject,
 };
 use mmp_server::state::AppState;
 use rust_decimal::Decimal;
@@ -69,6 +70,8 @@ pub struct Report {
     pub consumption_entries_created: usize,
     pub shopping_seeded: usize,
 }
+
+const BATCH_COOK_NOTE: &str = "batch cooked on a Sunday, frozen in portions";
 
 struct Loader<'a> {
     state: &'a AppState,
@@ -586,7 +589,7 @@ impl Loader<'_> {
                 .stock
                 .create(
                     NewStockItem {
-                        product_id: product,
+                        subject: StockSubject::product(product),
                         level,
                         storage_location,
                         source_date,
@@ -633,7 +636,47 @@ impl Loader<'_> {
         self.load_household_meals().await?;
         self.load_assumed_meals().await?;
         self.load_pooled_ingredient_demand().await?;
+        self.load_batch_cook().await?;
         self.load_shopping().await
+    }
+
+    async fn load_batch_cook(&mut self) -> anyhow::Result<()> {
+        let already = self
+            .state
+            .stock
+            .list(&mmp_core::ports::StockQuery {
+                include_archived: false,
+                page: mmp_core::ports::PageRequest::new(1, mmp_core::ports::PageRequest::MAX_PER_PAGE),
+                ..Default::default()
+            })
+            .await?
+            .items
+            .iter()
+            .any(|item| item.note.as_deref() == Some(BATCH_COOK_NOTE));
+        if already {
+            return Ok(());
+        }
+
+        let prepared = self
+            .state
+            .preparation
+            .record(mmp_core::services::RecordPreparation {
+                recipe_id: recipe_id("chicken-and-rice"),
+                source: mmp_core::domain::PreparationSource::Standalone,
+                servings_produced: rust_decimal::Decimal::new(6, 0),
+                storage_location: StorageLocation::Frozen,
+                usability_deadline: Some(UsabilityDeadline {
+                    date: self.today + Duration::days(60),
+                    basis: Some("frozen on the day it was cooked".to_owned()),
+                }),
+                note: Some(BATCH_COOK_NOTE.to_owned()),
+                prepared_at: None,
+                actor: self.actor.id,
+            })
+            .await?;
+        self.report.stock_items_created += 1;
+        self.report.stock_effects_applied += prepared.stock.len();
+        Ok(())
     }
 
     async fn load_weekly_shop(&mut self, week: Date, days: i64) -> anyhow::Result<()> {
@@ -674,7 +717,7 @@ impl Loader<'_> {
                 .stock
                 .create(
                     NewStockItem {
-                        product_id: product,
+                        subject: StockSubject::product(product),
                         level: StockLevel::Exact { quantity: amount },
                         storage_location,
                         source_date: None,
@@ -737,7 +780,7 @@ impl Loader<'_> {
                 .stock
                 .create(
                     NewStockItem {
-                        product_id: product,
+                        subject: StockSubject::product(product),
                         level,
                         storage_location: StorageLocation::Chilled,
                         source_date: None,
@@ -837,7 +880,7 @@ impl Loader<'_> {
                 .stock
                 .create(
                     NewStockItem {
-                        product_id: yoghurt,
+                        subject: StockSubject::product(yoghurt),
                         level: StockLevel::Exact {
                             quantity: quantity(200, Unit::Gram),
                         },
@@ -895,7 +938,7 @@ impl Loader<'_> {
                 .stock
                 .create(
                     NewStockItem {
-                        product_id: product,
+                        subject: StockSubject::product(product),
                         level: StockLevel::Exact {
                             quantity: quantity(amount, unit),
                         },

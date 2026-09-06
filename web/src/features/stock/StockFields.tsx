@@ -12,6 +12,7 @@ export type StockDraft = {
   unit: Unit | '';
   quantity: string;
   storageLocation: StorageLocation;
+  useBy: string;
   note: string;
 };
 
@@ -22,6 +23,7 @@ export function emptyStockDraft(): StockDraft {
     unit: 'g',
     quantity: '',
     storageLocation: 'chilled',
+    useBy: '',
     note: '',
   };
 }
@@ -129,6 +131,16 @@ export function StockFields({
           </MenuItem>
         ))}
       </TextField>
+
+      <TextField
+        label="Use by"
+        type="date"
+        value={draft.useBy}
+        onChange={(event) => set('useBy', event.target.value)}
+        slotProps={{ inputLabel: { shrink: true } }}
+        error={Boolean(errors.usability_deadline)}
+        helperText={errors.usability_deadline ?? 'Leave empty if it does not go off.'}
+      />
 
       <TextField
         label="Note"

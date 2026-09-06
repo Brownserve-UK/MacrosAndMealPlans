@@ -8,8 +8,8 @@ use super::*;
 use crate::domain::{
     Availability, Confidence, ConsumedAmount, DemandGap, HouseholdMember, HouseholdMemberId,
     MealItemRef, MealPlanComponent, MealPlanEntry, MealSlot, MissingStockInterpretation,
-    NewStockItem, Product, ProductId, Provenance, Quantity, Revision, StockLevel, StorageLocation,
-    Unit, UserId, WeightDisplay,
+    NewStockItem, Product, ProductId, Provenance, Quantity, Revision, StockLevel, StockSubject,
+    StorageLocation, Unit, UserId, WeightDisplay,
 };
 use crate::ports::{FixedClock, MealPlanRepository, StockQuery};
 use crate::testing::{
@@ -136,7 +136,7 @@ async fn plan_measured_on(h: &Harness, product_id: ProductId, g: i64, on: time::
 
 fn new_item(product_id: ProductId, level: StockLevel) -> NewStockItem {
     NewStockItem {
-        product_id,
+        subject: StockSubject::product(product_id),
         level,
         storage_location: StorageLocation::Chilled,
         source_date: None,

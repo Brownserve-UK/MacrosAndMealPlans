@@ -13,10 +13,16 @@ import { RecordListShell } from '../../components/RecordList';
 import { EmptyState, ErrorState, Loading } from '../../components/States';
 import { useDebounced } from '../../hooks/useDebounced';
 import { NewStockDialog } from './NewStockDialog';
-import { groupSortDate, IngredientCard, StockCard, type StockGroup } from './StockCard';
+import {
+  groupSortDate,
+  IngredientCard,
+  PreparedPortionCard,
+  StockCard,
+  type StockGroup,
+} from './StockCard';
 import { levelFor } from './stockLevel';
 
-type View = 'ingredients' | 'products';
+type View = 'ingredients' | 'products' | 'prepared';
 type SortKey = 'level' | 'name' | 'useby';
 
 const SORTS: { value: SortKey; label: string }[] = [
@@ -90,26 +96,49 @@ export function StockPage() {
   const productGroups = useMemo<StockGroup[]>(() => {
     const byProduct = new Map<string, StockGroup>();
     for (const item of stock.data?.items ?? []) {
-      let group = byProduct.get(item.product_id);
+      const productId = item.product_id;
+      if (!productId) continue;
+      let group = byProduct.get(productId);
       if (!group) {
         group = {
-          id: item.product_id,
-          name: productName.get(item.product_id) ?? 'Unknown product',
+          id: productId,
+          name: productName.get(productId) ?? 'Unknown product',
           items: [],
-          availability: availabilityByProduct.get(item.product_id)?.availability ?? null,
+          availability: availabilityByProduct.get(productId)?.availability ?? null,
         };
-        byProduct.set(item.product_id, group);
+        byProduct.set(productId, group);
       }
       group.items.push(item);
     }
     return [...byProduct.values()];
   }, [stock.data, productName, availabilityByProduct]);
 
+  const preparedGroups = useMemo<StockGroup[]>(() => {
+    const byBatch = new Map<string, StockGroup>();
+    for (const item of stock.data?.items ?? []) {
+      const batchId = item.prepared_batch_id;
+      if (!batchId) continue;
+      let group = byBatch.get(batchId);
+      if (!group) {
+        group = {
+          id: batchId,
+          name: item.prepared_batch_name ?? 'Prepared portion',
+          items: [],
+          availability: null,
+        };
+        byBatch.set(batchId, group);
+      }
+      group.items.push(item);
+    }
+    return [...byBatch.values()];
+  }, [stock.data]);
+
   // Products we hold that aren't mapped to an ingredient have nowhere to sit here, so they only
   // ever appear under Products.
   const ingredientGroups = useMemo<{ group: StockGroup; productCount: number }[]>(() => {
     const byIngredient = new Map<string, { group: StockGroup; products: Set<string> }>();
     for (const item of stock.data?.items ?? []) {
+      if (!item.product_id) continue;
       const ingredientId = ingredientOfProduct.get(item.product_id);
       if (!ingredientId) continue;
       let entry = byIngredient.get(ingredientId);
@@ -142,6 +171,14 @@ export function StockPage() {
     return sortGroups(filtered, sort);
   }, [productGroups, debounced, sort]);
 
+  const visiblePrepared = useMemo(() => {
+    const needle = debounced.trim().toLowerCase();
+    const filtered = needle
+      ? preparedGroups.filter((group) => group.name.toLowerCase().includes(needle))
+      : preparedGroups;
+    return sortGroups(filtered, sort);
+  }, [preparedGroups, debounced, sort]);
+
   const visibleIngredients = useMemo(() => {
     const needle = debounced.trim().toLowerCase();
     const filtered = needle
@@ -159,8 +196,13 @@ export function StockPage() {
   if (stock.isLoading) return <Loading label="Loading stock" />;
   if (stock.isError) return <ErrorState error={stock.error} onRetry={() => stock.refetch()} />;
 
-  const empty = productGroups.length === 0;
-  const showing = view === 'ingredients' ? visibleIngredients.length : visibleProducts.length;
+  const empty = productGroups.length === 0 && preparedGroups.length === 0;
+  const showing =
+    view === 'ingredients'
+      ? visibleIngredients.length
+      : view === 'prepared'
+        ? visiblePrepared.length
+        : visibleProducts.length;
 
   return (
     <>
@@ -188,6 +230,7 @@ export function StockPage() {
           >
             <Tab value="ingredients" label="Ingredients" />
             <Tab value="products" label="Products" />
+            <Tab value="prepared" label="Prepared" />
           </Tabs>
 
           <Stack
@@ -222,10 +265,17 @@ export function StockPage() {
         search.trim() ? (
           <EmptyState title="Nothing matched" description={`Nothing matches "${search}".`} />
         ) : (
-          <EmptyState
-            title="Nothing mapped to an ingredient"
-            description="Map your products to ingredients, or switch to Products."
-          />
+          view === 'prepared' ? (
+            <EmptyState
+              title="Nothing cooked yet"
+              description="Cook a recipe and any servings you don't eat will wait here."
+            />
+          ) : (
+            <EmptyState
+              title="Nothing mapped to an ingredient"
+              description="Map your products to ingredients, or switch to Products."
+            />
+          )
         )
       ) : view === 'ingredients' ? (
         <RecordListShell>
@@ -235,6 +285,12 @@ export function StockPage() {
               group={entry.group}
               productCount={entry.productCount}
             />
+          ))}
+        </RecordListShell>
+      ) : view === 'prepared' ? (
+        <RecordListShell>
+          {visiblePrepared.map((group) => (
+            <PreparedPortionCard key={group.id} group={group} />
           ))}
         </RecordListShell>
       ) : (

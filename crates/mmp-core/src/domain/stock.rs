@@ -5,8 +5,9 @@ use rust_decimal::Decimal;
 use time::{Date, OffsetDateTime};
 
 use super::{
-    HouseholdMemberId, IngredientId, MealPlanEntryId, MealPlanScope, MealSlot, Patch, ProductId,
-    Quantity, Revision, StockEffectId, StockEventId, StockItemId, Unit, UserId,
+    HouseholdMemberId, IngredientId, MealPlanEntryId, MealPlanScope, MealSlot, Patch,
+    PreparedBatchId, ProductId, Quantity, Revision, StockEffectId, StockEventId, StockItemId, Unit,
+    UserId,
 };
 use crate::error::{Result, ValidationErrors};
 
@@ -152,10 +153,45 @@ impl StockLevel {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum StockSubject {
+    Product { product_id: ProductId },
+    PreparedPortion { prepared_batch_id: PreparedBatchId },
+}
+
+impl StockSubject {
+    pub const fn product(product_id: ProductId) -> Self {
+        StockSubject::Product { product_id }
+    }
+
+    pub const fn prepared_portion(prepared_batch_id: PreparedBatchId) -> Self {
+        StockSubject::PreparedPortion { prepared_batch_id }
+    }
+
+    pub const fn product_id(&self) -> Option<ProductId> {
+        match self {
+            StockSubject::Product { product_id } => Some(*product_id),
+            StockSubject::PreparedPortion { .. } => None,
+        }
+    }
+
+    pub const fn prepared_batch_id(&self) -> Option<PreparedBatchId> {
+        match self {
+            StockSubject::PreparedPortion { prepared_batch_id } => Some(*prepared_batch_id),
+            StockSubject::Product { .. } => None,
+        }
+    }
+
+    pub const fn is_prepared_portion(&self) -> bool {
+        matches!(self, StockSubject::PreparedPortion { .. })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct StockItem {
     pub id: StockItemId,
-    pub product_id: ProductId,
+    pub subject: StockSubject,
     pub level: StockLevel,
     pub storage_location: StorageLocation,
     pub source_date: Option<SourceDate>,
@@ -175,11 +211,23 @@ impl StockItem {
     pub fn tracking_mode(&self) -> TrackingMode {
         self.level.tracking_mode()
     }
+
+    pub const fn product_id(&self) -> Option<ProductId> {
+        self.subject.product_id()
+    }
+
+    pub const fn prepared_batch_id(&self) -> Option<PreparedBatchId> {
+        self.subject.prepared_batch_id()
+    }
+
+    pub const fn is_prepared_portion(&self) -> bool {
+        self.subject.is_prepared_portion()
+    }
 }
 
 #[derive(Debug, Clone)]
 pub struct NewStockItem {
-    pub product_id: ProductId,
+    pub subject: StockSubject,
     pub level: StockLevel,
     pub storage_location: StorageLocation,
     pub source_date: Option<SourceDate>,
@@ -352,6 +400,7 @@ impl Availability {
 pub enum DemandSubject {
     Product { product_id: ProductId },
     Ingredient { ingredient_id: IngredientId },
+    PreparedPortion { prepared_batch_id: PreparedBatchId },
 }
 
 impl DemandSubject {
@@ -363,18 +412,33 @@ impl DemandSubject {
         DemandSubject::Ingredient { ingredient_id }
     }
 
+    pub const fn prepared_portion(prepared_batch_id: PreparedBatchId) -> Self {
+        DemandSubject::PreparedPortion { prepared_batch_id }
+    }
+
     pub const fn product_id(&self) -> Option<ProductId> {
         match self {
             DemandSubject::Product { product_id } => Some(*product_id),
-            DemandSubject::Ingredient { .. } => None,
+            DemandSubject::Ingredient { .. } | DemandSubject::PreparedPortion { .. } => None,
         }
     }
 
     pub const fn ingredient_id(&self) -> Option<IngredientId> {
         match self {
             DemandSubject::Ingredient { ingredient_id } => Some(*ingredient_id),
-            DemandSubject::Product { .. } => None,
+            DemandSubject::Product { .. } | DemandSubject::PreparedPortion { .. } => None,
         }
+    }
+
+    pub const fn prepared_batch_id(&self) -> Option<PreparedBatchId> {
+        match self {
+            DemandSubject::PreparedPortion { prepared_batch_id } => Some(*prepared_batch_id),
+            DemandSubject::Product { .. } | DemandSubject::Ingredient { .. } => None,
+        }
+    }
+
+    pub const fn is_prepared_portion(&self) -> bool {
+        matches!(self, DemandSubject::PreparedPortion { .. })
     }
 }
 
@@ -440,23 +504,36 @@ pub struct AvailabilityReport {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DeductionCandidates {
+    Products(Vec<ProductId>),
+    PreparedBatch(PreparedBatchId),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeductionTarget {
     pub subject: DemandSubject,
-    pub product_ids: Vec<ProductId>,
+    pub candidates: DeductionCandidates,
 }
 
 impl DeductionTarget {
     pub fn product(product_id: ProductId) -> Self {
         Self {
             subject: DemandSubject::product(product_id),
-            product_ids: vec![product_id],
+            candidates: DeductionCandidates::Products(vec![product_id]),
         }
     }
 
     pub fn pool(ingredient_id: IngredientId, product_ids: Vec<ProductId>) -> Self {
         Self {
             subject: DemandSubject::ingredient(ingredient_id),
-            product_ids,
+            candidates: DeductionCandidates::Products(product_ids),
+        }
+    }
+
+    pub fn prepared_portion(prepared_batch_id: PreparedBatchId) -> Self {
+        Self {
+            subject: DemandSubject::prepared_portion(prepared_batch_id),
+            candidates: DeductionCandidates::PreparedBatch(prepared_batch_id),
         }
     }
 }
@@ -494,13 +571,15 @@ pub enum StockEffectSource {
     MealPlanComponent,
     ConsumptionRecord,
     Purchase,
+    PreparedBatch,
 }
 
 impl StockEffectSource {
-    pub const ALL: [StockEffectSource; 3] = [
+    pub const ALL: [StockEffectSource; 4] = [
         StockEffectSource::MealPlanComponent,
         StockEffectSource::ConsumptionRecord,
         StockEffectSource::Purchase,
+        StockEffectSource::PreparedBatch,
     ];
 
     pub const fn code(&self) -> &'static str {
@@ -508,6 +587,7 @@ impl StockEffectSource {
             StockEffectSource::MealPlanComponent => "meal_plan_component",
             StockEffectSource::ConsumptionRecord => "consumption_record",
             StockEffectSource::Purchase => "purchase",
+            StockEffectSource::PreparedBatch => "prepared_batch",
         }
     }
 }
@@ -543,7 +623,7 @@ pub struct StockEffect {
     pub source_id: uuid::Uuid,
     pub source_detail_id: Option<uuid::Uuid>,
     pub stock_item_id: StockItemId,
-    pub product_id: ProductId,
+    pub subject: StockSubject,
     pub state: StockEffectState,
     pub applied_mode: TrackingMode,
     pub applied_unit: Unit,
@@ -561,7 +641,7 @@ pub struct NewStockEffect {
     pub source_kind: StockEffectSource,
     pub source_id: uuid::Uuid,
     pub stock_item_id: StockItemId,
-    pub product_id: ProductId,
+    pub subject: StockSubject,
     pub applied_mode: TrackingMode,
     pub applied_unit: Unit,
     pub exact_delta: Option<Decimal>,

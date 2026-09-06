@@ -59,10 +59,31 @@ async fn list(
 ) -> ApiResult<Json<StockPage>> {
     principal.require(Permission::StockRead)?;
     let page = state.stock.list(&to_query(query)).await?;
+    let meta = PageMeta::of(&page);
     Ok(Json(StockPage {
-        page: PageMeta::of(&page),
-        items: page.items.into_iter().map(Into::into).collect(),
+        page: meta,
+        items: name_portions(&state, page.items).await?,
     }))
+}
+
+async fn name_portions(
+    state: &AppState,
+    items: Vec<mmp_core::domain::StockItem>,
+) -> ApiResult<Vec<StockItemDto>> {
+    let batch_ids: Vec<_> = items
+        .iter()
+        .filter_map(|item| item.prepared_batch_id())
+        .collect();
+    let names = state.preparation.names_for(&batch_ids).await?;
+    Ok(items
+        .into_iter()
+        .map(|item| {
+            let batch_id = item.prepared_batch_id();
+            let mut dto: StockItemDto = item.into();
+            dto.prepared_batch_name = batch_id.and_then(|id| names.get(&id).cloned());
+            dto
+        })
+        .collect())
 }
 
 #[utoipa::path(
@@ -113,7 +134,12 @@ async fn get_one(
 ) -> ApiResult<Tagged<StockItemDto>> {
     principal.require(Permission::StockRead)?;
     let item = state.stock.get(stock_item_id(id)).await?;
-    Ok(Tagged(item.revision, item.into()))
+    let revision = item.revision;
+    let named = name_portions(&state, vec![item]).await?;
+    Ok(Tagged(
+        revision,
+        named.into_iter().next().expect("one item in, one out"),
+    ))
 }
 
 #[utoipa::path(

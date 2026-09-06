@@ -34,6 +34,7 @@ function draftFrom(item: StockItem): StockDraft {
     unit: level.mode === 'not_tracked' ? 'g' : level.quantity.unit,
     quantity: level.mode === 'not_tracked' ? '' : String(level.quantity.amount),
     storageLocation: item.storage_location,
+    useBy: item.usability_deadline?.date ?? '',
     note: item.note ?? '',
   };
 }
@@ -77,7 +78,9 @@ export function StockItemPage({ id }: { id: string }) {
   const [failure, setFailure] = useState<string | null>(null);
   const [showHistory, setShowHistory] = useState(false);
 
-  const product = useProduct(item.data?.product_id ?? '', { enabled: Boolean(item.data) });
+  const product = useProduct(item.data?.product_id ?? '', {
+    enabled: Boolean(item.data?.product_id),
+  });
 
   if (item.isLoading) return <Loading label="Loading stock item" />;
   if (item.isError || !item.data) {
@@ -85,13 +88,18 @@ export function StockItemPage({ id }: { id: string }) {
   }
 
   const current = item.data;
+  const portionOf = current.prepared_batch_id ? current.prepared_batch_name : null;
+  const title = portionOf ?? product.data?.name ?? 'Stock item';
   const working = draft ?? draftFrom(current);
   const canSeeHistory = principal?.permissions.includes('stock:history') ?? false;
 
   async function onSubmit(event: FormEvent) {
     event.preventDefault();
     setFailure(null);
-    const found = validateStockDraft({ ...working, product: { id: current.product_id } as never });
+    const found = validateStockDraft({
+      ...working,
+      product: { id: current.product_id ?? current.prepared_batch_id } as never,
+    });
     setErrors(found);
     if (Object.keys(found).length > 0) return;
     try {
@@ -101,6 +109,9 @@ export function StockItemPage({ id }: { id: string }) {
         body: {
           level: draftToLevel(working),
           storage_location: working.storageLocation,
+          usability_deadline: working.useBy
+            ? { date: working.useBy, basis: current.usability_deadline?.basis ?? null }
+            : null,
           note: working.note.trim() || null,
         },
       });
@@ -116,16 +127,26 @@ export function StockItemPage({ id }: { id: string }) {
 
   return (
     <>
-      <Link
-        to="/stock/products/$productId"
-        params={{ productId: current.product_id }}
-        className="app-link"
-      >
-        <BackLabel>{product.data?.name ?? 'Product stock'}</BackLabel>
-      </Link>
+      {current.product_id ? (
+        <Link
+          to="/stock/products/$productId"
+          params={{ productId: current.product_id }}
+          className="app-link"
+        >
+          <BackLabel>{product.data?.name ?? 'Product stock'}</BackLabel>
+        </Link>
+      ) : (
+        <Link to="/stock" className="app-link">
+          <BackLabel>Stock</BackLabel>
+        </Link>
+      )}
       <PageHeader
-        title={product.data?.name ?? 'Stock item'}
-        subtitle={current.storage_location}
+        title={title}
+        subtitle={
+          portionOf
+            ? `Prepared portion · ${current.storage_location}`
+            : current.storage_location
+        }
       />
 
       <Paper variant="outlined" sx={{ p: 3, maxWidth: 560 }}>
@@ -148,10 +169,14 @@ export function StockItemPage({ id }: { id: string }) {
                   disabled={archive.isPending}
                   onClick={async () => {
                     await archive.mutateAsync({ id, revision: current.revision });
-                    void navigate({
-                      to: '/stock/products/$productId',
-                      params: { productId: current.product_id },
-                    });
+                    if (current.product_id) {
+                      void navigate({
+                        to: '/stock/products/$productId',
+                        params: { productId: current.product_id },
+                      });
+                    } else {
+                      void navigate({ to: '/stock' });
+                    }
                   }}
                 >
                   Archive

@@ -140,6 +140,26 @@ export function StockCard({ group }: { group: StockGroup }) {
   );
 }
 
+export function PreparedPortionCard({ group }: { group: StockGroup }) {
+  const first = group.items[0];
+  if (!first) return null;
+
+  return (
+    <Link
+      to="/stock/$id"
+      params={{ id: first.id }}
+      style={{ textDecoration: 'none', color: 'inherit' }}
+    >
+      <StockRow
+        testId={`stock-portion-${group.id}`}
+        name={group.name}
+        subtitle={locationSubtitle(group.items)}
+        availability={group.availability}
+      />
+    </Link>
+  );
+}
+
 export function IngredientCard({ group, productCount }: { group: StockGroup; productCount: number }) {
   if (group.items.length === 0) return null;
 

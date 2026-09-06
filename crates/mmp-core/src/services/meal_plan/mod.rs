@@ -10,9 +10,10 @@ use crate::domain::{
 use crate::error::{CoreError, Result, ValidationErrors};
 use crate::ports::{
     Clock, ConsumptionRecordRepository, HouseholdMemberRepository, HouseholdSettingsRepository,
-    IngredientRepository, MealPlanRepository, NutritionTargetRepository, ProductRepository,
-    RecipeRepository,
+    IngredientRepository, MealPlanRepository, NutritionTargetRepository, PreparedBatchRepository,
+    ProductRepository, RecipeRepository,
 };
+use crate::services::PreparationService;
 
 mod catalogue;
 mod outcomes;
@@ -37,6 +38,8 @@ pub struct MealPlanService {
     targets: Arc<dyn NutritionTargetRepository>,
     members: Arc<dyn HouseholdMemberRepository>,
     settings: Arc<dyn HouseholdSettingsRepository>,
+    batches: Arc<dyn PreparedBatchRepository>,
+    preparation: PreparationService,
     clock: Arc<dyn Clock>,
 }
 
@@ -51,6 +54,8 @@ impl MealPlanService {
         targets: Arc<dyn NutritionTargetRepository>,
         members: Arc<dyn HouseholdMemberRepository>,
         settings: Arc<dyn HouseholdSettingsRepository>,
+        batches: Arc<dyn PreparedBatchRepository>,
+        preparation: PreparationService,
         clock: Arc<dyn Clock>,
     ) -> Self {
         Self {
@@ -62,6 +67,8 @@ impl MealPlanService {
             targets,
             members,
             settings,
+            batches,
+            preparation,
             clock,
         }
     }

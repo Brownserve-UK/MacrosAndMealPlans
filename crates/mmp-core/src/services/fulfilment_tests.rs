@@ -5,9 +5,9 @@ use time::macros::datetime;
 
 use super::{RecipeFulfilments, expand_recipe};
 use crate::domain::{
-    ConsumedAmount, DemandGap, DemandSubject, IngredientId, NutritionFacts, Product, ProductId,
-    Provenance, Quantity, Recipe, RecipeComponent, RecipeComponentId, RecipeId, RecipeRequirement,
-    RecipeVisibility, Revision, Unit, UserId,
+    ConsumedAmount, DeductionCandidates, DemandGap, DemandSubject, IngredientId, NutritionFacts,
+    Product, ProductId, Provenance, Quantity, Recipe, RecipeComponent, RecipeComponentId, RecipeId,
+    RecipeRequirement, RecipeVisibility, Revision, Unit, UserId,
 };
 
 fn d(value: i64) -> Decimal {
@@ -122,7 +122,10 @@ fn a_pinned_product_becomes_a_want_against_that_product() {
     assert_eq!(out.wants.len(), 1);
     assert_eq!(out.wants[0].want, Quantity::new(d(200), Unit::Gram));
     assert_eq!(out.wants[0].target.subject, DemandSubject::product(milk.id));
-    assert_eq!(out.wants[0].target.product_ids, vec![milk.id]);
+    assert_eq!(
+        out.wants[0].target.candidates,
+        DeductionCandidates::Products(vec![milk.id])
+    );
 }
 
 #[test]
@@ -190,7 +193,10 @@ fn an_ingredient_becomes_one_want_against_the_whole_pool() {
         out.wants[0].target.subject,
         DemandSubject::ingredient(ingredient)
     );
-    assert_eq!(out.wants[0].target.product_ids, vec![first.id, second.id]);
+    assert_eq!(
+        out.wants[0].target.candidates,
+        DeductionCandidates::Products(vec![first.id, second.id])
+    );
 }
 
 #[test]

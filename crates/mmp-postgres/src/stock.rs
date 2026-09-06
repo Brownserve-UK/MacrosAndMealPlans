@@ -13,9 +13,9 @@ use crate::rows::{StockEffectRow, StockEventRow, StockItemRow};
 
 macro_rules! columns {
     () => {
-        "id, product_id, tracking_mode, quantity_value, quantity_unit, storage_location, \
-         source_date, source_date_kind, usability_deadline, usability_deadline_basis, note, \
-         revision, created_at, updated_at, archived_at"
+        "id, product_id, prepared_batch_id, tracking_mode, quantity_value, quantity_unit, \
+         storage_location, source_date, source_date_kind, usability_deadline, \
+         usability_deadline_basis, note, revision, created_at, updated_at, archived_at"
     };
 }
 
@@ -43,6 +43,17 @@ const LIST_FOR_PRODUCTS: &str = concat!(
     columns!(),
     " FROM stock_item WHERE product_id = ANY($1) ORDER BY created_at ASC, id ASC"
 );
+
+fn demand_subject(subject: mmp_core::domain::StockSubject) -> mmp_core::domain::DemandSubject {
+    match subject {
+        mmp_core::domain::StockSubject::Product { product_id } => {
+            mmp_core::domain::DemandSubject::product(product_id)
+        }
+        mmp_core::domain::StockSubject::PreparedPortion { prepared_batch_id } => {
+            mmp_core::domain::DemandSubject::prepared_portion(prepared_batch_id)
+        }
+    }
+}
 
 pub struct PgStockRepository {
     pool: PgPool,
@@ -89,14 +100,15 @@ pub(crate) async fn insert_stock_item(
 
     sqlx::query(
         "INSERT INTO stock_item (
-             id, product_id, tracking_mode, quantity_value, quantity_unit,
+             id, product_id, prepared_batch_id, tracking_mode, quantity_value, quantity_unit,
              storage_location,
              source_date, source_date_kind, usability_deadline, usability_deadline_basis,
              note, revision, created_at, updated_at
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)",
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)",
     )
     .bind(item.id.as_uuid())
-    .bind(item.product_id.as_uuid())
+    .bind(item.product_id().map(|id| id.as_uuid()))
+    .bind(item.prepared_batch_id().map(|id| id.as_uuid()))
     .bind(bindings.tracking_mode)
     .bind(bindings.quantity_value)
     .bind(bindings.quantity_unit)
@@ -227,8 +239,8 @@ pub(crate) async fn apply_stock_write(
     now: time::OffsetDateTime,
 ) -> Result<Vec<mmp_core::domain::StockOutcome>> {
     use mmp_core::domain::{
-        DeductionPlan, ReleasePlan, Shortfall, StockEventKind, StockEventSource, StockOutcome,
-        apply_take, plan_deduction, plan_release,
+        DeductionCandidates, DeductionPlan, ReleasePlan, Shortfall, StockEventKind,
+        StockEventSource, StockOutcome, apply_take, plan_deduction, plan_release,
     };
     use rust_decimal::Decimal;
 
@@ -236,13 +248,16 @@ pub(crate) async fn apply_stock_write(
 
     for release in &write.releases {
         let effect_rows: Vec<crate::rows::StockEffectRow> = sqlx::query_as(
-            "SELECT id, source_kind, source_id, source_detail_id, stock_item_id, product_id, state, applied_mode, \
+            "SELECT id, source_kind, source_id, source_detail_id, stock_item_id, product_id, \
+             prepared_batch_id, state, applied_mode, \
              applied_unit, exact_delta, estimated_delta, requested_value, apply_event_id, \
              applied_at, released_at, note FROM stock_effect \
-             WHERE source_kind = $1 AND source_id = $2 AND state = 'applied' FOR UPDATE",
+             WHERE source_kind = $1 AND source_id = $2 AND state = 'applied' \
+             AND ($3::uuid IS NULL OR source_detail_id = $3) FOR UPDATE",
         )
         .bind(release.source_kind.code())
         .bind(release.source_id)
+        .bind(release.source_detail_id)
         .fetch_all(&mut *conn)
         .await
         .map_err(|e| repository_error("locking stock effects for a release", e))?;
@@ -257,11 +272,11 @@ pub(crate) async fn apply_stock_write(
             label: release.source_label.clone(),
         };
         let mut unresolved = false;
-        let mut product_id = None;
+        let mut subject = None;
         let mut unit = mmp_core::domain::Unit::Gram;
 
         for effect in effects {
-            product_id = Some(effect.product_id);
+            subject = Some(effect.subject);
             unit = effect.applied_unit;
             let item_row: Option<StockItemRow> = sqlx::query_as(concat!(
                 "SELECT ",
@@ -338,9 +353,9 @@ pub(crate) async fn apply_stock_write(
             }
         }
 
-        if unresolved && let Some(product_id) = product_id {
+        if unresolved && let Some(subject) = subject {
             outcomes.push(mmp_core::domain::StockOutcome {
-                subject: mmp_core::domain::DemandSubject::product(product_id),
+                subject: demand_subject(subject),
                 wanted: mmp_core::domain::Quantity::new(Decimal::ZERO, unit),
                 deducted: mmp_core::domain::Quantity::new(Decimal::ZERO, unit),
                 shortfall: Shortfall::Covered,
@@ -350,21 +365,31 @@ pub(crate) async fn apply_stock_write(
     }
 
     for deduction in &write.deductions {
-        let rows: Vec<StockItemRow> = sqlx::query_as(concat!(
-            "SELECT ",
-            columns!(),
-            " FROM stock_item WHERE product_id = ANY($1) AND archived_at IS NULL FOR UPDATE"
-        ))
-        .bind(
-            deduction
-                .target
-                .product_ids
-                .iter()
-                .map(|id| id.as_uuid())
-                .collect::<Vec<_>>(),
-        )
-        .fetch_all(&mut *conn)
-        .await
+        let rows: Vec<StockItemRow> = match &deduction.target.candidates {
+            DeductionCandidates::Products(product_ids) => {
+                sqlx::query_as(concat!(
+                    "SELECT ",
+                    columns!(),
+                    " FROM stock_item WHERE product_id = ANY($1) AND archived_at IS NULL FOR UPDATE"
+                ))
+                .bind(
+                    product_ids
+                        .iter()
+                        .map(|id| id.as_uuid())
+                        .collect::<Vec<_>>(),
+                )
+                .fetch_all(&mut *conn)
+                .await
+            }
+            DeductionCandidates::PreparedBatch(batch_id) => sqlx::query_as(concat!(
+                "SELECT ",
+                columns!(),
+                " FROM stock_item WHERE prepared_batch_id = $1 AND archived_at IS NULL FOR UPDATE"
+            ))
+            .bind(batch_id.as_uuid())
+            .fetch_all(&mut *conn)
+            .await,
+        }
         .map_err(|e| repository_error("locking stock for a deduction", e))?;
         let items: Vec<StockItem> = rows
             .into_iter()
@@ -393,10 +418,11 @@ pub(crate) async fn apply_stock_write(
             let event_id = Uuid::now_v7();
             let inserted: Option<(Uuid,)> = sqlx::query_as(
                 "INSERT INTO stock_effect (
-                     id, source_kind, source_id, source_detail_id, stock_item_id, product_id, state,
+                     id, source_kind, source_id, source_detail_id, stock_item_id, product_id,
+                     prepared_batch_id, state,
                      applied_mode, applied_unit, exact_delta, estimated_delta,
                      requested_value, apply_event_id, applied_at
-                 ) VALUES ($1, $2, $3, $4, $5, $6, 'applied', $7, $8, $9, $10, $11, $12, $13)
+                 ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'applied', $8, $9, $10, $11, $12, $13, $14)
                  ON CONFLICT (source_kind, source_id, source_detail_id, stock_item_id)
                  WHERE state = 'applied'
                  DO NOTHING RETURNING id",
@@ -406,7 +432,8 @@ pub(crate) async fn apply_stock_write(
             .bind(deduction.source_id)
             .bind(deduction.source_detail_id)
             .bind(take.stock_item_id.as_uuid())
-            .bind(item.product_id.as_uuid())
+            .bind(item.product_id().map(|id| id.as_uuid()))
+            .bind(item.prepared_batch_id().map(|id| id.as_uuid()))
             .bind(item.tracking_mode().code())
             .bind(take.requested.unit.code())
             .bind(applied.exact_delta)
@@ -624,7 +651,8 @@ impl StockRepository for PgStockRepository {
         source_id: Uuid,
     ) -> Result<Vec<StockEffect>> {
         let rows: Vec<StockEffectRow> = sqlx::query_as(
-            "SELECT id, source_kind, source_id, source_detail_id, stock_item_id, product_id, state, applied_mode, \
+            "SELECT id, source_kind, source_id, source_detail_id, stock_item_id, product_id, \
+             prepared_batch_id, state, applied_mode, \
              applied_unit, exact_delta, estimated_delta, requested_value, apply_event_id, \
              applied_at, released_at, note FROM stock_effect \
              WHERE source_kind = $1 AND source_id = $2 ORDER BY applied_at ASC, id ASC",

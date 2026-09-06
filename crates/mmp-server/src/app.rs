@@ -28,6 +28,7 @@ pub fn build(state: AppState) -> (Router, utoipa::openapi::OpenApi) {
         .merge(routes::shopping::router())
         .merge(routes::stock::router())
         .merge(routes::weight::router())
+        .merge(routes::preparation::router())
         .split_for_parts();
 
     let router = router
@@ -70,6 +71,13 @@ pub fn stub_state() -> AppState {
     let consumption = Arc::new(NoopConsumptionRecords);
     let products = Arc::new(NoopProducts);
     let targets = Arc::new(NoopNutritionTargets);
+    let preparation = mmp_core::services::PreparationService::new(
+        Arc::new(NoopPreparedBatches),
+        Arc::new(NoopRecipes),
+        Arc::new(NoopProducts),
+        Arc::new(NoopIngredients),
+        Arc::new(SystemClock),
+    );
     let stock = mmp_core::services::StockService::new(
         Arc::new(NoopStock),
         Arc::new(NoopProducts),
@@ -97,6 +105,7 @@ pub fn stub_state() -> AppState {
             products.clone(),
             Arc::new(NoopIngredients),
             Arc::new(NoopRecipes),
+            Arc::new(NoopPreparedBatches),
             Arc::new(SystemClock),
         ),
         mmp_core::services::MealPlanService::new(
@@ -108,6 +117,8 @@ pub fn stub_state() -> AppState {
             targets.clone(),
             Arc::new(NoopMembers),
             Arc::new(NoopHouseholdSettings),
+            Arc::new(NoopPreparedBatches),
+            preparation.clone(),
             Arc::new(SystemClock),
         ),
         mmp_core::services::NutritionTargetService::new(targets, Arc::new(SystemClock)),
@@ -132,6 +143,7 @@ pub fn stub_state() -> AppState {
             Arc::new(NoopWeightGoals),
             Arc::new(SystemClock),
         ),
+        preparation,
         Arc::new(crate::auth::DevBasicAuthProvider::new(household, "")),
     )
 }
@@ -273,6 +285,41 @@ struct NoopNutritionTargets;
 struct NoopWeightRecords;
 struct NoopWeightGoals;
 struct NoopRecipes;
+struct NoopPreparedBatches;
+
+#[async_trait::async_trait]
+impl mmp_core::ports::PreparedBatchRepository for NoopPreparedBatches {
+    async fn get(
+        &self,
+        _: mmp_core::domain::PreparedBatchId,
+    ) -> mmp_core::Result<Option<mmp_core::domain::PreparedBatch>> {
+        Ok(None)
+    }
+
+    async fn get_many(
+        &self,
+        _: &[mmp_core::domain::PreparedBatchId],
+    ) -> mmp_core::Result<Vec<mmp_core::domain::PreparedBatch>> {
+        Ok(Vec::new())
+    }
+
+    async fn for_component(
+        &self,
+        _: mmp_core::domain::MealPlanComponentId,
+    ) -> mmp_core::Result<Option<mmp_core::domain::PreparedBatch>> {
+        Ok(None)
+    }
+
+    async fn insert(
+        &self,
+        _: &mmp_core::domain::PreparedBatch,
+        _: &mmp_core::domain::StockItem,
+        _: &mmp_core::domain::NewStockEvent,
+        _: &mmp_core::ports::StockWrite,
+    ) -> mmp_core::Result<Vec<mmp_core::domain::StockOutcome>> {
+        Ok(Vec::new())
+    }
+}
 
 #[async_trait::async_trait]
 impl mmp_core::ports::NutritionTargetRepository for NoopNutritionTargets {

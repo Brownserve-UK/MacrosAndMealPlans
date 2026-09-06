@@ -6,17 +6,17 @@ use http_body_util::BodyExt;
 use mmp_core::ports::SystemClock;
 use mmp_core::services::{
     CatalogueService, ConsumptionService, HouseholdService, HouseholdSettingsService,
-    MealPlanService, NutritionTargetService, RecipeService, ShoppingService, StockService,
-    WeightService,
+    MealPlanService, NutritionTargetService, PreparationService, RecipeService, ShoppingService,
+    StockService, WeightService,
 };
 use mmp_core::testing::{
     InMemoryAccessGrantRepository, InMemoryConsumptionRecordRepository,
     InMemoryHouseholdMemberRepository, InMemoryHouseholdSettingsRepository,
     InMemoryIngredientRepository, InMemoryMealPlanRepository, InMemoryNutritionTargetRepository,
-    InMemoryProductRepository, InMemoryPurchaseRepository, InMemoryRecipeRepository,
-    InMemoryShoppingCadenceRepository, InMemoryShoppingOpportunityRepository,
-    InMemoryStockRepository, InMemoryUserRepository, InMemoryWeightGoalRepository,
-    InMemoryWeightRecordRepository,
+    InMemoryPreparedBatchRepository, InMemoryProductRepository, InMemoryPurchaseRepository,
+    InMemoryRecipeRepository, InMemoryShoppingCadenceRepository,
+    InMemoryShoppingOpportunityRepository, InMemoryStockRepository, InMemoryUserRepository,
+    InMemoryWeightGoalRepository, InMemoryWeightRecordRepository,
 };
 use mmp_server::auth::DevBasicAuthProvider;
 use mmp_server::{AppState, app};
@@ -68,6 +68,7 @@ fn app_with_web(dist: &std::path::Path) -> axum::Router {
             Arc::new(products.clone()),
             ingredients.clone(),
             recipes_repo.clone(),
+            Arc::new(InMemoryPreparedBatchRepository::new()),
             Arc::new(SystemClock),
         ),
         MealPlanService::new(
@@ -79,6 +80,14 @@ fn app_with_web(dist: &std::path::Path) -> axum::Router {
             Arc::new(targets.clone()),
             Arc::new(InMemoryHouseholdMemberRepository::new()),
             Arc::new(InMemoryHouseholdSettingsRepository::new()),
+            Arc::new(InMemoryPreparedBatchRepository::new()),
+            PreparationService::new(
+                Arc::new(InMemoryPreparedBatchRepository::new()),
+                recipes_repo.clone(),
+                Arc::new(InMemoryProductRepository::new()),
+                Arc::new(InMemoryIngredientRepository::new()),
+                Arc::new(SystemClock),
+            ),
             Arc::new(SystemClock),
         ),
         NutritionTargetService::new(Arc::new(targets), Arc::new(SystemClock)),
@@ -114,6 +123,13 @@ fn app_with_web(dist: &std::path::Path) -> axum::Router {
         WeightService::new(
             Arc::new(InMemoryWeightRecordRepository::new()),
             Arc::new(InMemoryWeightGoalRepository::new()),
+            Arc::new(SystemClock),
+        ),
+        PreparationService::new(
+            Arc::new(InMemoryPreparedBatchRepository::new()),
+            recipes_repo.clone(),
+            Arc::new(InMemoryProductRepository::new()),
+            Arc::new(InMemoryIngredientRepository::new()),
             Arc::new(SystemClock),
         ),
         Arc::new(DevBasicAuthProvider::new(household, "changeme")),
@@ -240,6 +256,7 @@ async fn without_a_web_build_the_api_still_works() {
             Arc::new(products.clone()),
             ingredients.clone(),
             recipes_repo.clone(),
+            Arc::new(InMemoryPreparedBatchRepository::new()),
             Arc::new(SystemClock),
         ),
         MealPlanService::new(
@@ -251,6 +268,14 @@ async fn without_a_web_build_the_api_still_works() {
             Arc::new(targets.clone()),
             Arc::new(InMemoryHouseholdMemberRepository::new()),
             Arc::new(InMemoryHouseholdSettingsRepository::new()),
+            Arc::new(InMemoryPreparedBatchRepository::new()),
+            PreparationService::new(
+                Arc::new(InMemoryPreparedBatchRepository::new()),
+                recipes_repo.clone(),
+                Arc::new(InMemoryProductRepository::new()),
+                Arc::new(InMemoryIngredientRepository::new()),
+                Arc::new(SystemClock),
+            ),
             Arc::new(SystemClock),
         ),
         NutritionTargetService::new(Arc::new(targets), Arc::new(SystemClock)),
@@ -286,6 +311,13 @@ async fn without_a_web_build_the_api_still_works() {
         WeightService::new(
             Arc::new(InMemoryWeightRecordRepository::new()),
             Arc::new(InMemoryWeightGoalRepository::new()),
+            Arc::new(SystemClock),
+        ),
+        PreparationService::new(
+            Arc::new(InMemoryPreparedBatchRepository::new()),
+            recipes_repo.clone(),
+            Arc::new(InMemoryProductRepository::new()),
+            Arc::new(InMemoryIngredientRepository::new()),
             Arc::new(SystemClock),
         ),
         Arc::new(DevBasicAuthProvider::new(household, "changeme")),

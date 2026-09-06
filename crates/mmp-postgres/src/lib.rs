@@ -6,6 +6,7 @@ mod household_settings;
 mod ingredient;
 mod meal_plan;
 mod nutrition_target;
+mod prepared;
 mod product;
 mod recipe;
 mod rows;
@@ -21,6 +22,7 @@ pub use household_settings::PgHouseholdSettingsRepository;
 pub use ingredient::PgIngredientRepository;
 pub use meal_plan::PgMealPlanRepository;
 pub use nutrition_target::PgNutritionTargetRepository;
+pub use prepared::PgPreparedBatchRepository;
 pub use product::PgProductRepository;
 pub use recipe::PgRecipeRepository;
 pub use shopping::{

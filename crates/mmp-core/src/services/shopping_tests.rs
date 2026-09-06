@@ -8,8 +8,8 @@ use super::*;
 use crate::domain::{
     ConsumedAmount, HouseholdMember, HouseholdMemberId, Ingredient, IngredientId, MealItemRef,
     MealPlanComponent, MealPlanEntry, MealSlot, MissingStockInterpretation, NewStockItem, Product,
-    ProductId, Provenance, Quantity, Revision, StockLevel, StorageLocation, Unit, UserId,
-    WeightDisplay,
+    ProductId, Provenance, Quantity, Revision, StockLevel, StockSubject, StorageLocation, Unit,
+    UserId, WeightDisplay,
 };
 use crate::ports::{Clock, FixedClock, MealPlanRepository};
 use crate::testing::{
@@ -139,7 +139,7 @@ async fn add_stock(h: &Harness, product_id: ProductId, quantity: Quantity) {
     h.stock_service
         .create(
             NewStockItem {
-                product_id,
+                subject: StockSubject::product(product_id),
                 level: StockLevel::Exact { quantity },
                 storage_location: StorageLocation::Chilled,
                 source_date: None,
@@ -334,7 +334,7 @@ async fn a_not_tracked_staple_never_asks_to_be_bought() {
     h.stock_service
         .create(
             NewStockItem {
-                product_id: a.id,
+                subject: StockSubject::product(a.id),
                 level: StockLevel::NotTracked,
                 storage_location: StorageLocation::Ambient,
                 source_date: None,

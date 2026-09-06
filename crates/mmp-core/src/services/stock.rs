@@ -7,11 +7,12 @@ use time::Date;
 use super::fulfilment::{RecipeFulfilments, RecipeWant, expand_recipe};
 use super::revision::{commit_outcome, require_revision};
 use crate::domain::{
-    Availability, AvailabilityReport, Confidence, ConsumedAmount, DeductionPlan, DemandClaim,
-    DemandGap, DemandSubject, HouseholdMemberId, IngredientAvailability, IngredientId, MealItemRef,
-    MissingStock, NewStockEvent, NewStockItem, ProductAvailability, ProductId, Quantity, Recipe,
-    RecipeId, RecipeRequirement, Revision, StockEvent, StockEventKind, StockItem, StockItemId,
-    StockItemPatch, StockLevel, UserId, apply_take, plan_deduction,
+    Availability, AvailabilityReport, Confidence, ConsumedAmount, DeductionCandidates,
+    DeductionPlan, DemandClaim, DemandGap, DemandSubject, HouseholdMemberId,
+    IngredientAvailability, IngredientId, MealItemRef, MissingStock, NewStockEvent, NewStockItem,
+    ProductAvailability, ProductId, Quantity, Recipe, RecipeId, RecipeRequirement, Revision,
+    StockEvent, StockEventKind, StockItem, StockItemId, StockItemPatch, StockLevel, UserId,
+    apply_take, plan_deduction,
 };
 use crate::error::{CoreError, Result};
 use crate::ports::{
@@ -96,19 +97,21 @@ impl StockService {
         subject: Option<HouseholdMemberId>,
     ) -> Result<StockItem> {
         input.validate()?;
-        let product = self
-            .products
-            .get(input.product_id)
-            .await?
-            .ok_or_else(|| CoreError::not_found("product", input.product_id))?;
-        if product.is_archived() {
-            return Err(CoreError::conflict("That product is archived."));
+        if let Some(product_id) = input.subject.product_id() {
+            let product = self
+                .products
+                .get(product_id)
+                .await?
+                .ok_or_else(|| CoreError::not_found("product", product_id))?;
+            if product.is_archived() {
+                return Err(CoreError::conflict("That product is archived."));
+            }
         }
 
         let now = self.clock.now();
         let item = StockItem {
             id: StockItemId::new(),
-            product_id: input.product_id,
+            subject: input.subject,
             level: input.level,
             storage_location: input.storage_location,
             source_date: input.source_date,
@@ -226,7 +229,11 @@ impl StockService {
                 ..Default::default()
             })
             .await?;
-        let mut ids: Vec<ProductId> = all.items.iter().map(|item| item.product_id).collect();
+        let mut ids: Vec<ProductId> = all
+            .items
+            .iter()
+            .filter_map(|item| item.product_id())
+            .collect();
         sort_dedup(&mut ids, ProductId::as_uuid);
         self.report(&ids, true, from, to).await
     }
@@ -259,7 +266,7 @@ impl StockService {
                 ..Default::default()
             })
             .await?;
-        ids.extend(held.items.iter().map(|item| item.product_id));
+        ids.extend(held.items.iter().filter_map(|item| item.product_id()));
         sort_dedup(&mut ids, ProductId::as_uuid);
 
         self.build_snapshot(demand, &ids, true).await
@@ -314,6 +321,7 @@ impl StockService {
                 DemandSubject::Ingredient { ingredient_id } => {
                     ingredient_ids.contains(&ingredient_id)
                 }
+                DemandSubject::PreparedPortion { .. } => false,
             })
             .cloned()
             .collect();
@@ -330,7 +338,10 @@ impl StockService {
             if item.is_archived() {
                 continue;
             }
-            by_product.entry(item.product_id).or_default().push(item);
+            let Some(product_id) = item.product_id() else {
+                continue;
+            };
+            by_product.entry(product_id).or_default().push(item);
         }
 
         let catalogue = self.products.get_many(&wanted).await?;
@@ -378,7 +389,10 @@ impl StockService {
                     let Some(item) = pool.iter().find(|item| item.id == take.stock_item_id) else {
                         continue;
                     };
-                    add_quantity(&mut apportioned, item.product_id, take.requested);
+                    let Some(product_id) = item.product_id() else {
+                        continue;
+                    };
+                    add_quantity(&mut apportioned, product_id, take.requested);
                 }
             }
 
@@ -668,10 +682,12 @@ impl Demand {
     }
 
     fn add_want(&mut self, want: &RecipeWant) {
-        if let Some(ingredient_id) = want.target.subject.ingredient_id() {
+        if let Some(ingredient_id) = want.target.subject.ingredient_id()
+            && let DeductionCandidates::Products(product_ids) = &want.target.candidates
+        {
             self.pools
                 .entry(ingredient_id)
-                .or_insert_with(|| want.target.product_ids.clone());
+                .or_insert_with(|| product_ids.clone());
         }
         self.add(want.target.subject, want.want);
     }

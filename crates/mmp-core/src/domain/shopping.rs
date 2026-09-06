@@ -409,6 +409,7 @@ impl Purchase {
                         .is_some_and(|product_id| pool.contains(&product_id))
             }
             DemandSubject::Product { product_id } => self.product_id == Some(*product_id),
+            DemandSubject::PreparedPortion { .. } => false,
         }
     }
 }

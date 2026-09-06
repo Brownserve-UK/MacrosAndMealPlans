@@ -11,17 +11,17 @@ use image::{DynamicImage, ImageFormat, RgbImage};
 use mmp_core::ports::FixedClock;
 use mmp_core::services::{
     CatalogueService, ConsumptionService, HouseholdService, HouseholdSettingsService,
-    MealPlanService, NutritionTargetService, RecipeService, ShoppingService, StockService,
-    WeightService,
+    MealPlanService, NutritionTargetService, PreparationService, RecipeService, ShoppingService,
+    StockService, WeightService,
 };
 use mmp_core::testing::{
     InMemoryAccessGrantRepository, InMemoryConsumptionRecordRepository,
     InMemoryHouseholdMemberRepository, InMemoryHouseholdSettingsRepository,
     InMemoryIngredientRepository, InMemoryMealPlanRepository, InMemoryNutritionTargetRepository,
-    InMemoryProductRepository, InMemoryPurchaseRepository, InMemoryRecipeRepository,
-    InMemoryShoppingCadenceRepository, InMemoryShoppingOpportunityRepository,
-    InMemoryStockRepository, InMemoryUserRepository, InMemoryWeightGoalRepository,
-    InMemoryWeightRecordRepository,
+    InMemoryPreparedBatchRepository, InMemoryProductRepository, InMemoryPurchaseRepository,
+    InMemoryRecipeRepository, InMemoryShoppingCadenceRepository,
+    InMemoryShoppingOpportunityRepository, InMemoryStockRepository, InMemoryUserRepository,
+    InMemoryWeightGoalRepository, InMemoryWeightRecordRepository,
 };
 use mmp_server::AppState;
 use mmp_server::auth::DevBasicAuthProvider;
@@ -74,6 +74,21 @@ async fn app() -> Router {
         ingredients.clone(),
         clock.clone(),
     );
+    let batches = Arc::new(InMemoryPreparedBatchRepository::new());
+    let preparation2 = PreparationService::new(
+        batches.clone(),
+        recipes_repo.clone(),
+        Arc::new(products.clone()),
+        ingredients.clone(),
+        clock.clone(),
+    );
+    let preparation = PreparationService::new(
+        batches.clone(),
+        recipes_repo.clone(),
+        Arc::new(products.clone()),
+        ingredients.clone(),
+        clock.clone(),
+    );
     let state = AppState::new(
         CatalogueService::new(
             ingredients.clone(),
@@ -87,6 +102,7 @@ async fn app() -> Router {
             Arc::new(products.clone()),
             ingredients.clone(),
             recipes_repo.clone(),
+            batches.clone(),
             clock.clone(),
         ),
         MealPlanService::new(
@@ -98,6 +114,8 @@ async fn app() -> Router {
             Arc::new(targets.clone()),
             Arc::new(members.clone()),
             Arc::new(settings_repo.clone()),
+            batches.clone(),
+            preparation,
             clock.clone(),
         ),
         NutritionTargetService::new(Arc::new(targets), clock.clone()),
@@ -117,6 +135,7 @@ async fn app() -> Router {
             Arc::new(InMemoryWeightGoalRepository::new()),
             clock.clone(),
         ),
+        preparation2,
         Arc::new(DevBasicAuthProvider::new(household, PASSWORD)),
     );
     mmp_server::app::build(state).0

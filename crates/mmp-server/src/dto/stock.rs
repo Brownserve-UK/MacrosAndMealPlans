@@ -172,10 +172,23 @@ impl From<UsabilityDeadlineDto> for UsabilityDeadline {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum StockSubjectKindDto {
+    Product,
+    PreparedPortion,
+}
+
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct StockItemDto {
     pub id: Uuid,
-    pub product_id: Uuid,
+    pub subject_kind: StockSubjectKindDto,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub product_id: Option<Uuid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prepared_batch_id: Option<Uuid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prepared_batch_name: Option<String>,
     pub tracking_mode: TrackingModeDto,
     pub level: StockLevelDto,
     pub storage_location: StorageLocationDto,
@@ -204,7 +217,14 @@ impl From<StockItem> for StockItemDto {
     fn from(value: StockItem) -> Self {
         Self {
             id: value.id.as_uuid(),
-            product_id: value.product_id.as_uuid(),
+            subject_kind: if value.is_prepared_portion() {
+                StockSubjectKindDto::PreparedPortion
+            } else {
+                StockSubjectKindDto::Product
+            },
+            product_id: value.product_id().map(|id| id.as_uuid()),
+            prepared_batch_id: value.prepared_batch_id().map(|id| id.as_uuid()),
+            prepared_batch_name: None,
             tracking_mode: value.tracking_mode().into(),
             level: value.level.into(),
             storage_location: value.storage_location.into(),
@@ -237,7 +257,9 @@ pub struct CreateStockItemRequest {
 impl CreateStockItemRequest {
     pub fn into_domain(self) -> NewStockItem {
         NewStockItem {
-            product_id: mmp_core::domain::ProductId::from(self.product_id),
+            subject: mmp_core::domain::StockSubject::product(mmp_core::domain::ProductId::from(
+                self.product_id,
+            )),
             level: self.level.into(),
             storage_location: self.storage_location.into(),
             source_date: self.source_date.map(Into::into),
@@ -356,6 +378,7 @@ pub struct StockOutcomesResponse {
 pub enum DemandSubjectDto {
     Product { product_id: Uuid },
     Ingredient { ingredient_id: Uuid },
+    PreparedPortion { prepared_batch_id: Uuid },
 }
 
 impl From<DemandSubject> for DemandSubjectDto {
@@ -366,6 +389,9 @@ impl From<DemandSubject> for DemandSubjectDto {
             },
             DemandSubject::Ingredient { ingredient_id } => Self::Ingredient {
                 ingredient_id: ingredient_id.as_uuid(),
+            },
+            DemandSubject::PreparedPortion { prepared_batch_id } => Self::PreparedPortion {
+                prepared_batch_id: prepared_batch_id.as_uuid(),
             },
         }
     }

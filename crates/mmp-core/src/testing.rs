@@ -7,14 +7,15 @@ use async_trait::async_trait;
 use time::Date;
 
 use crate::domain::{
-    AccessScope, ConsumptionRecord, ConsumptionRecordId, HouseholdMember, HouseholdMemberId,
-    HouseholdSettings, Ingredient, IngredientId, MealParticipant, MealPlanEntry, MealPlanEntryId,
-    MealTimes, MemberAccessGrant, MissingStockInterpretation, NewStockEvent, NutritionTarget,
-    NutritionTargetId, OpportunityException, Product, ProductId, Purchase, PurchaseId,
-    PurchaseState, Quantity, Recipe, RecipeId, RecipePhoto, RecipeSummary, RecipeVisibility,
-    Revision, Role, ShoppingCadence, ShoppingOpportunityId, StockEffect, StockEffectSource,
-    StockEvent, StockEventId, StockItem, StockItemId, StockOutcome, Unit, User, UserId, WeightGoal,
-    WeightGoalId, WeightRecord, WeightRecordId,
+    AccessScope, ConsumptionRecord, ConsumptionRecordId, DeductionCandidates, DemandSubject,
+    HouseholdMember, HouseholdMemberId, HouseholdSettings, Ingredient, IngredientId,
+    MealParticipant, MealPlanComponentId, MealPlanEntry, MealPlanEntryId, MealTimes,
+    MemberAccessGrant, MissingStockInterpretation, NewStockEvent, NutritionTarget,
+    NutritionTargetId, OpportunityException, PreparedBatch, PreparedBatchId, Product, ProductId,
+    Purchase, PurchaseId, PurchaseState, Quantity, Recipe, RecipeId, RecipePhoto, RecipeSummary,
+    RecipeVisibility, Revision, Role, ShoppingCadence, ShoppingOpportunityId, StockEffect,
+    StockEffectSource, StockEvent, StockEventId, StockItem, StockItemId, StockOutcome,
+    StockSubject, Unit, User, UserId, WeightGoal, WeightGoalId, WeightRecord, WeightRecordId,
 };
 use crate::error::{CoreError, Result};
 use crate::ports::{
@@ -858,6 +859,78 @@ impl ConsumptionRecordRepository for InMemoryConsumptionRecordRepository {
         } else {
             Ok((outcome, Vec::new()))
         }
+    }
+}
+
+#[derive(Clone, Default)]
+pub struct InMemoryPreparedBatchRepository {
+    rows: Arc<Mutex<Vec<PreparedBatch>>>,
+    stock: InMemoryStockRepository,
+}
+
+impl InMemoryPreparedBatchRepository {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_stock(stock: InMemoryStockRepository) -> Self {
+        Self {
+            rows: Arc::new(Mutex::new(Vec::new())),
+            stock,
+        }
+    }
+
+    pub fn count(&self) -> usize {
+        self.rows.lock().unwrap().len()
+    }
+}
+
+#[async_trait]
+impl crate::ports::PreparedBatchRepository for InMemoryPreparedBatchRepository {
+    async fn get(&self, id: PreparedBatchId) -> Result<Option<PreparedBatch>> {
+        Ok(self
+            .rows
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|b| b.id == id)
+            .cloned())
+    }
+
+    async fn get_many(&self, ids: &[PreparedBatchId]) -> Result<Vec<PreparedBatch>> {
+        Ok(self
+            .rows
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|b| ids.contains(&b.id))
+            .cloned()
+            .collect())
+    }
+
+    async fn for_component(
+        &self,
+        component_id: MealPlanComponentId,
+    ) -> Result<Option<PreparedBatch>> {
+        Ok(self
+            .rows
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|b| b.source.component_id() == Some(component_id))
+            .cloned())
+    }
+
+    async fn insert(
+        &self,
+        batch: &PreparedBatch,
+        portion: &StockItem,
+        event: &NewStockEvent,
+        stock: &crate::ports::StockWrite,
+    ) -> Result<Vec<StockOutcome>> {
+        self.rows.lock().unwrap().push(batch.clone());
+        self.stock.insert_item(portion, event);
+        Ok(self.stock.apply_write(stock, batch.prepared_at))
     }
 }
 
@@ -1727,6 +1800,24 @@ impl RecipeRepository for InMemoryRecipeRepository {
     }
 }
 
+fn demand_subject(subject: StockSubject) -> DemandSubject {
+    match subject {
+        StockSubject::Product { product_id } => DemandSubject::product(product_id),
+        StockSubject::PreparedPortion { prepared_batch_id } => {
+            DemandSubject::prepared_portion(prepared_batch_id)
+        }
+    }
+}
+
+fn candidate_matches(candidates: &DeductionCandidates, item: &StockItem) -> bool {
+    match candidates {
+        DeductionCandidates::Products(product_ids) => item
+            .product_id()
+            .is_some_and(|id| product_ids.contains(&id)),
+        DeductionCandidates::PreparedBatch(batch_id) => item.prepared_batch_id() == Some(*batch_id),
+    }
+}
+
 #[derive(Default, Clone)]
 pub struct InMemoryStockRepository {
     rows: Arc<Mutex<HashMap<StockItemId, StockItem>>>,
@@ -1772,6 +1863,11 @@ impl InMemoryStockRepository {
         id
     }
 
+    pub(crate) fn insert_item(&self, item: &StockItem, event: &NewStockEvent) {
+        self.rows.lock().unwrap().insert(item.id, item.clone());
+        self.record(item.id, event);
+    }
+
     pub(crate) fn apply_write(
         &self,
         write: &crate::ports::StockWrite,
@@ -1794,6 +1890,9 @@ impl InMemoryStockRepository {
                     e.state == StockEffectState::Applied
                         && e.source_kind == release.source_kind
                         && e.source_id == release.source_id
+                        && release
+                            .source_detail_id
+                            .is_none_or(|detail| e.source_detail_id == Some(detail))
                 })
                 .cloned()
                 .collect();
@@ -1801,7 +1900,7 @@ impl InMemoryStockRepository {
             let mut subject = None;
             let mut unit = Unit::Gram;
             for effect in targets {
-                subject = Some(crate::domain::DemandSubject::product(effect.product_id));
+                subject = Some(demand_subject(effect.subject));
                 unit = effect.applied_unit;
                 let item = self
                     .rows
@@ -1878,7 +1977,7 @@ impl InMemoryStockRepository {
             let items: Vec<StockItem> = {
                 let rows = self.rows.lock().unwrap();
                 rows.values()
-                    .filter(|item| deduction.target.product_ids.contains(&item.product_id))
+                    .filter(|item| candidate_matches(&deduction.target.candidates, item))
                     .cloned()
                     .collect()
             };
@@ -1938,7 +2037,7 @@ impl InMemoryStockRepository {
                     source_id: deduction.source_id,
                     source_detail_id: deduction.source_detail_id,
                     stock_item_id: take.stock_item_id,
-                    product_id: item.product_id,
+                    subject: item.subject,
                     state: StockEffectState::Applied,
                     applied_mode: item.tracking_mode(),
                     applied_unit: take.requested.unit,
@@ -1981,7 +2080,11 @@ impl StockRepository for InMemoryStockRepository {
         let items: Vec<StockItem> = rows
             .values()
             .filter(|item| query.include_archived || !item.is_archived())
-            .filter(|item| query.product_id.is_none_or(|id| item.product_id == id))
+            .filter(|item| {
+                query
+                    .product_id
+                    .is_none_or(|id| item.product_id() == Some(id))
+            })
             .cloned()
             .collect();
         Ok(paginate(items, query.page, query.sort, |item| {
@@ -1993,7 +2096,10 @@ impl StockRepository for InMemoryStockRepository {
         let rows = self.rows.lock().unwrap();
         Ok(rows
             .values()
-            .filter(|item| product_ids.contains(&item.product_id))
+            .filter(|item| {
+                item.product_id()
+                    .is_some_and(|id| product_ids.contains(&id))
+            })
             .cloned()
             .collect())
     }

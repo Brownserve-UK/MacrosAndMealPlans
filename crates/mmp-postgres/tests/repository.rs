@@ -14,8 +14,8 @@ use mmp_core::domain::{
     RecipeComponent, RecipeComponentId, RecipeId, RecipeInstruction, RecipeInstructionId,
     RecipePhoto, RecipePhotoDerivatives, RecipeRequirement, RecipeVisibility, Revision, Role,
     ShoppingCadence, ShoppingOpportunityId, StockEventKind, StockItem, StockItemId, StockLevel,
-    StorageLocation, Unit, User, UserId, WeightDisplay, WeightGoal, WeightGoalId, WeightObjective,
-    WeightRecord, WeightRecordId, WeightSource,
+    StockSubject, StorageLocation, Unit, User, UserId, WeightDisplay, WeightGoal, WeightGoalId,
+    WeightObjective, WeightRecord, WeightRecordId, WeightSource,
 };
 use mmp_core::domain::{DeductionTarget, StockEffectSource, StockEventSource};
 use mmp_core::ports::{
@@ -2773,7 +2773,7 @@ async fn round_trips_a_stock_item_and_writes_an_event(pool: PgPool) {
     let repo = PgStockRepository::new(pool.clone());
     let item = mmp_core::domain::StockItem {
         id: StockItemId::new(),
-        product_id,
+        subject: StockSubject::product(product_id),
         level: StockLevel::Exact {
             quantity: Quantity::new(Decimal::new(400, 0), Unit::Gram),
         },
@@ -2818,7 +2818,7 @@ async fn several_stock_rows_may_share_a_product(pool: PgPool) {
         let now = OffsetDateTime::now_utc();
         let item = mmp_core::domain::StockItem {
             id: StockItemId::new(),
-            product_id,
+            subject: StockSubject::product(product_id),
             level: StockLevel::Exact {
                 quantity: Quantity::new(Decimal::new(grams, 0), Unit::Gram),
             },
@@ -2859,7 +2859,7 @@ async fn a_stale_stock_update_is_refused(pool: PgPool) {
     let now = OffsetDateTime::now_utc();
     let mut item = mmp_core::domain::StockItem {
         id: StockItemId::new(),
-        product_id,
+        subject: StockSubject::product(product_id),
         level: StockLevel::Exact {
             quantity: Quantity::new(Decimal::new(400, 0), Unit::Gram),
         },
@@ -2895,7 +2895,7 @@ fn stock_item_of(product_id: ProductId, millilitres: i64) -> mmp_core::domain::S
     let now = OffsetDateTime::now_utc();
     mmp_core::domain::StockItem {
         id: StockItemId::new(),
-        product_id,
+        subject: StockSubject::product(product_id),
         level: StockLevel::Exact {
             quantity: Quantity::new(Decimal::new(millilitres, 0), Unit::Millilitre),
         },
@@ -3193,7 +3193,7 @@ async fn a_purchase_and_the_stock_it_creates_land_together(pool: PgPool) {
     let now = OffsetDateTime::now_utc();
     let item = StockItem {
         id: StockItemId::new(),
-        product_id: bottle.id,
+        subject: StockSubject::product(bottle.id),
         level: StockLevel::Exact {
             quantity: Quantity::new(Decimal::new(2000, 0), Unit::Millilitre),
         },

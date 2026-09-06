@@ -9,10 +9,11 @@ use crate::domain::{
     HouseholdMember, HouseholdMemberId, HouseholdSettings, Ingredient, IngredientId,
     MealParticipant, MealPlanComponentId, MealPlanComponentSnapshot, MealPlanEntry,
     MealPlanEntryId, MemberAccessGrant, NewStockEvent, NutritionTarget, NutritionTargetId,
-    OpportunityException, Product, ProductId, Purchase, PurchaseId, PurchaseState, Quantity,
-    Recipe, RecipeId, RecipePhoto, RecipeSummary, Revision, Role, ShoppingCadence,
-    ShoppingOpportunityId, StockEffect, StockEffectSource, StockEvent, StockItem, StockItemId,
-    StockOutcome, User, UserId, WeightGoal, WeightGoalId, WeightRecord, WeightRecordId,
+    OpportunityException, PreparedBatch, PreparedBatchId, Product, ProductId, Purchase, PurchaseId,
+    PurchaseState, Quantity, Recipe, RecipeId, RecipePhoto, RecipeSummary, Revision, Role,
+    ShoppingCadence, ShoppingOpportunityId, StockEffect, StockEffectSource, StockEvent, StockItem,
+    StockItemId, StockOutcome, User, UserId, WeightGoal, WeightGoalId, WeightRecord,
+    WeightRecordId,
 };
 use crate::error::Result;
 
@@ -242,6 +243,7 @@ pub struct StockDeduction {
 pub struct StockRelease {
     pub source_kind: StockEffectSource,
     pub source_id: uuid::Uuid,
+    pub source_detail_id: Option<uuid::Uuid>,
     pub actor_user_id: Option<UserId>,
     pub subject_member_id: Option<HouseholdMemberId>,
     pub source_label: String,
@@ -437,6 +439,26 @@ pub trait StockRepository: Send + Sync + 'static {
         source_kind: StockEffectSource,
         source_id: uuid::Uuid,
     ) -> Result<Vec<StockEffect>>;
+}
+
+#[async_trait]
+pub trait PreparedBatchRepository: Send + Sync + 'static {
+    async fn get(&self, id: PreparedBatchId) -> Result<Option<PreparedBatch>>;
+
+    async fn get_many(&self, ids: &[PreparedBatchId]) -> Result<Vec<PreparedBatch>>;
+
+    async fn for_component(
+        &self,
+        component_id: MealPlanComponentId,
+    ) -> Result<Option<PreparedBatch>>;
+
+    async fn insert(
+        &self,
+        batch: &PreparedBatch,
+        portion: &StockItem,
+        event: &NewStockEvent,
+        stock: &StockWrite,
+    ) -> Result<Vec<StockOutcome>>;
 }
 
 #[async_trait]

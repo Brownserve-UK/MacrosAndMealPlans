@@ -2,17 +2,18 @@ use std::collections::BTreeMap;
 use std::str::FromStr;
 
 use mmp_core::domain::{
-    AccessScope, CatalogueOrigin, ConsumedAmount, ConsumptionRecord, ConsumptionRecordId,
-    ExceptionState, HouseholdMember, HouseholdMemberId, HouseholdSettings, Ingredient,
-    IngredientId, MealItemRef, MealPlanComponentId, MealPlanEntryId, MealSlot, MealTimes,
-    MemberAccessGrant, MissingStockInterpretation, NutritionFacts, NutritionGoals,
-    NutritionQuality, NutritionTarget, NutritionTargetId, OpportunityException, Product, ProductId,
-    Provenance, Purchase, PurchaseId, PurchaseState, Quantity, RecipeId, Revision, Role,
-    ShoppingCadence, ShoppingOpportunityId, ShoppingSection, SourceDate, SourceDateKind,
-    StockEffect, StockEffectId, StockEffectSource, StockEffectState, StockEvent, StockEventId,
-    StockEventKind, StockEventSource, StockItem, StockItemId, StockLevel, StorageLocation,
-    TrackingMode, Unit, UsabilityDeadline, User, UserId, WeightDisplay, WeightGoal, WeightGoalId,
-    WeightObjective, WeightRecord, WeightRecordId, WeightSource, week_day_from_number,
+    AccessScope, CatalogueOrigin, ConsumedAmount, ConsumedNutrition, ConsumptionRecord,
+    ConsumptionRecordId, ExceptionState, HouseholdMember, HouseholdMemberId, HouseholdSettings,
+    Ingredient, IngredientId, MealItemRef, MealPlanComponentId, MealPlanEntryId, MealSlot,
+    MealTimes, MemberAccessGrant, MissingStockInterpretation, NutritionFacts, NutritionGoals,
+    NutritionQuality, NutritionTarget, NutritionTargetId, OpportunityException, PreparationSource,
+    PreparedBatch, PreparedBatchId, Product, ProductId, Provenance, Purchase, PurchaseId,
+    PurchaseState, Quantity, RecipeId, Revision, Role, ShoppingCadence, ShoppingOpportunityId,
+    ShoppingSection, SourceDate, SourceDateKind, StockEffect, StockEffectId, StockEffectSource,
+    StockEffectState, StockEvent, StockEventId, StockEventKind, StockEventSource, StockItem,
+    StockItemId, StockLevel, StockSubject, StorageLocation, TrackingMode, Unit, UsabilityDeadline,
+    User, UserId, WeightDisplay, WeightGoal, WeightGoalId, WeightObjective, WeightRecord,
+    WeightRecordId, WeightSource, week_day_from_number,
 };
 use mmp_core::{CoreError, RepositoryError};
 use rust_decimal::Decimal;
@@ -459,9 +460,97 @@ impl TryFrom<HouseholdSettingsRow> for HouseholdSettings {
 }
 
 #[derive(Debug, sqlx::FromRow)]
+pub struct PreparedBatchRow {
+    pub id: Uuid,
+    pub recipe_id: Option<Uuid>,
+    pub meal_plan_entry_id: Option<Uuid>,
+    pub meal_plan_component_id: Option<Uuid>,
+    pub prepared_at: OffsetDateTime,
+    pub servings_produced: Decimal,
+    pub frozen_item_name: String,
+    pub nutrition_basis_amount: Option<Decimal>,
+    pub nutrition_basis_unit: Option<String>,
+    pub energy_kcal: Option<Decimal>,
+    pub protein_g: Option<Decimal>,
+    pub carbohydrate_g: Option<Decimal>,
+    pub sugar_g: Option<Decimal>,
+    pub fat_g: Option<Decimal>,
+    pub saturated_fat_g: Option<Decimal>,
+    pub fibre_g: Option<Decimal>,
+    pub salt_g: Option<Decimal>,
+    pub cholesterol_mg: Option<Decimal>,
+    pub nutrition_extra: Json<BTreeMap<String, Decimal>>,
+    pub nutrition_quality: String,
+    pub created_by: Uuid,
+    pub revision: i64,
+    pub created_at: OffsetDateTime,
+    pub updated_at: OffsetDateTime,
+}
+
+impl TryFrom<PreparedBatchRow> for PreparedBatch {
+    type Error = CoreError;
+
+    fn try_from(row: PreparedBatchRow) -> Result<Self, Self::Error> {
+        let source = match (row.meal_plan_entry_id, row.meal_plan_component_id) {
+            (Some(entry_id), Some(component_id)) => PreparationSource::MealPlanComponent {
+                entry_id: MealPlanEntryId::from(entry_id),
+                component_id: MealPlanComponentId::from(component_id),
+            },
+            _ => PreparationSource::Standalone,
+        };
+        Ok(PreparedBatch {
+            id: PreparedBatchId::from(row.id),
+            recipe_id: row.recipe_id.map(RecipeId::from),
+            source,
+            prepared_at: row.prepared_at,
+            servings_produced: row.servings_produced,
+            item_name: row.frozen_item_name,
+            nutrition: ConsumedNutrition {
+                facts: NutritionFacts {
+                    basis: parse_basis(row.nutrition_basis_amount, row.nutrition_basis_unit)?,
+                    energy_kcal: row.energy_kcal,
+                    protein_g: row.protein_g,
+                    carbohydrate_g: row.carbohydrate_g,
+                    sugar_g: row.sugar_g,
+                    fat_g: row.fat_g,
+                    saturated_fat_g: row.saturated_fat_g,
+                    fibre_g: row.fibre_g,
+                    salt_g: row.salt_g,
+                    cholesterol_mg: row.cholesterol_mg,
+                    extra: row.nutrition_extra.0,
+                },
+                quality: NutritionQuality::from_str(&row.nutrition_quality)
+                    .map_err(|_| bad_value("nutrition_quality", &row.nutrition_quality))?,
+            },
+            created_by: UserId::from(row.created_by),
+            revision: Revision::new(row.revision),
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+        })
+    }
+}
+
+fn stock_subject(
+    product_id: Option<Uuid>,
+    prepared_batch_id: Option<Uuid>,
+) -> Result<StockSubject, CoreError> {
+    match (product_id, prepared_batch_id) {
+        (Some(product_id), None) => Ok(StockSubject::product(ProductId::from(product_id))),
+        (None, Some(batch_id)) => Ok(StockSubject::prepared_portion(PreparedBatchId::from(
+            batch_id,
+        ))),
+        _ => Err(bad_value(
+            "product_id",
+            "expected exactly one stock subject",
+        )),
+    }
+}
+
+#[derive(Debug, sqlx::FromRow)]
 pub struct StockItemRow {
     pub id: Uuid,
-    pub product_id: Uuid,
+    pub product_id: Option<Uuid>,
+    pub prepared_batch_id: Option<Uuid>,
     pub tracking_mode: String,
     pub quantity_value: Option<Decimal>,
     pub quantity_unit: Option<String>,
@@ -517,7 +606,7 @@ impl TryFrom<StockItemRow> for StockItem {
 
         Ok(StockItem {
             id: StockItemId::from(row.id),
-            product_id: ProductId::from(row.product_id),
+            subject: stock_subject(row.product_id, row.prepared_batch_id)?,
             level,
             storage_location: StorageLocation::from_str(&row.storage_location)
                 .map_err(|_| bad_value("storage_location", &row.storage_location))?,
@@ -592,7 +681,8 @@ pub struct StockEffectRow {
     pub source_id: Uuid,
     pub source_detail_id: Option<Uuid>,
     pub stock_item_id: Uuid,
-    pub product_id: Uuid,
+    pub product_id: Option<Uuid>,
+    pub prepared_batch_id: Option<Uuid>,
     pub state: String,
     pub applied_mode: String,
     pub applied_unit: String,
@@ -616,7 +706,7 @@ impl TryFrom<StockEffectRow> for StockEffect {
             source_id: row.source_id,
             source_detail_id: row.source_detail_id,
             stock_item_id: StockItemId::from(row.stock_item_id),
-            product_id: ProductId::from(row.product_id),
+            subject: stock_subject(row.product_id, row.prepared_batch_id)?,
             state: StockEffectState::from_str(&row.state)
                 .map_err(|_| bad_value("state", &row.state))?,
             applied_mode: TrackingMode::from_str(&row.applied_mode)

@@ -6,11 +6,11 @@ pub use repository::{
     AccessGrantRepository, ConsumptionQuery, ConsumptionRecordRepository,
     HouseholdMemberRepository, HouseholdSettingsRepository, IngredientQuery, IngredientRepository,
     IngredientSort, MealPlanComponentUpdate, MealPlanQuery, MealPlanRepository, MemberQuery,
-    NewStockFromPurchase, NutritionTargetRepository, ProductQuery, ProductRepository,
-    PurchaseQuery, PurchaseRepository, RecipeQuery, RecipeRepository, ShoppingCadenceRepository,
-    ShoppingOpportunityRepository, SnapshotOp, SortDirection, StockDeduction, StockQuery,
-    StockRelease, StockRepository, StockWrite, UpdateOutcome, UserQuery, UserRepository,
-    WeightGoalRepository, WeightRecordRepository,
+    NewStockFromPurchase, NutritionTargetRepository, PreparedBatchRepository, ProductQuery,
+    ProductRepository, PurchaseQuery, PurchaseRepository, RecipeQuery, RecipeRepository,
+    ShoppingCadenceRepository, ShoppingOpportunityRepository, SnapshotOp, SortDirection,
+    StockDeduction, StockQuery, StockRelease, StockRepository, StockWrite, UpdateOutcome,
+    UserQuery, UserRepository, WeightGoalRepository, WeightRecordRepository,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

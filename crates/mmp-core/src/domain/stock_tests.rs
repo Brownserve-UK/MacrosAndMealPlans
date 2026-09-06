@@ -13,7 +13,7 @@ fn day(d: u8) -> Date {
 fn item(level: StockLevel) -> StockItem {
     StockItem {
         id: StockItemId::new(),
-        product_id: ProductId::new(),
+        subject: StockSubject::product(ProductId::new()),
         level,
         storage_location: StorageLocation::Chilled,
         source_date: None,
@@ -163,7 +163,7 @@ fn an_estimated_take_floors_at_zero_and_reverses_exactly() {
         source_kind: StockEffectSource::MealPlanComponent,
         source_id: uuid::Uuid::now_v7(),
         stock_item_id: after.id,
-        product_id: after.product_id,
+        subject: after.subject,
         state: StockEffectState::Applied,
         applied_mode: TrackingMode::Estimated,
         applied_unit: Unit::Gram,
@@ -195,7 +195,7 @@ fn an_exact_take_floors_at_zero_and_reverses_to_the_amount_actually_removed() {
         source_kind: StockEffectSource::ConsumptionRecord,
         source_id: uuid::Uuid::now_v7(),
         stock_item_id: after.id,
-        product_id: after.product_id,
+        subject: after.subject,
         state: StockEffectState::Applied,
         applied_mode: TrackingMode::Exact,
         applied_unit: Unit::Gram,
@@ -224,7 +224,7 @@ fn release_fails_when_the_tracking_mode_has_since_changed() {
         source_kind: StockEffectSource::MealPlanComponent,
         source_id: uuid::Uuid::now_v7(),
         stock_item_id: now_estimated.id,
-        product_id: now_estimated.product_id,
+        subject: now_estimated.subject,
         state: StockEffectState::Applied,
         applied_mode: TrackingMode::Exact,
         applied_unit: Unit::Gram,
@@ -276,7 +276,7 @@ fn not_tracked_level_contributes_nothing_measurable() {
 #[test]
 fn an_estimated_level_cannot_be_negative() {
     let item = NewStockItem {
-        product_id: ProductId::new(),
+        subject: StockSubject::product(ProductId::new()),
         level: StockLevel::Estimated {
             quantity: Quantity::new(dec(-1), Unit::Gram),
         },

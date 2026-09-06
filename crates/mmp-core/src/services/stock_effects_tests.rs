@@ -6,12 +6,14 @@ use super::{
     record_release, requirement_deduction,
 };
 use crate::domain::{
-    Confidence, ConsumedAmount, ConsumptionRecord, ConsumptionRecordId, DeductionTarget,
-    DemandSubject, HouseholdMemberId, Ingredient, IngredientId, MealItemRef, MealPlanComponentId,
-    MealSlot, NutritionFacts, NutritionQuality, Product, ProductId, Provenance, Quantity, Revision,
-    Shortfall, StockEffectSource, StockOutcome, Unit, UserId,
+    Confidence, ConsumedAmount, ConsumptionRecord, ConsumptionRecordId, DeductionCandidates,
+    DeductionTarget, DemandSubject, HouseholdMemberId, Ingredient, IngredientId, MealItemRef,
+    MealPlanComponentId, MealSlot, NutritionFacts, NutritionQuality, Product, ProductId,
+    Provenance, Quantity, Revision, Shortfall, StockEffectSource, StockOutcome, Unit, UserId,
 };
-use crate::testing::{InMemoryIngredientRepository, InMemoryProductRepository};
+use crate::testing::{
+    InMemoryIngredientRepository, InMemoryPreparedBatchRepository, InMemoryProductRepository,
+};
 
 fn d(value: i64) -> Decimal {
     Decimal::from(value)
@@ -151,7 +153,10 @@ fn a_requirement_deduction_keeps_the_line_it_came_from() {
 
     assert_eq!(deduction.source_id, source);
     assert_eq!(deduction.source_detail_id, Some(detail));
-    assert_eq!(deduction.target.product_ids, vec![first, second]);
+    assert_eq!(
+        deduction.target.candidates,
+        DeductionCandidates::Products(vec![first, second])
+    );
 }
 
 #[test]
@@ -191,7 +196,7 @@ fn a_record_release_matches_the_deduction_it_reverses() {
 fn a_component_release_is_keyed_to_the_meal_plan_component() {
     let component = MealPlanComponentId::new().as_uuid();
 
-    let release = component_release(component, "Dinner".to_owned(), None, None);
+    let release = component_release(component, None, "Dinner".to_owned(), None, None);
 
     assert_eq!(release.source_kind, StockEffectSource::MealPlanComponent);
     assert_eq!(release.source_id, component);
@@ -201,8 +206,9 @@ fn a_component_release_is_keyed_to_the_meal_plan_component() {
 async fn naming_nothing_asks_the_repositories_nothing() {
     let products = InMemoryProductRepository::new();
     let ingredients = InMemoryIngredientRepository::new();
+    let batches = InMemoryPreparedBatchRepository::new();
 
-    let named = name_outcomes(&products, &ingredients, Vec::new())
+    let named = name_outcomes(&products, &ingredients, &batches, Vec::new())
         .await
         .unwrap();
 
@@ -213,6 +219,7 @@ async fn naming_nothing_asks_the_repositories_nothing() {
 async fn outcomes_are_named_from_whichever_side_the_subject_came_from() {
     let products = InMemoryProductRepository::new();
     let ingredients = InMemoryIngredientRepository::new();
+    let batches = InMemoryPreparedBatchRepository::new();
     let milk = product("Sample Whole Milk");
     let oats = ingredient("Oats");
     products.seed(milk.clone());
@@ -221,6 +228,7 @@ async fn outcomes_are_named_from_whichever_side_the_subject_came_from() {
     let named = name_outcomes(
         &products,
         &ingredients,
+        &batches,
         vec![
             outcome(DemandSubject::product(milk.id)),
             outcome(DemandSubject::ingredient(oats.id)),
@@ -237,10 +245,12 @@ async fn outcomes_are_named_from_whichever_side_the_subject_came_from() {
 async fn a_subject_we_cannot_name_is_said_to_be_unknown_rather_than_dropped() {
     let products = InMemoryProductRepository::new();
     let ingredients = InMemoryIngredientRepository::new();
+    let batches = InMemoryPreparedBatchRepository::new();
 
     let named = name_outcomes(
         &products,
         &ingredients,
+        &batches,
         vec![
             outcome(DemandSubject::product(ProductId::new())),
             outcome(DemandSubject::ingredient(IngredientId::new())),
@@ -258,6 +268,7 @@ async fn a_subject_we_cannot_name_is_said_to_be_unknown_rather_than_dropped() {
 async fn naming_preserves_the_figures_and_the_order_it_was_given() {
     let products = InMemoryProductRepository::new();
     let ingredients = InMemoryIngredientRepository::new();
+    let batches = InMemoryPreparedBatchRepository::new();
     let milk = product("Milk");
     products.seed(milk.clone());
 
@@ -275,6 +286,7 @@ async fn naming_preserves_the_figures_and_the_order_it_was_given() {
     let named = name_outcomes(
         &products,
         &ingredients,
+        &batches,
         vec![outcome(DemandSubject::product(milk.id)), short],
     )
     .await

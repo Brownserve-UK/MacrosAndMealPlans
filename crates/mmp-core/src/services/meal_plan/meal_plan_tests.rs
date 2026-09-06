@@ -8,21 +8,22 @@ use super::*;
 use crate::domain::{
     ActualMealPlanComponent, ChangedMealOutcome, ConfirmMealPlanComponent, ConfirmMealPlanEntry,
     ConsumedAmount, HouseholdMember, HouseholdMemberId, MealItemRef, MealPlanEntryPatch,
-    MealPlanScope, MealPlanStatus, MealSlot, NewConsumptionRecord, NewMealPlanComponent,
-    NewMealPlanEntry, NewNutritionTarget, NutritionFacts, NutritionGoals, NutritionQuality,
-    OutcomeActor, ParticipantStatus, Portioning, Product, ProductId, Provenance, Quantity, Recipe,
-    RecipeComponent, RecipeId, RecipeVisibility, ReplacementItem, ReviewMealOutcomes,
-    ReviewedMealOutcome, ReviewedMemberOutcome, Revision, StockItem, StockLevel, StorageLocation,
-    Unit, UserId, WeightDisplay,
+    MealPlanScope, MealPlanStatus, MealSlot, NewConsumptionRecord, NewMealParticipant,
+    NewMealPlanComponent, NewMealPlanEntry, NewNutritionTarget, NutritionFacts, NutritionGoals,
+    NutritionQuality, OutcomeActor, ParticipantStatus, Portioning, Product, ProductId, Provenance,
+    Quantity, Recipe, RecipeComponent, RecipeId, RecipeVisibility, ReplacementItem,
+    ReviewMealOutcomes, ReviewedMealOutcome, ReviewedMemberOutcome, Revision, StockItem,
+    StockLevel, StockSubject, StorageLocation, Unit, UserId, WeightDisplay,
 };
 use crate::ports::{FixedClock, StockRepository};
+use crate::services::PreparationService;
 use crate::services::stock_effects::StockAffected;
 use crate::services::{ConsumptionService, NutritionTargetService};
 use crate::testing::{
     InMemoryConsumptionRecordRepository, InMemoryHouseholdMemberRepository,
     InMemoryHouseholdSettingsRepository, InMemoryIngredientRepository, InMemoryMealPlanRepository,
-    InMemoryNutritionTargetRepository, InMemoryProductRepository, InMemoryRecipeRepository,
-    InMemoryStockRepository,
+    InMemoryNutritionTargetRepository, InMemoryPreparedBatchRepository, InMemoryProductRepository,
+    InMemoryRecipeRepository, InMemoryStockRepository,
 };
 
 struct Harness {
@@ -37,6 +38,7 @@ struct Harness {
     settings: InMemoryHouseholdSettingsRepository,
     stock: InMemoryStockRepository,
     plans: InMemoryMealPlanRepository,
+    batches: InMemoryPreparedBatchRepository,
     member_id: HouseholdMemberId,
     actor_id: UserId,
 }
@@ -45,7 +47,7 @@ impl Harness {
     fn seed_stock_grams(&self, product_id: ProductId, grams: i64) -> crate::domain::StockItemId {
         let item = StockItem {
             id: crate::domain::StockItemId::new(),
-            product_id,
+            subject: StockSubject::product(product_id),
             level: StockLevel::Exact {
                 quantity: Quantity::new(Decimal::new(grams, 0), Unit::Gram),
             },
@@ -61,6 +63,32 @@ impl Harness {
         let id = item.id;
         self.stock.seed(item);
         id
+    }
+
+    async fn stock_servings(&self, id: crate::domain::StockItemId) -> Decimal {
+        self.stock_grams(id).await
+    }
+
+    async fn portion_for(
+        &self,
+        component_id: crate::domain::MealPlanComponentId,
+    ) -> crate::domain::StockItemId {
+        use crate::ports::PreparedBatchRepository;
+        let batch = self
+            .batches
+            .for_component(component_id)
+            .await
+            .unwrap()
+            .expect("the component should have been prepared");
+        self.stock
+            .list(&crate::ports::StockQuery::default())
+            .await
+            .unwrap()
+            .items
+            .into_iter()
+            .find(|item| item.prepared_batch_id() == Some(batch.id))
+            .expect("the batch should hold a portion")
+            .id
     }
 
     async fn stock_grams(&self, id: crate::domain::StockItemId) -> Decimal {
@@ -110,6 +138,14 @@ fn harness() -> Harness {
         archived_at: None,
     });
     let plans = InMemoryMealPlanRepository::new(records.clone());
+    let batches = InMemoryPreparedBatchRepository::with_stock(stock.clone());
+    let preparation = PreparationService::new(
+        Arc::new(batches.clone()),
+        Arc::new(recipes.clone()),
+        Arc::new(products.clone()),
+        Arc::new(ingredients.clone()),
+        clock.clone(),
+    );
     let service = MealPlanService::new(
         Arc::new(plans.clone()),
         Arc::new(products.clone()),
@@ -119,6 +155,8 @@ fn harness() -> Harness {
         Arc::new(target_repo.clone()),
         Arc::new(members.clone()),
         Arc::new(settings.clone()),
+        Arc::new(batches.clone()),
+        preparation,
         clock.clone(),
     );
     let consumption = ConsumptionService::new(
@@ -126,6 +164,7 @@ fn harness() -> Harness {
         Arc::new(products.clone()),
         Arc::new(ingredients.clone()),
         Arc::new(recipes.clone()),
+        Arc::new(batches.clone()),
         clock.clone(),
     );
     let targets = NutritionTargetService::new(Arc::new(target_repo.clone()), clock);
@@ -141,6 +180,7 @@ fn harness() -> Harness {
         settings,
         stock,
         plans,
+        batches,
         member_id,
         actor_id: UserId::new(),
     }
@@ -1892,6 +1932,63 @@ fn dgrams(value: i64) -> Decimal {
     Decimal::new(value, 0)
 }
 
+async fn household_planned(
+    h: &Harness,
+    components: Vec<NewMealPlanComponent>,
+    members: &[HouseholdMemberId],
+) -> MealPlanEntryView {
+    h.service
+        .create(NewMealPlanEntry {
+            id: None,
+            scope: MealPlanScope::Household,
+            member_id: None,
+            planned_on: date!(2026 - 08 - 25),
+            planned_time: Some(time!(18:30)),
+            slot: MealSlot::Dinner,
+            portioning: Portioning::Equal,
+            components,
+            participants: Some(
+                members
+                    .iter()
+                    .map(|member_id| NewMealParticipant {
+                        id: None,
+                        member_id: *member_id,
+                        allocations: Vec::new(),
+                    })
+                    .collect(),
+            ),
+            guest_groups: Vec::new(),
+            actor_id: h.actor_id,
+        })
+        .await
+        .unwrap()
+}
+
+async fn confirm_component_for(
+    h: &Harness,
+    entry_id: crate::domain::MealPlanEntryId,
+    component_id: crate::domain::MealPlanComponentId,
+    revision: Revision,
+    amount: ConsumedAmount,
+    subject: HouseholdMemberId,
+) -> StockAffected<MealPlanEntryView> {
+    h.service
+        .mark_component_eaten_backdated(
+            entry_id,
+            component_id,
+            revision,
+            ConfirmMealPlanComponent {
+                consumed_on: date!(2026 - 08 - 25),
+                consumed_at: None,
+                amount,
+                actor_id: h.actor_id,
+                subject_member_id: Some(subject),
+            },
+        )
+        .await
+        .unwrap()
+}
+
 async fn confirm_component(
     h: &Harness,
     entry_id: crate::domain::MealPlanEntryId,
@@ -2945,7 +3042,7 @@ fn dated_stock(
 ) -> crate::domain::StockItemId {
     let item = StockItem {
         id: crate::domain::StockItemId::new(),
-        product_id,
+        subject: StockSubject::product(product_id),
         level: StockLevel::Exact {
             quantity: Quantity::new(Decimal::new(grams, 0), Unit::Gram),
         },
@@ -3000,7 +3097,7 @@ async fn a_pooled_ingredient_draw_spans_two_products_in_use_by_order() {
 }
 
 #[tokio::test]
-async fn reopening_a_recipe_meal_returns_every_product_it_drew_from() {
+async fn reopening_a_recipe_meal_returns_the_serving_but_not_the_raw_ingredients() {
     let h = harness();
     let rice_id = crate::domain::IngredientId::new();
     let tesco = mapped_product("Tesco Basmati", rice_id);
@@ -3023,6 +3120,9 @@ async fn reopening_a_recipe_meal_returns_every_product_it_drew_from() {
     )
     .await;
 
+    let portion = h.portion_for(component.id).await;
+    assert_eq!(h.stock_servings(portion).await, Decimal::ZERO);
+
     h.service
         .reopen_component(
             entry.entry.id,
@@ -3033,8 +3133,9 @@ async fn reopening_a_recipe_meal_returns_every_product_it_drew_from() {
         .await
         .unwrap();
 
-    assert_eq!(h.stock_grams(older).await, dgrams(60));
-    assert_eq!(h.stock_grams(newer).await, dgrams(200));
+    assert_eq!(h.stock_servings(portion).await, Decimal::ONE);
+    assert_eq!(h.stock_grams(older).await, dgrams(0));
+    assert_eq!(h.stock_grams(newer).await, dgrams(160));
 }
 
 #[tokio::test]
@@ -3067,4 +3168,107 @@ async fn a_recipe_pinning_a_product_and_needing_its_ingredient_draws_both() {
     .await;
 
     assert_eq!(h.stock_grams(item).await, dgrams(350));
+}
+
+#[tokio::test]
+async fn cooking_a_recipe_consumes_raw_stock_and_leaves_the_uneaten_servings_as_a_portion() {
+    let h = harness();
+    let rice_id = crate::domain::IngredientId::new();
+    let tesco = mapped_product("Tesco Basmati", rice_id);
+    h.products.seed(tesco.clone());
+    let rice = h.seed_stock_grams(tesco.id, 1000);
+
+    let curry = seed_recipe(&h, "Curry", 4, vec![ingredient_line(rice_id, 400)]).await;
+    let entry = planned(&h, vec![servings_of(curry.id, 4)]).await;
+    let component = entry.components[0].component.clone();
+
+    confirm_component(
+        &h,
+        entry.entry.id,
+        component.id,
+        component.revision,
+        ConsumedAmount::Servings(Decimal::ONE),
+    )
+    .await;
+
+    assert_eq!(
+        h.stock_grams(rice).await,
+        dgrams(600),
+        "cooking four servings should draw the recipe's full 400 g of rice"
+    );
+    let portion = h.portion_for(component.id).await;
+    assert_eq!(
+        h.stock_servings(portion).await,
+        Decimal::new(3, 0),
+        "one of the four cooked servings was eaten, three remain as leftovers"
+    );
+}
+
+#[tokio::test]
+async fn a_second_eater_draws_from_the_portion_without_cooking_the_recipe_again() {
+    let h = harness();
+    let rice_id = crate::domain::IngredientId::new();
+    let tesco = mapped_product("Tesco Basmati", rice_id);
+    h.products.seed(tesco.clone());
+    let rice = h.seed_stock_grams(tesco.id, 1000);
+    let other = h.add_member("Sam");
+
+    let curry = seed_recipe(&h, "Curry", 4, vec![ingredient_line(rice_id, 400)]).await;
+    let entry = household_planned(&h, vec![servings_of(curry.id, 4)], &[h.member_id, other]).await;
+    let component = entry.components[0].component.clone();
+
+    let after_first = confirm_component_for(
+        &h,
+        entry.entry.id,
+        component.id,
+        component.revision,
+        ConsumedAmount::Servings(Decimal::ONE),
+        h.member_id,
+    )
+    .await;
+    confirm_component_for(
+        &h,
+        entry.entry.id,
+        component.id,
+        after_first.value.components[0].component.revision,
+        ConsumedAmount::Servings(Decimal::ONE),
+        other,
+    )
+    .await;
+
+    assert_eq!(
+        h.stock_grams(rice).await,
+        dgrams(600),
+        "the raw rice should move exactly once, however many people eat"
+    );
+    assert_eq!(h.batches.count(), 1, "the meal should be cooked only once");
+    let portion = h.portion_for(component.id).await;
+    assert_eq!(h.stock_servings(portion).await, Decimal::new(2, 0));
+}
+
+#[tokio::test]
+async fn a_plain_product_component_still_draws_its_stock_on_first_confirmation() {
+    let h = harness();
+    let yoghurt = product("Yoghurt", 60);
+    h.products.seed(yoghurt.clone());
+    let pot = h.seed_stock_grams(yoghurt.id, 500);
+
+    let entry = planned(&h, vec![measured(yoghurt.id, 150)]).await;
+    let component = entry.components[0].component.clone();
+
+    confirm_component(
+        &h,
+        entry.entry.id,
+        component.id,
+        component.revision,
+        ConsumedAmount::Measure(Quantity::new(Decimal::new(150, 0), Unit::Gram)),
+    )
+    .await;
+
+    assert_eq!(h.stock_grams(pot).await, dgrams(350));
+    assert_eq!(
+        h.batches.count(),
+        0,
+        "a product is not cooked, so nothing should be prepared"
+    );
 }
