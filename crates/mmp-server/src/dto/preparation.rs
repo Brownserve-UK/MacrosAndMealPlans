@@ -4,11 +4,23 @@ use mmp_core::domain::{
 };
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
-use time::OffsetDateTime;
-use utoipa::ToSchema;
+use time::{Date, OffsetDateTime};
+use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
+use super::common::iso_date;
 use super::{NutritionDto, StorageLocationDto, UsabilityDeadlineDto};
+
+#[derive(Debug, Clone, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct PreparationRangeQuery {
+    #[serde(with = "iso_date")]
+    #[param(value_type = String, format = Date, example = "2026-09-01")]
+    pub from: Date,
+    #[serde(with = "iso_date")]
+    #[param(value_type = String, format = Date, example = "2026-09-07")]
+    pub to: Date,
+}
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct PreparedBatchDto {

@@ -82,6 +82,17 @@ impl PreparationService {
         self.batches.for_component(component_id).await
     }
 
+    pub async fn list_in_range(
+        &self,
+        from: time::Date,
+        to: time::Date,
+    ) -> Result<Vec<PreparedBatch>> {
+        if to < from {
+            return Err(CoreError::conflict("That date range runs backwards."));
+        }
+        self.batches.list_in_range(from, to).await
+    }
+
     pub async fn record(&self, input: RecordPreparation) -> Result<StockAffected<PreparedBatch>> {
         let recipe = self
             .recipes

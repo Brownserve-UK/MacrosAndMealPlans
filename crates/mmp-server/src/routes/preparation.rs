@@ -1,5 +1,5 @@
 use axum::Json;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use mmp_core::domain::{PreparedBatchId, RecipeId};
 use mmp_core::services::RecordPreparation;
 use utoipa_axum::router::OpenApiRouter;
@@ -7,15 +7,42 @@ use utoipa_axum::routes;
 use uuid::Uuid;
 
 use crate::auth::Principal;
-use crate::dto::{PreparationResponse, PreparedBatchDto, RecordPreparationRequest};
+use crate::dto::{
+    PreparationRangeQuery, PreparationResponse, PreparedBatchDto, RecordPreparationRequest,
+};
 use crate::error::ApiResult;
 use crate::http::Created;
 use crate::state::AppState;
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
-        .routes(routes!(record))
+        .routes(routes!(record, list))
         .routes(routes!(get))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/preparations",
+    operation_id = "listPreparations",
+    params(PreparationRangeQuery),
+    responses(
+        (status = 200, description = "Cooking events in the range, newest first",
+         body = Vec<PreparedBatchDto>),
+        (status = 409, description = "That date range runs backwards", body = crate::error::Problem),
+    ),
+    tag = "preparation",
+    security(("basic" = []))
+)]
+async fn list(
+    State(state): State<AppState>,
+    _principal: Principal,
+    Query(range): Query<PreparationRangeQuery>,
+) -> ApiResult<Json<Vec<PreparedBatchDto>>> {
+    let batches = state
+        .preparation
+        .list_in_range(range.from, range.to)
+        .await?;
+    Ok(Json(batches.into_iter().map(Into::into).collect()))
 }
 
 #[utoipa::path(

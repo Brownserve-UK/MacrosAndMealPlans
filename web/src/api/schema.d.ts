@@ -651,7 +651,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        get: operations["listPreparations"];
         put?: never;
         post: operations["recordPreparation"];
         delete?: never;
@@ -4819,6 +4819,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PlannerWeekDto"];
+                };
+            };
+        };
+    };
+    listPreparations: {
+        parameters: {
+            query: {
+                /** @example 2026-09-01 */
+                from: string;
+                /** @example 2026-09-07 */
+                to: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Cooking events in the range, newest first */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PreparedBatchDto"][];
+                };
+            };
+            /** @description That date range runs backwards */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
         };

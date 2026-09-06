@@ -457,6 +457,8 @@ pub trait PreparedBatchRepository: Send + Sync + 'static {
         component_ids: &[MealPlanComponentId],
     ) -> Result<HashMap<MealPlanComponentId, PreparedBatch>>;
 
+    async fn list_in_range(&self, from: Date, to: Date) -> Result<Vec<PreparedBatch>>;
+
     async fn insert(
         &self,
         batch: &PreparedBatch,

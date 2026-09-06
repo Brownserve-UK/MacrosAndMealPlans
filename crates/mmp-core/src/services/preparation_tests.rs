@@ -168,6 +168,37 @@ fn record(h: &Harness, produced: i64, placements: Vec<PortionPlacement>) -> Reco
 }
 
 #[tokio::test]
+async fn a_cook_with_no_meal_behind_it_is_still_found_by_date() {
+    let h = harness();
+    seed_rice(&h, 2000);
+
+    h.service
+        .record(record(
+            &h,
+            6,
+            vec![placement(StorageLocation::Frozen, 6, date!(2026 - 12 - 05))],
+        ))
+        .await
+        .unwrap();
+
+    let found = h
+        .service
+        .list_in_range(date!(2026 - 09 - 06), date!(2026 - 09 - 06))
+        .await
+        .unwrap();
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].servings_produced, d(6));
+    assert_eq!(found[0].source, PreparationSource::Standalone);
+
+    let elsewhere = h
+        .service
+        .list_in_range(date!(2026 - 09 - 07), date!(2026 - 09 - 30))
+        .await
+        .unwrap();
+    assert!(elsewhere.is_empty());
+}
+
+#[tokio::test]
 async fn one_cook_can_land_in_two_places() {
     let h = harness();
     seed_rice(&h, 2000);

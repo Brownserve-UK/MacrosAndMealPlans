@@ -310,6 +310,14 @@ impl mmp_core::ports::PreparedBatchRepository for NoopPreparedBatches {
         Ok(None)
     }
 
+    async fn list_in_range(
+        &self,
+        _: time::Date,
+        _: time::Date,
+    ) -> mmp_core::Result<Vec<mmp_core::domain::PreparedBatch>> {
+        Ok(Vec::new())
+    }
+
     async fn for_components(
         &self,
         _: &[mmp_core::domain::MealPlanComponentId],

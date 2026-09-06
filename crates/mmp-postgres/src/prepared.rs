@@ -7,6 +7,7 @@ use mmp_core::domain::{
 };
 use mmp_core::ports::{PreparedBatchRepository, StockWrite};
 use sqlx::PgPool;
+use time::Date;
 use uuid::Uuid;
 
 use crate::error::{map_db_error, repository_error};
@@ -40,6 +41,12 @@ const FOR_COMPONENTS: &str = concat!(
     columns!(),
     " FROM prepared_batch WHERE meal_plan_component_id = ANY($1) \
      ORDER BY prepared_at ASC, id ASC"
+);
+const LIST_IN_RANGE: &str = concat!(
+    "SELECT ",
+    columns!(),
+    " FROM prepared_batch WHERE (prepared_at AT TIME ZONE 'UTC')::date BETWEEN $1 AND $2 \
+     ORDER BY prepared_at DESC, id DESC"
 );
 
 pub struct PgPreparedBatchRepository {
@@ -109,6 +116,16 @@ impl PreparedBatchRepository for PgPreparedBatchRepository {
             }
         }
         Ok(found)
+    }
+
+    async fn list_in_range(&self, from: Date, to: Date) -> Result<Vec<PreparedBatch>> {
+        let rows: Vec<PreparedBatchRow> = sqlx::query_as(LIST_IN_RANGE)
+            .bind(from)
+            .bind(to)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| repository_error("listing prepared batches", e))?;
+        rows.into_iter().map(TryInto::try_into).collect()
     }
 
     async fn insert(

@@ -936,6 +936,22 @@ impl crate::ports::PreparedBatchRepository for InMemoryPreparedBatchRepository {
         Ok(found)
     }
 
+    async fn list_in_range(&self, from: time::Date, to: time::Date) -> Result<Vec<PreparedBatch>> {
+        let mut found: Vec<PreparedBatch> = self
+            .rows
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|batch| {
+                let day = batch.prepared_at.to_offset(time::UtcOffset::UTC).date();
+                day >= from && day <= to
+            })
+            .cloned()
+            .collect();
+        found.sort_by(|a, b| b.prepared_at.cmp(&a.prepared_at).then(b.id.cmp(&a.id)));
+        Ok(found)
+    }
+
     async fn insert(
         &self,
         batch: &PreparedBatch,
