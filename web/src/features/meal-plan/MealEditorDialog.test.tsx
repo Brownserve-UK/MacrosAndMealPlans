@@ -21,31 +21,44 @@ vi.mock('../../api/queries', () => ({
   }),
   useProducts: () => ({ data: { items: [] }, isLoading: false }),
   useRecipes: () => ({ data: { items: [] }, isLoading: false }),
+  useRecipeNutrition: () => ({ data: { nutrition: { energy_kcal: 345 } } }),
 }));
 
 vi.mock('./FoodSearch', () => ({
   FoodSearch: ({ onPick }: { onPick: (choice: unknown) => void }) => (
-    <button
-      type="button"
-      onClick={() => onPick({
-        kind: 'product',
-        product: {
-          id: 'food',
-          name: 'Test food',
-          nutrition: { basis: { amount: 100, unit: 'g' } },
-          package_quantity: null,
-        },
-      })}
-    >
-      Add test food
-    </button>
+    <>
+      <button
+        type="button"
+        onClick={() => onPick({
+          kind: 'product',
+          product: {
+            id: 'food',
+            name: 'Test food',
+            nutrition: { basis: { amount: 100, unit: 'g' } },
+            package_quantity: null,
+          },
+        })}
+      >
+        Add test food
+      </button>
+      <button
+        type="button"
+        onClick={() => onPick({ kind: 'recipe', recipe: { id: 'curry', name: 'Test curry' } })}
+      >
+        Add test recipe
+      </button>
+    </>
   ),
 }));
 
-async function showPeople() {
+async function addFood() {
   const user = userEvent.setup();
   await user.click(screen.getByRole('button', { name: 'Add test food' }));
-  await user.click(screen.getByRole('button', { name: 'Continue' }));
+  return user;
+}
+
+function personChip(name: string): HTMLElement {
+  return screen.getByText(name).closest('.MuiChip-root') as HTMLElement;
 }
 
 describe('MealEditorDialog household roster', () => {
@@ -54,17 +67,22 @@ describe('MealEditorDialog household roster', () => {
     attendance.isFetching = false;
   });
 
-  it('disables a member already eating in that slot and shows the reason', async () => {
+  it('cannot pick a member already eating in that slot, and says why on hover', async () => {
     attendance.rows = [
       { member_id: 'morgan', display_name: 'Morgan Sample', attendance: 'participating', claimed_time: '10:00' },
     ];
     render(
       <MealEditorDialog open mode="household" onClose={vi.fn()} date="2026-09-10" slot="breakfast" meal={null} />,
     );
-    await showPeople();
-    const label = screen.getByText('Morgan Sample').closest('label') as HTMLElement;
-    expect(label.querySelector('input')).toBeDisabled();
-    expect(screen.getByText('Already eating at 10:00')).toBeInTheDocument();
+    const user = await addFood();
+    const chip = personChip('Morgan Sample');
+    expect(chip).toHaveAttribute('aria-disabled', 'true');
+
+    await user.click(chip);
+    expect(screen.queryByText('Cooking 1 serving')).not.toBeInTheDocument();
+
+    await user.hover(chip);
+    expect(await screen.findByRole('tooltip')).toHaveTextContent('Already eating at 10:00');
   });
 
   it('falls back to a generic reason when the clashing meal has no time', async () => {
@@ -74,8 +92,9 @@ describe('MealEditorDialog household roster', () => {
     render(
       <MealEditorDialog open mode="household" onClose={vi.fn()} date="2026-09-10" slot="breakfast" meal={null} />,
     );
-    await showPeople();
-    expect(screen.getByText('Already in another meal')).toBeInTheDocument();
+    const user = await addFood();
+    await user.hover(personChip('Morgan Sample'));
+    expect(await screen.findByRole('tooltip')).toHaveTextContent('Already in another meal');
   });
 
   it('locks the whole roster while attendance is still being fetched', async () => {
@@ -86,11 +105,35 @@ describe('MealEditorDialog household roster', () => {
     render(
       <MealEditorDialog open mode="household" onClose={vi.fn()} date="2026-09-10" slot="breakfast" meal={null} />,
     );
-    await showPeople();
+    await addFood();
     expect(screen.getByText("Checking who's free…")).toBeInTheDocument();
     for (const name of ['Me', 'Morgan Sample']) {
-      expect((screen.getByText(name).closest('label') as HTMLElement).querySelector('input')).toBeDisabled();
+      expect(personChip(name)).toHaveClass('Mui-disabled');
     }
+  });
+
+  it('derives the servings from who is eating, and cook extra adds to them', async () => {
+    attendance.rows = [
+      { member_id: 'morgan', display_name: 'Morgan Sample', attendance: 'available', claimed_time: null },
+    ];
+    render(
+      <MealEditorDialog open mode="household" onClose={vi.fn()} date="2026-09-10" slot="breakfast" meal={null} />,
+    );
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Add test recipe' }));
+
+    expect(screen.getByRole('button', { name: 'Plan meal' })).toBeDisabled();
+
+    await user.click(screen.getByText('Me'));
+    await user.click(screen.getByText('Morgan Sample'));
+    expect(screen.getByText('Cooking 2 servings')).toBeInTheDocument();
+    expect(screen.getByText('One each, nothing left over.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Plan meal' })).toBeEnabled();
+
+    await user.click(screen.getByRole('button', { name: 'Cook more extra' }));
+    await user.click(screen.getByRole('button', { name: 'Cook more extra' }));
+    expect(screen.getByText('Cooking 4 servings')).toBeInTheDocument();
+    expect(screen.getByText('2 now, 2 kept for later.')).toBeInTheDocument();
   });
 
   it('keeps date and meal fixed while showing the configured time', async () => {

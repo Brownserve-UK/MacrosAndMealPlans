@@ -1,20 +1,19 @@
 import AddIcon from '@mui/icons-material/AddOutlined';
+import CheckIcon from '@mui/icons-material/CheckOutlined';
 import DeleteIcon from '@mui/icons-material/DeleteOutlineOutlined';
 import RemoveIcon from '@mui/icons-material/RemoveOutlined';
 import Alert from '@mui/material/Alert';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
-import Checkbox from '@mui/material/Checkbox';
+import Chip from '@mui/material/Chip';
 import DialogActions from '@mui/material/DialogActions';
 import DialogContent from '@mui/material/DialogContent';
 import DialogTitle from '@mui/material/DialogTitle';
 import IconButton from '@mui/material/IconButton';
 import MenuItem from '@mui/material/MenuItem';
 import Stack from '@mui/material/Stack';
-import Step from '@mui/material/Step';
-import StepLabel from '@mui/material/StepLabel';
-import Stepper from '@mui/material/Stepper';
 import TextField from '@mui/material/TextField';
+import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 import { useMemo, useState } from 'react';
 import type { Amount, MealSlot, PlannerMeal, Product, RecipeSummary, Unit } from '../../api/client';
@@ -24,6 +23,7 @@ import {
   useHouseholdSlotAttendance,
   useMealTimes,
   useMembers,
+  useRecipeNutrition,
   useUpdateMealPlanEntry,
 } from '../../api/queries';
 import { useAuth } from '../../auth/AuthProvider';
@@ -66,6 +66,29 @@ function initialFoods(meal: PlannerMeal | null): FoodDraft[] {
   }));
 }
 
+function initialDiners(meal: PlannerMeal | null, household: boolean): number {
+  if (!household) return 1;
+  const guests = meal?.guest_groups.reduce((sum, group) => sum + group.count, 0) ?? 0;
+  return (meal?.people.length ?? 0) + guests;
+}
+
+function initialExtra(meal: PlannerMeal | null, household: boolean): number {
+  const recipe = (meal?.foods ?? []).find((food) => food.amount.kind === 'servings');
+  if (!recipe) return 0;
+  return Math.max(0, Math.round(recipe.amount.value - initialDiners(meal, household)));
+}
+
+function RecipeKcal({ recipeId }: { recipeId: string }) {
+  const nutrition = useRecipeNutrition(recipeId);
+  const kcal = nutrition.data?.nutrition.energy_kcal;
+  if (kcal == null) return null;
+  return (
+    <Typography variant="caption" color="text.secondary">
+      {`${Math.round(kcal)} kcal a serving`}
+    </Typography>
+  );
+}
+
 export function MealEditorDialog({
   open,
   onClose,
@@ -90,7 +113,6 @@ export function MealEditorDialog({
   const [plannedTimeOverride, setPlannedTimeOverride] = useState<string | null>(
     meal ? meal.planned_time ?? '' : null,
   );
-  const [step, setStep] = useState(0);
   const mealNoun = slot === 'snacks' ? 'snack' : 'meal';
   const [selectedMembers, setSelectedMembers] = useState<string[]>(
     household
@@ -101,6 +123,7 @@ export function MealEditorDialog({
   );
   const [guestCount, setGuestCount] = useState(meal?.guest_groups.reduce((sum, group) => sum + group.count, 0) ?? 0);
   const [foods, setFoods] = useState<FoodDraft[]>(() => initialFoods(meal));
+  const [extra, setExtra] = useState(() => initialExtra(meal, household));
   const [error, setError] = useState<string | null>(null);
   const busy = create.isPending || update.isPending;
 
@@ -119,6 +142,8 @@ export function MealEditorDialog({
 
   const visibleMembers = useMemo(() => members.data?.items ?? [], [members.data]);
   const diners = household ? selectedMembers.length + guestCount : 1;
+  const cooking = diners + extra;
+  const hasRecipe = foods.some((food) => food.itemKind === 'recipe');
   const plannedTime = plannedTimeOverride
     ?? (slot === 'snacks' ? '' : mealTimes.data?.[slot] ?? '');
   const slotLabel = slot === 'snacks' ? 'snack' : slot;
@@ -127,6 +152,10 @@ export function MealEditorDialog({
     day: 'numeric',
     month: 'long',
   });
+
+  function servingsFor(food: FoodDraft): Amount {
+    return food.itemKind === 'recipe' ? { kind: 'servings', value: cooking } : food.amount;
+  }
 
   function memberBlockedReason(memberId: string): string | null {
     if (meal?.people.some((person) => person.member_id === memberId)) return null;
@@ -142,7 +171,7 @@ export function MealEditorDialog({
 
   function addProduct(next: Product) {
     if (foods.some((food) => food.itemKind === 'product' && food.itemId === next.id)) return;
-    const food: FoodDraft = {
+    setFoods((current) => [...current, {
       componentId: crypto.randomUUID(),
       itemKind: 'product',
       itemId: next.id,
@@ -152,20 +181,18 @@ export function MealEditorDialog({
         unit: next.nutrition.basis?.unit ?? next.package_quantity?.unit ?? 'g',
         value: next.nutrition.basis?.amount ?? 100,
       },
-    };
-    setFoods((current) => [...current, food]);
+    }]);
   }
 
   function addRecipe(next: RecipeSummary) {
     if (foods.some((food) => food.itemKind === 'recipe' && food.itemId === next.id)) return;
-    const food: FoodDraft = {
+    setFoods((current) => [...current, {
       componentId: crypto.randomUUID(),
       itemKind: 'recipe',
       itemId: next.id,
       name: next.name,
-      amount: { kind: 'servings', value: 1 },
-    };
-    setFoods((current) => [...current, food]);
+      amount: { kind: 'servings', value: Math.max(cooking, 1) },
+    }]);
   }
 
   function addFood(choice: FoodChoice) {
@@ -177,47 +204,33 @@ export function MealEditorDialog({
     setFoods((current) => current.map((food) => food.componentId === componentId ? { ...food, amount } : food));
   }
 
-  function toggleMember(memberId: string, checked: boolean) {
-    setSelectedMembers((current) => checked ? [...current, memberId] : current.filter((id) => id !== memberId));
-  }
-
-  function setGuests(nextCount: number) {
-    setGuestCount(Math.max(0, nextCount));
-  }
-
-  function validateMeal() {
-    if (foods.length === 0) {
-      setError('Add at least one food.');
-      return false;
-    }
-    if (foods.some((food) => !Number.isFinite(food.amount.value) || food.amount.value <= 0)) {
-      setError('Every food needs an amount greater than zero.');
-      return false;
-    }
-    setError(null);
-    return true;
-  }
-
-  function continueToPeople() {
-    if (!validateMeal()) return;
-    setStep(1);
+  function toggleMember(memberId: string) {
+    setSelectedMembers((current) => current.includes(memberId)
+      ? current.filter((id) => id !== memberId)
+      : [...current, memberId]);
   }
 
   async function save() {
-    if (!validateMeal()) {
-      if (household) setStep(0);
+    if (foods.length === 0) {
+      setError('Add at least one food.');
       return;
     }
-    if (household && selectedMembers.length + guestCount === 0) {
-      setError('Choose at least one household member or guest.');
+    if (foods.some((food) => food.itemKind === 'product' && (!Number.isFinite(food.amount.value) || food.amount.value <= 0))) {
+      setError('Every food needs an amount greater than zero.');
       return;
     }
+    if (household && diners === 0) {
+      setError(`Choose who is eating this ${mealNoun}.`);
+      return;
+    }
+    setError(null);
+
     const components = foods.map((food) => ({
       id: food.componentId,
       ...(food.itemKind === 'product'
         ? { item_kind: 'product' as const, product_id: food.itemId }
         : { item_kind: 'recipe' as const, recipe_id: food.itemId }),
-      amount: food.amount,
+      amount: servingsFor(food),
     }));
     const participants = household
       ? selectedMembers.map((memberId) => ({ member_id: memberId, allocations: [] }))
@@ -225,7 +238,7 @@ export function MealEditorDialog({
     const guestAllocations = household && guestCount > 0
       ? foods.map((food) => ({
           component_id: food.componentId,
-          amount: equalShare(food.amount, diners),
+          amount: equalShare(servingsFor(food), diners),
         }))
       : [];
 
@@ -260,143 +273,163 @@ export function MealEditorDialog({
     }
   }
 
-  const mealFields = (
-    <Stack spacing={2.5}>
-      <TextField
-        label={slot === 'snacks' ? 'Time (optional)' : 'Time'}
-        type="time"
-        value={plannedTime}
-        onChange={(event) => setPlannedTimeOverride(event.target.value)}
-        slotProps={{ inputLabel: { shrink: true } }}
-        sx={{ width: { xs: '100%', sm: 180 } }}
-      />
-      <Box>
-        <Typography variant="h3" sx={{ mb: 1 }}>Food</Typography>
-        <Stack spacing={1.5}>
-          <FoodSearch
-            onPick={addFood}
-            excludeProductIds={foods.filter((food) => food.itemKind === 'product').map((food) => food.itemId)}
-            excludeRecipeIds={foods.filter((food) => food.itemKind === 'recipe').map((food) => food.itemId)}
+  const summary = extra > 0
+    ? `${diners} now, ${extra} kept for later.`
+    : 'One each, nothing left over.';
+
+  return (
+    <FormDialog open={open} onClose={busy ? undefined : onClose} fullWidth maxWidth="sm">
+      <DialogTitle sx={{ pb: 1 }}>
+        <Typography component="span" variant="h2">{meal ? `Edit ${slotLabel}` : `Plan ${slotLabel}`}</Typography>
+        <Typography component="span" variant="body2" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>{dateLabel}</Typography>
+      </DialogTitle>
+      <DialogContent dividers>
+        <Stack spacing={2.5}>
+          {error ? <Alert severity="error">{error}</Alert> : null}
+
+          <TextField
+            label={slot === 'snacks' ? 'Time (optional)' : 'Time'}
+            type="time"
+            value={plannedTime}
+            onChange={(event) => setPlannedTimeOverride(event.target.value)}
+            slotProps={{ inputLabel: { shrink: true } }}
+            sx={{ width: { xs: '100%', sm: 180 } }}
           />
-          {foods.length === 0 ? (
-            <Typography variant="body2" color="text.secondary">No food added yet.</Typography>
-          ) : (
-            <Stack spacing={1}>
+
+          <Box>
+            <Typography variant="h3" sx={{ mb: 1 }}>Food</Typography>
+            <Stack spacing={1.5}>
+              <FoodSearch
+                onPick={addFood}
+                excludeProductIds={foods.filter((food) => food.itemKind === 'product').map((food) => food.itemId)}
+                excludeRecipeIds={foods.filter((food) => food.itemKind === 'recipe').map((food) => food.itemId)}
+              />
               {foods.map((food) => (
                 <Box key={food.componentId} sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2, p: 1.5 }}>
-                  <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} sx={{ alignItems: { sm: 'center' } }}>
-                    <Typography sx={{ flex: 1, minWidth: 0 }}>{food.name}</Typography>
-                    <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
-                      <TextField
-                        label="Amount"
-                        type="number"
-                        value={amountValue(food.amount)}
-                        onChange={(event) => setFoodAmount(food.componentId, withAmountValue(food.amount, event.target.value))}
-                        slotProps={{ htmlInput: { min: 0, step: 'any' } }}
-                        sx={{ width: 120 }}
-                      />
-                      {food.amount.kind === 'measure' ? (
+                  <Stack direction="row" spacing={1.5} sx={{ alignItems: 'center' }}>
+                    <Box sx={{ flex: 1, minWidth: 0 }}>
+                      <Typography>{food.name}</Typography>
+                      {food.itemKind === 'recipe' ? <RecipeKcal recipeId={food.itemId} /> : null}
+                    </Box>
+                    {food.itemKind === 'product' ? (
+                      <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
                         <TextField
-                          select
-                          label="Unit"
-                          value={food.amount.unit}
-                          onChange={(event) => setFoodAmount(food.componentId, { kind: 'measure', value: food.amount.value, unit: event.target.value as Unit })}
+                          label="Amount"
+                          type="number"
+                          value={amountValue(food.amount)}
+                          onChange={(event) => setFoodAmount(food.componentId, withAmountValue(food.amount, event.target.value))}
+                          slotProps={{ htmlInput: { min: 0, step: 'any' } }}
                           sx={{ width: 110 }}
-                        >
-                          {UNITS.map((unit) => <MenuItem key={unit} value={unit}>{displayUnit(unit)}</MenuItem>)}
-                        </TextField>
-                      ) : (
-                        <Typography color="text.secondary" sx={{ minWidth: 72 }}>
-                          {food.amount.value === 1 ? 'serving' : 'servings'}
-                        </Typography>
-                      )}
-                      <IconButton aria-label={`Remove ${food.name}`} onClick={() => setFoods((current) => current.filter((candidate) => candidate.componentId !== food.componentId))}>
-                        <DeleteIcon />
-                      </IconButton>
-                    </Stack>
+                        />
+                        {food.amount.kind === 'measure' ? (
+                          <TextField
+                            select
+                            label="Unit"
+                            value={food.amount.unit}
+                            onChange={(event) => setFoodAmount(food.componentId, { kind: 'measure', value: food.amount.value, unit: event.target.value as Unit })}
+                            sx={{ width: 100 }}
+                          >
+                            {UNITS.map((unit) => <MenuItem key={unit} value={unit}>{displayUnit(unit)}</MenuItem>)}
+                          </TextField>
+                        ) : null}
+                      </Stack>
+                    ) : (
+                      <Typography variant="body2" color="text.secondary">
+                        {cooking === 1 ? '1 serving' : `${cooking} servings`}
+                      </Typography>
+                    )}
+                    <IconButton aria-label={`Remove ${food.name}`} onClick={() => setFoods((current) => current.filter((candidate) => candidate.componentId !== food.componentId))}>
+                      <DeleteIcon />
+                    </IconButton>
                   </Stack>
                 </Box>
               ))}
             </Stack>
-          )}
-        </Stack>
-      </Box>
-    </Stack>
-  );
+          </Box>
 
-  const peopleFields = (
-    <Stack spacing={3}>
-      <Box>
-        <Stack direction="row" spacing={1} sx={{ alignItems: 'baseline', mb: 1 }}>
-          <Typography variant="h3">People</Typography>
-          {attendance.isFetching ? <Typography variant="caption" color="text.secondary">Checking who's free…</Typography> : null}
-        </Stack>
-        <Stack spacing={0.75}>
-          {visibleMembers.map((member) => {
-            const blocked = memberBlockedReason(member.id);
-            return (
-              <Box key={member.id} component="label" sx={{ display: 'flex', alignItems: 'flex-start', border: '1px solid', borderColor: 'divider', borderRadius: 2, px: 1, py: 0.5 }}>
-                <Checkbox
-                  sx={{ mt: -0.25 }}
-                  checked={selectedMembers.includes(member.id)}
-                  disabled={Boolean(blocked) || attendance.isFetching}
-                  onChange={(_, checked) => toggleMember(member.id, checked)}
-                />
-                <Box sx={{ py: 0.5 }}>
-                  <Typography color={blocked ? 'text.disabled' : 'text.primary'}>{member.display_name}</Typography>
-                  {blocked ? <Typography variant="caption" color="text.secondary">{blocked}</Typography> : null}
-                </Box>
+          {household ? (
+            <Box>
+              <Stack direction="row" spacing={1} sx={{ alignItems: 'baseline', mb: 1 }}>
+                <Typography variant="h3">Eating</Typography>
+                {attendance.isFetching ? <Typography variant="caption" color="text.secondary">Checking who's free…</Typography> : null}
+              </Stack>
+              <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap', gap: 1, alignItems: 'center' }}>
+                {visibleMembers.map((member) => {
+                  const blocked = memberBlockedReason(member.id);
+                  const picked = selectedMembers.includes(member.id);
+                  const chip = (
+                    <Chip
+                      label={member.display_name}
+                      icon={picked ? <CheckIcon /> : undefined}
+                      aria-disabled={blocked ? true : undefined}
+                      aria-pressed={blocked ? undefined : picked}
+                      onClick={blocked ? undefined : () => toggleMember(member.id)}
+                      disabled={attendance.isFetching}
+                      variant="outlined"
+                      sx={{
+                        borderRadius: 999,
+                        height: 36,
+                        px: 0.5,
+                        ...(picked
+                          ? { bgcolor: 'action.selected', borderColor: 'primary.main', color: 'primary.main' }
+                          : {}),
+                        ...(blocked
+                          ? { borderStyle: 'dashed', color: 'text.disabled', cursor: 'default' }
+                          : {}),
+                      }}
+                    />
+                  );
+                  return blocked
+                    ? <Tooltip key={member.id} title={blocked}><span>{chip}</span></Tooltip>
+                    : <Box key={member.id} component="span">{chip}</Box>;
+                })}
+                <Stack direction="row" spacing={0.5} sx={{ alignItems: 'center', bgcolor: 'action.hover', borderRadius: 2, pl: 1.5, height: 36 }}>
+                  <Typography variant="body2" color="text.secondary">Guests</Typography>
+                  <IconButton size="small" aria-label="Remove guest" disabled={guestCount === 0} onClick={() => setGuestCount(Math.max(0, guestCount - 1))}><RemoveIcon fontSize="small" /></IconButton>
+                  <Typography className="numeral" sx={{ minWidth: 16, textAlign: 'center' }}>{guestCount}</Typography>
+                  <IconButton size="small" aria-label="Add guest" onClick={() => setGuestCount(guestCount + 1)}><AddIcon fontSize="small" /></IconButton>
+                </Stack>
+              </Stack>
+            </Box>
+          ) : null}
+
+          {hasRecipe ? (
+            <Stack
+              direction="row"
+              spacing={2}
+              sx={{ alignItems: 'center', bgcolor: 'action.hover', borderRadius: 2.5, px: 1.75, py: 1.5 }}
+            >
+              <Box sx={{ flex: 1, minWidth: 0 }}>
+                <Typography variant="subtitle2" color={diners > 0 ? 'text.primary' : 'text.disabled'}>
+                  {diners === 0
+                    ? 'Nobody is eating yet'
+                    : cooking === 1 ? 'Cooking 1 serving' : `Cooking ${cooking} servings`}
+                </Typography>
+                <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                  {diners === 0 ? `Pick who this ${mealNoun} is for.` : summary}
+                </Typography>
               </Box>
-            );
-          })}
-        </Stack>
-      </Box>
-
-      <Box>
-        <Typography variant="h3" sx={{ mb: 1 }}>Guests</Typography>
-        <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
-          <IconButton aria-label="Remove guest" disabled={guestCount === 0} onClick={() => setGuests(guestCount - 1)}><RemoveIcon /></IconButton>
-          <Typography className="numeral" sx={{ minWidth: 24, textAlign: 'center' }}>{guestCount}</Typography>
-          <IconButton aria-label="Add guest" onClick={() => setGuests(guestCount + 1)}><AddIcon /></IconButton>
-        </Stack>
-      </Box>
-
-    </Stack>
-  );
-
-  return (
-    <FormDialog open={open} onClose={busy ? undefined : onClose} fullWidth maxWidth="sm">
-      <DialogTitle sx={{ pb: household ? 1.5 : 1 }}>
-        <Typography component="span" variant="h2">{meal ? `Edit ${slotLabel}` : `Plan ${slotLabel}`}</Typography>
-        <Typography component="span" variant="body2" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>{dateLabel}</Typography>
-      </DialogTitle>
-      {household ? (
-        <Box sx={{ px: 3, pb: 2 }}>
-          <Stepper activeStep={step}>
-            <Step><StepLabel>Meal</StepLabel></Step>
-            <Step><StepLabel>People</StepLabel></Step>
-          </Stepper>
-        </Box>
-      ) : null}
-      <DialogContent dividers>
-        <Stack spacing={2.5}>
-          {error ? <Alert severity="error">{error}</Alert> : null}
-          {household && step === 1 ? peopleFields : mealFields}
+              <Stack sx={{ alignItems: 'center', flexShrink: 0 }}>
+                <Typography variant="caption" color="text.secondary">Cook extra</Typography>
+                <Stack direction="row" spacing={0.5} sx={{ alignItems: 'center' }}>
+                  <IconButton size="small" aria-label="Cook less extra" disabled={extra === 0} onClick={() => setExtra(Math.max(0, extra - 1))}><RemoveIcon fontSize="small" /></IconButton>
+                  <Typography className="numeral" sx={{ minWidth: 20, textAlign: 'center', fontWeight: 600 }}>{extra}</Typography>
+                  <IconButton size="small" aria-label="Cook more extra" onClick={() => setExtra(extra + 1)}><AddIcon fontSize="small" /></IconButton>
+                </Stack>
+              </Stack>
+            </Stack>
+          ) : null}
         </Stack>
       </DialogContent>
       <DialogActions>
-        {household && step === 1 ? (
-          <Button onClick={() => { setError(null); setStep(0); }} disabled={busy}>Back</Button>
-        ) : (
-          <Button onClick={onClose} disabled={busy}>Cancel</Button>
-        )}
-        {household && step === 0 ? (
-          <Button variant="contained" onClick={continueToPeople} disabled={busy}>Continue</Button>
-        ) : (
-          <Button variant="contained" onClick={() => void save()} disabled={busy}>
-            {meal ? 'Save changes' : `Plan ${mealNoun}`}
-          </Button>
-        )}
+        <Button onClick={onClose} disabled={busy}>Cancel</Button>
+        <Button
+          variant="contained"
+          onClick={() => void save()}
+          disabled={busy || foods.length === 0 || (household && diners === 0)}
+        >
+          {meal ? 'Save changes' : `Plan ${mealNoun}`}
+        </Button>
       </DialogActions>
     </FormDialog>
   );
