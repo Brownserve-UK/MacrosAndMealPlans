@@ -3,7 +3,8 @@ use std::collections::HashMap;
 use async_trait::async_trait;
 use mmp_core::Result;
 use mmp_core::domain::{
-    MealPlanComponentId, NewStockEvent, PreparedBatch, PreparedBatchId, StockItem, StockOutcome,
+    MealPlanComponentId, NewStockEvent, PreparedBatch, PreparedBatchId, StockItem, StockItemId,
+    StockOutcome,
 };
 use mmp_core::ports::{PreparedBatchRepository, StockWrite};
 use sqlx::PgPool;
@@ -126,6 +127,18 @@ impl PreparedBatchRepository for PgPreparedBatchRepository {
             .await
             .map_err(|e| repository_error("listing prepared batches", e))?;
         rows.into_iter().map(TryInto::try_into).collect()
+    }
+
+    async fn portions(&self, batch_id: PreparedBatchId) -> Result<Vec<StockItem>> {
+        crate::stock::portions_for_batch(&self.pool, batch_id).await
+    }
+
+    async fn place_portions(
+        &self,
+        portions: &[(StockItem, NewStockEvent)],
+        archive: &[StockItemId],
+    ) -> Result<Vec<StockOutcome>> {
+        crate::stock::place_portions(&self.pool, portions, archive).await
     }
 
     async fn insert(

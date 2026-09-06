@@ -5,12 +5,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PlannerMeal } from '../../api/client';
 import { MealOutcomeDialog } from './MealOutcomeDialog';
 
-const mocks = vi.hoisted(() => ({ review: vi.fn(), moveStock: vi.fn(), stockItems: [] as unknown[] }));
+const mocks = vi.hoisted(() => ({ review: vi.fn(), place: vi.fn() }));
 
 vi.mock('../../api/queries', () => ({
   useReviewMealOutcomes: () => ({ mutateAsync: mocks.review, isPending: false }),
-  useStock: () => ({ data: { items: mocks.stockItems } }),
-  useUpdateStockItem: () => ({ mutateAsync: mocks.moveStock, isPending: false }),
+  usePlacePortions: () => ({ mutateAsync: mocks.place, isPending: false }),
 }));
 
 function mealWith(overrides: Partial<PlannerMeal>): PlannerMeal {
@@ -66,10 +65,7 @@ function renderDialog(meal: PlannerMeal) {
 }
 
 describe('MealOutcomeDialog', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mocks.stockItems = [];
-  });
+  beforeEach(() => vi.clearAllMocks());
 
   it('only offers the still-pending participants and records what they ate', async () => {
     mocks.review.mockResolvedValue({});
@@ -128,37 +124,47 @@ describe('MealOutcomeDialog', () => {
     expect(screen.getByText('Put it away')).toBeInTheDocument();
   });
 
-  it('moves the leftover portion where you put it', async () => {
+  it('puts the whole leftover in the freezer by default', async () => {
     mocks.review.mockResolvedValue({});
-    mocks.moveStock.mockResolvedValue({ id: 's1' });
-    mocks.stockItems = [
-      { id: 's1', prepared_batch_id: 'b1', revision: 2, storage_location: 'chilled' },
-    ];
+    mocks.place.mockResolvedValue({});
     renderDialog(cookedMeal(4));
-    const user = userEvent.setup();
 
-    await user.click(screen.getByRole('button', { name: 'Freezer' }));
-    await user.click(screen.getByRole('button', { name: 'Record meal' }));
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Record meal' }));
 
-    expect(mocks.moveStock).toHaveBeenCalledWith({
-      id: 's1',
-      revision: 2,
-      body: { storage_location: 'frozen' },
+    expect(mocks.place).toHaveBeenCalledWith({
+      id: 'b1',
+      body: { placements: [{ storage_location: 'frozen', servings: 2 }] },
     });
   });
 
-  it('leaves the leftover alone when it is already where you want it', async () => {
+  it('splits the leftover between the fridge and the freezer', async () => {
     mocks.review.mockResolvedValue({});
-    mocks.stockItems = [
-      { id: 's1', prepared_batch_id: 'b1', revision: 2, storage_location: 'chilled' },
-    ];
+    mocks.place.mockResolvedValue({});
     renderDialog(cookedMeal(4));
     const user = userEvent.setup();
 
-    await user.click(screen.getByRole('button', { name: 'Fridge' }));
+    await user.click(screen.getByRole('button', { name: 'More in the fridge' }));
+    await user.click(screen.getByRole('button', { name: 'More in the fridge' }));
     await user.click(screen.getByRole('button', { name: 'Record meal' }));
 
-    expect(mocks.moveStock).not.toHaveBeenCalled();
+    expect(mocks.place).toHaveBeenCalledWith({
+      id: 'b1',
+      body: {
+        placements: [
+          { storage_location: 'chilled', servings: 1 },
+          { storage_location: 'frozen', servings: 1 },
+        ],
+      },
+    });
+  });
+
+  it('does not put anything away when it was all eaten', async () => {
+    mocks.review.mockResolvedValue({});
+    renderDialog(cookedMeal(2));
+
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Record meal' }));
+
+    expect(mocks.place).not.toHaveBeenCalled();
   });
 
   it('shows nothing to record once everyone is resolved', () => {

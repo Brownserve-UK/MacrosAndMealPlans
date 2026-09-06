@@ -93,6 +93,71 @@ impl PreparationService {
         self.batches.list_in_range(from, to).await
     }
 
+    pub async fn place(
+        &self,
+        batch_id: PreparedBatchId,
+        placements: Vec<PortionPlacement>,
+        actor: UserId,
+    ) -> Result<StockAffected<PreparedBatch>> {
+        let batch = self.get(batch_id).await?;
+        let held = self.batches.portions(batch_id).await?;
+        let remaining: Decimal = held
+            .iter()
+            .filter_map(|item| item.level.conservative_quantity())
+            .map(|quantity| quantity.amount)
+            .sum();
+        validate_placements(&placements, remaining)?;
+
+        let now = self.clock.now();
+        let mut portions = Vec::with_capacity(placements.len());
+        for (index, placement) in placements.iter().enumerate() {
+            let level = StockLevel::Exact {
+                quantity: Quantity::new(placement.servings, Unit::Serving),
+            };
+            let existing = held.get(index);
+            let item = StockItem {
+                id: existing.map(|item| item.id).unwrap_or_default(),
+                subject: StockSubject::prepared_portion(batch_id),
+                level,
+                storage_location: placement.storage_location,
+                source_date: existing.and_then(|item| item.source_date),
+                usability_deadline: placement.usability_deadline.clone(),
+                note: placement.note.clone(),
+                revision: existing
+                    .map(|item| item.revision)
+                    .unwrap_or(Revision::INITIAL),
+                created_at: existing.map(|item| item.created_at).unwrap_or(now),
+                updated_at: now,
+                archived_at: None,
+            };
+            let event = NewStockEvent {
+                kind: StockEventKind::Moved,
+                quantity_delta: None,
+                actor_user_id: Some(actor),
+                subject_member_id: None,
+                source: None,
+                reverses_event_id: None,
+                note: None,
+            };
+            portions.push((item, event));
+        }
+
+        let archive: Vec<_> = held
+            .iter()
+            .skip(placements.len())
+            .map(|item| item.id)
+            .collect();
+        let outcomes = self.batches.place_portions(&portions, &archive).await?;
+        let named = name_outcomes(
+            &*self.products,
+            &*self.ingredients,
+            &*self.batches,
+            outcomes,
+        )
+        .await?;
+        Ok(StockAffected::new(batch, named))
+    }
+
     pub async fn record(&self, input: RecordPreparation) -> Result<StockAffected<PreparedBatch>> {
         let recipe = self
             .recipes

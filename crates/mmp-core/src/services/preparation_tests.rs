@@ -168,6 +168,80 @@ fn record(h: &Harness, produced: i64, placements: Vec<PortionPlacement>) -> Reco
 }
 
 #[tokio::test]
+async fn putting_leftovers_away_can_split_them_between_two_places() {
+    let h = harness();
+    seed_rice(&h, 2000);
+
+    let batch = h
+        .service
+        .record(record(
+            &h,
+            6,
+            vec![placement(
+                StorageLocation::Ambient,
+                6,
+                date!(2026 - 09 - 07),
+            )],
+        ))
+        .await
+        .unwrap()
+        .into_value();
+
+    h.service
+        .place(
+            batch.id,
+            vec![
+                placement(StorageLocation::Chilled, 2, date!(2026 - 09 - 09)),
+                placement(StorageLocation::Frozen, 4, date!(2026 - 12 - 05)),
+            ],
+            UserId::new(),
+        )
+        .await
+        .unwrap();
+
+    let held = portions(&h).await;
+    assert_eq!(held.len(), 2, "one portion became two");
+    assert_eq!(held[0].storage_location, StorageLocation::Chilled);
+    assert_eq!(held[1].storage_location, StorageLocation::Frozen);
+    assert_eq!(
+        held[0].prepared_batch_id(),
+        held[1].prepared_batch_id(),
+        "both still belong to the same cook"
+    );
+}
+
+#[tokio::test]
+async fn putting_away_more_than_is_left_is_refused() {
+    let h = harness();
+    seed_rice(&h, 2000);
+
+    let batch = h
+        .service
+        .record(record(
+            &h,
+            4,
+            vec![placement(
+                StorageLocation::Ambient,
+                4,
+                date!(2026 - 09 - 07),
+            )],
+        ))
+        .await
+        .unwrap()
+        .into_value();
+
+    let refused = h
+        .service
+        .place(
+            batch.id,
+            vec![placement(StorageLocation::Frozen, 5, date!(2026 - 12 - 05))],
+            UserId::new(),
+        )
+        .await;
+    assert!(refused.is_err());
+}
+
+#[tokio::test]
 async fn a_cook_with_no_meal_behind_it_is_still_found_by_date() {
     let h = harness();
     seed_rice(&h, 2000);

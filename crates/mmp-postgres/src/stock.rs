@@ -91,6 +91,78 @@ fn level_bindings(level: &StockLevel) -> LevelBindings {
     }
 }
 
+pub(crate) async fn portions_for_batch(
+    pool: &sqlx::PgPool,
+    batch_id: mmp_core::domain::PreparedBatchId,
+) -> Result<Vec<StockItem>> {
+    let rows: Vec<crate::rows::StockItemRow> = sqlx::query_as(concat!(
+        "SELECT ",
+        columns!(),
+        " FROM stock_item WHERE prepared_batch_id = $1 AND archived_at IS NULL \
+         ORDER BY created_at ASC, id ASC"
+    ))
+    .bind(batch_id.as_uuid())
+    .fetch_all(pool)
+    .await
+    .map_err(|e| repository_error("loading a cook's portions", e))?;
+    rows.into_iter().map(TryInto::try_into).collect()
+}
+
+pub(crate) async fn place_portions(
+    pool: &sqlx::PgPool,
+    portions: &[(StockItem, NewStockEvent)],
+    archive: &[mmp_core::domain::StockItemId],
+) -> Result<Vec<mmp_core::domain::StockOutcome>> {
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|e| repository_error("putting portions away", e))?;
+
+    for id in archive {
+        sqlx::query("UPDATE stock_item SET archived_at = now(), updated_at = now() WHERE id = $1")
+            .bind(id.as_uuid())
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| map_db_error(e, "archiving a portion"))?;
+    }
+
+    for (item, event) in portions {
+        let bindings = level_bindings(&item.level);
+        let updated: Option<(uuid::Uuid,)> = sqlx::query_as(
+            "UPDATE stock_item SET tracking_mode = $2, quantity_value = $3, quantity_unit = $4, \
+                 storage_location = $5, usability_deadline = $6, usability_deadline_basis = $7, \
+                 note = $8, revision = revision + 1, updated_at = now() \
+             WHERE id = $1 RETURNING id",
+        )
+        .bind(item.id.as_uuid())
+        .bind(bindings.tracking_mode)
+        .bind(bindings.quantity_value)
+        .bind(bindings.quantity_unit)
+        .bind(item.storage_location.code())
+        .bind(item.usability_deadline.as_ref().map(|d| d.date))
+        .bind(
+            item.usability_deadline
+                .as_ref()
+                .and_then(|d| d.basis.clone()),
+        )
+        .bind(item.note.as_deref())
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|e| map_db_error(e, "moving a portion"))?;
+
+        if updated.is_some() {
+            write_event(&mut *tx, item.id, event).await?;
+        } else {
+            insert_stock_item(&mut tx, item, event).await?;
+        }
+    }
+
+    tx.commit()
+        .await
+        .map_err(|e| repository_error("putting portions away", e))?;
+    Ok(Vec::new())
+}
+
 pub(crate) async fn insert_stock_item(
     conn: &mut sqlx::PgConnection,
     item: &StockItem,

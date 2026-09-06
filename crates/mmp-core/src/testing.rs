@@ -952,6 +952,37 @@ impl crate::ports::PreparedBatchRepository for InMemoryPreparedBatchRepository {
         Ok(found)
     }
 
+    async fn portions(&self, batch_id: PreparedBatchId) -> Result<Vec<StockItem>> {
+        let mut found: Vec<StockItem> = self
+            .stock
+            .rows
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|item| item.archived_at.is_none() && item.prepared_batch_id() == Some(batch_id))
+            .cloned()
+            .collect();
+        found.sort_by_key(|item| item.created_at);
+        Ok(found)
+    }
+
+    async fn place_portions(
+        &self,
+        portions: &[(StockItem, NewStockEvent)],
+        archive: &[crate::domain::StockItemId],
+    ) -> Result<Vec<StockOutcome>> {
+        let mut rows = self.stock.rows.lock().unwrap();
+        for id in archive {
+            if let Some(item) = rows.get_mut(id) {
+                item.archived_at = Some(item.updated_at);
+            }
+        }
+        for (item, _) in portions {
+            rows.insert(item.id, item.clone());
+        }
+        Ok(Vec::new())
+    }
+
     async fn insert(
         &self,
         batch: &PreparedBatch,

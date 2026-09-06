@@ -676,6 +676,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/preparations/{id}/placements": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["placePortions"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/products": {
         parameters: {
             query?: never;
@@ -2042,6 +2058,9 @@ export interface components {
         };
         /** @enum {string} */
         ParticipantStatus: "planned" | "eaten" | "not_eaten";
+        PlacePortionsRequest: {
+            placements: components["schemas"]["PortionPlacementRequest"][];
+        };
         PlannerCapabilitiesDto: {
             can_delete: boolean;
             can_edit: boolean;
@@ -4922,6 +4941,51 @@ export interface operations {
             };
             /** @description No such preparation */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    placePortions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Prepared batch id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PlacePortionsRequest"];
+            };
+        };
+        responses: {
+            /** @description Where the cook's remaining portions now live */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PreparationResponse"];
+                };
+            };
+            /** @description No such preparation */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description That does not add up to what is left */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -108,6 +108,11 @@ impl RecordPreparationRequest {
     }
 }
 
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+pub struct PlacePortionsRequest {
+    pub placements: Vec<PortionPlacementRequest>,
+}
+
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct PreparationResponse {
     #[serde(flatten)]

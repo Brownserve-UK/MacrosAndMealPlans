@@ -8,7 +8,8 @@ use uuid::Uuid;
 
 use crate::auth::Principal;
 use crate::dto::{
-    PreparationRangeQuery, PreparationResponse, PreparedBatchDto, RecordPreparationRequest,
+    PlacePortionsRequest, PreparationRangeQuery, PreparationResponse, PreparedBatchDto,
+    RecordPreparationRequest,
 };
 use crate::error::ApiResult;
 use crate::http::Created;
@@ -18,6 +19,44 @@ pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(record, list))
         .routes(routes!(get))
+        .routes(routes!(place))
+}
+
+#[utoipa::path(
+    put,
+    path = "/api/v1/preparations/{id}/placements",
+    operation_id = "placePortions",
+    params(("id" = Uuid, Path, description = "Prepared batch id")),
+    request_body = PlacePortionsRequest,
+    responses(
+        (status = 200, description = "Where the cook's remaining portions now live",
+         body = PreparationResponse),
+        (status = 404, description = "No such preparation", body = crate::error::Problem),
+        (status = 422, description = "That does not add up to what is left",
+         body = crate::error::Problem),
+    ),
+    tag = "preparation",
+    security(("basic" = []))
+)]
+async fn place(
+    State(state): State<AppState>,
+    principal: Principal,
+    Path(id): Path<Uuid>,
+    Json(body): Json<PlacePortionsRequest>,
+) -> ApiResult<Json<PreparationResponse>> {
+    let placed = state
+        .preparation
+        .place(
+            PreparedBatchId::from(id),
+            body.placements.into_iter().map(Into::into).collect(),
+            principal.user_id,
+        )
+        .await?;
+    let stock_outcomes = placed.stock.iter().cloned().map(Into::into).collect();
+    Ok(Json(PreparationResponse {
+        batch: placed.into_value().into(),
+        stock_outcomes,
+    }))
 }
 
 #[utoipa::path(

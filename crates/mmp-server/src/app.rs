@@ -318,6 +318,21 @@ impl mmp_core::ports::PreparedBatchRepository for NoopPreparedBatches {
         Ok(Vec::new())
     }
 
+    async fn portions(
+        &self,
+        _: mmp_core::domain::PreparedBatchId,
+    ) -> mmp_core::Result<Vec<mmp_core::domain::StockItem>> {
+        Ok(Vec::new())
+    }
+
+    async fn place_portions(
+        &self,
+        _: &[(mmp_core::domain::StockItem, mmp_core::domain::NewStockEvent)],
+        _: &[mmp_core::domain::StockItemId],
+    ) -> mmp_core::Result<Vec<mmp_core::domain::StockOutcome>> {
+        Ok(Vec::new())
+    }
+
     async fn for_components(
         &self,
         _: &[mmp_core::domain::MealPlanComponentId],

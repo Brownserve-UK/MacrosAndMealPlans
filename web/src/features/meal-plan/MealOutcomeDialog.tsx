@@ -12,7 +12,7 @@ import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
 import { useState } from 'react';
 import { ApiError, type Amount, type PlannerMeal } from '../../api/client';
-import { useReviewMealOutcomes, useStock, useUpdateStockItem } from '../../api/queries';
+import { usePlacePortions, useReviewMealOutcomes } from '../../api/queries';
 import type { components } from '../../api/schema';
 import { ConceptIcon } from '../../components/ConceptIcon';
 import { FormDialog } from '../../components/FormDialog';
@@ -42,16 +42,11 @@ function servingsMade(food: PlannerMeal['foods'][number]): number | null {
 
 export function MealOutcomeDialog({ meal, onClose }: { meal: PlannerMeal; onClose: () => void }) {
   const review = useReviewMealOutcomes();
-  const stock = useStock({ per_page: 200 });
-  const moveStock = useUpdateStockItem();
+  const place = usePlacePortions();
   const [claims, setClaims] = useState<Claims>({});
-  const [putAway, setPutAway] = useState<Record<string, 'chilled' | 'frozen'>>({});
+  const [fridge, setFridge] = useState<Record<string, number>>({});
   const [error, setError] = useState<string | null>(null);
   const isSnack = meal.slot === 'snacks';
-
-  function portionFor(batchId: string) {
-    return (stock.data?.items ?? []).find((item) => item.prepared_batch_id === batchId);
-  }
 
   const pendingPeople = meal.people.filter(
     (person) => person.can_record && person.allocations.some((allocation) => allocation.status === 'planned'),
@@ -168,15 +163,15 @@ export function MealOutcomeDialog({ meal, onClose }: { meal: PlannerMeal; onClos
 
       for (const food of meal.foods) {
         const remaining = remainingFor(food.id);
-        const wanted = putAway[food.id];
-        if (!food.cooked || remaining == null || remaining <= 0 || !wanted) continue;
-        const portion = portionFor(food.cooked.prepared_batch_id);
-        if (!portion || portion.storage_location === wanted) continue;
-        await moveStock.mutateAsync({
-          id: portion.id,
-          revision: portion.revision,
-          body: { storage_location: wanted },
-        });
+        if (!food.cooked || remaining == null || remaining <= 0) continue;
+        const chilled = Math.min(fridge[food.id] ?? 0, remaining);
+        const frozen = Math.round((remaining - chilled) * 10) / 10;
+        const placements = [
+          ...(chilled > 0 ? [{ storage_location: 'chilled' as const, servings: chilled }] : []),
+          ...(frozen > 0 ? [{ storage_location: 'frozen' as const, servings: frozen }] : []),
+        ];
+        if (placements.length === 0) continue;
+        await place.mutateAsync({ id: food.cooked.prepared_batch_id, body: { placements } });
       }
       onClose();
     } catch (caught) {
@@ -298,26 +293,42 @@ export function MealOutcomeDialog({ meal, onClose }: { meal: PlannerMeal; onClos
                   {remaining > 0 ? 'Put it away' : `All of the ${food.item_name} was eaten`}
                 </Typography>
                 {remaining > 0 && food.cooked ? (
-                  <Stack direction="row" spacing={1} sx={{ mt: 1.25 }}>
+                  <Stack direction="row" spacing={2} sx={{ mt: 1.25, flexWrap: 'wrap' }}>
                     {(['chilled', 'frozen'] as const).map((where) => {
-                      const current = putAway[food.id] ?? portionFor(food.cooked!.prepared_batch_id)?.storage_location;
-                      const active = current === where;
+                      const chilled = Math.min(fridge[food.id] ?? 0, remaining);
+                      const value = where === 'chilled'
+                        ? chilled
+                        : Math.round((remaining - chilled) * 10) / 10;
+                      const label = where === 'chilled' ? 'Fridge' : 'Freezer';
+                      const move = (next: number) =>
+                        setFridge((now) => ({
+                          ...now,
+                          [food.id]: Math.max(0, Math.min(remaining, next)),
+                        }));
                       return (
-                        <Button
-                          key={where}
-                          size="small"
-                          aria-pressed={active}
-                          onClick={() => setPutAway((now) => ({ ...now, [food.id]: where }))}
-                          startIcon={<ConceptIcon concept={where === 'chilled' ? 'fridge' : 'freezer'} size={16} />}
-                          sx={{
-                            border: '1px solid',
-                            borderColor: active ? 'primary.main' : 'divider',
-                            bgcolor: active ? 'action.selected' : 'transparent',
-                            color: active ? 'primary.main' : 'text.primary',
-                          }}
-                        >
-                          {where === 'chilled' ? 'Fridge' : 'Freezer'}
-                        </Button>
+                        <Stack key={where} direction="row" spacing={0.75} sx={{ alignItems: 'center' }}>
+                          <ConceptIcon concept={where === 'chilled' ? 'fridge' : 'freezer'} size={16} />
+                          <Typography variant="body2">{label}</Typography>
+                          <IconButton
+                            size="small"
+                            aria-label={`Less in the ${label.toLowerCase()}`}
+                            disabled={value <= 0}
+                            onClick={() => move(where === 'chilled' ? chilled - STEP : chilled + STEP)}
+                          >
+                            <RemoveIcon fontSize="small" />
+                          </IconButton>
+                          <Typography className="numeral" sx={{ minWidth: 26, textAlign: 'center', fontWeight: 600 }}>
+                            {show(value)}
+                          </Typography>
+                          <IconButton
+                            size="small"
+                            aria-label={`More in the ${label.toLowerCase()}`}
+                            disabled={value >= remaining}
+                            onClick={() => move(where === 'chilled' ? chilled + STEP : chilled - STEP)}
+                          >
+                            <AddIcon fontSize="small" />
+                          </IconButton>
+                        </Stack>
                       );
                     })}
                   </Stack>
