@@ -245,6 +245,13 @@ pub fn has_explicit_allocations(participants: &[NewMealParticipant]) -> bool {
         .any(|participant| !participant.allocations.is_empty())
 }
 
+fn default_share(amount: &ConsumedAmount, shares: usize) -> ConsumedAmount {
+    match amount {
+        ConsumedAmount::Servings(_) => ConsumedAmount::Servings(Decimal::ONE),
+        other => equal_split(other, shares),
+    }
+}
+
 pub fn apply_equal_shares(entry: &mut MealPlanEntry) {
     let guest_heads: usize = entry
         .guest_groups
@@ -263,7 +270,7 @@ pub fn apply_equal_shares(entry: &mut MealPlanEntry) {
                     .iter()
                     .find(|component| component.id == allocation.component_id)
             {
-                allocation.allocated = equal_split(&component.amount, shares);
+                allocation.allocated = default_share(&component.amount, shares);
             }
         }
     }
@@ -274,7 +281,7 @@ pub fn apply_equal_shares(entry: &mut MealPlanEntry) {
                     .iter()
                     .find(|component| component.id == allocation.component_id)
             {
-                allocation.allocated = equal_split(&component.amount, shares);
+                allocation.allocated = default_share(&component.amount, shares);
             }
         }
     }

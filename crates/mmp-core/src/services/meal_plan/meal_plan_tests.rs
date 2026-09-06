@@ -1591,7 +1591,7 @@ async fn a_recipe_serving_can_be_planned_and_counts_toward_the_day() {
 }
 
 #[tokio::test]
-async fn two_servings_double_the_planned_nutrition() {
+async fn planned_nutrition_follows_the_serving_you_eat_not_the_batch_you_make() {
     let h = harness();
     let rice = product("Rice", 100);
     h.products.seed(rice.clone());
@@ -1601,7 +1601,11 @@ async fn two_servings_double_the_planned_nutrition() {
 
     assert_eq!(
         entry.planned.nutrition.energy_kcal,
-        Some(Decimal::new(200, 0))
+        Some(Decimal::new(100, 0))
+    );
+    assert_eq!(
+        entry.components[0].preparation.prepared,
+        ConsumedAmount::Servings(Decimal::new(2, 0))
     );
 }
 
@@ -3344,6 +3348,29 @@ async fn cooking_a_recipe_consumes_raw_stock_and_leaves_the_uneaten_servings_as_
 }
 
 #[tokio::test]
+async fn a_forecast_above_the_head_count_is_spare_rather_than_bigger_portions() {
+    let h = harness();
+    let other = h.add_member("Sam");
+    let food = product("Curry", 100);
+    h.products.seed(food.clone());
+    let curry = seed_recipe(&h, "Curry", 4, vec![recipe_line(food.id, 200)]).await;
+
+    let entry = household_planned(&h, vec![servings_of(curry.id, 5)], &[h.member_id, other]).await;
+
+    for participant in &entry.entry.participants {
+        assert_eq!(
+            participant.allocations[0].allocated,
+            ConsumedAmount::Servings(Decimal::ONE),
+            "a serving is already one person's portion"
+        );
+    }
+    assert_eq!(
+        entry.components[0].preparation.unallocated,
+        Some(ConsumedAmount::Servings(Decimal::new(3, 0)))
+    );
+}
+
+#[tokio::test]
 async fn cooking_more_than_planned_leaves_the_surplus_unallocated() {
     let h = harness();
     let rice_id = crate::domain::IngredientId::new();
@@ -3361,27 +3388,34 @@ async fn cooking_more_than_planned_leaves_the_surplus_unallocated() {
     assert_eq!(prep.prepared, ConsumedAmount::Servings(Decimal::new(5, 0)));
     assert_eq!(
         prep.unallocated,
-        Some(ConsumedAmount::Servings(Decimal::new(3, 0)))
+        Some(ConsumedAmount::Servings(Decimal::new(4, 0)))
     );
     assert!(!prep.shortage);
 }
 
 #[tokio::test]
-async fn cooking_less_than_planned_is_reported_as_a_shortage() {
+async fn cooking_less_than_the_people_eating_is_reported_as_a_shortage() {
     let h = harness();
+    let sam = h.add_member("Sam");
+    let ash = h.add_member("Ash");
     let rice_id = crate::domain::IngredientId::new();
     let tesco = mapped_product("Tesco Basmati", rice_id);
     h.products.seed(tesco.clone());
     h.seed_stock_grams(tesco.id, 2000);
 
     let curry = seed_recipe(&h, "Curry", 4, vec![ingredient_line(rice_id, 400)]).await;
-    let entry = planned(&h, vec![servings_of(curry.id, 6)]).await;
+    let entry =
+        household_planned(&h, vec![servings_of(curry.id, 6)], &[h.member_id, sam, ash]).await;
     let component = entry.components[0].component.clone();
     cook(&h, entry.entry.id, component.id, curry.id, 1).await;
 
     let after = h.service.get(entry.entry.id).await.unwrap();
     let prep = &after.components[0].preparation;
     assert_eq!(prep.prepared, ConsumedAmount::Servings(Decimal::ONE));
+    assert_eq!(
+        prep.allocated,
+        Some(ConsumedAmount::Servings(Decimal::new(3, 0)))
+    );
     assert!(prep.shortage);
 }
 

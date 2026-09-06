@@ -112,7 +112,7 @@ describe('MealEditorDialog household roster', () => {
     }
   });
 
-  it('derives the servings from who is eating, and cook extra adds to them', async () => {
+  it('forecasts the servings from who is eating, and lets you say you are making more', async () => {
     attendance.rows = [
       { member_id: 'morgan', display_name: 'Morgan Sample', attendance: 'available', claimed_time: null },
     ];
@@ -126,14 +126,35 @@ describe('MealEditorDialog household roster', () => {
 
     await user.click(screen.getByText('Me'));
     await user.click(screen.getByText('Morgan Sample'));
-    expect(screen.getByText('Cooking 2 servings')).toBeInTheDocument();
-    expect(screen.getByText('One each, nothing left over.')).toBeInTheDocument();
+    expect(screen.getByText('About 2 servings')).toBeInTheDocument();
+    expect(screen.getByText('For the shopping list')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Plan meal' })).toBeEnabled();
 
-    await user.click(screen.getByRole('button', { name: 'Cook more extra' }));
-    await user.click(screen.getByRole('button', { name: 'Cook more extra' }));
-    expect(screen.getByText('Cooking 4 servings')).toBeInTheDocument();
-    expect(screen.getByText('2 now, 2 kept for later.')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Making more?' }));
+    expect(screen.getByText('About 4 servings')).toBeInTheDocument();
+    expect(screen.getByText('2 spare for the freezer')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Make more' }));
+    expect(screen.getByText('About 5 servings')).toBeInTheDocument();
+  });
+
+  it('never forecasts fewer servings than the people eating', async () => {
+    attendance.rows = [
+      { member_id: 'morgan', display_name: 'Morgan Sample', attendance: 'available', claimed_time: null },
+    ];
+    render(
+      <MealEditorDialog open mode="household" onClose={vi.fn()} date="2026-09-10" slot="breakfast" meal={null} />,
+    );
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Add test recipe' }));
+    await user.click(screen.getByText('Me'));
+    await user.click(screen.getByText('Morgan Sample'));
+
+    await user.click(screen.getByRole('button', { name: 'Making more?' }));
+    await user.click(screen.getByRole('button', { name: 'Make less' }));
+    await user.click(screen.getByRole('button', { name: 'Make less' }));
+    expect(screen.getByText('About 2 servings')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Make less' })).toBeDisabled();
   });
 
   it('keeps date and meal fixed while showing the configured time', async () => {

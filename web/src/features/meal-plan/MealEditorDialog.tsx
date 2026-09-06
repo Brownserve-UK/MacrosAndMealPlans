@@ -72,10 +72,11 @@ function initialDiners(meal: PlannerMeal | null, household: boolean): number {
   return (meal?.people.length ?? 0) + guests;
 }
 
-function initialExtra(meal: PlannerMeal | null, household: boolean): number {
+function initialMaking(meal: PlannerMeal | null, household: boolean): number | null {
   const recipe = (meal?.foods ?? []).find((food) => food.amount.kind === 'servings');
-  if (!recipe) return 0;
-  return Math.max(0, Math.round(recipe.amount.value - initialDiners(meal, household)));
+  if (!recipe) return null;
+  const planned = Math.round(recipe.amount.value);
+  return planned > initialDiners(meal, household) ? planned : null;
 }
 
 function RecipeKcal({ recipeId }: { recipeId: string }) {
@@ -123,7 +124,7 @@ export function MealEditorDialog({
   );
   const [guestCount, setGuestCount] = useState(meal?.guest_groups.reduce((sum, group) => sum + group.count, 0) ?? 0);
   const [foods, setFoods] = useState<FoodDraft[]>(() => initialFoods(meal));
-  const [extra, setExtra] = useState(() => initialExtra(meal, household));
+  const [making, setMaking] = useState<number | null>(() => initialMaking(meal, household));
   const [error, setError] = useState<string | null>(null);
   const busy = create.isPending || update.isPending;
 
@@ -142,7 +143,7 @@ export function MealEditorDialog({
 
   const visibleMembers = useMemo(() => members.data?.items ?? [], [members.data]);
   const diners = household ? selectedMembers.length + guestCount : 1;
-  const cooking = diners + extra;
+  const forecast = Math.max(making ?? diners, diners);
   const hasRecipe = foods.some((food) => food.itemKind === 'recipe');
   const plannedTime = plannedTimeOverride
     ?? (slot === 'snacks' ? '' : mealTimes.data?.[slot] ?? '');
@@ -154,7 +155,7 @@ export function MealEditorDialog({
   });
 
   function servingsFor(food: FoodDraft): Amount {
-    return food.itemKind === 'recipe' ? { kind: 'servings', value: cooking } : food.amount;
+    return food.itemKind === 'recipe' ? { kind: 'servings', value: forecast } : food.amount;
   }
 
   function memberBlockedReason(memberId: string): string | null {
@@ -191,7 +192,7 @@ export function MealEditorDialog({
       itemKind: 'recipe',
       itemId: next.id,
       name: next.name,
-      amount: { kind: 'servings', value: Math.max(cooking, 1) },
+      amount: { kind: 'servings', value: Math.max(forecast, 1) },
     }]);
   }
 
@@ -238,7 +239,9 @@ export function MealEditorDialog({
     const guestAllocations = household && guestCount > 0
       ? foods.map((food) => ({
           component_id: food.componentId,
-          amount: equalShare(servingsFor(food), diners),
+          amount: food.itemKind === 'recipe'
+            ? { kind: 'servings' as const, value: 1 }
+            : equalShare(food.amount, diners),
         }))
       : [];
 
@@ -273,9 +276,7 @@ export function MealEditorDialog({
     }
   }
 
-  const summary = extra > 0
-    ? `${diners} now, ${extra} kept for later.`
-    : 'One each, nothing left over.';
+  const spare = forecast - diners;
 
   return (
     <FormDialog open={open} onClose={busy ? undefined : onClose} fullWidth maxWidth="sm">
@@ -333,11 +334,7 @@ export function MealEditorDialog({
                           </TextField>
                         ) : null}
                       </Stack>
-                    ) : (
-                      <Typography variant="body2" color="text.secondary">
-                        {cooking === 1 ? '1 serving' : `${cooking} servings`}
-                      </Typography>
-                    )}
+                    ) : null}
                     <IconButton aria-label={`Remove ${food.name}`} onClick={() => setFoods((current) => current.filter((candidate) => candidate.componentId !== food.componentId))}>
                       <DeleteIcon />
                     </IconButton>
@@ -400,23 +397,35 @@ export function MealEditorDialog({
               sx={{ alignItems: 'center', bgcolor: 'action.hover', borderRadius: 2.5, px: 1.75, py: 1.5 }}
             >
               <Box sx={{ flex: 1, minWidth: 0 }}>
-                <Typography variant="subtitle2" color={diners > 0 ? 'text.primary' : 'text.disabled'}>
+                <Typography
+                  variant="subtitle2"
+                  className="numeral"
+                  color={diners > 0 ? 'text.primary' : 'text.disabled'}
+                >
                   {diners === 0
-                    ? 'Nobody is eating yet'
-                    : cooking === 1 ? 'Cooking 1 serving' : `Cooking ${cooking} servings`}
+                    ? 'Nobody yet'
+                    : forecast === 1 ? 'About 1 serving' : `About ${forecast} servings`}
                 </Typography>
                 <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
-                  {diners === 0 ? `Pick who this ${mealNoun} is for.` : summary}
+                  {diners === 0
+                    ? `Pick who this ${mealNoun} is for.`
+                    : spare > 0
+                      ? `${spare} spare for the freezer`
+                      : 'For the shopping list'}
                 </Typography>
               </Box>
-              <Stack sx={{ alignItems: 'center', flexShrink: 0 }}>
-                <Typography variant="caption" color="text.secondary">Cook extra</Typography>
-                <Stack direction="row" spacing={0.5} sx={{ alignItems: 'center' }}>
-                  <IconButton size="small" aria-label="Cook less extra" disabled={extra === 0} onClick={() => setExtra(Math.max(0, extra - 1))}><RemoveIcon fontSize="small" /></IconButton>
-                  <Typography className="numeral" sx={{ minWidth: 20, textAlign: 'center', fontWeight: 600 }}>{extra}</Typography>
-                  <IconButton size="small" aria-label="Cook more extra" onClick={() => setExtra(extra + 1)}><AddIcon fontSize="small" /></IconButton>
+              {diners > 0 && making === null ? (
+                <Button size="small" onClick={() => setMaking(diners + 2)} sx={{ flexShrink: 0 }}>
+                  Making more?
+                </Button>
+              ) : null}
+              {making !== null ? (
+                <Stack direction="row" spacing={0.5} sx={{ alignItems: 'center', flexShrink: 0 }}>
+                  <IconButton size="small" aria-label="Make less" disabled={forecast <= diners} onClick={() => setMaking(Math.max(diners, forecast - 1))}><RemoveIcon fontSize="small" /></IconButton>
+                  <Typography className="numeral" sx={{ minWidth: 20, textAlign: 'center', fontWeight: 600 }}>{forecast}</Typography>
+                  <IconButton size="small" aria-label="Make more" onClick={() => setMaking(forecast + 1)}><AddIcon fontSize="small" /></IconButton>
                 </Stack>
-              </Stack>
+              ) : null}
             </Stack>
           ) : null}
         </Stack>
