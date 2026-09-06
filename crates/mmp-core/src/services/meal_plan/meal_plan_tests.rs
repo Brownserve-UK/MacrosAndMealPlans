@@ -3344,6 +3344,48 @@ async fn cooking_a_recipe_consumes_raw_stock_and_leaves_the_uneaten_servings_as_
 }
 
 #[tokio::test]
+async fn cooking_more_than_planned_leaves_the_surplus_unallocated() {
+    let h = harness();
+    let rice_id = crate::domain::IngredientId::new();
+    let tesco = mapped_product("Tesco Basmati", rice_id);
+    h.products.seed(tesco.clone());
+    h.seed_stock_grams(tesco.id, 2000);
+
+    let curry = seed_recipe(&h, "Curry", 4, vec![ingredient_line(rice_id, 400)]).await;
+    let entry = planned(&h, vec![servings_of(curry.id, 2)]).await;
+    let component = entry.components[0].component.clone();
+    cook(&h, entry.entry.id, component.id, curry.id, 5).await;
+
+    let after = h.service.get(entry.entry.id).await.unwrap();
+    let prep = &after.components[0].preparation;
+    assert_eq!(prep.prepared, ConsumedAmount::Servings(Decimal::new(5, 0)));
+    assert_eq!(
+        prep.unallocated,
+        Some(ConsumedAmount::Servings(Decimal::new(3, 0)))
+    );
+    assert!(!prep.shortage);
+}
+
+#[tokio::test]
+async fn cooking_less_than_planned_is_reported_as_a_shortage() {
+    let h = harness();
+    let rice_id = crate::domain::IngredientId::new();
+    let tesco = mapped_product("Tesco Basmati", rice_id);
+    h.products.seed(tesco.clone());
+    h.seed_stock_grams(tesco.id, 2000);
+
+    let curry = seed_recipe(&h, "Curry", 4, vec![ingredient_line(rice_id, 400)]).await;
+    let entry = planned(&h, vec![servings_of(curry.id, 6)]).await;
+    let component = entry.components[0].component.clone();
+    cook(&h, entry.entry.id, component.id, curry.id, 1).await;
+
+    let after = h.service.get(entry.entry.id).await.unwrap();
+    let prep = &after.components[0].preparation;
+    assert_eq!(prep.prepared, ConsumedAmount::Servings(Decimal::ONE));
+    assert!(prep.shortage);
+}
+
+#[tokio::test]
 async fn a_second_eater_draws_from_the_portion_without_cooking_the_recipe_again() {
     let h = harness();
     let rice_id = crate::domain::IngredientId::new();

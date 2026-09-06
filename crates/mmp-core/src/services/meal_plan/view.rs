@@ -406,8 +406,13 @@ impl MealPlanService {
                 )
             };
 
+            let cooked = cooked_by_component.get(&component.id).cloned();
             let outcomes = outcomes_for_component(&entry, &records_by_key, component.id);
-            let preparation = preparation_for(&component.amount, &outcomes);
+            let prepared = cooked
+                .as_ref()
+                .map(|batch| ConsumedAmount::Servings(batch.servings_produced))
+                .unwrap_or(component.amount);
+            let preparation = preparation_for(&prepared, &outcomes);
             let subject_status = subject
                 .and_then(|member| entry.participant_for(member))
                 .and_then(|participant| {
@@ -426,7 +431,7 @@ impl MealPlanService {
                 quality,
                 consumption_record: subject_record,
                 preparation,
-                cooked: cooked_by_component.get(&component.id).cloned(),
+                cooked,
                 status: entry.component_status(component.id, assumption),
                 subject_status,
             });
