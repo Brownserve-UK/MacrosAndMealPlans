@@ -218,9 +218,6 @@ impl MealPlanService {
         entry.updated_by = input.actor_id;
         entry.updated_at = now;
         entry.revision = entry.revision.next();
-        if !has_explicit_allocations(&input.participants) {
-            apply_equal_shares(&mut entry);
-        }
         commit_outcome(
             MEAL_PLAN_ENTRY,
             id,
@@ -272,7 +269,6 @@ impl MealPlanService {
         entry.updated_by = actor_id;
         entry.updated_at = now;
         entry.revision = entry.revision.next();
-        apply_equal_shares(&mut entry);
         commit_outcome(
             MEAL_PLAN_ENTRY,
             id,
@@ -326,7 +322,6 @@ impl MealPlanService {
         entry.updated_by = actor_id;
         entry.updated_at = now;
         entry.revision = entry.revision.next();
-        apply_equal_shares(&mut entry);
         commit_outcome(
             MEAL_PLAN_ENTRY,
             id,
@@ -444,10 +439,6 @@ impl MealPlanService {
         require_editable(&entry)?;
 
         let now = self.clock.now();
-        let explicit_allocations = patch
-            .participants
-            .as_deref()
-            .is_some_and(has_explicit_allocations);
         if let Some(components) = patch.components {
             validate_components(&components)?;
             let existing_items = entry
@@ -531,9 +522,6 @@ impl MealPlanService {
         entry.updated_by = actor_id;
         entry.updated_at = now;
         entry.revision = entry.revision.next();
-        if !explicit_allocations {
-            apply_equal_shares(&mut entry);
-        }
         commit_outcome(
             MEAL_PLAN_ENTRY,
             id,

@@ -1906,6 +1906,85 @@ async fn a_participant_sees_only_their_own_share_and_outcome() {
 }
 
 #[tokio::test]
+async fn recording_one_outcome_leaves_everyone_elses_share_alone() {
+    let h = harness();
+    let taylor = h.add_member("Taylor");
+    let food = product("Curry", 100);
+    h.products.seed(food.clone());
+    let entry = planned(&h, vec![measured(food.id, 400)]).await;
+    let component_id = entry.components[0].component.id;
+
+    let shared = h
+        .service
+        .set_participants(
+            entry.entry.id,
+            entry.entry.revision,
+            crate::domain::SetMealParticipants {
+                actor_id: h.actor_id,
+                guest_groups: Vec::new(),
+                participants: vec![
+                    crate::domain::NewMealParticipant {
+                        id: None,
+                        member_id: h.member_id,
+                        allocations: vec![crate::domain::NewMealParticipantAllocation {
+                            component_id,
+                            allocated: ConsumedAmount::Measure(Quantity::new(
+                                dgrams(300),
+                                Unit::Gram,
+                            )),
+                        }],
+                    },
+                    crate::domain::NewMealParticipant {
+                        id: None,
+                        member_id: taylor,
+                        allocations: vec![crate::domain::NewMealParticipantAllocation {
+                            component_id,
+                            allocated: ConsumedAmount::Measure(Quantity::new(
+                                dgrams(100),
+                                Unit::Gram,
+                            )),
+                        }],
+                    },
+                ],
+            },
+        )
+        .await
+        .unwrap();
+
+    let component = shared.components[0].component.clone();
+    h.service
+        .mark_component_eaten_backdated(
+            shared.entry.id,
+            component.id,
+            component.revision,
+            ConfirmMealPlanComponent {
+                consumed_on: date!(2026 - 08 - 25),
+                consumed_at: None,
+                amount: ConsumedAmount::Measure(Quantity::new(dgrams(300), Unit::Gram)),
+                actor_id: h.actor_id,
+                subject_member_id: Some(h.member_id),
+            },
+        )
+        .await
+        .unwrap();
+
+    let after = h.service.get(shared.entry.id).await.unwrap();
+    let taylor_share = after
+        .participants
+        .iter()
+        .find(|participant| participant.member_id == taylor)
+        .unwrap()
+        .allocations
+        .iter()
+        .find(|allocation| allocation.component_id == component_id)
+        .unwrap();
+    assert_eq!(
+        taylor_share.allocated,
+        ConsumedAmount::Measure(Quantity::new(dgrams(100), Unit::Gram))
+    );
+}
+
+#[tokio::test]
 async fn a_recipe_built_from_products_without_nutrition_reports_unknown_not_zero() {
     let h = harness();
     let mut blank = product("Mystery", 0);
@@ -2390,7 +2469,7 @@ async fn opting_out_of_a_future_meal_is_allowed() {
 }
 
 #[tokio::test]
-async fn opting_out_recalculates_leftovers_and_a_manager_cannot_re_add() {
+async fn opting_out_leaves_the_other_portions_alone_and_a_manager_cannot_re_add() {
     let h = harness();
     h.settings.set_default_all_members_participate(true);
     let morgan = h.add_member("Morgan");
@@ -2411,12 +2490,18 @@ async fn opting_out_recalculates_leftovers_and_a_manager_cannot_re_add() {
         .await
         .unwrap();
     assert_eq!(after.entry.participants.len(), 2);
-    // 900 g equal-split across the two who remain is 450 g each, allocated == prepared, no leftover.
     let prep = &after.components[0].preparation;
     assert_eq!(
         prep.allocated,
         Some(ConsumedAmount::Measure(Quantity::new(
-            Decimal::new(900, 0),
+            Decimal::new(600, 0),
+            Unit::Gram
+        )))
+    );
+    assert_eq!(
+        prep.unallocated,
+        Some(ConsumedAmount::Measure(Quantity::new(
+            Decimal::new(300, 0),
             Unit::Gram
         )))
     );
