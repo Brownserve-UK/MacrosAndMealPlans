@@ -1,14 +1,10 @@
-import AddIcon from '@mui/icons-material/AddOutlined';
-import ClockIcon from '@mui/icons-material/AccessTimeOutlined';
 import Alert from '@mui/material/Alert';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
-import Chip from '@mui/material/Chip';
 import Dialog from '@mui/material/Dialog';
 import DialogActions from '@mui/material/DialogActions';
 import DialogContent from '@mui/material/DialogContent';
 import DialogTitle from '@mui/material/DialogTitle';
-import Paper from '@mui/material/Paper';
 import Stack from '@mui/material/Stack';
 import Typography from '@mui/material/Typography';
 import { useNavigate } from '@tanstack/react-router';
@@ -25,9 +21,10 @@ import { useAuth } from '../../auth/AuthProvider';
 import { PageHeader } from '../../components/PageHeader';
 import { ErrorState, Loading } from '../../components/States';
 import { addDays, defaultDayFor, parseIsoDate, startOfWeekIso, todayIso } from './date';
-import { Fact, FactBar, MealCard } from './MealCard';
+import { MealRow } from './MealRow';
 import { MealEditorDialog } from './MealEditorDialog';
 import { MealSlotMenu } from './MealSlotMenu';
+import { PlannerLens } from './PlannerLens';
 import { DayWeekNutrition } from './NutritionSummary';
 import { EmptySlot, SlotSection } from './SlotSection';
 import { SnackSection } from './SnackSection';
@@ -54,14 +51,6 @@ function myPortionResolved(entry: MealPlanEntry, memberId: string | null | undef
     ?.allocations.some((allocation) => allocation.status !== 'planned') ?? false;
 }
 
-function statusChip(entry: MealPlanEntry) {
-  if (entry.status === 'eaten') return <Chip size="small" color="success" label="Eaten" />;
-  if (entry.status === 'not_eaten') return <Chip size="small" label="Not eaten" />;
-  if (entry.status === 'partially_resolved') return <Chip size="small" label="Partly recorded" />;
-  if (entry.status === 'assumed') return <Chip size="small" color="warning" variant="outlined" label="Assumed" />;
-  return null;
-}
-
 function OwnMealCard({
   entry,
   canPlan,
@@ -76,34 +65,30 @@ function OwnMealCard({
   onDelete: () => void;
 }) {
   const kcal = entry.planned.nutrition.energy_kcal;
-  const itemCount = entry.components.length;
-  const plannedValue = kcal != null
-    ? `${itemCount} ${itemCount === 1 ? 'item' : 'items'} · ${Math.round(kcal)} kcal`
-    : `${itemCount} ${itemCount === 1 ? 'item' : 'items'}`;
   const editable = canPlan && (entry.status === 'planned' || entry.status === 'assumed');
+  const tagLabel = entry.status === 'eaten'
+    ? 'Eaten'
+    : entry.status === 'not_eaten'
+      ? 'Not eaten'
+      : entry.status === 'partially_resolved'
+        ? 'Partly recorded'
+        : null;
 
   return (
-    <MealCard
-      header={
-        <Stack direction="row" spacing={2} sx={{ justifyContent: 'space-between', alignItems: 'center' }}>
-          <FactBar>
-            {entry.planned_time ? <Fact icon={<ClockIcon fontSize="small" />} label="Time" value={entry.planned_time} /> : null}
-            <Fact label="Planned" value={plannedValue} />
-          </FactBar>
-          {statusChip(entry)}
-        </Stack>
-      }
-      foods={entry.components.map((component) => ({ id: component.id, name: component.item_name, amount: component.amount }))}
+    <MealRow
+      model={{
+        time: entry.planned_time,
+        title: entry.components.map((component) => component.item_name).join(', ') || 'Nothing planned',
+        chips: [],
+        detail: kcal != null ? `${Math.round(kcal)} kcal` : null,
+        tag: tagLabel ? { label: tagLabel } : null,
+      }}
+      primary={editable ? { label: 'Add food', onClick: onAddFood } : null}
+      extras={editable ? [
+        { label: 'Edit meal', onClick: onEdit },
+        { label: 'Delete meal', onClick: onDelete },
+      ] : []}
       warning={entry.needs_attention ? 'Some items need attention' : null}
-      actions={
-        editable ? (
-          <>
-            <Button size="small" startIcon={<AddIcon />} onClick={onAddFood}>Add food</Button>
-            <Button size="small" onClick={onEdit}>Edit meal</Button>
-            <Button size="small" color="error" onClick={onDelete}>Delete</Button>
-          </>
-        ) : null
-      }
     />
   );
 }
@@ -123,15 +108,15 @@ function HouseholdHeldCard({
     !myPortionResolved(entry, memberId)
     && (entry.status === 'planned' || entry.status === 'assumed');
   return (
-    <MealCard
-      header={
-        <FactBar>
-          {entry.planned_time ? <Fact icon={<ClockIcon fontSize="small" />} label="Time" value={entry.planned_time} /> : null}
-          <Chip size="small" variant="outlined" label="Household meal" />
-        </FactBar>
-      }
-      foods={entry.components.map((component) => ({ id: component.id, name: component.item_name, amount: component.amount }))}
-      actions={canOptOut ? <Button size="small" disabled={busy} onClick={onOptOut}>Opt out to plan your own</Button> : null}
+    <MealRow
+      model={{
+        time: entry.planned_time,
+        title: entry.components.map((component) => component.item_name).join(', ') || 'Nothing planned',
+        chips: [{ key: 'household', label: 'Household meal' }],
+        detail: null,
+        tag: null,
+      }}
+      secondary={canOptOut && !busy ? { label: 'Opt out to plan your own', onClick: onOptOut } : null}
     />
   );
 }
@@ -146,17 +131,16 @@ function OptedOutCard({
   onJoin: () => void;
 }) {
   return (
-    <Paper variant="outlined" sx={{ px: { xs: 2, sm: 2.5 }, py: 2 }}>
-      <Stack direction="row" spacing={2} sx={{ justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 1 }}>
-        <Box sx={{ minWidth: 0 }}>
-          <Chip label="Opted out" size="small" />
-          <Typography color="text.secondary" sx={{ mt: 0.75 }}>
-            Household meal{entry.planned_time ? ` at ${entry.planned_time}` : ''}
-          </Typography>
-        </Box>
-        <Button size="small" disabled={busy} onClick={onJoin}>Join meal</Button>
-      </Stack>
-    </Paper>
+    <MealRow
+      model={{
+        time: entry.planned_time,
+        title: 'Household meal',
+        chips: [{ key: 'opted-out', label: 'Opted out', muted: true }],
+        detail: null,
+        tag: null,
+      }}
+      primary={busy ? null : { label: 'Join meal', onClick: onJoin }}
+    />
   );
 }
 
@@ -224,8 +208,18 @@ export function MyPlannerPage({ weekStart, day }: { weekStart: string; day: stri
   return (
     <Box>
       <PageHeader
-        title="My planner"
-        actions={canPlan ? <MealSlotMenu choices={headerChoices} onSelect={(slot) => openEditor(null, slot)} /> : null}
+        title="Planner"
+        actions={
+          <>
+            <PlannerLens
+              lens="mine"
+              weekStart={weekStart}
+              day={activeDate}
+              show={principal?.permissions?.includes('household:write') ?? false}
+            />
+            {canPlan ? <MealSlotMenu choices={headerChoices} onSelect={(slot) => openEditor(null, slot)} /> : null}
+          </>
+        }
       />
       {error ? <Alert severity="error" onClose={() => setError(null)} sx={{ mb: 2 }}>{error}</Alert> : null}
       {week.data ? (

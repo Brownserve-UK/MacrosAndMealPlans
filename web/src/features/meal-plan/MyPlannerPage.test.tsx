@@ -118,16 +118,18 @@ describe('MyPlannerPage', () => {
     entries = [];
   });
 
-  it('offers Add food on a filled personal slot, never Add meal', () => {
+  it('offers Add food on a filled personal slot, never Add meal', async () => {
     entries = [baseEntry({ id: 'mine', scope: 'member' })];
     render(<MyPlannerPage weekStart={WEEK_START} day={DAY} />);
     const dinner = within(dinnerSection());
     expect(dinner.getByText('Pasta bake')).toBeInTheDocument();
     expect(dinner.getByRole('button', { name: 'Add food' })).toBeInTheDocument();
-    expect(dinner.getByRole('button', { name: 'Edit meal' })).toBeInTheDocument();
-    expect(dinner.getByRole('button', { name: 'Delete' })).toBeInTheDocument();
     expect(dinner.queryByRole('button', { name: /Add meal/ })).not.toBeInTheDocument();
     expect(dinner.queryByRole('button', { name: /Opt out/ })).not.toBeInTheDocument();
+
+    await userEvent.setup().click(dinner.getByRole('button', { name: /^More for/ }));
+    expect(screen.getByRole('menuitem', { name: 'Edit meal' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: 'Delete meal' })).toBeInTheDocument();
   });
 
   it('shows an empty slot as a single Plan action', () => {

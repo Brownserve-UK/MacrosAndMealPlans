@@ -1,10 +1,7 @@
 import AddIcon from '@mui/icons-material/AddOutlined';
-import ClockIcon from '@mui/icons-material/AccessTimeOutlined';
-import PeopleIcon from '@mui/icons-material/PeopleOutlineOutlined';
 import Alert from '@mui/material/Alert';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
-import Chip from '@mui/material/Chip';
 import Dialog from '@mui/material/Dialog';
 import DialogActions from '@mui/material/DialogActions';
 import DialogContent from '@mui/material/DialogContent';
@@ -18,8 +15,8 @@ import { useDeleteMealPlanEntry, useHouseholdPlannerWeek } from '../../api/queri
 import { PageHeader } from '../../components/PageHeader';
 import { ErrorState, Loading } from '../../components/States';
 import { addDays, defaultDayFor, parseIsoDate, startOfWeekIso, todayIso } from './date';
-import { formatAmount } from './format';
-import { Fact, FactBar, MealCard } from './MealCard';
+import { MealRow, plannerMealRow, type MealAction } from './MealRow';
+import { PlannerLens } from './PlannerLens';
 import { CookDialog } from './CookDialog';
 import { MealEditorDialog } from './MealEditorDialog';
 import { MealOutcomeDialog } from './MealOutcomeDialog';
@@ -32,13 +29,6 @@ type EditSelection = { key: string; meal: PlannerMeal | null; slot: MealSlot };
 
 function fullDayLabel(date: string) {
   return parseIsoDate(date).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' });
-}
-
-function preparationLine(meal: PlannerMeal): string | null {
-  const diners = meal.people.length + meal.guest_groups.reduce((sum, group) => sum + group.count, 0);
-  if (diners === 0) return null;
-  const parts = meal.foods.map((food) => `${food.item_name}: ${formatAmount(food.amount)} for ${diners}`);
-  return parts.length > 0 ? parts.join(' · ') : null;
 }
 
 function HouseholdMealCard({
@@ -54,61 +44,31 @@ function HouseholdMealCard({
   onCook: () => void;
   onDelete: () => void;
 }) {
-  const guests = meal.guest_groups.reduce((sum, group) => sum + group.count, 0);
-  const diners = meal.people.length + guests;
   const shortages = meal.foods.filter((food) => food.shortage);
-  const line = preparationLine(meal);
   const canReview = meal.people.some((person) => person.can_record && person.allocations.some((a) => a.status === 'planned'))
     || (meal.capabilities.can_record_guests && meal.guest_groups.some((group) => group.allocations.some((a) => a.status === 'planned')));
-  const assumed = meal.status === 'assumed';
   const needsCooking = meal.status !== 'eaten' && meal.foods.some((food) => food.needs_cooking);
-  const cooked = meal.foods.find((food) => food.cooked)?.cooked;
+
+  const extras: MealAction[] = [
+    ...(meal.capabilities.can_edit ? [{ label: 'Edit meal', onClick: onEdit }] : []),
+    ...(meal.capabilities.can_delete ? [{ label: 'Delete meal', onClick: onDelete }] : []),
+  ];
 
   return (
-    <MealCard
-      header={
-        <Stack spacing={1}>
-          <Stack direction="row" spacing={2} sx={{ justifyContent: 'space-between', alignItems: 'center' }}>
-            <FactBar>
-              {meal.planned_time ? <Fact icon={<ClockIcon fontSize="small" />} label="Time" value={meal.planned_time} /> : null}
-              <Fact icon={<PeopleIcon fontSize="small" />} label="Eating" value={diners === 1 ? '1 person' : `${diners} people`} />
-            </FactBar>
-            {cooked && meal.status !== 'eaten' ? <Chip size="small" color="success" variant="outlined" label={`Cooked ${cooked.servings_produced}`} /> : null}
-            {meal.status === 'eaten' ? <Chip size="small" color="success" label="Recorded" /> : null}
-            {assumed ? <Chip size="small" color="warning" variant="outlined" label="Assumed" /> : null}
-            {meal.status === 'partially_resolved' ? <Chip size="small" label="Partly recorded" /> : null}
-          </Stack>
-          {(meal.people.length > 0 || meal.opted_out.length > 0 || guests > 0) ? (
-            <Stack direction="row" sx={{ flexWrap: 'wrap', gap: 0.5 }}>
-              {meal.people.map((person) => (
-                <Chip
-                  key={person.member_id}
-                  size="small"
-                  variant="outlined"
-                  label={`${person.display_name}${person.status === 'not_eaten' ? ' · did not eat' : ''}`}
-                />
-              ))}
-              {meal.opted_out.map((record) => (
-                <Chip key={record.member_id} size="small" variant="outlined" label="Opted out" />
-              ))}
-              {guests > 0 ? <Chip size="small" variant="outlined" label={guests === 1 ? '1 guest' : `${guests} guests`} /> : null}
-            </Stack>
-          ) : null}
-          {line ? <Typography variant="body2" color="text.secondary">{line}</Typography> : null}
-        </Stack>
+    <MealRow
+      model={plannerMealRow(meal)}
+      primary={
+        needsCooking
+          ? { label: 'Cooked it', onClick: onCook }
+          : canReview
+            ? { label: 'Record meal', onClick: onReview }
+            : null
       }
-      foods={meal.foods.map((food) => ({ id: food.id, name: food.item_name, amount: food.amount }))}
-      warning={shortages.length > 0 ? `Not enough servings for ${shortages.map((food) => food.item_name).join(', ')}` : null}
-      actions={
-        <>
-          {needsCooking ? (
-            <Button variant="contained" size="small" onClick={onCook}>Cooked it</Button>
-          ) : canReview ? (
-            <Button variant="contained" size="small" onClick={onReview}>Record meal</Button>
-          ) : null}
-          {meal.capabilities.can_edit ? <Button size="small" onClick={onEdit}>Edit meal</Button> : null}
-          {meal.capabilities.can_delete ? <Button size="small" color="error" onClick={onDelete}>Delete</Button> : null}
-        </>
+      extras={extras}
+      warning={
+        shortages.length > 0
+          ? `Not enough servings for ${shortages.map((food) => food.item_name).join(', ')}`
+          : null
       }
     />
   );
@@ -156,8 +116,13 @@ export function HouseholdPlannerPage({ weekStart, day }: { weekStart: string; da
   return (
     <Box>
       <PageHeader
-        title="Household planner"
-        actions={canPlan ? <MealSlotMenu choices={MAIN_SLOTS} onSelect={(slot) => openEditor(null, slot)} /> : null}
+        title="Planner"
+        actions={
+          <>
+            <PlannerLens lens="household" weekStart={weekStart} day={activeDate} show />
+            {canPlan ? <MealSlotMenu choices={MAIN_SLOTS} onSelect={(slot) => openEditor(null, slot)} /> : null}
+          </>
+        }
       />
       {error ? <Alert severity="error" onClose={() => setError(null)} sx={{ mb: 2 }}>{error}</Alert> : null}
       {week.data ? (
