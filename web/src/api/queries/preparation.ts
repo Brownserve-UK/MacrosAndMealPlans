@@ -1,7 +1,16 @@
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { client, unwrap } from '../client';
 import type { components } from '../schema';
-import { mealPlanKeys, stockKeys } from '../keys';
+import { mealPlanKeys, preparationKeys, stockKeys } from '../keys';
+
+export function useCooks(from: string, to: string) {
+  return useQuery({
+    queryKey: preparationKeys.range(from, to),
+    enabled: Boolean(from && to),
+    queryFn: async () =>
+      unwrap(await client.GET('/api/v1/preparations', { params: { query: { from, to } } })),
+  });
+}
 
 export function usePlacePortions() {
   const qc = useQueryClient();
@@ -20,6 +29,7 @@ export function usePlacePortions() {
       void qc.invalidateQueries({ queryKey: mealPlanKeys.myWeeks() });
       void qc.invalidateQueries({ queryKey: mealPlanKeys.householdWeeks() });
       void qc.invalidateQueries({ queryKey: stockKeys.all() });
+      void qc.invalidateQueries({ queryKey: preparationKeys.all() });
     },
   });
 }
@@ -34,6 +44,7 @@ export function useRecordPreparation() {
       void qc.invalidateQueries({ queryKey: mealPlanKeys.householdWeeks() });
       void qc.invalidateQueries({ queryKey: mealPlanKeys.needsReview() });
       void qc.invalidateQueries({ queryKey: stockKeys.all() });
+      void qc.invalidateQueries({ queryKey: preparationKeys.all() });
     },
   });
 }

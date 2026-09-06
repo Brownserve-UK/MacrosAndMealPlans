@@ -101,6 +101,7 @@ vi.mock('../../auth/AuthProvider', () => ({ useAuth: () => ({ principal: { membe
 vi.mock('../../api/queries', () => ({
   useMealPlanWeek: () => ({ data: week(), isLoading: false, isError: false, refetch: vi.fn() }),
   useMeta: () => ({ data: { nutrient_directions: {} } }),
+  useCooks: () => ({ data: [] }),
   useDeleteMealPlanEntry: () => ({ mutateAsync: mocks.remove, isPending: false }),
   useOptOutOfMeal: () => ({ mutateAsync: mocks.optOut, isPending: false }),
   useRejoinMeal: () => ({ mutateAsync: mocks.rejoin, isPending: false }),

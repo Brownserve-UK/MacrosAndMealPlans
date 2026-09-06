@@ -136,6 +136,11 @@ export const recipeKeys = {
     [...recipe, id, 'photo', size, version] as const,
 };
 
+export const preparationKeys = {
+  all: () => ['preparations'] as const,
+  range: (from: string, to: string) => ['preparations', from, to] as const,
+};
+
 export const stockKeys = {
   all: () => stock,
   list: (params: StockListParams) => [...stock, params] as const,
