@@ -47,6 +47,8 @@ Most of this app is a list of things. The row is the unit that makes those lists
 
 Anything that does not fit this shape is either two rows or the wrong component. Do not add a third line to make it fit.
 
+Only the leading element varies. Things that will one day carry a picture, such as people, products, ingredients and recipes, use an **avatar** and fall back to initials until an image exists. Things identified by kind rather than by picture, such as meals, cooking events, dishes and storage, use an **icon tile**. The rest of the row is the same either way.
+
 ### Icons
 
 Every repeated row carries a leading icon. This is not decoration, it is how the eye tells one kind of thing from another before reading a word.
