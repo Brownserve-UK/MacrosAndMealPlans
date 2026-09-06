@@ -1418,7 +1418,6 @@ export interface components {
             planned_on: string;
             /** @example 18:30 */
             planned_time?: string | null;
-            portioning?: null | components["schemas"]["Portioning"];
             slot: components["schemas"]["MealSlot"];
         };
         CreateMemberRequest: {
@@ -1848,7 +1847,6 @@ export interface components {
             planned_on: string;
             /** @example 18:30 */
             planned_time?: string | null;
-            portioning: components["schemas"]["Portioning"];
             /** Format: int64 */
             revision: number;
             scope: components["schemas"]["MealPlanScope"];
@@ -2063,7 +2061,6 @@ export interface components {
             planned_on: string;
             /** @example 18:30 */
             planned_time?: string | null;
-            portioning: components["schemas"]["Portioning"];
             /** Format: int64 */
             revision: number;
             scope: components["schemas"]["MealPlanScope"];
@@ -2085,8 +2082,6 @@ export interface components {
             /** Format: date */
             week_start: string;
         };
-        /** @enum {string} */
-        Portioning: "equal" | "custom";
         PreparationResponse: components["schemas"]["PreparedBatchDto"] & {
             stock_outcomes?: components["schemas"]["StockOutcomeDto"][];
         };
@@ -2672,7 +2667,6 @@ export interface components {
             planned_on?: string | null;
             /** @example 18:30 */
             planned_time?: string | null;
-            portioning?: null | components["schemas"]["Portioning"];
             slot?: null | components["schemas"]["MealSlot"];
         };
         UpdateMealTimesRequest: {

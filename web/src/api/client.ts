@@ -35,7 +35,6 @@ export type PlannerMeal = components['schemas']['PlannerMealDto'];
 export type PlannerFood = components['schemas']['PlannerFoodDto'];
 export type PlannerPerson = components['schemas']['PlannerPersonDto'];
 export type SlotAttendance = components['schemas']['SlotAttendanceDto'];
-export type Portioning = components['schemas']['Portioning'];
 export type MealGuestGroup = components['schemas']['MealGuestGroupDto'];
 export type MealItem = components['schemas']['MealItemDto'];
 export type MealItemSource = components['schemas']['MealItemSourceDto'];

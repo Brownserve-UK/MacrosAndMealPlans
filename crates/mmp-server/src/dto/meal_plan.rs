@@ -3,7 +3,7 @@ use mmp_core::domain::{
     ConfirmMealPlanEntry, MealGuestGroup, MealItemRef, MealOptOut, MealParticipantAllocation,
     MealPlanEntryPatch, MealPlanScope, MealPlanStatus, MealSlot, NewMealGuestAllocation,
     NewMealGuestGroup, NewMealParticipant, NewMealParticipantAllocation, NewMealPlanComponent,
-    NewMealPlanEntry, ParticipantStatus, Patch, Portioning, ReplacementItem, ReviewMealOutcomes,
+    NewMealPlanEntry, ParticipantStatus, Patch, ReplacementItem, ReviewMealOutcomes,
     ReviewedGuestOutcome, ReviewedMealOutcome, ReviewedMemberOutcome, SetMealParticipants,
     SlotAttendance,
 };
@@ -290,7 +290,6 @@ pub struct MealPlanEntryDto {
     #[schema(value_type = Option<String>, example = "18:30")]
     pub planned_time: Option<Time>,
     pub slot: MealSlot,
-    pub portioning: Portioning,
     pub status: MealPlanStatus,
     pub components: Vec<MealPlanComponentDto>,
     pub planned: NutritionSummaryDto,
@@ -330,7 +329,6 @@ impl From<MealPlanEntryView> for MealPlanEntryDto {
             planned_on: value.entry.planned_on,
             planned_time: value.entry.planned_time,
             slot: value.entry.slot,
-            portioning: value.entry.portioning,
             status: value.status,
             components: value.components.into_iter().map(Into::into).collect(),
             planned: value.planned.into(),
@@ -543,7 +541,6 @@ pub struct PlannerMealDto {
     #[schema(value_type = Option<String>, example = "18:30")]
     pub planned_time: Option<Time>,
     pub slot: MealSlot,
-    pub portioning: Portioning,
     pub status: MealPlanStatus,
     pub foods: Vec<PlannerFoodDto>,
     pub people: Vec<PlannerPersonDto>,
@@ -616,8 +613,6 @@ pub struct CreateMealPlanEntryRequest {
     #[schema(value_type = Option<String>, example = "18:30")]
     pub planned_time: Option<Time>,
     pub slot: MealSlot,
-    #[serde(default)]
-    pub portioning: Option<Portioning>,
     pub components: Vec<MealPlanComponentRequest>,
     #[serde(default)]
     pub participants: Option<Vec<MealParticipantRequest>>,
@@ -648,7 +643,6 @@ impl CreateMealPlanEntryRequest {
             planned_on: self.planned_on,
             planned_time: self.planned_time,
             slot: self.slot,
-            portioning: self.portioning.unwrap_or(Portioning::Equal),
             components: self.components.into_iter().map(Into::into).collect(),
             participants: self.participants.map(participants_into_domain),
             guest_groups: guest_groups_into_domain(self.guest_count, self.guest_allocations),
@@ -738,8 +732,6 @@ pub struct UpdateMealPlanEntryRequest {
     #[serde(default)]
     pub slot: Option<MealSlot>,
     #[serde(default)]
-    pub portioning: Option<Portioning>,
-    #[serde(default)]
     pub components: Option<Vec<MealPlanComponentRequest>>,
     #[serde(default)]
     pub participants: Option<Vec<MealParticipantRequest>>,
@@ -762,7 +754,6 @@ impl UpdateMealPlanEntryRequest {
             planned_on: self.planned_on,
             planned_time,
             slot: self.slot,
-            portioning: self.portioning,
             components: self
                 .components
                 .map(|components| components.into_iter().map(Into::into).collect()),

@@ -271,7 +271,6 @@ async fn get_planner_week(
             planned_on: view.entry.planned_on,
             planned_time: view.entry.planned_time,
             slot: view.entry.slot,
-            portioning: view.entry.portioning,
             status: view.status,
             foods,
             people,

@@ -25,7 +25,6 @@ function entry(id: string, plannedOn: string, name: string): MealPlanEntry {
     planned_on: plannedOn,
     planned_time: '08:30',
     slot: 'breakfast',
-    portioning: 'equal',
     status: 'assumed',
     components: [
       {

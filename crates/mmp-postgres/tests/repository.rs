@@ -9,13 +9,13 @@ use mmp_core::domain::{
     MealParticipantAllocationId, MealParticipantId, MealPlanComponent, MealPlanComponentId,
     MealPlanComponentSnapshot, MealPlanEntry, MealPlanEntryId, MealPlanScope, MealPlanStatus,
     MealSlot, MemberAccessGrant, NewStockEvent, NutritionFacts, NutritionGoals, NutritionQuality,
-    NutritionTarget, NutritionTargetId, OpportunityException, ParticipantStatus, Portioning,
-    Product, ProductId, Provenance, Purchase, PurchaseId, PurchaseState, Quantity, Recipe,
-    RecipeComponent, RecipeComponentId, RecipeId, RecipeInstruction, RecipeInstructionId,
-    RecipePhoto, RecipePhotoDerivatives, RecipeRequirement, RecipeVisibility, Revision, Role,
-    ShoppingCadence, ShoppingOpportunityId, StockEventKind, StockItem, StockItemId, StockLevel,
-    StockSubject, StorageLocation, Unit, User, UserId, WeightDisplay, WeightGoal, WeightGoalId,
-    WeightObjective, WeightRecord, WeightRecordId, WeightSource,
+    NutritionTarget, NutritionTargetId, OpportunityException, ParticipantStatus, Product,
+    ProductId, Provenance, Purchase, PurchaseId, PurchaseState, Quantity, Recipe, RecipeComponent,
+    RecipeComponentId, RecipeId, RecipeInstruction, RecipeInstructionId, RecipePhoto,
+    RecipePhotoDerivatives, RecipeRequirement, RecipeVisibility, Revision, Role, ShoppingCadence,
+    ShoppingOpportunityId, StockEventKind, StockItem, StockItemId, StockLevel, StockSubject,
+    StorageLocation, Unit, User, UserId, WeightDisplay, WeightGoal, WeightGoalId, WeightObjective,
+    WeightRecord, WeightRecordId, WeightSource,
 };
 use mmp_core::domain::{DeductionTarget, StockEffectSource, StockEventSource};
 use mmp_core::ports::{
@@ -1262,7 +1262,6 @@ fn meal_plan_entry(
         planned_on: date!(2026 - 08 - 25),
         planned_time: Some(time::macros::time!(18:30)),
         slot: MealSlot::Dinner,
-        portioning: Portioning::Equal,
         components: vec![MealPlanComponent {
             id: MealPlanComponentId::new(),
             item: MealItemRef::product(product_id),

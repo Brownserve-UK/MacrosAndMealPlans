@@ -100,7 +100,6 @@ const plannedEntry = {
   planned_on: DAY,
   planned_time: '08:30',
   slot: 'breakfast',
-  portioning: 'equal',
   status: 'planned',
   components: [],
   planned: nutrition,

@@ -1174,3 +1174,7 @@ ALTER TABLE stock_event
     ADD CONSTRAINT stock_event_source_kind_valid
         CHECK (source_kind IS NULL OR source_kind IN
                ('meal_plan_component', 'consumption_record', 'purchase', 'prepared_batch'));
+
+ALTER TABLE meal_plan_entry
+    DROP CONSTRAINT meal_plan_entry_portioning_valid,
+    DROP COLUMN portioning;

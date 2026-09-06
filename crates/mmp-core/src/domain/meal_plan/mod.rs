@@ -21,7 +21,6 @@ str_enum!(
     UnknownParticipantStatus,
     "participant status"
 );
-str_enum!(Portioning, UnknownPortioning, "portioning mode");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -111,25 +110,6 @@ pub struct MealPlanComponent {
     pub snapshot: Option<MealPlanComponentSnapshot>,
     pub revision: Revision,
     pub display_order: Uuid,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[serde(rename_all = "snake_case")]
-pub enum Portioning {
-    Equal,
-    Custom,
-}
-
-impl Portioning {
-    pub const ALL: [Portioning; 2] = [Portioning::Equal, Portioning::Custom];
-
-    pub const fn code(self) -> &'static str {
-        match self {
-            Portioning::Equal => "equal",
-            Portioning::Custom => "custom",
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -265,7 +245,6 @@ pub struct MealPlanEntry {
     pub planned_on: Date,
     pub planned_time: Option<Time>,
     pub slot: MealSlot,
-    pub portioning: Portioning,
     pub components: Vec<MealPlanComponent>,
     pub participants: Vec<MealParticipant>,
     pub guest_groups: Vec<MealGuestGroup>,
@@ -323,7 +302,6 @@ pub struct NewMealPlanEntry {
     pub planned_on: Date,
     pub planned_time: Option<Time>,
     pub slot: MealSlot,
-    pub portioning: Portioning,
     pub components: Vec<NewMealPlanComponent>,
     pub participants: Option<Vec<NewMealParticipant>>,
     pub guest_groups: Vec<NewMealGuestGroup>,
@@ -335,7 +313,6 @@ pub struct MealPlanEntryPatch {
     pub planned_on: Option<Date>,
     pub planned_time: Option<Option<Time>>,
     pub slot: Option<MealSlot>,
-    pub portioning: Option<Portioning>,
     pub components: Option<Vec<NewMealPlanComponent>>,
     pub participants: Option<Vec<NewMealParticipant>>,
     pub guest_groups: Option<Vec<NewMealGuestGroup>>,
@@ -599,7 +576,7 @@ pub use outcomes::{
     require_editable, require_planned, require_subject_pending, validate_actual_components,
 };
 pub use participation::{
-    apply_equal_portioning, build_participant, has_explicit_allocations, merge_guest_group,
+    apply_equal_shares, build_participant, has_explicit_allocations, merge_guest_group,
     merge_participant, participant_status_to_meal, require_household_attendance, set_allocation,
     sync_allocations, validate_guest_groups, validate_participants,
 };

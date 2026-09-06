@@ -9,8 +9,8 @@ use mmp_core::domain::{
     MealGuestGroup, MealGuestGroupId, MealItemRef, MealOptOut, MealParticipant,
     MealParticipantAllocation, MealParticipantAllocationId, MealParticipantId, MealPlanComponent,
     MealPlanComponentId, MealPlanComponentSnapshot, MealPlanEntry, MealPlanEntryId, MealPlanScope,
-    MealSlot, NutritionFacts, NutritionQuality, ParticipantStatus, Portioning, ProductId, RecipeId,
-    Revision, UserId,
+    MealSlot, NutritionFacts, NutritionQuality, ParticipantStatus, ProductId, RecipeId, Revision,
+    UserId,
 };
 use mmp_core::ports::{
     MealPlanComponentUpdate, MealPlanQuery, MealPlanRepository, SnapshotOp, StockWrite,
@@ -39,7 +39,6 @@ struct EntryRow {
     planned_on: Date,
     planned_time: Option<Time>,
     slot: String,
-    portioning: String,
     created_by: Uuid,
     updated_by: Uuid,
     revision: i64,
@@ -236,8 +235,6 @@ fn assemble(
         planned_on: row.planned_on,
         planned_time: row.planned_time,
         slot,
-        portioning: Portioning::from_str(&row.portioning)
-            .map_err(|_| bad_value("portioning", &row.portioning))?,
         components,
         participants,
         guest_groups,
@@ -250,11 +247,11 @@ fn assemble(
     })
 }
 
-const GET_ENTRY: &str = "SELECT id, scope, member_id, planned_on, planned_time, slot, portioning, created_by, updated_by, revision, created_at, updated_at FROM meal_plan_entry WHERE id = $1";
-const LIST_ENTRIES: &str = "SELECT id, scope, member_id, planned_on, planned_time, slot, portioning, created_by, updated_by, revision, created_at, updated_at FROM meal_plan_entry WHERE (member_id = $1 OR ($4 AND (EXISTS (SELECT 1 FROM meal_plan_participant p WHERE p.entry_id = meal_plan_entry.id AND p.member_id = $1) OR EXISTS (SELECT 1 FROM meal_plan_opt_out o WHERE o.entry_id = meal_plan_entry.id AND o.member_id = $1)))) AND planned_on >= $2 AND planned_on <= $3 ORDER BY planned_on, CASE slot WHEN 'breakfast' THEN 0 WHEN 'lunch' THEN 1 WHEN 'dinner' THEN 2 ELSE 3 END, planned_time NULLS LAST, created_at, id";
-const LIST_ALL_ENTRIES: &str = "SELECT id, scope, member_id, planned_on, planned_time, slot, portioning, created_by, updated_by, revision, created_at, updated_at FROM meal_plan_entry WHERE planned_on >= $1 AND planned_on <= $2 ORDER BY planned_on, CASE slot WHEN 'breakfast' THEN 0 WHEN 'lunch' THEN 1 WHEN 'dinner' THEN 2 ELSE 3 END, planned_time NULLS LAST, created_at, id";
-const LIST_ENTRIES_THROUGH: &str = "SELECT id, scope, member_id, planned_on, planned_time, slot, portioning, created_by, updated_by, revision, created_at, updated_at FROM meal_plan_entry WHERE (member_id = $1 OR EXISTS (SELECT 1 FROM meal_plan_participant p WHERE p.entry_id = meal_plan_entry.id AND p.member_id = $1)) AND planned_on <= $2 ORDER BY planned_on, CASE slot WHEN 'breakfast' THEN 0 WHEN 'lunch' THEN 1 WHEN 'dinner' THEN 2 ELSE 3 END, planned_time NULLS LAST, created_at, id";
-const LIST_ALL_ENTRIES_THROUGH: &str = "SELECT id, scope, member_id, planned_on, planned_time, slot, portioning, created_by, updated_by, revision, created_at, updated_at FROM meal_plan_entry WHERE planned_on <= $1 ORDER BY planned_on, CASE slot WHEN 'breakfast' THEN 0 WHEN 'lunch' THEN 1 WHEN 'dinner' THEN 2 ELSE 3 END, planned_time NULLS LAST, created_at, id";
+const GET_ENTRY: &str = "SELECT id, scope, member_id, planned_on, planned_time, slot, created_by, updated_by, revision, created_at, updated_at FROM meal_plan_entry WHERE id = $1";
+const LIST_ENTRIES: &str = "SELECT id, scope, member_id, planned_on, planned_time, slot, created_by, updated_by, revision, created_at, updated_at FROM meal_plan_entry WHERE (member_id = $1 OR ($4 AND (EXISTS (SELECT 1 FROM meal_plan_participant p WHERE p.entry_id = meal_plan_entry.id AND p.member_id = $1) OR EXISTS (SELECT 1 FROM meal_plan_opt_out o WHERE o.entry_id = meal_plan_entry.id AND o.member_id = $1)))) AND planned_on >= $2 AND planned_on <= $3 ORDER BY planned_on, CASE slot WHEN 'breakfast' THEN 0 WHEN 'lunch' THEN 1 WHEN 'dinner' THEN 2 ELSE 3 END, planned_time NULLS LAST, created_at, id";
+const LIST_ALL_ENTRIES: &str = "SELECT id, scope, member_id, planned_on, planned_time, slot, created_by, updated_by, revision, created_at, updated_at FROM meal_plan_entry WHERE planned_on >= $1 AND planned_on <= $2 ORDER BY planned_on, CASE slot WHEN 'breakfast' THEN 0 WHEN 'lunch' THEN 1 WHEN 'dinner' THEN 2 ELSE 3 END, planned_time NULLS LAST, created_at, id";
+const LIST_ENTRIES_THROUGH: &str = "SELECT id, scope, member_id, planned_on, planned_time, slot, created_by, updated_by, revision, created_at, updated_at FROM meal_plan_entry WHERE (member_id = $1 OR EXISTS (SELECT 1 FROM meal_plan_participant p WHERE p.entry_id = meal_plan_entry.id AND p.member_id = $1)) AND planned_on <= $2 ORDER BY planned_on, CASE slot WHEN 'breakfast' THEN 0 WHEN 'lunch' THEN 1 WHEN 'dinner' THEN 2 ELSE 3 END, planned_time NULLS LAST, created_at, id";
+const LIST_ALL_ENTRIES_THROUGH: &str = "SELECT id, scope, member_id, planned_on, planned_time, slot, created_by, updated_by, revision, created_at, updated_at FROM meal_plan_entry WHERE planned_on <= $1 ORDER BY planned_on, CASE slot WHEN 'breakfast' THEN 0 WHEN 'lunch' THEN 1 WHEN 'dinner' THEN 2 ELSE 3 END, planned_time NULLS LAST, created_at, id";
 const LIST_COMPONENTS: &str = "SELECT id, entry_id, position, item_kind, product_id, recipe_id, amount_kind, amount_value, amount_unit, frozen_item_name, nutrition_basis_amount, nutrition_basis_unit, energy_kcal, protein_g, carbohydrate_g, sugar_g, fat_g, saturated_fat_g, fibre_g, salt_g, cholesterol_mg, nutrition_extra, nutrition_quality, revision, display_order FROM meal_plan_component WHERE entry_id = ANY($1) ORDER BY entry_id, position";
 const LIST_PARTICIPANTS: &str = "SELECT id, entry_id, member_id, revision, created_at, updated_at FROM meal_plan_participant WHERE entry_id = ANY($1) ORDER BY entry_id, created_at, id";
 const LIST_ALLOCATIONS: &str = "SELECT id, participant_id, component_id, allocated_kind, allocated_value, allocated_unit, status, consumption_record_id, resolved_by, resolved_at FROM meal_plan_participant_allocation WHERE participant_id = ANY($1)";
@@ -724,7 +721,7 @@ async fn delete_consumption(
 
 async fn insert_entry(tx: &mut Transaction<'_, Postgres>, entry: &MealPlanEntry) -> Result<()> {
     sqlx::query(
-        "INSERT INTO meal_plan_entry (id, scope, member_id, planned_on, planned_time, slot, portioning, created_by, updated_by, revision, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
+        "INSERT INTO meal_plan_entry (id, scope, member_id, planned_on, planned_time, slot, created_by, updated_by, revision, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
     )
     .bind(entry.id.as_uuid())
     .bind(entry.scope.code())
@@ -732,7 +729,6 @@ async fn insert_entry(tx: &mut Transaction<'_, Postgres>, entry: &MealPlanEntry)
     .bind(entry.planned_on)
     .bind(entry.planned_time)
     .bind(entry.slot.code())
-    .bind(entry.portioning.code())
     .bind(entry.created_by.as_uuid())
     .bind(entry.updated_by.as_uuid())
     .bind(entry.revision.get())
@@ -750,13 +746,12 @@ async fn update_entry(
     expected: Revision,
 ) -> Result<UpdateOutcome> {
     let affected = sqlx::query(
-        "UPDATE meal_plan_entry SET planned_on = $2, planned_time = $3, slot = $4, portioning = $5, updated_by = $6, revision = $7, updated_at = $8 WHERE id = $1 AND revision = $9",
+        "UPDATE meal_plan_entry SET planned_on = $2, planned_time = $3, slot = $4, updated_by = $5, revision = $6, updated_at = $7 WHERE id = $1 AND revision = $8",
     )
     .bind(entry.id.as_uuid())
     .bind(entry.planned_on)
     .bind(entry.planned_time)
     .bind(entry.slot.code())
-    .bind(entry.portioning.code())
     .bind(entry.updated_by.as_uuid())
     .bind(entry.revision.get())
     .bind(entry.updated_at)

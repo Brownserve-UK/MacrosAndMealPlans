@@ -38,7 +38,6 @@ function baseEntry(overrides: Partial<MealPlanEntry>): MealPlanEntry {
     planned_on: DAY,
     planned_time: '18:30',
     slot: 'dinner',
-    portioning: 'equal',
     status: 'planned',
     components: [{
       id: 'c1',

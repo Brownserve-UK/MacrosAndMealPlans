@@ -8,10 +8,10 @@ use crate::domain::{
     MealPlanComponentId, MealPlanComponentSnapshot, MealPlanEntry, MealPlanEntryId, MealPlanStatus,
     MealSlot, NewConsumptionRecord, OutcomeActor, ParticipantStatus, PreparationSource,
     PreparedBatch, Quantity, RecipeId, ReviewMealOutcomes, Revision, StockEffectSource,
-    StockOutcome, StorageLocation, Unit, UserId, actual_components_for_member,
-    apply_equal_portioning, build_guest_results, component_still_eaten, derive_component_status,
-    find_component, pending_component_ids, replacements_for, require_allocation_planned,
-    require_subject_pending, set_allocation, validate_actual_components,
+    StockOutcome, StorageLocation, Unit, UserId, actual_components_for_member, apply_equal_shares,
+    build_guest_results, component_still_eaten, derive_component_status, find_component,
+    pending_component_ids, replacements_for, require_allocation_planned, require_subject_pending,
+    set_allocation, validate_actual_components,
 };
 use crate::error::{CoreError, Result, ValidationErrors};
 use crate::ports::{MealPlanComponentUpdate, SnapshotOp, StockDeduction, StockRelease, StockWrite};
@@ -121,7 +121,7 @@ impl MealPlanService {
             nutrition: planned.nutrition.facts,
             quality: planned.nutrition.quality,
         };
-        apply_equal_portioning(&mut entry);
+        apply_equal_shares(&mut entry);
         let update = component_update(
             component_id,
             SnapshotOp::Set(&snapshot),
@@ -196,7 +196,7 @@ impl MealPlanService {
             nutrition: planned.nutrition.facts,
             quality: planned.nutrition.quality,
         };
-        apply_equal_portioning(&mut entry);
+        apply_equal_shares(&mut entry);
         let update = component_update(
             component_id,
             SnapshotOp::Set(&snapshot),
@@ -262,7 +262,7 @@ impl MealPlanService {
             None,
             None,
         );
-        apply_equal_portioning(&mut entry);
+        apply_equal_shares(&mut entry);
         let still_eaten = component_still_eaten(&entry, component_id);
         let snapshot_op = if still_eaten {
             SnapshotOp::Keep
@@ -344,7 +344,7 @@ impl MealPlanService {
         entry.updated_by = actor.actor_id;
         entry.updated_at = now;
         entry.revision = entry.revision.next();
-        apply_equal_portioning(&mut entry);
+        apply_equal_shares(&mut entry);
         let (outcome, stock_outcomes) = self
             .plans
             .resolve(&entry, expected, &[], &StockWrite::default())
@@ -448,7 +448,7 @@ impl MealPlanService {
         entry.updated_by = input.actor_id;
         entry.updated_at = now;
         entry.revision = entry.revision.next();
-        apply_equal_portioning(&mut entry);
+        apply_equal_shares(&mut entry);
         let write = StockWrite {
             deductions,
             releases: Vec::new(),
@@ -653,7 +653,7 @@ impl MealPlanService {
         entry.updated_by = input.actor_id;
         entry.updated_at = now;
         entry.revision = entry.revision.next();
-        apply_equal_portioning(&mut entry);
+        apply_equal_shares(&mut entry);
         let write = StockWrite {
             deductions,
             releases: Vec::new(),
@@ -749,7 +749,7 @@ impl MealPlanService {
         entry.updated_by = actor.actor_id;
         entry.updated_at = now;
         entry.revision = entry.revision.next();
-        apply_equal_portioning(&mut entry);
+        apply_equal_shares(&mut entry);
         let write = StockWrite {
             deductions: Vec::new(),
             releases,

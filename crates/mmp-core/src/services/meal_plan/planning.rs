@@ -4,11 +4,11 @@ use time::{Date, Time};
 
 use crate::domain::{
     HouseholdMemberId, MEAL_PLAN_ENTRY, MealOptOut, MealPlanEntry, MealPlanEntryId,
-    MealPlanEntryPatch, MealPlanScope, MealSlot, NewMealPlanEntry, Portioning, Revision,
-    SetMealParticipants, SlotAttendance, UserId, apply_equal_portioning, build_participant,
-    has_explicit_allocations, make_components, merge_components, merge_guest_group,
-    merge_participant, require_editable, require_household_attendance, require_planned,
-    sync_allocations, validate_components, validate_guest_groups, validate_participants,
+    MealPlanEntryPatch, MealPlanScope, MealSlot, NewMealPlanEntry, Revision, SetMealParticipants,
+    SlotAttendance, UserId, apply_equal_shares, build_participant, has_explicit_allocations,
+    make_components, merge_components, merge_guest_group, merge_participant, require_editable,
+    require_household_attendance, require_planned, sync_allocations, validate_components,
+    validate_guest_groups, validate_participants,
 };
 use crate::error::{CoreError, Result, ValidationErrors};
 use crate::ports::{MealPlanQuery, MemberQuery, PageRequest};
@@ -65,14 +65,10 @@ impl MealPlanService {
             }
         };
 
-        let mut portioning = input.portioning;
-        if input
+        let explicit_allocations = input
             .participants
             .as_deref()
-            .is_some_and(has_explicit_allocations)
-        {
-            portioning = Portioning::Custom;
-        }
+            .is_some_and(has_explicit_allocations);
 
         let participants = if let Some(requested) = &input.participants {
             validate_participants(requested, &components)?;
@@ -128,7 +124,6 @@ impl MealPlanService {
             planned_on: input.planned_on,
             planned_time: input.planned_time,
             slot: input.slot,
-            portioning,
             components,
             participants,
             guest_groups,
@@ -139,7 +134,9 @@ impl MealPlanService {
             created_at: now,
             updated_at: now,
         };
-        apply_equal_portioning(&mut entry);
+        if !explicit_allocations {
+            apply_equal_shares(&mut entry);
+        }
         self.plans.insert(&entry).await?;
         self.present(entry, &[], input.member_id).await
     }
@@ -218,13 +215,12 @@ impl MealPlanService {
             .iter()
             .map(|group| merge_guest_group(&entry.guest_groups, group, now))
             .collect();
-        if has_explicit_allocations(&input.participants) {
-            entry.portioning = Portioning::Custom;
-        }
         entry.updated_by = input.actor_id;
         entry.updated_at = now;
         entry.revision = entry.revision.next();
-        apply_equal_portioning(&mut entry);
+        if !has_explicit_allocations(&input.participants) {
+            apply_equal_shares(&mut entry);
+        }
         commit_outcome(
             MEAL_PLAN_ENTRY,
             id,
@@ -276,7 +272,7 @@ impl MealPlanService {
         entry.updated_by = actor_id;
         entry.updated_at = now;
         entry.revision = entry.revision.next();
-        apply_equal_portioning(&mut entry);
+        apply_equal_shares(&mut entry);
         commit_outcome(
             MEAL_PLAN_ENTRY,
             id,
@@ -330,7 +326,7 @@ impl MealPlanService {
         entry.updated_by = actor_id;
         entry.updated_at = now;
         entry.revision = entry.revision.next();
-        apply_equal_portioning(&mut entry);
+        apply_equal_shares(&mut entry);
         commit_outcome(
             MEAL_PLAN_ENTRY,
             id,
@@ -448,9 +444,10 @@ impl MealPlanService {
         require_editable(&entry)?;
 
         let now = self.clock.now();
-        if let Some(portioning) = patch.portioning {
-            entry.portioning = portioning;
-        }
+        let explicit_allocations = patch
+            .participants
+            .as_deref()
+            .is_some_and(has_explicit_allocations);
         if let Some(components) = patch.components {
             validate_components(&components)?;
             let existing_items = entry
@@ -466,9 +463,6 @@ impl MealPlanService {
         }
         if let Some(participants) = patch.participants {
             validate_participants(&participants, &entry.components)?;
-            if has_explicit_allocations(&participants) {
-                entry.portioning = Portioning::Custom;
-            }
             entry.participants = participants
                 .iter()
                 .map(|participant| {
@@ -537,7 +531,9 @@ impl MealPlanService {
         entry.updated_by = actor_id;
         entry.updated_at = now;
         entry.revision = entry.revision.next();
-        apply_equal_portioning(&mut entry);
+        if !explicit_allocations {
+            apply_equal_shares(&mut entry);
+        }
         commit_outcome(
             MEAL_PLAN_ENTRY,
             id,

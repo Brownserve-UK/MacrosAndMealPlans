@@ -18,7 +18,6 @@ function mealWith(overrides: Partial<PlannerMeal>): PlannerMeal {
     planned_on: '2026-08-25',
     planned_time: '18:30',
     slot: 'dinner',
-    portioning: 'equal',
     status: 'planned',
     foods: [{ id: 'c1', item_kind: 'product', product_id: 'p1', item_name: 'Chilli', amount: { kind: 'measure', value: 600, unit: 'g' }, shortage: false }],
     people: [

@@ -362,7 +362,6 @@ function entryToPlannerMeal(entry: MealPlanEntry): PlannerMeal {
     planned_on: entry.planned_on,
     planned_time: entry.planned_time ?? undefined,
     slot: entry.slot,
-    portioning: entry.portioning,
     status: entry.status,
     foods: entry.components.map((component) => ({
       id: component.id,

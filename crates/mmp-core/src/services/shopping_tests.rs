@@ -162,7 +162,6 @@ async fn plan_product(h: &Harness, product_id: ProductId, quantity: Quantity, on
         planned_on: on,
         planned_time: None,
         slot: MealSlot::Breakfast,
-        portioning: crate::domain::Portioning::Equal,
         components: vec![MealPlanComponent {
             id: crate::domain::MealPlanComponentId::new(),
             item: MealItemRef::product(product_id),

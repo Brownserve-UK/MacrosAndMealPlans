@@ -811,7 +811,6 @@ impl Loader<'_> {
                 planned_on: date,
                 planned_time: slot_time(MealSlot::Breakfast),
                 slot: MealSlot::Breakfast,
-                portioning: mmp_core::domain::Portioning::Equal,
                 components: vec![NewMealPlanComponent {
                     id: None,
                     item: MealItemRef::recipe(recipe_id("porridge")),
@@ -1213,7 +1212,6 @@ impl Loader<'_> {
                 planned_on: date,
                 planned_time: slot_time(slot),
                 slot,
-                portioning: mmp_core::domain::Portioning::Equal,
                 components: components_for(slot),
                 participants: None,
                 guest_groups: Vec::new(),
@@ -1299,7 +1297,6 @@ impl Loader<'_> {
                 planned_on: date,
                 planned_time,
                 slot,
-                portioning: mmp_core::domain::Portioning::Equal,
                 components: vec![NewMealPlanComponent {
                     id: Some(component_id),
                     item: MealItemRef::recipe(recipe_id(recipe_key)),
@@ -1480,7 +1477,6 @@ impl Loader<'_> {
                 planned_on: date,
                 planned_time: Some(planned_time),
                 slot: MealSlot::Snacks,
-                portioning: mmp_core::domain::Portioning::Equal,
                 components: vec![NewMealPlanComponent {
                     id: None,
                     item: MealItemRef::product(product_id(product_key)),
@@ -1519,8 +1515,7 @@ impl Loader<'_> {
                         planned_on: date,
                         planned_time: slot_time(slot),
                         slot,
-                        portioning: mmp_core::domain::Portioning::Equal,
-                        components: components_for(slot),
+                                components: components_for(slot),
                         participants: None,
                         guest_groups: Vec::new(),
                         actor_id: self.actor.id,
@@ -1671,7 +1666,6 @@ impl Loader<'_> {
                 planned_on: date,
                 planned_time: slot_time(slot),
                 slot,
-                portioning: mmp_core::domain::Portioning::Equal,
                 components: vec![NewMealPlanComponent {
                     id: None,
                     item: MealItemRef::recipe(recipe_id(recipe_key)),

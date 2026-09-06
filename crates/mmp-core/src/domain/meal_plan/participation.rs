@@ -6,7 +6,7 @@ use time::OffsetDateTime;
 use super::{
     Assumption, MealGuestAllocation, MealGuestGroup, MealParticipant, MealParticipantAllocation,
     MealPlanComponent, MealPlanEntry, MealPlanScope, MealPlanStatus, NewMealGuestGroup,
-    NewMealParticipant, ParticipantStatus, Portioning, equal_split,
+    NewMealParticipant, ParticipantStatus, equal_split,
 };
 use crate::domain::{
     ConsumedAmount, ConsumptionRecordId, HouseholdMemberId, MealParticipantAllocationId,
@@ -245,10 +245,7 @@ pub fn has_explicit_allocations(participants: &[NewMealParticipant]) -> bool {
         .any(|participant| !participant.allocations.is_empty())
 }
 
-pub fn apply_equal_portioning(entry: &mut MealPlanEntry) {
-    if entry.portioning != Portioning::Equal {
-        return;
-    }
+pub fn apply_equal_shares(entry: &mut MealPlanEntry) {
     let guest_heads: usize = entry
         .guest_groups
         .iter()

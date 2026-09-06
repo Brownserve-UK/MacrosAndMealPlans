@@ -42,8 +42,6 @@ type FoodDraft = {
   amount: Amount;
 };
 
-type PortionValues = Record<string, string>;
-
 const UNITS: Unit[] = ['mg', 'g', 'kg', 'oz', 'lb', 'ml', 'l', 'tsp', 'tbsp', 'fl_oz', 'cup', 'item', 'piece', 'slice', 'clove', 'can', 'pack', 'bunch'];
 
 function amountValue(amount: Amount) {
@@ -58,10 +56,6 @@ function equalShare(amount: Amount, dinerCount: number): Amount {
   return { ...amount, value: amount.value / Math.max(dinerCount, 1) };
 }
 
-function allocationKey(componentId: string, subjectId: string) {
-  return `${componentId}:${subjectId}`;
-}
-
 function initialFoods(meal: PlannerMeal | null): FoodDraft[] {
   return (meal?.foods ?? []).map((food) => ({
     componentId: food.id,
@@ -70,22 +64,6 @@ function initialFoods(meal: PlannerMeal | null): FoodDraft[] {
     name: food.item_name,
     amount: food.amount,
   }));
-}
-
-function initialPortions(meal: PlannerMeal | null): PortionValues {
-  if (!meal) return {};
-  const values: PortionValues = {};
-  for (const person of meal.people) {
-    for (const allocation of person.allocations) {
-      values[allocationKey(allocation.component_id, person.member_id)] = String(allocation.allocated.value);
-    }
-  }
-  for (const group of meal.guest_groups) {
-    for (const allocation of group.allocations) {
-      values[allocationKey(allocation.component_id, 'guest')] = String(allocation.allocated.value);
-    }
-  }
-  return values;
 }
 
 export function MealEditorDialog({
@@ -123,8 +101,6 @@ export function MealEditorDialog({
   );
   const [guestCount, setGuestCount] = useState(meal?.guest_groups.reduce((sum, group) => sum + group.count, 0) ?? 0);
   const [foods, setFoods] = useState<FoodDraft[]>(() => initialFoods(meal));
-  const [customPortions, setCustomPortions] = useState(() => meal?.portioning === 'custom');
-  const [portions, setPortions] = useState<PortionValues>(() => initialPortions(meal));
   const [error, setError] = useState<string | null>(null);
   const busy = create.isPending || update.isPending;
 
@@ -178,7 +154,6 @@ export function MealEditorDialog({
       },
     };
     setFoods((current) => [...current, food]);
-    if (customPortions) initialiseFoodPortions(food);
   }
 
   function addRecipe(next: RecipeSummary) {
@@ -191,7 +166,6 @@ export function MealEditorDialog({
       amount: { kind: 'servings', value: 1 },
     };
     setFoods((current) => [...current, food]);
-    if (customPortions) initialiseFoodPortions(food);
   }
 
   function addFood(choice: FoodChoice) {
@@ -199,55 +173,16 @@ export function MealEditorDialog({
     else addRecipe(choice.recipe);
   }
 
-  function initialiseFoodPortions(food: FoodDraft) {
-    const share = String(equalShare(food.amount, diners).value);
-    setPortions((current) => {
-      const next = { ...current };
-      for (const memberId of selectedMembers) next[allocationKey(food.componentId, memberId)] = share;
-      if (guestCount > 0) next[allocationKey(food.componentId, 'guest')] = share;
-      return next;
-    });
-  }
-
   function setFoodAmount(componentId: string, amount: Amount) {
     setFoods((current) => current.map((food) => food.componentId === componentId ? { ...food, amount } : food));
   }
 
-  function enableCustomPortions() {
-    const next: PortionValues = {};
-    for (const food of foods) {
-      for (const memberId of selectedMembers) {
-        next[allocationKey(food.componentId, memberId)] = String(equalShare(food.amount, diners).value);
-      }
-      if (guestCount > 0) next[allocationKey(food.componentId, 'guest')] = String(equalShare(food.amount, diners).value);
-    }
-    setPortions(next);
-    setCustomPortions(true);
-  }
-
   function toggleMember(memberId: string, checked: boolean) {
     setSelectedMembers((current) => checked ? [...current, memberId] : current.filter((id) => id !== memberId));
-    if (!customPortions) return;
-    setPortions((current) => {
-      const next = { ...current };
-      for (const food of foods) {
-        const key = allocationKey(food.componentId, memberId);
-        if (checked) next[key] = '0';
-        else delete next[key];
-      }
-      return next;
-    });
   }
 
   function setGuests(nextCount: number) {
-    const safeCount = Math.max(0, nextCount);
-    setGuestCount(safeCount);
-    if (!customPortions || safeCount === 0 || guestCount > 0) return;
-    setPortions((current) => {
-      const next = { ...current };
-      for (const food of foods) next[allocationKey(food.componentId, 'guest')] = '0';
-      return next;
-    });
+    setGuestCount(Math.max(0, nextCount));
   }
 
   function validateMeal() {
@@ -277,18 +212,6 @@ export function MealEditorDialog({
       setError('Choose at least one household member or guest.');
       return;
     }
-    if (household && customPortions) {
-      const invalid = foods.some((food) => {
-        const memberTotal = selectedMembers.reduce((sum, memberId) => sum + (Number(portions[allocationKey(food.componentId, memberId)]) || 0), 0);
-        const guestTotal = guestCount * (Number(portions[allocationKey(food.componentId, 'guest')]) || 0);
-        return Math.abs(memberTotal + guestTotal - food.amount.value) > 0.0001;
-      });
-      if (invalid) {
-        setError('Set amounts must add up to the total for each food.');
-        return;
-      }
-    }
-
     const components = foods.map((food) => ({
       id: food.componentId,
       ...(food.itemKind === 'product'
@@ -297,22 +220,12 @@ export function MealEditorDialog({
       amount: food.amount,
     }));
     const participants = household
-      ? selectedMembers.map((memberId) => ({
-          member_id: memberId,
-          allocations: customPortions
-            ? foods.map((food) => ({
-                component_id: food.componentId,
-                amount: { ...food.amount, value: Number(portions[allocationKey(food.componentId, memberId)]) || 0 },
-              }))
-            : [],
-        }))
+      ? selectedMembers.map((memberId) => ({ member_id: memberId, allocations: [] }))
       : undefined;
     const guestAllocations = household && guestCount > 0
       ? foods.map((food) => ({
           component_id: food.componentId,
-          amount: customPortions
-            ? { ...food.amount, value: Number(portions[allocationKey(food.componentId, 'guest')]) || 0 }
-            : equalShare(food.amount, diners),
+          amount: equalShare(food.amount, diners),
         }))
       : [];
 
@@ -325,7 +238,6 @@ export function MealEditorDialog({
             planned_on: date,
             slot,
             planned_time: plannedTime || null,
-            portioning: household ? (customPortions ? 'custom' : 'equal') : undefined,
             components,
             ...(household ? { participants, guest_count: guestCount, guest_allocations: guestAllocations } : {}),
           },
@@ -336,7 +248,6 @@ export function MealEditorDialog({
           slot,
           planned_time: plannedTime || null,
           household,
-          portioning: household ? (customPortions ? 'custom' : 'equal') : undefined,
           components,
           participants,
           guest_count: household ? guestCount : 0,
@@ -450,54 +361,6 @@ export function MealEditorDialog({
         </Stack>
       </Box>
 
-      {diners > 0 && foods.length > 0 ? (
-        <Box>
-          <Typography variant="h3" sx={{ mb: 1 }}>Portions</Typography>
-          <Stack direction="row" spacing={1} sx={{ mb: customPortions ? 2 : 0 }}>
-            <Button variant={customPortions ? 'outlined' : 'contained'} onClick={() => setCustomPortions(false)}>Split equally</Button>
-            <Button
-              variant={customPortions ? 'contained' : 'outlined'}
-              onClick={() => {
-                if (!customPortions) enableCustomPortions();
-              }}
-            >
-              Set amounts
-            </Button>
-          </Stack>
-          {customPortions ? (
-            <Stack spacing={1.5}>
-              {foods.map((food) => (
-                <Box key={food.componentId} sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2, p: 1.5 }}>
-                  <Typography sx={{ mb: 1, fontWeight: 600 }}>{food.name}</Typography>
-                  <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.25} sx={{ flexWrap: 'wrap' }}>
-                    {selectedMembers.map((memberId) => (
-                      <TextField
-                        key={memberId}
-                        label={visibleMembers.find((member) => member.id === memberId)?.display_name ?? 'Member'}
-                        type="number"
-                        value={portions[allocationKey(food.componentId, memberId)] ?? ''}
-                        onChange={(event) => setPortions((current) => ({ ...current, [allocationKey(food.componentId, memberId)]: event.target.value }))}
-                        slotProps={{ htmlInput: { min: 0, step: 'any' } }}
-                        sx={{ width: 150 }}
-                      />
-                    ))}
-                    {guestCount > 0 ? (
-                      <TextField
-                        label="Each guest"
-                        type="number"
-                        value={portions[allocationKey(food.componentId, 'guest')] ?? ''}
-                        onChange={(event) => setPortions((current) => ({ ...current, [allocationKey(food.componentId, 'guest')]: event.target.value }))}
-                        slotProps={{ htmlInput: { min: 0, step: 'any' } }}
-                        sx={{ width: 150 }}
-                      />
-                    ) : null}
-                  </Stack>
-                </Box>
-              ))}
-            </Stack>
-          ) : null}
-        </Box>
-      ) : null}
     </Stack>
   );
 

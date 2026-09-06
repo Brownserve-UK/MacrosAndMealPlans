@@ -112,7 +112,6 @@ async fn plan_measured_on(h: &Harness, product_id: ProductId, g: i64, on: time::
         planned_on: on,
         planned_time: None,
         slot: MealSlot::Dinner,
-        portioning: crate::domain::Portioning::Equal,
         components: vec![MealPlanComponent {
             id: crate::domain::MealPlanComponentId::new(),
             item: MealItemRef::product(product_id),
@@ -322,7 +321,6 @@ async fn a_planned_recipe_we_cannot_load_leaves_demand_incomplete() {
         planned_on: date!(2026 - 08 - 25),
         planned_time: None,
         slot: MealSlot::Lunch,
-        portioning: crate::domain::Portioning::Equal,
         components: vec![MealPlanComponent {
             id: crate::domain::MealPlanComponentId::new(),
             item: MealItemRef::recipe(crate::domain::RecipeId::new()),
@@ -524,7 +522,6 @@ async fn plan_servings(h: &Harness, recipe_id: crate::domain::RecipeId, servings
         planned_on: date!(2026 - 08 - 25),
         planned_time: None,
         slot: MealSlot::Dinner,
-        portioning: crate::domain::Portioning::Equal,
         components: vec![MealPlanComponent {
             id: crate::domain::MealPlanComponentId::new(),
             item: MealItemRef::recipe(recipe_id),
@@ -1068,7 +1065,6 @@ async fn plan_household_shared(
         planned_on: on,
         planned_time: None,
         slot: MealSlot::Dinner,
-        portioning: crate::domain::Portioning::Equal,
         components: vec![component],
         participants,
         guest_groups: Vec::new(),
