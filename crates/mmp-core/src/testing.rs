@@ -921,6 +921,21 @@ impl crate::ports::PreparedBatchRepository for InMemoryPreparedBatchRepository {
             .cloned())
     }
 
+    async fn for_components(
+        &self,
+        component_ids: &[MealPlanComponentId],
+    ) -> Result<HashMap<MealPlanComponentId, PreparedBatch>> {
+        let mut found = HashMap::new();
+        for batch in self.rows.lock().unwrap().iter() {
+            if let Some(component_id) = batch.source.component_id()
+                && component_ids.contains(&component_id)
+            {
+                found.entry(component_id).or_insert(batch.clone());
+            }
+        }
+        Ok(found)
+    }
+
     async fn insert(
         &self,
         batch: &PreparedBatch,

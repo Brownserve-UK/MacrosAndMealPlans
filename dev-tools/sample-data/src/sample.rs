@@ -640,6 +640,43 @@ impl Loader<'_> {
         self.load_shopping().await
     }
 
+    async fn cook_planned_recipes(
+        &mut self,
+        view: &mmp_core::services::MealPlanEntryView,
+    ) -> anyhow::Result<()> {
+        for component in &view.components {
+            if component.cooked.is_some() {
+                continue;
+            }
+            let Some(recipe_id) = component.component.item.recipe_id() else {
+                continue;
+            };
+            let mmp_core::domain::ConsumedAmount::Servings(servings) = component.component.amount
+            else {
+                continue;
+            };
+            self.state
+                .preparation
+                .record(mmp_core::services::RecordPreparation {
+                    recipe_id,
+                    source: mmp_core::domain::PreparationSource::MealPlanComponent {
+                        entry_id: view.entry.id,
+                        component_id: component.component.id,
+                    },
+                    servings_produced: servings,
+                    placements: vec![mmp_core::domain::PortionPlacement::new(
+                        StorageLocation::Chilled,
+                        servings,
+                    )],
+                    prepared_at: None,
+                    actor: self.actor.id,
+                })
+                .await?;
+            self.report.stock_items_created += 1;
+        }
+        Ok(())
+    }
+
     async fn load_batch_cook(&mut self) -> anyhow::Result<()> {
         let already = self
             .state
@@ -1074,6 +1111,7 @@ impl Loader<'_> {
         if view.entry.status(Assumption::NONE) != MealPlanStatus::Planned {
             return Ok(());
         }
+        self.cook_planned_recipes(&view).await?;
         self.state
             .meal_plan
             .review_outcomes_backdated(
@@ -1559,6 +1597,10 @@ impl Loader<'_> {
                 )
                 .await?
                 .into_value();
+        }
+
+        if !matches!(outcome, Outcome::Planned | Outcome::NotEaten) {
+            self.cook_planned_recipes(&view).await?;
         }
 
         match outcome {

@@ -6,12 +6,12 @@ use crate::domain::{
     Assumption, ConfirmMealPlanComponent, ConfirmMealPlanEntry, ConsumedAmount, ConsumptionRecord,
     ConsumptionRecordId, HouseholdMemberId, MEAL_PLAN_COMPONENT, MEAL_PLAN_ENTRY, MealItemRef,
     MealPlanComponentId, MealPlanComponentSnapshot, MealPlanEntry, MealPlanEntryId, MealPlanStatus,
-    MealSlot, NewConsumptionRecord, OutcomeActor, ParticipantStatus, PortionPlacement,
-    PreparationSource, PreparedBatch, Quantity, RecipeId, ReviewMealOutcomes, Revision,
-    StockEffectSource, StockOutcome, StorageLocation, Unit, UserId, actual_components_for_member,
-    apply_equal_shares, build_guest_results, component_still_eaten, derive_component_status,
-    find_component, pending_component_ids, replacements_for, require_allocation_planned,
-    require_subject_pending, set_allocation, validate_actual_components,
+    MealSlot, NewConsumptionRecord, OutcomeActor, ParticipantStatus, PreparedBatch, Quantity,
+    ReviewMealOutcomes, Revision, StockEffectSource, StockOutcome, Unit, UserId,
+    actual_components_for_member, apply_equal_shares, build_guest_results, component_still_eaten,
+    derive_component_status, find_component, pending_component_ids, replacements_for,
+    require_allocation_planned, require_subject_pending, set_allocation,
+    validate_actual_components,
 };
 use crate::error::{CoreError, Result, ValidationErrors};
 use crate::ports::{MealPlanComponentUpdate, SnapshotOp, StockDeduction, StockRelease, StockWrite};
@@ -19,7 +19,6 @@ use crate::ports::{MealPlanComponentUpdate, SnapshotOp, StockDeduction, StockRel
 use super::catalogue::ItemCatalogue;
 use super::view::MealPlanEntryView;
 use super::{MealPlanService, PRODUCT, RECIPE, ensure_due};
-use crate::services::RecordPreparation;
 use crate::services::revision::{commit_outcome, require_revision};
 use crate::services::stock_effects::{
     StockAffected, component_release, name_outcomes, portion_deduction, product_deduction,
@@ -812,13 +811,10 @@ impl MealPlanService {
                 .into_iter()
                 .collect())
             }
-            MealItemRef::Recipe { recipe_id } => {
-                let Some(batch) = self
-                    .ensure_prepared(entry, component_id, recipe_id, prepared_amount, actor)
-                    .await?
-                else {
-                    return Ok(Vec::new());
-                };
+            MealItemRef::Recipe { .. } => {
+                let batch = self
+                    .cooked_batch(component_id, &catalogue.name_of(item))
+                    .await?;
                 let ConsumedAmount::Servings(servings) = *eaten_amount else {
                     return Ok(Vec::new());
                 };
@@ -835,35 +831,17 @@ impl MealPlanService {
         }
     }
 
-    async fn ensure_prepared(
+    async fn cooked_batch(
         &self,
-        entry: &MealPlanEntry,
         component_id: MealPlanComponentId,
-        recipe_id: RecipeId,
-        prepared_amount: &ConsumedAmount,
-        actor: UserId,
-    ) -> Result<Option<PreparedBatch>> {
-        if let Some(existing) = self.preparation.for_component(component_id).await? {
-            return Ok(Some(existing));
-        }
-        let ConsumedAmount::Servings(servings) = *prepared_amount else {
-            return Ok(None);
-        };
-        let prepared = self
-            .preparation
-            .record(RecordPreparation {
-                recipe_id,
-                source: PreparationSource::MealPlanComponent {
-                    entry_id: entry.id,
-                    component_id,
-                },
-                servings_produced: servings,
-                placements: vec![PortionPlacement::new(StorageLocation::Chilled, servings)],
-                prepared_at: None,
-                actor,
+        name: &str,
+    ) -> Result<PreparedBatch> {
+        self.preparation
+            .for_component(component_id)
+            .await?
+            .ok_or_else(|| {
+                CoreError::conflict(format!("Record that you cooked {name} before eating it."))
             })
-            .await?;
-        Ok(Some(prepared.into_value()))
     }
 
     fn record_deduction_for(

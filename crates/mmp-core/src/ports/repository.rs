@@ -452,6 +452,11 @@ pub trait PreparedBatchRepository: Send + Sync + 'static {
         component_id: MealPlanComponentId,
     ) -> Result<Option<PreparedBatch>>;
 
+    async fn for_components(
+        &self,
+        component_ids: &[MealPlanComponentId],
+    ) -> Result<HashMap<MealPlanComponentId, PreparedBatch>>;
+
     async fn insert(
         &self,
         batch: &PreparedBatch,

@@ -26,6 +26,7 @@ const meal: PlannerMeal = {
     item_name: 'Vegetable curry',
     amount: { kind: 'measure', value: 900, unit: 'g' },
     shortage: true,
+    needs_cooking: false,
   }],
   people: [
     { member_id: 'm1', display_name: 'Alex', status: 'planned', can_record: true, allocations: [{ component_id: 'c1', allocated: { kind: 'measure', value: '300', unit: 'g' }, status: 'planned' }] },

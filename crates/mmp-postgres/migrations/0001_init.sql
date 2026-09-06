@@ -1178,3 +1178,6 @@ ALTER TABLE stock_event
 ALTER TABLE meal_plan_entry
     DROP CONSTRAINT meal_plan_entry_portioning_valid,
     DROP COLUMN portioning;
+
+ALTER TABLE prepared_batch
+    DROP CONSTRAINT prepared_batch_component_needs_entry;

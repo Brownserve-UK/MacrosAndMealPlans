@@ -8,4 +8,5 @@ export * from './nutritionTargets';
 export * from './weight';
 export * from './recipes';
 export * from './stock';
+export * from './preparation';
 export * from './shopping';

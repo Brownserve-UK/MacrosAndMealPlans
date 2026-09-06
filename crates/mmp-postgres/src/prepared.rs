@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use async_trait::async_trait;
 use mmp_core::Result;
 use mmp_core::domain::{
@@ -32,6 +34,12 @@ const FOR_COMPONENT: &str = concat!(
     columns!(),
     " FROM prepared_batch WHERE meal_plan_component_id = $1 \
      ORDER BY prepared_at ASC, id ASC LIMIT 1"
+);
+const FOR_COMPONENTS: &str = concat!(
+    "SELECT ",
+    columns!(),
+    " FROM prepared_batch WHERE meal_plan_component_id = ANY($1) \
+     ORDER BY prepared_at ASC, id ASC"
 );
 
 pub struct PgPreparedBatchRepository {
@@ -78,6 +86,29 @@ impl PreparedBatchRepository for PgPreparedBatchRepository {
             .await
             .map_err(|e| repository_error("loading a component's prepared batch", e))?;
         row.map(TryInto::try_into).transpose()
+    }
+
+    async fn for_components(
+        &self,
+        component_ids: &[MealPlanComponentId],
+    ) -> Result<HashMap<MealPlanComponentId, PreparedBatch>> {
+        if component_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let uuids: Vec<Uuid> = component_ids.iter().map(|id| id.as_uuid()).collect();
+        let rows: Vec<PreparedBatchRow> = sqlx::query_as(FOR_COMPONENTS)
+            .bind(&uuids)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| repository_error("loading prepared batches for components", e))?;
+        let mut found = HashMap::new();
+        for row in rows {
+            let batch: PreparedBatch = row.try_into()?;
+            if let Some(component_id) = batch.source.component_id() {
+                found.entry(component_id).or_insert(batch);
+            }
+        }
+        Ok(found)
     }
 
     async fn insert(

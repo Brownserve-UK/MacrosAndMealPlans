@@ -39,6 +39,7 @@ struct Harness {
     stock: InMemoryStockRepository,
     plans: InMemoryMealPlanRepository,
     batches: InMemoryPreparedBatchRepository,
+    preparation: PreparationService,
     member_id: HouseholdMemberId,
     actor_id: UserId,
 }
@@ -146,6 +147,7 @@ fn harness() -> Harness {
         Arc::new(ingredients.clone()),
         clock.clone(),
     );
+    let preparation_for_tests = preparation.clone();
     let service = MealPlanService::new(
         Arc::new(plans.clone()),
         Arc::new(products.clone()),
@@ -181,6 +183,7 @@ fn harness() -> Harness {
         stock,
         plans,
         batches,
+        preparation: preparation_for_tests,
         member_id,
         actor_id: UserId::new(),
     }
@@ -1685,6 +1688,7 @@ async fn editing_a_recipe_moves_planned_numbers_but_not_eaten_history() {
     );
 
     let component_id = reloaded.components[0].component.id;
+    cook(&h, entry.entry.id, component_id, curry.id, 1).await;
     let eaten = h
         .service
         .mark_component_eaten_backdated(
@@ -1736,6 +1740,7 @@ async fn confirming_a_recipe_component_writes_a_recipe_referencing_record() {
     let curry = seed_recipe(&h, "Curry", 4, vec![recipe_line(rice.id, 400)]).await;
     let entry = planned(&h, vec![servings_of(curry.id, 1)]).await;
     let component_id = entry.components[0].component.id;
+    cook(&h, entry.entry.id, component_id, curry.id, 1).await;
 
     h.service
         .mark_component_eaten_backdated(
@@ -1974,6 +1979,33 @@ async fn confirm_component_for(
         .unwrap()
 }
 
+async fn cook(
+    h: &Harness,
+    entry_id: crate::domain::MealPlanEntryId,
+    component_id: crate::domain::MealPlanComponentId,
+    recipe_id: RecipeId,
+    servings: i64,
+) {
+    let made = Decimal::new(servings, 0);
+    h.preparation
+        .record(crate::services::RecordPreparation {
+            recipe_id,
+            source: crate::domain::PreparationSource::MealPlanComponent {
+                entry_id,
+                component_id,
+            },
+            servings_produced: made,
+            placements: vec![crate::domain::PortionPlacement::new(
+                StorageLocation::Chilled,
+                made,
+            )],
+            prepared_at: None,
+            actor: h.actor_id,
+        })
+        .await
+        .unwrap();
+}
+
 async fn confirm_component(
     h: &Harness,
     entry_id: crate::domain::MealPlanEntryId,
@@ -2172,6 +2204,7 @@ async fn a_recipe_component_draws_each_of_its_lines_from_stock() {
 
     let entry = planned(&h, vec![servings_of(curry.id, 1)]).await;
     let component = entry.components[0].component.clone();
+    cook(&h, entry.entry.id, component.id, curry.id, 1).await;
 
     let outcome = confirm_component(
         &h,
@@ -3054,6 +3087,7 @@ async fn a_pooled_ingredient_draw_spans_two_products_in_use_by_order() {
     let curry = seed_recipe(&h, "Curry", 4, vec![ingredient_line(rice_id, 400)]).await;
     let entry = planned(&h, vec![servings_of(curry.id, 1)]).await;
     let component = entry.components[0].component.clone();
+    cook(&h, entry.entry.id, component.id, curry.id, 1).await;
 
     let outcome = confirm_component(
         &h,
@@ -3086,6 +3120,7 @@ async fn reopening_a_recipe_meal_returns_the_serving_but_not_the_raw_ingredients
     let curry = seed_recipe(&h, "Curry", 4, vec![ingredient_line(rice_id, 400)]).await;
     let entry = planned(&h, vec![servings_of(curry.id, 1)]).await;
     let component = entry.components[0].component.clone();
+    cook(&h, entry.entry.id, component.id, curry.id, 1).await;
 
     let after_eating = confirm_component(
         &h,
@@ -3133,6 +3168,7 @@ async fn a_recipe_pinning_a_product_and_needing_its_ingredient_draws_both() {
     .await;
     let entry = planned(&h, vec![servings_of(curry.id, 1)]).await;
     let component = entry.components[0].component.clone();
+    cook(&h, entry.entry.id, component.id, curry.id, 1).await;
 
     confirm_component(
         &h,
@@ -3147,6 +3183,47 @@ async fn a_recipe_pinning_a_product_and_needing_its_ingredient_draws_both() {
 }
 
 #[tokio::test]
+async fn a_recipe_cannot_be_eaten_before_it_has_been_cooked() {
+    let h = harness();
+    let rice_id = crate::domain::IngredientId::new();
+    let tesco = mapped_product("Tesco Basmati", rice_id);
+    h.products.seed(tesco.clone());
+    let rice = h.seed_stock_grams(tesco.id, 1000);
+
+    let curry = seed_recipe(&h, "Curry", 4, vec![ingredient_line(rice_id, 400)]).await;
+    let entry = planned(&h, vec![servings_of(curry.id, 4)]).await;
+    let component = entry.components[0].component.clone();
+
+    let error = h
+        .service
+        .mark_component_eaten_backdated(
+            entry.entry.id,
+            component.id,
+            component.revision,
+            ConfirmMealPlanComponent {
+                consumed_on: date!(2026 - 08 - 25),
+                consumed_at: None,
+                amount: ConsumedAmount::Servings(Decimal::ONE),
+                actor_id: h.actor_id,
+                subject_member_id: None,
+            },
+        )
+        .await
+        .unwrap_err();
+
+    assert!(
+        error.to_string().contains("cooked"),
+        "expected a prompt to record the cook, got {error}"
+    );
+    assert_eq!(
+        h.stock_grams(rice).await,
+        dgrams(1000),
+        "eating must not move raw stock on its own"
+    );
+    assert_eq!(h.batches.count(), 0, "and it must not silently cook either");
+}
+
+#[tokio::test]
 async fn cooking_a_recipe_consumes_raw_stock_and_leaves_the_uneaten_servings_as_a_portion() {
     let h = harness();
     let rice_id = crate::domain::IngredientId::new();
@@ -3157,6 +3234,7 @@ async fn cooking_a_recipe_consumes_raw_stock_and_leaves_the_uneaten_servings_as_
     let curry = seed_recipe(&h, "Curry", 4, vec![ingredient_line(rice_id, 400)]).await;
     let entry = planned(&h, vec![servings_of(curry.id, 4)]).await;
     let component = entry.components[0].component.clone();
+    cook(&h, entry.entry.id, component.id, curry.id, 4).await;
 
     confirm_component(
         &h,
@@ -3192,6 +3270,7 @@ async fn a_second_eater_draws_from_the_portion_without_cooking_the_recipe_again(
     let curry = seed_recipe(&h, "Curry", 4, vec![ingredient_line(rice_id, 400)]).await;
     let entry = household_planned(&h, vec![servings_of(curry.id, 4)], &[h.member_id, other]).await;
     let component = entry.components[0].component.clone();
+    cook(&h, entry.entry.id, component.id, curry.id, 4).await;
 
     let after_first = confirm_component_for(
         &h,

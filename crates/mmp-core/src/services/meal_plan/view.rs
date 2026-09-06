@@ -8,8 +8,8 @@ use crate::domain::{
     ConsumptionRecordId, HouseholdMemberId, MealItemRef, MealParticipantAllocation,
     MealPlanComponent, MealPlanComponentId, MealPlanEntry, MealPlanEntryId, MealPlanScope,
     MealPlanStatus, MealSlot, NUTRIENT_KEYS, NutritionFacts, NutritionGoals, NutritionQuality,
-    Revision, derive_participant_status, outcomes_for_component, participant_status_to_meal,
-    preparation_for, resolve_on, sum_nutrition,
+    PreparedBatch, Revision, derive_participant_status, outcomes_for_component,
+    participant_status_to_meal, preparation_for, resolve_on, sum_nutrition,
 };
 use crate::error::Result;
 use crate::ports::MealPlanQuery;
@@ -31,6 +31,7 @@ pub struct MealPlanComponentView {
     pub quality: NutritionQuality,
     pub consumption_record: Option<ConsumptionRecord>,
     pub preparation: ComponentPreparation,
+    pub cooked: Option<PreparedBatch>,
     pub status: MealPlanStatus,
     pub subject_status: MealPlanStatus,
 }
@@ -348,6 +349,15 @@ impl MealPlanService {
                 })
                 .collect();
 
+        let cooked_by_component = {
+            let ids: Vec<MealPlanComponentId> = entry
+                .components
+                .iter()
+                .map(|component| component.id)
+                .collect();
+            self.batches.for_components(&ids).await?
+        };
+
         let component_ids: HashSet<MealPlanComponentId> = entry
             .components
             .iter()
@@ -416,6 +426,7 @@ impl MealPlanService {
                 quality,
                 consumption_record: subject_record,
                 preparation,
+                cooked: cooked_by_component.get(&component.id).cloned(),
                 status: entry.component_status(component.id, assumption),
                 subject_status,
             });

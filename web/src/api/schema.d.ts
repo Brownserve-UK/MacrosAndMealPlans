@@ -1381,6 +1381,14 @@ export interface components {
             /** Format: date-time */
             updated_at: string;
         };
+        CookedDto: {
+            /** Format: date-time */
+            prepared_at: string;
+            /** Format: uuid */
+            prepared_batch_id: string;
+            /** Format: double */
+            servings_produced: number;
+        };
         CreateConsumptionRequest: components["schemas"]["ItemRefRequest"] & {
             amount: components["schemas"]["AmountDto"];
             /** Format: date-time */
@@ -1799,9 +1807,11 @@ export interface components {
         MealPlanComponentDto: components["schemas"]["MealItemRefDto"] & {
             amount: components["schemas"]["AmountDto"];
             consumption_record?: null | components["schemas"]["ConsumptionRecordDto"];
+            cooked?: null | components["schemas"]["CookedDto"];
             /** Format: uuid */
             id: string;
             item_name: string;
+            needs_cooking: boolean;
             nutrition: components["schemas"]["NutritionDto"];
             /** Format: int32 */
             position: number;
@@ -2039,9 +2049,11 @@ export interface components {
         };
         PlannerFoodDto: components["schemas"]["MealItemRefDto"] & {
             amount: components["schemas"]["AmountDto"];
+            cooked?: null | components["schemas"]["CookedDto"];
             /** Format: uuid */
             id: string;
             item_name: string;
+            needs_cooking: boolean;
             shortage: boolean;
         };
         PlannerMealDto: {

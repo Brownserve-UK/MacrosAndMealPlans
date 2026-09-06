@@ -310,6 +310,18 @@ impl mmp_core::ports::PreparedBatchRepository for NoopPreparedBatches {
         Ok(None)
     }
 
+    async fn for_components(
+        &self,
+        _: &[mmp_core::domain::MealPlanComponentId],
+    ) -> mmp_core::Result<
+        std::collections::HashMap<
+            mmp_core::domain::MealPlanComponentId,
+            mmp_core::domain::PreparedBatch,
+        >,
+    > {
+        Ok(std::collections::HashMap::new())
+    }
+
     async fn insert(
         &self,
         _: &mmp_core::domain::PreparedBatch,

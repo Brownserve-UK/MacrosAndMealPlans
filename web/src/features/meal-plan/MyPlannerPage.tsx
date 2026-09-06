@@ -371,6 +371,8 @@ function entryToPlannerMeal(entry: MealPlanEntry): PlannerMeal {
       item_name: component.item_name,
       amount: component.amount,
       shortage: component.preparation.shortage,
+      needs_cooking: component.needs_cooking,
+      cooked: component.cooked,
     })),
     people: entry.participants.map((person) => ({
       member_id: person.member_id,

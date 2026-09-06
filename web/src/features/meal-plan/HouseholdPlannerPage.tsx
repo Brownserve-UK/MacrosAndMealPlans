@@ -20,6 +20,7 @@ import { ErrorState, Loading } from '../../components/States';
 import { addDays, defaultDayFor, parseIsoDate, startOfWeekIso, todayIso } from './date';
 import { formatAmount } from './format';
 import { Fact, FactBar, MealCard } from './MealCard';
+import { CookDialog } from './CookDialog';
 import { MealEditorDialog } from './MealEditorDialog';
 import { MealOutcomeDialog } from './MealOutcomeDialog';
 import { MealSlotMenu } from './MealSlotMenu';
@@ -44,11 +45,13 @@ function HouseholdMealCard({
   meal,
   onEdit,
   onReview,
+  onCook,
   onDelete,
 }: {
   meal: PlannerMeal;
   onEdit: () => void;
   onReview: () => void;
+  onCook: () => void;
   onDelete: () => void;
 }) {
   const guests = meal.guest_groups.reduce((sum, group) => sum + group.count, 0);
@@ -58,6 +61,8 @@ function HouseholdMealCard({
   const canReview = meal.people.some((person) => person.can_record && person.allocations.some((a) => a.status === 'planned'))
     || (meal.capabilities.can_record_guests && meal.guest_groups.some((group) => group.allocations.some((a) => a.status === 'planned')));
   const assumed = meal.status === 'assumed';
+  const needsCooking = meal.status !== 'eaten' && meal.foods.some((food) => food.needs_cooking);
+  const cooked = meal.foods.find((food) => food.cooked)?.cooked;
 
   return (
     <MealCard
@@ -68,6 +73,7 @@ function HouseholdMealCard({
               {meal.planned_time ? <Fact icon={<ClockIcon fontSize="small" />} label="Time" value={meal.planned_time} /> : null}
               <Fact icon={<PeopleIcon fontSize="small" />} label="Eating" value={diners === 1 ? '1 person' : `${diners} people`} />
             </FactBar>
+            {cooked && meal.status !== 'eaten' ? <Chip size="small" color="success" variant="outlined" label={`Cooked ${cooked.servings_produced}`} /> : null}
             {meal.status === 'eaten' ? <Chip size="small" color="success" label="Recorded" /> : null}
             {assumed ? <Chip size="small" color="warning" variant="outlined" label="Assumed" /> : null}
             {meal.status === 'partially_resolved' ? <Chip size="small" label="Partly recorded" /> : null}
@@ -95,7 +101,11 @@ function HouseholdMealCard({
       warning={shortages.length > 0 ? `Not enough servings for ${shortages.map((food) => food.item_name).join(', ')}` : null}
       actions={
         <>
-          {canReview ? <Button variant="contained" size="small" onClick={onReview}>Record meal</Button> : null}
+          {needsCooking ? (
+            <Button variant="contained" size="small" onClick={onCook}>Cooked it</Button>
+          ) : canReview ? (
+            <Button variant="contained" size="small" onClick={onReview}>Record meal</Button>
+          ) : null}
           {meal.capabilities.can_edit ? <Button size="small" onClick={onEdit}>Edit meal</Button> : null}
           {meal.capabilities.can_delete ? <Button size="small" color="error" onClick={onDelete}>Delete</Button> : null}
         </>
@@ -111,6 +121,7 @@ export function HouseholdPlannerPage({ weekStart, day }: { weekStart: string; da
   const [editing, setEditing] = useState<EditSelection | null>(null);
   const [outcome, setOutcome] = useState<PlannerMeal | null>(null);
   const [deleting, setDeleting] = useState<PlannerMeal | null>(null);
+  const [cooking, setCooking] = useState<PlannerMeal | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const activeDate = day >= weekStart && day <= addDays(weekStart, 6) ? day : weekStart;
@@ -190,6 +201,7 @@ export function HouseholdPlannerPage({ weekStart, day }: { weekStart: string; da
                         meal={meal}
                         onEdit={() => openEditor(meal, meal.slot)}
                         onReview={() => setOutcome(meal)}
+                        onCook={() => setCooking(meal)}
                         onDelete={() => setDeleting(meal)}
                       />
                     ))}
@@ -207,6 +219,7 @@ export function HouseholdPlannerPage({ weekStart, day }: { weekStart: string; da
 
       {editing ? <MealEditorDialog key={editing.key} open mode="household" onClose={() => setEditing(null)} date={activeDate} slot={editing.slot} meal={editing.meal} /> : null}
       {outcome ? <MealOutcomeDialog meal={outcome} onClose={() => setOutcome(null)} /> : null}
+      {cooking ? <CookDialog meal={cooking} onClose={() => setCooking(null)} /> : null}
       <Dialog open={Boolean(deleting)} onClose={remove.isPending ? undefined : () => setDeleting(null)}>
         <DialogTitle>Delete this meal?</DialogTitle>
         <DialogContent><Typography>The meal and its attendance plan will be removed.</Typography></DialogContent>

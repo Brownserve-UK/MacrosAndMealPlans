@@ -40,6 +40,7 @@ function entry(id: string, plannedOn: string, name: string): MealPlanEntry {
         subject_status: 'assumed',
         position: 0,
         revision: 1,
+        needs_cooking: false,
       },
     ],
     planned: nutrition,

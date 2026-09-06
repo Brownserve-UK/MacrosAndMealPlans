@@ -10,10 +10,10 @@ use uuid::Uuid;
 use crate::auth::Principal;
 use crate::dto::common::iso_date;
 use crate::dto::{
-    CreateMealPlanEntryRequest, MarkMealPlanComponentEatenRequest, MarkMealPlanEatenRequest,
-    MealGuestGroupDto, MealPlanEntryDto, MealPlanWeekDto, PlannerCapabilitiesDto, PlannerFoodDto,
-    PlannerMealDto, PlannerPersonDto, PlannerWeekDto, ReviewMealOutcomesRequest,
-    SetMealPlanParticipantsRequest, UpdateMealPlanEntryRequest,
+    CookedDto, CreateMealPlanEntryRequest, MarkMealPlanComponentEatenRequest,
+    MarkMealPlanEatenRequest, MealGuestGroupDto, MealPlanEntryDto, MealPlanWeekDto,
+    PlannerCapabilitiesDto, PlannerFoodDto, PlannerMealDto, PlannerPersonDto, PlannerWeekDto,
+    ReviewMealOutcomesRequest, SetMealPlanParticipantsRequest, UpdateMealPlanEntryRequest,
 };
 use crate::error::{ApiError, ApiResult};
 use crate::http::{Created, IfMatch, Tagged};
@@ -261,6 +261,12 @@ async fn get_planner_week(
                 item_name: component.item_name.clone(),
                 amount: component.component.amount.into(),
                 shortage: component.preparation.shortage,
+                needs_cooking: component.component.item.is_recipe() && component.cooked.is_none(),
+                cooked: component.cooked.as_ref().map(|batch| CookedDto {
+                    prepared_batch_id: batch.id.as_uuid(),
+                    prepared_at: batch.prepared_at,
+                    servings_produced: batch.servings_produced,
+                }),
             })
             .collect();
         meals.push(PlannerMealDto {

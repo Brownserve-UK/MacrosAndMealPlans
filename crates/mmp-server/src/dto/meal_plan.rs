@@ -11,6 +11,7 @@ use mmp_core::services::{
     MealItem, MealItemSource, MealParticipantView, MealPlanComponentView, MealPlanDay,
     MealPlanEntryView, MealPlanWeek, MealSlotView, NutritionSummary, StockAffected,
 };
+use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use time::{Date, OffsetDateTime, Time};
 use utoipa::ToSchema;
@@ -237,6 +238,9 @@ pub struct MealPlanComponentDto {
     pub subject_status: MealPlanStatus,
     pub preparation: ComponentPreparationDto,
     pub revision: i64,
+    pub needs_cooking: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cooked: Option<CookedDto>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub consumption_record: Option<ConsumptionRecordDto>,
 }
@@ -255,6 +259,12 @@ impl From<MealPlanComponentView> for MealPlanComponentDto {
             subject_status: value.subject_status,
             preparation: value.preparation.into(),
             revision: value.component.revision.get(),
+            needs_cooking: value.component.item.is_recipe() && value.cooked.is_none(),
+            cooked: value.cooked.as_ref().map(|batch| CookedDto {
+                prepared_batch_id: batch.id.as_uuid(),
+                prepared_at: batch.prepared_at,
+                servings_produced: batch.servings_produced,
+            }),
             consumption_record: value.consumption_record.map(Into::into),
         }
     }
@@ -524,6 +534,20 @@ pub struct PlannerFoodDto {
     pub item_name: String,
     pub amount: AmountDto,
     pub shortage: bool,
+    pub needs_cooking: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cooked: Option<CookedDto>,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct CookedDto {
+    pub prepared_batch_id: Uuid,
+    #[serde(with = "time::serde::rfc3339")]
+    #[schema(value_type = String, format = DateTime)]
+    pub prepared_at: OffsetDateTime,
+    #[serde(with = "rust_decimal::serde::float")]
+    #[schema(value_type = f64)]
+    pub servings_produced: Decimal,
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
