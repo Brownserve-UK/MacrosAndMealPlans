@@ -9,12 +9,15 @@ import Tabs from '@mui/material/Tabs';
 import Typography from '@mui/material/Typography';
 import { useState } from 'react';
 import { ApiError, type MealPlanEntry, type Product } from '../../api/client';
+import { Link } from '@tanstack/react-router';
 import {
   useMarkMealPlanEaten,
   useMarkMealPlanNotEaten,
   useNeedsReview,
   useSetProductMapping,
+  useShoppingList,
 } from '../../api/queries';
+import { cannotBuyInTime, unreachableMeals } from './unreachable';
 import { useAuth } from '../../auth/AuthProvider';
 import { PageHeader } from '../../components/PageHeader';
 import { ErrorState, Loading } from '../../components/States';
@@ -33,6 +36,14 @@ function whenLabel(entry: MealPlanEntry) {
     month: 'short',
   });
   return entry.planned_time ? `${day} · ${entry.planned_time}` : day;
+}
+
+function whenFor(iso: string) {
+  return parseIsoDate(iso).toLocaleDateString('en-GB', {
+    weekday: 'short',
+    day: 'numeric',
+    month: 'short',
+  });
 }
 
 function ReviewCard({
@@ -85,11 +96,14 @@ export function NeedsReviewPage() {
   const { principal } = useAuth();
   const memberId = principal?.member_id ?? '';
   const review = useNeedsReview();
+  const shopping = useShoppingList(undefined);
   const markEaten = useMarkMealPlanEaten();
   const markNotEaten = useMarkMealPlanNotEaten();
   const setMapping = useSetProductMapping();
   const [error, setError] = useState<string | null>(null);
-  const [tab, setTab] = useState<'personal' | 'household' | 'ingredients'>('personal');
+  const [tab, setTab] = useState<'personal' | 'household' | 'shopping' | 'ingredients'>(
+    'personal',
+  );
   const [replacing, setReplacing] = useState<MealPlanEntry | null>(null);
   const [householdReview, setHouseholdReview] = useState<string | null>(null);
   const [creatingIngredient, setCreatingIngredient] = useState<string | null>(null);
@@ -129,6 +143,8 @@ export function NeedsReviewPage() {
   const ingredients = review.data?.ingredient_mappings ?? [];
   const canReviewHousehold = principal?.permissions.includes('household:write') ?? false;
   const canMapIngredients = principal?.permissions.includes('catalogue:write') ?? false;
+  const canShop = principal?.permissions.includes('shopping:read') ?? false;
+  const unreachable = unreachableMeals(shopping.data);
 
   async function linkProduct(ingredientId: string) {
     if (!mappingProduct) return;
@@ -161,6 +177,7 @@ export function NeedsReviewPage() {
         {canReviewHousehold ? (
           <Tab value="household" label={`Household meals (${household.length})`} />
         ) : null}
+        {canShop ? <Tab value="shopping" label={`Shopping (${unreachable.length})`} /> : null}
         {canMapIngredients ? (
           <Tab value="ingredients" label={`Ingredient mappings (${ingredients.length})`} />
         ) : null}
@@ -234,6 +251,49 @@ export function NeedsReviewPage() {
                   </Button>
                 }
               />
+            ))}
+          </Stack>
+        </Box>
+      ) : null}
+
+      {tab === 'shopping' && unreachable.length === 0 ? (
+        <Paper variant="outlined" sx={{ px: 3, py: 4 }}>
+          <Typography color="text.secondary">
+            Every planned meal can be shopped for in time.
+          </Typography>
+        </Paper>
+      ) : null}
+
+      {tab === 'shopping' && unreachable.length > 0 ? (
+        <Box component="section">
+          <Stack spacing={2}>
+            {unreachable.map((meal) => (
+              <Paper key={meal.entryId} variant="outlined" sx={{ p: 2.5 }}>
+                <Stack
+                  direction={{ xs: 'column', sm: 'row' }}
+                  spacing={2}
+                  sx={{ alignItems: { sm: 'center' } }}
+                >
+                  <Box sx={{ flexGrow: 1, minWidth: 0 }}>
+                    <Typography sx={{ fontWeight: 600 }}>
+                      {meal.recipeName ?? labelForSlot(meal.slot)}
+                    </Typography>
+                    <Typography variant="body2" color="text.secondary" className="numeral">
+                      {whenFor(meal.plannedOn)} · {labelForSlot(meal.slot)}
+                    </Typography>
+                    <Typography variant="body2" color="warning.main" sx={{ mt: 0.5 }}>
+                      {cannotBuyInTime(meal.names)}
+                    </Typography>
+                  </Box>
+                  <Box sx={{ flexShrink: 0 }}>
+                    <Link to="/shopping" className="app-link">
+                      <Button variant="outlined" component="span">
+                        Add a shop
+                      </Button>
+                    </Link>
+                  </Box>
+                </Stack>
+              </Paper>
             ))}
           </Stack>
         </Box>

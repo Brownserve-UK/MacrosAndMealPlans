@@ -105,6 +105,7 @@ vi.mock('../../api/queries', () => ({
   useDeleteMealPlanEntry: () => ({ mutateAsync: mocks.remove, isPending: false }),
   useOptOutOfMeal: () => ({ mutateAsync: mocks.optOut, isPending: false }),
   useRejoinMeal: () => ({ mutateAsync: mocks.rejoin, isPending: false }),
+  useShoppingList: () => ({ data: undefined }),
 }));
 vi.mock('./NutritionSummary', () => ({ DayWeekNutrition: () => <div>nutrition panel</div> }));
 vi.mock('./MealEditorDialog', () => ({ MealEditorDialog: () => <div>Meal editor</div> }));

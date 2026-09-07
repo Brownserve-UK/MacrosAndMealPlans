@@ -3,9 +3,10 @@ import { ApiError, client, ifMatch, unwrap } from '../client';
 import type { ShoppingSection, Unit } from '../client';
 import { stockKeys, shoppingKeys } from '../keys';
 
-export function useShoppingList(opportunityDate?: string) {
+export function useShoppingList(opportunityDate?: string, options?: { enabled?: boolean }) {
   return useQuery({
     queryKey: shoppingKeys.list(opportunityDate),
+    enabled: options?.enabled ?? true,
     queryFn: async () =>
       unwrap(
         await client.GET('/api/v1/shopping/requirements', {

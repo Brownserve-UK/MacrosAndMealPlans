@@ -9,13 +9,14 @@ import { useNavigate } from '@tanstack/react-router';
 import { useState } from 'react';
 import { ApiError } from '../../api/client';
 import type { Purchase, Unit } from '../../api/client';
-import { usePendingPutAway, useProducts, usePutAway } from '../../api/queries';
+import { useIngredients, usePendingPutAway, useProducts, usePutAway } from '../../api/queries';
 import { PageHeader } from '../../components/PageHeader';
 import { UnitSelect } from '../../components/UnitSelect';
 import { EmptyState, ErrorState, Loading } from '../../components/States';
 
 export function PutAwayPage() {
   const waiting = usePendingPutAway();
+  const ingredients = useIngredients({ per_page: 200 });
   const navigate = useNavigate();
 
   if (waiting.isLoading) return <Loading label="Fetching what you bought" />;
@@ -24,6 +25,10 @@ export function PutAwayPage() {
   }
 
   const purchases = waiting.data ?? [];
+  const named = new Map<string, string>();
+  for (const ingredient of ingredients.data?.items ?? []) {
+    named.set(ingredient.id, ingredient.name);
+  }
 
   return (
     <>
@@ -41,7 +46,7 @@ export function PutAwayPage() {
       ) : (
         <Stack spacing={2}>
           {purchases.map((purchase) => (
-            <PutAwayRow key={purchase.id} purchase={purchase} />
+            <PutAwayRow key={purchase.id} purchase={purchase} named={named} />
           ))}
           <Stack direction="row" spacing={1}>
             <Button onClick={() => void navigate({ to: '/shopping' })}>Do this later</Button>
@@ -52,7 +57,7 @@ export function PutAwayPage() {
   );
 }
 
-function PutAwayRow({ purchase }: { purchase: Purchase }) {
+function PutAwayRow({ purchase, named }: { purchase: Purchase; named: Map<string, string> }) {
   const update = usePutAway();
   const [search, setSearch] = useState('');
   const [productId, setProductId] = useState(purchase.product_id ?? '');
@@ -65,7 +70,11 @@ function PutAwayRow({ purchase }: { purchase: Purchase }) {
     search.trim() ? { q: search.trim(), per_page: 8 } : { per_page: 20 },
   );
   const choices = products.data?.items ?? [];
-  const name = purchase.name ?? choices.find((p) => p.id === purchase.product_id)?.name ?? 'Something';
+  const name =
+    purchase.name ??
+    choices.find((product) => product.id === purchase.product_id)?.name ??
+    (purchase.ingredient_id ? named.get(purchase.ingredient_id) : undefined) ??
+    'Something you bought';
 
   const parsed = amount.trim() === '' ? null : Number(amount);
   const complete = productId !== '' && parsed != null && !Number.isNaN(parsed) && parsed > 0 && unit !== '';

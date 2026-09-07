@@ -10,7 +10,8 @@ use mmp_core::domain::{
     MealSlot, NewConsumptionRecord, NewHouseholdMember, NewMealGuestAllocation, NewMealGuestGroup,
     NewMealParticipant, NewMealParticipantAllocation, NewMealPlanComponent, NewMealPlanEntry,
     NewNutritionTarget, NewProduct, NewPurchase, NewRecipe, NewRecipeComponent,
-    NewRecipeInstruction, NewShoppingCadence, NewStockItem, NewUser, NewWeightGoal,
+    NewRecipeInstruction, NewShoppingCadence, NewShoppingListItem, NewStockItem, NewUser,
+    NewWeightGoal,
     NewWeightRecord, NutritionFacts, NutritionGoals, OutcomeActor, Patch, ProductId, Provenance,
     Quantity, RecipeId, RecipePatch, RecipeRequirement, Role, ShoppingSection, SourceDate,
     SourceDateKind, StockLevel, StorageLocation, Unit, UsabilityDeadline, User, UserId,
@@ -533,6 +534,22 @@ impl Loader<'_> {
                 note: Some("frozen flat, bought in bulk"),
             },
             StockSpec {
+                product_key: "onion-salt",
+                level: StockLevel::NotTracked,
+                storage_location: StorageLocation::Ambient,
+                source_date: None,
+                note: Some("we never count this, it is just always there"),
+            },
+            StockSpec {
+                product_key: "tomato-ketchup",
+                level: StockLevel::Estimated {
+                    quantity: quantity(150, Unit::Millilitre),
+                },
+                storage_location: StorageLocation::Chilled,
+                source_date: None,
+                note: Some("about a third left, going by the squeeze"),
+            },
+            StockSpec {
                 product_key: "rolled-oats",
                 level: StockLevel::Exact {
                     quantity: quantity(500, Unit::Gram),
@@ -1045,6 +1062,33 @@ impl Loader<'_> {
                 )
                 .await?;
             self.report.shopping_seeded += 2;
+        }
+
+        if self.state.shopping.list_items().await?.is_empty() {
+            for (name, product_key, section) in [
+                ("Onion Salt", Some("onion-salt"), ShoppingSection::Ambient),
+                (
+                    "Tomato Ketchup",
+                    Some("tomato-ketchup"),
+                    ShoppingSection::Ambient,
+                ),
+            ] {
+                self.state
+                    .shopping
+                    .add_list_item(
+                        NewShoppingListItem {
+                            ingredient_id: None,
+                            product_id: product_key.map(product_id),
+                            name: name.to_owned(),
+                            quantity: None,
+                            section: Some(section),
+                            opportunity_date: None,
+                        },
+                        self.actor.id,
+                    )
+                    .await?;
+                self.report.shopping_seeded += 1;
+            }
         }
 
         Ok(())
@@ -1875,6 +1919,46 @@ fn product_specs() -> Vec<ProductSpec> {
             package_quantity: Some(quantity(600, Unit::Gram)),
             servings_per_pack: Some(4),
             nutrition: nutrition(100, Unit::Gram, [165, 31, 0, 0, 4, 1, 0, 1, 85]),
+        },
+        ProductSpec {
+            key: "chicken-breast-large",
+            name: "Sample Chicken Breast, large pack",
+            brand: Some("Sample Farm"),
+            ingredient_key: Some("chicken-breast"),
+            section: ShoppingSection::MeatFish,
+            package_quantity: Some(quantity(900, Unit::Gram)),
+            servings_per_pack: Some(6),
+            nutrition: nutrition(100, Unit::Gram, [165, 31, 0, 0, 4, 1, 0, 1, 85]),
+        },
+        ProductSpec {
+            key: "onion-salt",
+            name: "Sample Onion Salt",
+            brand: Some("Sample Pantry"),
+            ingredient_key: None,
+            section: ShoppingSection::Ambient,
+            package_quantity: Some(quantity(90, Unit::Gram)),
+            servings_per_pack: None,
+            nutrition: nutrition(100, Unit::Gram, [0, 0, 0, 0, 0, 0, 0, 60, 0]),
+        },
+        ProductSpec {
+            key: "tomato-ketchup",
+            name: "Sample Tomato Ketchup",
+            brand: Some("Sample Pantry"),
+            ingredient_key: None,
+            section: ShoppingSection::Ambient,
+            package_quantity: Some(quantity(500, Unit::Millilitre)),
+            servings_per_pack: None,
+            nutrition: nutrition(100, Unit::Millilitre, [102, 1, 24, 22, 0, 0, 0, 2, 0]),
+        },
+        ProductSpec {
+            key: "kiwi-fruit",
+            name: "Sample Kiwi Fruit",
+            brand: None,
+            ingredient_key: None,
+            section: ShoppingSection::FreshProduce,
+            package_quantity: Some(quantity(6, Unit::Item)),
+            servings_per_pack: Some(6),
+            nutrition: nutrition(1, Unit::Item, [46, 1, 11, 7, 0, 0, 2, 0, 0]),
         },
         ProductSpec {
             key: "basmati-rice",

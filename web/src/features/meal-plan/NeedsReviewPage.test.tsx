@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MealPlanEntry } from '../../api/client';
 import { NeedsReviewPage } from './NeedsReviewPage';
 
@@ -9,6 +9,8 @@ const mocks = vi.hoisted(() => ({
   markEaten: vi.fn(),
   markNotEaten: vi.fn(),
   needsReview: vi.fn(),
+  shoppingList: vi.fn(() => undefined),
+  permissions: [] as string[],
 }));
 
 const nutrition = { nutrition: {}, unknown_count: 0, partial_count: 0 };
@@ -54,7 +56,11 @@ function entry(id: string, plannedOn: string, name: string): MealPlanEntry {
 }
 
 vi.mock('../../auth/AuthProvider', () => ({
-  useAuth: () => ({ principal: { member_id: 'member-1', permissions: [] } }),
+  useAuth: () => ({ principal: { member_id: 'member-1', permissions: mocks.permissions } }),
+}));
+
+vi.mock('@tanstack/react-router', () => ({
+  Link: ({ children }: { children: React.ReactNode }) => children,
 }));
 
 vi.mock('../../api/queries', () => ({
@@ -65,6 +71,7 @@ vi.mock('../../api/queries', () => ({
   useReviewMealOutcomes: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useProducts: () => ({ data: { items: [] }, isLoading: false }),
   useRecipes: () => ({ data: { items: [] }, isLoading: false }),
+  useShoppingList: () => ({ data: mocks.shoppingList() }),
 }));
 
 function firstButton(name: string) {
@@ -157,5 +164,74 @@ describe('NeedsReviewPage', () => {
     renderPage();
 
     expect(screen.queryByRole('tab', { name: /Household meals/ })).not.toBeInTheDocument();
+  });
+});
+
+describe('NeedsReviewPage shopping', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.permissions = ['shopping:read'];
+    mocks.shoppingList.mockReturnValue(undefined);
+    mocks.needsReview.mockReturnValue({
+      data: { personal_meals: [], household_meals: [], ingredient_mappings: [] },
+      isLoading: false,
+      isError: false,
+      refetch: vi.fn(),
+    });
+  });
+
+  afterEach(() => {
+    mocks.permissions = [];
+  });
+
+  it('gathers meals no shop can reach in time', async () => {
+    mocks.shoppingList.mockReturnValue({
+      opportunities: [],
+      requirements: [
+        {
+          subject: { kind: 'ingredient', ingredient_id: 'i1' },
+          name: 'Salmon Fillet',
+          section: 'meat_fish',
+          certainty: { kind: 'definite' },
+          assignment: { kind: 'needs_earlier_opportunity' },
+          claims: [
+            {
+              subject: { kind: 'ingredient', ingredient_id: 'i1' },
+              quantity: { amount: 300, unit: 'g' },
+              entry_id: 'entry-1',
+              planned_on: '2026-09-08',
+              slot: 'dinner',
+              scope: 'member',
+              recipe_name: null,
+              assumed: false,
+            },
+          ],
+        },
+      ],
+      manual: [],
+      unplanned: [],
+      counts: [],
+      cadence_configured: true,
+    } as never);
+
+    renderPage();
+    await userEvent.click(screen.getByRole('tab', { name: 'Shopping (1)' }));
+
+    expect(screen.getByText(/No shop in time for Salmon Fillet/)).toBeInTheDocument();
+    expect(screen.getByText(/Tue 8 Sept?/)).toBeInTheDocument();
+  });
+
+  it('says so when every meal can be shopped for', async () => {
+    renderPage();
+    await userEvent.click(screen.getByRole('tab', { name: 'Shopping (0)' }));
+
+    expect(screen.getByText('Every planned meal can be shopped for in time.')).toBeInTheDocument();
+  });
+
+  it('keeps the section from anyone who cannot see the shopping', () => {
+    mocks.permissions = [];
+    renderPage();
+
+    expect(screen.queryByRole('tab', { name: /Shopping/ })).not.toBeInTheDocument();
   });
 });
