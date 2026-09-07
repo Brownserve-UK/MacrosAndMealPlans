@@ -77,7 +77,7 @@ specification or ADRs.
 
 - [ ] Pending purchases from an unfinished shop can become detached from the focused opportunity,
       leaving no UI from which to resume or cancel them.
-- [ ] Make finishing a shop atomic across all its purchases.
+- [x] Make finishing a shop atomic across all its purchases.
 - [ ] Validate that a purchase product belongs to the requirement's ingredient pool, and remove the
       misleading product-name fallback for invalid API-created purchases.
 - [x] Keep product-pinned demand on that product during the shopping coverage walk instead of
