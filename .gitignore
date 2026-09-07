@@ -11,3 +11,9 @@
 # Test and coverage output
 /coverage
 **/coverage
+
+# AI Stuff
+.claude/design
+.ai/scratchpad
+.ai/mockups
+.ai/screenshots
