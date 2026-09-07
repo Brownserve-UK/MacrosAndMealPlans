@@ -287,7 +287,7 @@ impl Loader<'_> {
                     brand: spec.brand.map(str::to_owned),
                     barcode: None,
                     retailer: Some("Sample Supermarket".to_owned()),
-                    shopping_section: Some(spec.section.code().to_owned()),
+                    shopping_section: Some(spec.section),
                     track_stock: None,
                     package_quantity: spec.package_quantity,
                     servings_per_pack: spec.servings_per_pack,
@@ -1022,6 +1022,7 @@ impl Loader<'_> {
                     NewPurchase {
                         ingredient_id: Some(IngredientId::seeded("chicken-breast")),
                         product_id: Some(product_id("chicken-breast")),
+                        name: None,
                         quantity: Some(quantity(600, Unit::Gram)),
                         opportunity_date: Some(focus),
                         note: None,
@@ -1035,6 +1036,7 @@ impl Loader<'_> {
                     NewPurchase {
                         ingredient_id: Some(IngredientId::seeded("broccoli")),
                         product_id: None,
+                        name: None,
                         quantity: None,
                         opportunity_date: Some(focus),
                         note: Some("grabbed some, forgot to look at the pack".to_owned()),

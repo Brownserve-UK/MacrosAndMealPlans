@@ -1,0 +1,83 @@
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { render, screen } from '@testing-library/react';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { shoppingList } from './fixtures';
+import { TripPage } from './TripPage';
+
+beforeAll(() => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  vi.setSystemTime(new Date('2026-09-01T09:00:00Z'));
+});
+
+afterAll(() => {
+  vi.useRealTimers();
+});
+
+vi.mock('@tanstack/react-router', () => ({
+  Link: ({ children }: { children: React.ReactNode }) => children,
+  useNavigate: () => vi.fn(),
+  useParams: () => ({ date: '2026-09-05' }),
+}));
+
+vi.mock('../../api/queries', () => ({
+  useShoppingList: () => ({ isLoading: false, isError: false, data: shoppingList }),
+  useStartShop: () => ({ isPending: false, mutateAsync: vi.fn() }),
+  useFinishShop: () => ({ isPending: false, mutateAsync: vi.fn() }),
+  useRecordPurchase: () => ({ isPending: false, mutate: vi.fn(), mutateAsync: vi.fn() }),
+  useUpdatePurchase: () => ({ isPending: false, mutate: vi.fn(), mutateAsync: vi.fn() }),
+  useAddShoppingListItem: () => ({ isPending: false, mutate: vi.fn() }),
+  useRemoveShoppingListItem: () => ({ isPending: false, mutate: vi.fn() }),
+  useProducts: () => ({ data: { items: [], total: 0 } }),
+  useUnits: () => ({ data: ['g', 'ml'] }),
+}));
+
+function renderPage() {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(
+    <QueryClientProvider client={client}>
+      <TripPage />
+    </QueryClientProvider>,
+  );
+}
+
+describe('TripPage', () => {
+  it('groups what to buy into aisles', () => {
+    renderPage();
+
+    const headings = screen.getAllByText(/Fresh produce|Meat & fish|Dairy|Ambient/);
+    expect(headings.map((node) => node.textContent)).toEqual(['Dairy', 'Ambient']);
+  });
+
+  it('shows the shelf life on the row itself', () => {
+    renderPage();
+
+    expect(screen.getByText(/Use by at least/)).toBeInTheDocument();
+  });
+
+  it('shows an amount only where there is one worth showing', () => {
+    renderPage();
+
+    expect(screen.getByText('600 ml')).toBeInTheDocument();
+    expect(screen.getByText('500 g')).toBeInTheDocument();
+  });
+
+  it('offers a way to start before anything is ticked', () => {
+    renderPage();
+
+    expect(screen.getByRole('button', { name: 'Start shopping' })).toBeInTheDocument();
+  });
+
+  it('lets you add anything without leaving the list', () => {
+    renderPage();
+
+    expect(screen.getByPlaceholderText('Add anything')).toBeInTheDocument();
+  });
+
+  it('says none of the internal vocabulary out loud', () => {
+    renderPage();
+
+    for (const leak of [/unassigned/i, /assumption_only/i, /incompatible_units/i]) {
+      expect(screen.queryByText(leak)).not.toBeInTheDocument();
+    }
+  });
+});

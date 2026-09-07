@@ -21,8 +21,9 @@ import { RecipePage } from '../features/recipes/RecipePage';
 import { EditRecipePage, NewRecipePage } from '../features/recipes/RecipeFormPage';
 import { RecipesPage } from '../features/recipes/RecipesPage';
 import { ProfilePage } from '../features/profile/ProfilePage';
-import { ShopModePage } from '../features/shopping/ShopModePage';
+import { PutAwayPage } from '../features/shopping/PutAwayPage';
 import { ShoppingPage } from '../features/shopping/ShoppingPage';
+import { TripPage } from '../features/shopping/TripPage';
 import { ShoppingSettingsPage } from '../features/shopping/ShoppingSettingsPage';
 import { StockPage } from '../features/stock/StockPage';
 import { DishPage } from '../features/stock/DishPage';
@@ -277,10 +278,16 @@ const shoppingRoute = createRoute({
   component: ShoppingPage,
 });
 
-const shopModeRoute = createRoute({
+const putAwayRoute = createRoute({
   getParentRoute: () => rootRoute,
-  path: '/shopping/shop',
-  component: ShopModePage,
+  path: '/shopping/put-away',
+  component: PutAwayPage,
+});
+
+const tripRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/shopping/$date',
+  component: TripPage,
 });
 
 const shoppingSettingsRoute = createRoute({
@@ -338,7 +345,8 @@ const routeTree = rootRoute.addChildren([
   accountsRoute,
   mealTimesRoute,
   shoppingRoute,
-  shopModeRoute,
+  putAwayRoute,
+  tripRoute,
   shoppingSettingsRoute,
   weightRoute,
   profileRoute,

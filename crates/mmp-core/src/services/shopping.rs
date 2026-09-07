@@ -47,7 +47,14 @@ pub struct ShoppingList {
     pub manual: Vec<ShoppingListItem>,
     pub unplanned: Vec<Purchase>,
     pub trip: Option<ShoppingTrip>,
+    pub counts: Vec<ShopCount>,
     pub cadence_configured: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ShopCount {
+    pub date: Date,
+    pub items: usize,
 }
 
 #[derive(Clone)]
@@ -413,6 +420,40 @@ impl ShoppingService {
                 .then_with(|| a.name.cmp(&b.name))
         });
 
+        let all_manual = self.list_items.list().await?;
+        let mut counts: Vec<ShopCount> = opportunities
+            .iter()
+            .map(|opportunity| {
+                let date = opportunity.date;
+                let derived = requirements
+                    .iter()
+                    .filter(|requirement| {
+                        matches!(requirement.assignment, Assignment::Opportunity { date: on } if on == date)
+                    })
+                    .count();
+                let by_hand = all_manual
+                    .iter()
+                    .filter(|item| item.opportunity_date == Some(date))
+                    .count();
+                ShopCount {
+                    date,
+                    items: derived + by_hand,
+                }
+            })
+            .collect();
+        if let Some(first) = counts.first_mut() {
+            first.items += requirements
+                .iter()
+                .filter(|requirement| {
+                    matches!(requirement.assignment, Assignment::NeedsEarlierOpportunity)
+                })
+                .count()
+                + all_manual
+                    .iter()
+                    .filter(|item| item.opportunity_date.is_none())
+                    .count();
+        }
+
         if let Some(focus) = focus {
             requirements.retain(|requirement| {
                 matches!(requirement.assignment, Assignment::Opportunity { date } if date == focus)
@@ -420,7 +461,7 @@ impl ShoppingService {
             });
         }
 
-        let mut manual = self.list_items.list().await?;
+        let mut manual = all_manual;
         manual.retain(|item| match (item.opportunity_date, focus) {
             (Some(on), Some(focus)) => on == focus,
             (Some(_), None) => false,
@@ -456,6 +497,7 @@ impl ShoppingService {
             manual,
             unplanned,
             trip,
+            counts,
             cadence_configured: cadence.is_some(),
         })
     }
@@ -490,6 +532,66 @@ impl ShoppingService {
             .into_iter()
             .filter(|purchase| purchase.state == PurchaseState::Pending)
             .collect())
+    }
+
+    pub async fn awaiting_put_away(&self) -> Result<Vec<Purchase>> {
+        let today = self.clock.now().date();
+        let pending = self.pending_purchases().await?;
+
+        let mut waiting = Vec::new();
+        for purchase in pending {
+            let settled = match purchase.opportunity_date {
+                None => true,
+                Some(date) if date < today => true,
+                Some(date) => self
+                    .trips
+                    .for_date(date)
+                    .await?
+                    .is_some_and(|trip| trip.is_finished()),
+            };
+            if settled {
+                waiting.push(purchase);
+            }
+        }
+        Ok(waiting)
+    }
+
+    pub async fn put_away(
+        &self,
+        id: PurchaseId,
+        expected: Revision,
+        product_id: ProductId,
+        quantity: Quantity,
+        actor: UserId,
+    ) -> Result<Purchase> {
+        let Some(mut purchase) = self.purchases.get(id).await? else {
+            return Err(CoreError::not_found(PURCHASE, id.to_string()));
+        };
+        if purchase.state == PurchaseState::Reconciled {
+            return Ok(purchase);
+        }
+        if purchase.state == PurchaseState::Cancelled {
+            return Err(CoreError::conflict("That purchase was cancelled."));
+        }
+
+        purchase.product_id = Some(product_id);
+        purchase.quantity = Some(quantity);
+
+        let Some(stock) = self.stock_for(&purchase, actor).await? else {
+            return Err(CoreError::conflict("Say which product and how much."));
+        };
+
+        purchase.state = PurchaseState::Reconciled;
+        purchase.stock_item_id = Some(stock.item.id);
+        purchase.updated_at = self.clock.now();
+        purchase.revision = expected.next();
+
+        let outcome = self
+            .purchases
+            .update(&purchase, expected, Some(&stock))
+            .await?;
+        commit_outcome(PURCHASE, id, expected, outcome)?;
+        Ok(purchase)
     }
 
     pub async fn record_purchase(&self, input: NewPurchase, actor: UserId) -> Result<Purchase> {

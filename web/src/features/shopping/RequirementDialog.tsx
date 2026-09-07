@@ -76,25 +76,27 @@ function flags(requirement: ShoppingRequirement): Flag[] {
   if (requirement.assignment.kind === 'needs_earlier_opportunity') {
     out.push({ severity: 'warning', text: 'Needed before your next shop' });
   }
-  if (requirement.assignment.kind === 'unassigned') {
-    out.push({ severity: 'info', text: 'No shop to put this on yet' });
-  }
   if (requirement.certainty.kind === 'suggested') {
     out.push({
       severity: 'info',
       text:
         requirement.certainty.reason === 'unknown_availability'
-          ? 'No stock recorded, so we cannot tell what you already have'
-          : 'Only needed if an unconfirmed meal was eaten',
+          ? "We don't know how much you have"
+          : 'Only if the meal we assumed was eaten actually was',
     });
   }
   if (requirement.gaps?.includes('incompatible_units')) {
-    out.push({
-      severity: 'warning',
-      text: 'Some meals measure this differently, so the amount may be short',
-    });
+    out.push({ severity: 'warning', text: 'This amount may be short' });
   }
   return out;
+}
+
+function merge(preferred: Product[], rest: Product[]): Product[] {
+  const held = [...preferred];
+  for (const product of rest) {
+    if (!held.some((existing) => existing.id === product.id)) held.push(product);
+  }
+  return held;
 }
 
 function Body({
@@ -308,6 +310,12 @@ function PurchaseForm({
   const pinnedProductId =
     requirement.subject.kind === 'product' ? requirement.subject.product_id : undefined;
 
+  const [search, setSearch] = useState('');
+  const everything = useProducts(
+    search.trim() ? { q: search.trim(), per_page: 8 } : { per_page: 25 },
+  );
+  const offered = search.trim() ? (everything.data?.items ?? []) : merge(choices, everything.data?.items ?? []);
+
   const [productId, setProductId] = useState(purchase?.product_id ?? pinnedProductId ?? '');
   const [amount, setAmount] = useState(
     purchase?.quantity
@@ -321,7 +329,7 @@ function PurchaseForm({
   );
   const [failure, setFailure] = useState<string | null>(null);
 
-  const chosen = productId || (choices.length === 1 ? choices[0]!.id : '');
+  const chosen = productId;
   const parsed = amount.trim() === '' ? null : Number(amount);
   const complete =
     chosen !== '' && parsed != null && !Number.isNaN(parsed) && parsed > 0 && unit !== '';
@@ -365,22 +373,36 @@ function PurchaseForm({
           <Stack spacing={2.5} sx={{ pt: 0.5 }}>
             {failure ? <Alert severity="error">{failure}</Alert> : null}
 
-            {choices.length > 1 ? (
-              <TextField
-                select
-                label="Product"
-                value={productId}
-                onChange={(e) => setProductId(e.target.value)}
-                fullWidth
-              >
-                <MenuItem value="">Not sure yet</MenuItem>
-                {choices.map((product) => (
-                  <MenuItem key={product.id} value={product.id}>
-                    {product.name}
-                  </MenuItem>
-                ))}
-              </TextField>
-            ) : null}
+            <TextField
+              select
+              label="Product"
+              value={productId}
+              onChange={(e) => setProductId(e.target.value)}
+              fullWidth
+              slotProps={{
+                select: {
+                  renderValue: (value) =>
+                    offered.find((product) => product.id === value)?.name ?? 'Not sure yet',
+                },
+              }}
+            >
+              <MenuItem disableRipple onKeyDown={(e) => e.stopPropagation()}>
+                <TextField
+                  size="small"
+                  placeholder="Search every product"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  onClick={(e) => e.stopPropagation()}
+                  fullWidth
+                />
+              </MenuItem>
+              <MenuItem value="">Not sure yet</MenuItem>
+              {offered.map((product) => (
+                <MenuItem key={product.id} value={product.id}>
+                  {product.name}
+                </MenuItem>
+              ))}
+            </TextField>
 
             <Stack direction="row" spacing={1.5}>
               <TextField

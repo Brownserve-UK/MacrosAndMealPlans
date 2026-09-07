@@ -17,11 +17,17 @@ export const shoppingList: ShoppingList = {
   opportunities: [
     { date: '2026-09-05', state: 'normal' },
     { date: '2026-09-12', state: 'normal' },
+    { date: '2026-09-19', state: 'normal' },
   ],
   focus: '2026-09-05',
   cadence_configured: true,
   manual: [],
   unplanned: [],
+  counts: [
+    { date: '2026-09-05', items: 3 },
+    { date: '2026-09-12', items: 8 },
+    { date: '2026-09-19', items: 0 },
+  ],
   requirements: [
     {
       subject: { kind: 'ingredient', ingredient_id: 'milk' },
@@ -39,6 +45,7 @@ export const shoppingList: ShoppingList = {
       subject: { kind: 'ingredient', ingredient_id: 'flour' },
       name: 'Plain Flour',
       quantity: g(500),
+      required_by: '2026-09-03',
       section: 'ambient',
       certainty: { kind: 'definite' },
       assignment: { kind: 'needs_earlier_opportunity' },

@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ApiError, client, ifMatch, unwrap } from '../client';
-import type { Unit } from '../client';
+import type { ShoppingSection, Unit } from '../client';
 import { stockKeys, shoppingKeys } from '../keys';
 
 export function useShoppingList(opportunityDate?: string) {
@@ -87,6 +87,80 @@ export function useMoveShoppingOpportunity() {
   });
 }
 
+export function usePendingPutAway() {
+  return useQuery({
+    queryKey: shoppingKeys.putAway(),
+    queryFn: async () => unwrap(await client.GET('/api/v1/shopping/put-away', {})),
+  });
+}
+
+export function usePutAway() {
+  const invalidate = useShoppingInvalidation();
+  return useMutation({
+    mutationFn: async (input: {
+      id: string;
+      revision: number;
+      product_id: string;
+      quantity: { amount: number; unit: Unit };
+    }) =>
+      unwrap(
+        await client.POST('/api/v1/shopping/put-away/{id}', {
+          params: { path: { id: input.id }, header: ifMatch(input.revision) },
+          body: { product_id: input.product_id, quantity: input.quantity },
+        }),
+      ),
+    onSuccess: invalidate,
+  });
+}
+
+export function useShoppingListItems() {
+  return useQuery({
+    queryKey: shoppingKeys.items(),
+    queryFn: async () => unwrap(await client.GET('/api/v1/shopping/items', {})),
+  });
+}
+
+export function useAddShoppingListItem() {
+  const invalidate = useShoppingInvalidation();
+  return useMutation({
+    mutationFn: async (body: {
+      name: string;
+      ingredient_id?: string;
+      product_id?: string;
+      quantity?: { amount: number; unit: Unit };
+      section?: ShoppingSection;
+      opportunity_date?: string;
+    }) => unwrap(await client.POST('/api/v1/shopping/items', { body })),
+    onSuccess: invalidate,
+  });
+}
+
+export function useRemoveShoppingListItem() {
+  const invalidate = useShoppingInvalidation();
+  return useMutation({
+    mutationFn: async (id: string) =>
+      unwrap(
+        await client.DELETE('/api/v1/shopping/items/{id}', {
+          params: { path: { id } },
+        }),
+      ),
+    onSuccess: invalidate,
+  });
+}
+
+export function useStartShop() {
+  const invalidate = useShoppingInvalidation();
+  return useMutation({
+    mutationFn: async (date: string) =>
+      unwrap(
+        await client.POST('/api/v1/shopping/opportunities/{date}/start', {
+          params: { path: { date } },
+        }),
+      ),
+    onSuccess: invalidate,
+  });
+}
+
 export function useFinishShop() {
   const invalidate = useShoppingInvalidation();
   return useMutation({
@@ -128,6 +202,7 @@ export function useRecordPurchase() {
     mutationFn: async (body: {
       ingredient_id?: string;
       product_id?: string;
+      name?: string;
       quantity?: { amount: number; unit: Unit };
       opportunity_date?: string;
       note?: string;

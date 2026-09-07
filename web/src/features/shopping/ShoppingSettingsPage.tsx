@@ -18,6 +18,7 @@ import {
 import { PageHeader } from '../../components/PageHeader';
 import { ErrorState, Loading } from '../../components/States';
 import { startOfWeekIso, todayIso } from '../meal-plan/date';
+import { AisleOrder } from './AisleOrder';
 
 const DAYS = [
   { value: 1, label: 'Mon' },
@@ -120,6 +121,8 @@ function EditCadence({ cadence }: { cadence: ShoppingCadence | null }) {
                 ))}
               </ToggleButtonGroup>
             </Stack>
+
+            <AisleOrder />
 
             <Stack direction="row" spacing={1.5}>
               <Button type="submit" variant="contained" disabled={save.isPending}>

@@ -11,7 +11,7 @@ use crate::auth::{Permission, Principal};
 use crate::dto::{
     CreateOpportunityRequest, CreatePurchaseRequest, CreateShoppingListItemRequest,
     FinishShopResponse, MoveOpportunityRequest, OpportunityRangeQuery, PageMeta, PurchaseDto,
-    PurchaseListQuery, PurchasePage, SetShoppingCadenceRequest, ShoppingCadenceDto,
+    PurchaseListQuery, PurchasePage, PutAwayRequest, SetShoppingCadenceRequest, ShoppingCadenceDto,
     ShoppingListDto, ShoppingListItemDto, ShoppingListQuery, ShoppingOpportunityDto,
     ShoppingTripDto, UpdateShoppingListItemRequest, list_item_id, purchase_id,
 };
@@ -26,6 +26,8 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(move_opportunity, skip_opportunity))
         .routes(routes!(start_shop))
         .routes(routes!(finish_shop))
+        .routes(routes!(put_away))
+        .routes(routes!(put_one_away))
         .routes(routes!(list_items, create_list_item))
         .routes(routes!(update_list_item, delete_list_item))
         .routes(routes!(get_cadence, set_cadence, clear_cadence))
@@ -353,6 +355,61 @@ async fn start_shop(
         .start_shop(parse_date(&date)?, principal.user_id)
         .await?;
     Ok(Json(trip.into()))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/shopping/put-away",
+    operation_id = "listPutAway",
+    responses((status = 200, description = "Bought, but not yet in stock", body = Vec<PurchaseDto>)),
+    tag = "shopping",
+    security(("basic" = []))
+)]
+async fn put_away(
+    State(state): State<AppState>,
+    principal: Principal,
+) -> ApiResult<Json<Vec<PurchaseDto>>> {
+    principal.require(Permission::ShoppingRead)?;
+    let waiting = state.shopping.awaiting_put_away().await?;
+    Ok(Json(waiting.into_iter().map(Into::into).collect()))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/shopping/put-away/{id}",
+    params(
+        ("id" = Uuid, Path, description = "The purchase"),
+        ("If-Match" = String, Header, description = "The revision you loaded"),
+    ),
+    request_body = PutAwayRequest,
+    operation_id = "putPurchaseAway",
+    responses(
+        (status = 200, description = "It is in stock", body = PurchaseDto),
+        (status = 404, description = "No such purchase", body = crate::error::Problem),
+        (status = 409, description = "It cannot be put away", body = crate::error::Problem),
+    ),
+    tag = "shopping",
+    security(("basic" = []))
+)]
+async fn put_one_away(
+    State(state): State<AppState>,
+    principal: Principal,
+    Path(id): Path<Uuid>,
+    crate::http::IfMatch(expected): crate::http::IfMatch,
+    Json(body): Json<PutAwayRequest>,
+) -> ApiResult<crate::http::Tagged<PurchaseDto>> {
+    principal.require(Permission::ShoppingWrite)?;
+    let purchase = state
+        .shopping
+        .put_away(
+            purchase_id(id),
+            expected,
+            body.product_id.into(),
+            body.quantity.into(),
+            principal.user_id,
+        )
+        .await?;
+    Ok(crate::http::Tagged(purchase.revision, purchase.into()))
 }
 
 #[utoipa::path(

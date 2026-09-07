@@ -1,6 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, screen, within } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { shoppingList } from './fixtures';
 import { ShoppingPage } from './ShoppingPage';
@@ -18,13 +17,14 @@ vi.mock('@tanstack/react-router', () => ({
   Link: ({ children }: { children: React.ReactNode }) => children,
 }));
 
+const putAway: unknown[] = [];
+
 vi.mock('../../api/queries', () => ({
   useShoppingList: () => ({ isLoading: false, isError: false, data: shoppingList }),
-  useSkipShoppingOpportunity: () => ({ isPending: false, mutate: vi.fn() }),
-  useProducts: () => ({ data: { items: [], total: 0 } }),
-  useRecordPurchase: () => ({ isPending: false, mutateAsync: vi.fn() }),
-  useUpdatePurchase: () => ({ isPending: false, mutateAsync: vi.fn() }),
-  useUnits: () => ({ data: ['g', 'ml'] }),
+  usePendingPutAway: () => ({ data: putAway }),
+  useMoveShoppingOpportunity: () => ({ isPending: false, mutateAsync: vi.fn() }),
+  useSkipShoppingOpportunity: () => ({ isPending: false, mutateAsync: vi.fn() }),
+  useAddShoppingOpportunity: () => ({ isPending: false, mutateAsync: vi.fn() }),
 }));
 
 function renderPage() {
@@ -37,75 +37,60 @@ function renderPage() {
 }
 
 describe('ShoppingPage', () => {
-  it('groups items by supermarket section in aisle order', () => {
+  it('is a stack of trips, not a list of things to buy', () => {
     renderPage();
 
-    const headings = screen.getAllByText(/Fresh produce|Meat & fish|Dairy|Ambient/);
-    expect(headings.map((node) => node.textContent)).toEqual(['Dairy', 'Ambient']);
+    expect(screen.getByText('This Saturday')).toBeInTheDocument();
+    expect(screen.getByText(/Sat 12 Sept?/)).toBeInTheDocument();
+    expect(screen.queryByText('Whole Milk')).not.toBeInTheDocument();
+    expect(screen.queryByText('Butter')).not.toBeInTheDocument();
   });
 
-  it('keeps an urgent item inside its own section rather than a banner', () => {
+  it('counts what each trip is for', () => {
     renderPage();
 
-    const ambient = screen.getByText('Ambient').closest('div')!.parentElement!;
-    expect(within(ambient).getByText('Plain Flour')).toBeInTheDocument();
-    expect(screen.queryByText(/needed before your next shop/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/3 things/)).toBeInTheDocument();
+    expect(screen.getByText(/8 things/)).toBeInTheDocument();
   });
 
-  it('keeps the card face clear of explanations', () => {
+  it('leaves out a later trip with nothing to buy', () => {
     renderPage();
 
-    expect(screen.queryByText(/Use by at least/)).not.toBeInTheDocument();
-    expect(screen.queryByText('Maybe')).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Why' })).not.toBeInTheDocument();
+    expect(screen.queryByText(/Sat 19 Sept?/)).not.toBeInTheDocument();
   });
 
-  it('opens the pop-up with a labelled headline and two distinguishable dates', async () => {
-    const user = userEvent.setup();
+  it('offers a shop for anything no trip can reach in time', () => {
     renderPage();
 
-    await user.click(screen.getByText('Whole Milk'));
-
-    const dialog = screen.getByRole('dialog');
-    expect(within(dialog).getByText('Still to buy')).toBeInTheDocument();
-    expect(within(dialog).getByText('600 ml')).toBeInTheDocument();
-    expect(within(dialog).getByText('Needed by').parentElement).toHaveTextContent(
-      /Needed byMon 7 Sept?/,
-    );
-    expect(within(dialog).getByText('Must keep until').parentElement).toHaveTextContent(
-      /Must keep untilWed 9 Sept?/,
-    );
+    expect(screen.getByText('No shop in time')).toBeInTheDocument();
+    expect(screen.getByText(/Plain Flour is needed/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Add a shop' })).toBeInTheDocument();
   });
 
-  it('lists the meals behind it', async () => {
-    const user = userEvent.setup();
+  it('says none of the internal vocabulary out loud', () => {
     renderPage();
 
-    await user.click(screen.getByText('Whole Milk'));
-
-    const dialog = screen.getByRole('dialog');
-    expect(within(dialog).getByText('What needs it')).toBeInTheDocument();
-    expect(within(dialog).getAllByText('Breakfast')).toHaveLength(2);
-    expect(within(dialog).getAllByText('300 ml')).toHaveLength(2);
+    for (const leak of [/unassigned/i, /assumption/i, /incompatible/i, /pending/i]) {
+      expect(screen.queryByText(leak)).not.toBeInTheDocument();
+    }
   });
 
-  it('flags why something is needed sooner', async () => {
-    const user = userEvent.setup();
+  it('keeps put away out of the way when there is nothing waiting', () => {
     renderPage();
 
-    await user.click(screen.getByText('Plain Flour'));
-
-    const alert = within(screen.getByRole('dialog')).getByRole('alert');
-    expect(alert).toHaveTextContent('Needed before your next shop');
+    expect(screen.queryByText('Put the shopping away')).not.toBeInTheDocument();
   });
+});
 
-  it('offers no way to buy from planning mode', async () => {
-    const user = userEvent.setup();
+describe('ShoppingPage with shopping to unpack', () => {
+  it('leads with put away', () => {
+    putAway.push({ id: 'p1' }, { id: 'p2' }, { id: 'p3' });
     renderPage();
 
-    await user.click(screen.getByText('Whole Milk'));
-
-    const dialog = screen.getByRole('dialog');
-    expect(within(dialog).queryByRole('button', { name: 'Add another' })).toBeNull();
+    const heading = screen.getByText('Put the shopping away');
+    expect(heading).toBeInTheDocument();
+    expect(within(heading.parentElement!).getByText('3 things, still in the bags'))
+      .toBeInTheDocument();
+    putAway.length = 0;
   });
 });

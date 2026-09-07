@@ -155,4 +155,6 @@ export const shoppingKeys = {
   opportunities: () => [...shopping, 'opportunities'] as const,
   cadence: () => [...shopping, 'cadence'] as const,
   purchases: (state?: string) => [...shopping, 'purchases', state] as const,
+  items: () => [...shopping, 'items'] as const,
+  putAway: () => [...shopping, 'put-away'] as const,
 };

@@ -1,125 +1,110 @@
-import Alert from '@mui/material/Alert';
+import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
-import Divider from '@mui/material/Divider';
-import MenuItem from '@mui/material/MenuItem';
 import Paper from '@mui/material/Paper';
 import Stack from '@mui/material/Stack';
-import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
 import { Link } from '@tanstack/react-router';
-import { useMemo, useState } from 'react';
-import { useShoppingList } from '../../api/queries';
+import { useState } from 'react';
+import { usePendingPutAway, useShoppingList } from '../../api/queries';
 import { PageHeader } from '../../components/PageHeader';
-import { EmptyState, ErrorState, Loading } from '../../components/States';
-import { formatDayLabel, formatFullDate } from '../meal-plan/date';
-import { groupBySection } from './grouping';
-import { OpportunitiesPanel } from './OpportunitiesPanel';
-import { RequirementCard } from './RequirementCard';
-import { RequirementDialog } from './RequirementDialog';
-import { purchasesOf, requirementKey } from './requirementKey';
-import { sectionLabel } from './sections';
+import { ErrorState, Loading } from '../../components/States';
+import { todayIso } from '../meal-plan/date';
+import { ChangeShopDialog } from './ChangeShopDialog';
+import { GapCard } from './GapCard';
+import { TripCard } from './TripCard';
 
 export function ShoppingPage() {
-  const [focus, setFocus] = useState<string | undefined>(undefined);
-  const [showingKey, setShowingKey] = useState<string | null>(null);
-  const list = useShoppingList(focus);
-
-  const grouped = useMemo(() => groupBySection(list.data?.requirements ?? []), [list.data]);
+  const list = useShoppingList(undefined);
+  const waiting = usePendingPutAway();
+  const [changing, setChanging] = useState<string | null>(null);
 
   if (list.isLoading) return <Loading label="Working out what you need" />;
   if (list.isError) return <ErrorState error={list.error} onRetry={() => list.refetch()} />;
 
   const data = list.data!;
-  const showing =
-    data.requirements.find((requirement) => requirementKey(requirement) === showingKey) ?? null;
-  const nextShopAfter = data.opportunities.find(
-    (opportunity) => opportunity.date > (data.focus ?? ''),
-  )?.date;
+  const unpacked = waiting.data ?? [];
+  const countFor = (date: string) =>
+    data.counts.find((count) => count.date === date)?.items ?? 0;
+
+  const [next, ...rest] = data.opportunities;
+  const later = rest.filter((opportunity) => countFor(opportunity.date) > 0);
+  const soonest = data.requirements.find(
+    (requirement) => requirement.assignment.kind === 'needs_earlier_opportunity',
+  );
+
+  const sections: string[] = [];
+  for (const requirement of data.requirements) {
+    if (!sections.includes(requirement.section)) sections.push(requirement.section);
+  }
 
   return (
     <>
-      <PageHeader
-        title="Shopping"
-        subtitle={
-          data.focus
-            ? `For your shop on ${formatFullDate(data.focus)}.`
-            : 'Everything your plans need that your stock cannot cover.'
-        }
-        actions={
-          <Stack direction="row" spacing={1.5} sx={{ alignItems: 'center' }}>
-            {data.opportunities.length > 1 ? (
-              <TextField
-                select
-                size="small"
-                label="Shop"
-                value={data.focus ?? ''}
-                onChange={(e) => setFocus(e.target.value || undefined)}
-                sx={{ minWidth: 180 }}
-              >
-                {data.opportunities.map((opportunity) => (
-                  <MenuItem key={opportunity.date} value={opportunity.date}>
-                    {formatDayLabel(opportunity.date)}
-                    {opportunity.state === 'one_off' ? ' (extra)' : ''}
-                  </MenuItem>
-                ))}
-              </TextField>
-            ) : null}
-            {data.requirements.length > 0 ? (
-              <Button component={Link} to="/shopping/shop" variant="contained">
-                Start shopping
-              </Button>
-            ) : null}
-          </Stack>
-        }
-      />
+      <PageHeader title="Shopping" />
 
-      {!data.cadence_configured && (
-        <Alert severity="info" sx={{ mb: 2.5 }}>
-          Tell us when you normally shop and we'll work out what to buy for each trip. Set it up
-          under Administration.
-        </Alert>
-      )}
+      <Stack spacing={2}>
+        {unpacked.length > 0 ? (
+          <Paper variant="outlined" sx={{ p: 2.5 }}>
+            <Stack
+              direction={{ xs: 'column', sm: 'row' }}
+              spacing={2}
+              sx={{ alignItems: { sm: 'center' } }}
+            >
+              <Box sx={{ flexGrow: 1, minWidth: 0 }}>
+                <Typography variant="h2">Put the shopping away</Typography>
+                <Typography variant="body2" color="text.secondary" className="numeral">
+                  {unpacked.length === 1
+                    ? '1 thing, still in the bags'
+                    : `${unpacked.length} things, still in the bags`}
+                </Typography>
+              </Box>
+              <Box sx={{ flexShrink: 0 }}>
+                <Link to="/shopping/put-away" className="app-link">
+                  <Button variant="contained" component="span">
+                    Put it away
+                  </Button>
+                </Link>
+              </Box>
+            </Stack>
+          </Paper>
+        ) : null}
 
-      <OpportunitiesPanel opportunities={data.opportunities} />
+        {next ? (
+          <TripCard
+            opportunity={next}
+            count={countFor(next.date)}
+            sections={sections}
+            imminent
+            onChange={() => setChanging(next.generated_for ?? next.date)}
+          />
+        ) : null}
 
-      {data.requirements.length === 0 ? (
-        <EmptyState
-          title="Nothing to buy"
-          description="Your stock covers everything you've planned."
-        />
-      ) : (
-        <Stack spacing={2.5}>
-          {grouped.map(([section, requirements]) => (
-            <Paper key={section} variant="outlined" sx={{ overflow: 'hidden' }}>
-              <Typography
-                variant="overline"
-                sx={{ px: 2, pt: 1.5, pb: 1, display: 'block', color: 'text.secondary' }}
-              >
-                {sectionLabel(section as never)}
-              </Typography>
-              <Divider />
-              {requirements.map((requirement, index) => (
-                <div key={requirementKey(requirement)}>
-                  {index > 0 ? <Divider /> : null}
-                  <RequirementCard
-                    requirement={requirement}
-                    nextShopAfter={nextShopAfter}
-                    bought={purchasesOf(requirement).length > 0}
-                    onOpen={() => setShowingKey(requirementKey(requirement))}
-                  />
-                </div>
-              ))}
-            </Paper>
-          ))}
-        </Stack>
-      )}
+        {soonest ? <GapCard requirement={soonest} /> : null}
 
-      <RequirementDialog
-        open={showing != null}
-        requirement={showing}
-        opportunityDate={data.focus}
-        onClose={() => setShowingKey(null)}
-      />
+        {later.map((opportunity) => (
+          <TripCard
+            key={opportunity.date}
+            opportunity={opportunity}
+            count={countFor(opportunity.date)}
+            onChange={() => setChanging(opportunity.generated_for ?? opportunity.date)}
+          />
+        ))}
+
+        {data.opportunities.length === 0 ? (
+          <Typography variant="body2" color="text.secondary">
+            {data.cadence_configured
+              ? 'No shops coming up.'
+              : 'Tell us when you shop and we will work out what to buy for each trip.'}
+          </Typography>
+        ) : null}
+
+        <Box>
+          <Button component={Link} to="/administration/shopping" sx={{ ml: -1.5 }}>
+            {data.cadence_configured ? 'Change when you shop' : 'Set up your shopping days'}
+          </Button>
+        </Box>
+      </Stack>
+
+      <ChangeShopDialog date={changing} earliest={todayIso()} onClose={() => setChanging(null)} />
     </>
   );
 }

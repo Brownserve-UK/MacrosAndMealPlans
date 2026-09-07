@@ -1092,6 +1092,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/shopping/put-away": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listPutAway"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/shopping/put-away/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["putPurchaseAway"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/shopping/requirements": {
         parameters: {
             query?: never;
@@ -2360,6 +2392,11 @@ export interface components {
         };
         /** @enum {string} */
         PurchaseStateDto: "pending" | "reconciled" | "cancelled";
+        PutAwayRequest: {
+            /** Format: uuid */
+            product_id: string;
+            quantity: components["schemas"]["QuantityDto"];
+        };
         QuantityDto: {
             /**
              * Format: double
@@ -2594,6 +2631,15 @@ export interface components {
             interval_weeks: number;
             usual_time?: string | null;
         };
+        ShopCountDto: {
+            /**
+             * Format: date
+             * @example 2026-09-05
+             */
+            date: string;
+            /** Format: int64 */
+            items: number;
+        };
         ShoppingCadenceDto: {
             /**
              * Format: date
@@ -2622,6 +2668,7 @@ export interface components {
         };
         ShoppingListDto: {
             cadence_configured: boolean;
+            counts: components["schemas"]["ShopCountDto"][];
             /** Format: date */
             focus?: string | null;
             manual: components["schemas"]["ShoppingListItemDto"][];
@@ -6456,6 +6503,74 @@ export interface operations {
             };
             /** @description The date could not be read */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    listPutAway: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Bought, but not yet in stock */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PurchaseDto"][];
+                };
+            };
+        };
+    };
+    putPurchaseAway: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The revision you loaded */
+                "If-Match": string;
+            };
+            path: {
+                /** @description The purchase */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PutAwayRequest"];
+            };
+        };
+        responses: {
+            /** @description It is in stock */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PurchaseDto"];
+                };
+            };
+            /** @description No such purchase */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description It cannot be put away */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
