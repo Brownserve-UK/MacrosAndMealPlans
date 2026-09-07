@@ -47,6 +47,7 @@ vi.mock('../../api/queries', () => ({
   useHouseholdPlannerWeek: () => ({ data: week, isLoading: false, isError: false, refetch: vi.fn() }),
   useDeleteMealPlanEntry: () => ({ mutateAsync: mocks.remove, isPending: false }),
   useCooks: () => ({ data: [] }),
+  useStock: () => ({ data: { items: [] } }),
 }));
 vi.mock('./MealEditorDialog', () => ({ MealEditorDialog: () => <div>Meal editor</div> }));
 vi.mock('./MealOutcomeDialog', () => ({ MealOutcomeDialog: () => <div>Outcome review</div> }));

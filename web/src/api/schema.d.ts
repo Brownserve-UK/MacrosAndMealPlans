@@ -1710,6 +1710,9 @@ export interface components {
         } | {
             /** Format: uuid */
             recipe_id: string;
+        } | {
+            /** Format: uuid */
+            prepared_batch_id: string;
         };
         LinkAccountRequest: {
             /** Format: uuid */
@@ -1774,6 +1777,11 @@ export interface components {
             item_kind: "recipe";
             /** Format: uuid */
             recipe_id: string;
+        } | {
+            /** @enum {string} */
+            item_kind: "dish";
+            /** Format: uuid */
+            prepared_batch_id: string;
         };
         MealItemSourceDto: {
             /** Format: uuid */

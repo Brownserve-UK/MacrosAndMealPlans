@@ -18,7 +18,7 @@ use crate::ports::{MealPlanComponentUpdate, SnapshotOp, StockDeduction, StockRel
 
 use super::catalogue::ItemCatalogue;
 use super::view::MealPlanEntryView;
-use super::{MealPlanService, PRODUCT, RECIPE, ensure_due};
+use super::{DISH, MealPlanService, PRODUCT, RECIPE, ensure_due};
 use crate::services::revision::{commit_outcome, require_revision};
 use crate::services::stock_effects::{
     StockAffected, component_release, name_outcomes, portion_deduction, product_deduction,
@@ -821,6 +821,21 @@ impl MealPlanService {
                     subject,
                 )])
             }
+            MealItemRef::Dish { prepared_batch_id } => {
+                let ConsumedAmount::Servings(servings) = *eaten_amount else {
+                    return Ok(Vec::new());
+                };
+                let name = catalogue.name_of(item);
+                Ok(vec![portion_deduction(
+                    component_id.as_uuid(),
+                    eater_id,
+                    prepared_batch_id,
+                    Quantity::new(servings, Unit::Serving),
+                    stock_source_label(entry, &name),
+                    Some(actor),
+                    subject,
+                )])
+            }
         }
     }
 
@@ -871,6 +886,20 @@ impl MealPlanService {
                     })
                     .collect()
             }
+            MealItemRef::Dish { prepared_batch_id } => {
+                let ConsumedAmount::Servings(servings) = record.amount else {
+                    return Vec::new();
+                };
+                vec![portion_deduction(
+                    record.id.as_uuid(),
+                    record.member_id.as_uuid(),
+                    prepared_batch_id,
+                    Quantity::new(servings, Unit::Serving),
+                    catalogue.name_of(record.item),
+                    record.recorded_by,
+                    Some(record.member_id),
+                )]
+            }
         }
     }
 
@@ -888,6 +917,12 @@ impl MealPlanService {
                         .get(recipe_id)
                         .await?
                         .ok_or_else(|| CoreError::not_found(RECIPE, recipe_id))?;
+                }
+                MealItemRef::Dish { prepared_batch_id } => {
+                    self.batches
+                        .get(prepared_batch_id)
+                        .await?
+                        .ok_or_else(|| CoreError::not_found(DISH, prepared_batch_id))?;
                 }
             }
         }
@@ -917,7 +952,9 @@ impl MealPlanService {
                     .unwrap_or_else(|| "food".to_owned());
                 (name, None)
             }
-            MealItemRef::Recipe { .. } => ("food".to_owned(), Some(subject.as_uuid())),
+            MealItemRef::Recipe { .. } | MealItemRef::Dish { .. } => {
+                ("food".to_owned(), Some(subject.as_uuid()))
+            }
         };
         Some(component_release(
             component_id.as_uuid(),

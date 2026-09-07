@@ -30,13 +30,13 @@ import { useAuth } from '../../auth/AuthProvider';
 import { FormDialog } from '../../components/FormDialog';
 import { displayUnit } from '../../components/UnitSelect';
 import { parseIsoDate } from './date';
-import { FoodSearch, type FoodChoice } from './FoodSearch';
+import { FoodSearch, type Dish, type FoodChoice } from './FoodSearch';
 
 type EditorMode = 'member' | 'household';
 
 type FoodDraft = {
   componentId: string;
-  itemKind: 'product' | 'recipe';
+  itemKind: 'product' | 'recipe' | 'dish';
   itemId: string;
   name: string;
   amount: Amount;
@@ -60,7 +60,11 @@ function initialFoods(meal: PlannerMeal | null): FoodDraft[] {
   return (meal?.foods ?? []).map((food) => ({
     componentId: food.id,
     itemKind: food.item_kind,
-    itemId: food.item_kind === 'product' ? food.product_id : food.recipe_id,
+    itemId: food.item_kind === 'product'
+      ? food.product_id
+      : food.item_kind === 'dish'
+        ? food.prepared_batch_id
+        : food.recipe_id,
     name: food.item_name,
     amount: food.amount,
   }));
@@ -158,6 +162,10 @@ export function MealEditorDialog({
     return food.itemKind === 'recipe' ? { kind: 'servings', value: forecast } : food.amount;
   }
 
+  function dishIds(): string[] {
+    return foods.filter((food) => food.itemKind === 'dish').map((food) => food.itemId);
+  }
+
   function memberBlockedReason(memberId: string): string | null {
     if (meal?.people.some((person) => person.member_id === memberId)) return null;
     const row = attendanceByMember.get(memberId);
@@ -196,8 +204,20 @@ export function MealEditorDialog({
     }]);
   }
 
+  function addDish(next: Dish) {
+    if (foods.some((food) => food.itemKind === 'dish' && food.itemId === next.preparedBatchId)) return;
+    setFoods((current) => [...current, {
+      componentId: crypto.randomUUID(),
+      itemKind: 'dish',
+      itemId: next.preparedBatchId,
+      name: next.name,
+      amount: { kind: 'servings', value: Math.min(Math.max(forecast, 1), next.servings) },
+    }]);
+  }
+
   function addFood(choice: FoodChoice) {
     if (choice.kind === 'product') addProduct(choice.product);
+    else if (choice.kind === 'dish') addDish(choice.dish);
     else addRecipe(choice.recipe);
   }
 
@@ -230,7 +250,9 @@ export function MealEditorDialog({
       id: food.componentId,
       ...(food.itemKind === 'product'
         ? { item_kind: 'product' as const, product_id: food.itemId }
-        : { item_kind: 'recipe' as const, recipe_id: food.itemId }),
+        : food.itemKind === 'dish'
+          ? { item_kind: 'dish' as const, prepared_batch_id: food.itemId }
+          : { item_kind: 'recipe' as const, recipe_id: food.itemId }),
       amount: servingsFor(food),
     }));
     const participants = household
@@ -304,6 +326,7 @@ export function MealEditorDialog({
                 onPick={addFood}
                 excludeProductIds={foods.filter((food) => food.itemKind === 'product').map((food) => food.itemId)}
                 excludeRecipeIds={foods.filter((food) => food.itemKind === 'recipe').map((food) => food.itemId)}
+                excludeDishIds={dishIds()}
               />
               {foods.map((food) => (
                 <Box key={food.componentId} sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2, p: 1.5 }}>

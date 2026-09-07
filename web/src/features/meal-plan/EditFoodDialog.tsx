@@ -39,12 +39,12 @@ function amountToDraft(item: MealItem): AmountDraft {
     : { kind: amount.kind, value: String(amount.value), unit: 'g' };
 }
 
-type ItemRef = { product_id: string } | { recipe_id: string };
+type ItemRef = { product_id: string } | { recipe_id: string } | { prepared_batch_id: string };
 
 function componentItem(component: MealPlanEntry['components'][number]): ItemRef {
-  return component.item_kind === 'recipe'
-    ? { recipe_id: component.recipe_id }
-    : { product_id: component.product_id };
+  if (component.item_kind === 'recipe') return { recipe_id: component.recipe_id };
+  if (component.item_kind === 'dish') return { prepared_batch_id: component.prepared_batch_id };
+  return { product_id: component.product_id };
 }
 
 export function EditFoodDialog({

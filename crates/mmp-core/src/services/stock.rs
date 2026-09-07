@@ -11,7 +11,7 @@ use crate::domain::{
     DeductionPlan, DemandClaim, DemandGap, DemandSubject, HouseholdMemberId,
     IngredientAvailability, IngredientId, MealItemRef, MissingStock, NewStockEvent, NewStockItem,
     ProductAvailability, ProductId, Quantity, Recipe, RecipeId, RecipeRequirement, Revision,
-    StockEvent, StockEventKind, StockItem, StockItemId, StockItemPatch, StockLevel, UserId,
+    StockEvent, StockEventKind, StockItem, StockItemId, StockItemPatch, StockLevel, Unit, UserId,
     apply_take, plan_deduction,
 };
 use crate::error::{CoreError, Result};
@@ -645,6 +645,16 @@ impl StockService {
                         for gap in expansion.loose_gaps {
                             demand.note_loose(gap);
                         }
+                    }
+                    MealItemRef::Dish { prepared_batch_id } => {
+                        let ConsumedAmount::Servings(servings) = wanted else {
+                            demand.note_loose(DemandGap::AmountUnresolvable);
+                            continue;
+                        };
+                        let subject = DemandSubject::prepared_portion(prepared_batch_id);
+                        let quantity = Quantity::new(servings, Unit::Serving);
+                        demand.add(subject, quantity);
+                        demand.note_claim(entry, subject, quantity, None, assumed);
                     }
                 }
             }

@@ -1,8 +1,9 @@
 use std::collections::HashMap;
 
 use crate::domain::{
-    ConsumedAmount, ConsumedNutrition, MealItemRef, Product, ProductId, Recipe, RecipeId,
-    RecipeRequirement, nutrition_for, recipe_nutrition, recipe_nutrition_for,
+    ConsumedAmount, ConsumedNutrition, MealItemRef, PreparedBatch, PreparedBatchId, Product,
+    ProductId, Recipe, RecipeId, RecipeRequirement, nutrition_for, recipe_nutrition,
+    recipe_nutrition_for,
 };
 use crate::error::Result;
 
@@ -25,6 +26,7 @@ pub(super) struct ItemCatalogue {
     pub(super) products: HashMap<ProductId, Product>,
     pub(super) recipes: HashMap<RecipeId, RecipeCard>,
     pub(super) definitions: HashMap<RecipeId, Recipe>,
+    pub(super) dishes: HashMap<PreparedBatchId, PreparedBatch>,
     pub(super) fulfilments: RecipeFulfilments,
 }
 
@@ -41,6 +43,11 @@ impl ItemCatalogue {
                 .get(&recipe_id)
                 .map(|card| card.name.clone())
                 .unwrap_or_else(|| "Missing recipe".to_owned()),
+            MealItemRef::Dish { prepared_batch_id } => self
+                .dishes
+                .get(&prepared_batch_id)
+                .map(|batch| batch.item_name.clone())
+                .unwrap_or_else(|| "Missing cooked food".to_owned()),
         }
     }
 
@@ -84,6 +91,18 @@ impl ItemCatalogue {
                     resolvable: false,
                 },
             },
+            MealItemRef::Dish { prepared_batch_id } => match self.dishes.get(&prepared_batch_id) {
+                Some(batch) => ResolvedItem {
+                    name: batch.item_name.clone(),
+                    nutrition: recipe_nutrition_for(&batch.nutrition, amount),
+                    resolvable: matches!(amount, ConsumedAmount::Servings(_)),
+                },
+                None => ResolvedItem {
+                    name: "Missing cooked food".to_owned(),
+                    nutrition: ConsumedNutrition::unknown(),
+                    resolvable: false,
+                },
+            },
         }
     }
 }
@@ -110,10 +129,12 @@ impl MealPlanService {
     ) -> Result<ItemCatalogue> {
         let mut product_ids: Vec<ProductId> = Vec::new();
         let mut recipe_ids: Vec<RecipeId> = Vec::new();
+        let mut dish_ids: Vec<PreparedBatchId> = Vec::new();
         for item in items {
             match item {
                 MealItemRef::Product { product_id } => product_ids.push(product_id),
                 MealItemRef::Recipe { recipe_id } => recipe_ids.push(recipe_id),
+                MealItemRef::Dish { prepared_batch_id } => dish_ids.push(prepared_batch_id),
             }
         }
 
@@ -145,10 +166,19 @@ impl MealPlanService {
             .map(|recipe| (recipe.id, recipe))
             .collect();
 
+        let dishes: HashMap<PreparedBatchId, PreparedBatch> = self
+            .batches
+            .get_many(&dish_ids)
+            .await?
+            .into_iter()
+            .map(|batch| (batch.id, batch))
+            .collect();
+
         Ok(ItemCatalogue {
             products,
             recipes: cards,
             definitions,
+            dishes,
             fulfilments,
         })
     }

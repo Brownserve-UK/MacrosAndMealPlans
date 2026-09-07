@@ -92,6 +92,21 @@ impl Harness {
             .id
     }
 
+    async fn portion_for_batch(
+        &self,
+        batch_id: crate::domain::PreparedBatchId,
+    ) -> crate::domain::StockItemId {
+        self.stock
+            .list(&crate::ports::StockQuery::default())
+            .await
+            .unwrap()
+            .items
+            .into_iter()
+            .find(|item| item.prepared_batch_id() == Some(batch_id))
+            .expect("the batch should hold a portion")
+            .id
+    }
+
     async fn stock_grams(&self, id: crate::domain::StockItemId) -> Decimal {
         match self.stock.get(id).await.unwrap().unwrap().level {
             StockLevel::Exact { quantity } => quantity.amount,
@@ -3344,6 +3359,67 @@ async fn cooking_a_recipe_consumes_raw_stock_and_leaves_the_uneaten_servings_as_
         h.stock_servings(portion).await,
         Decimal::new(3, 0),
         "one of the four cooked servings was eaten, three remain as leftovers"
+    );
+}
+
+#[tokio::test]
+async fn a_dish_can_be_planned_and_eaten_without_cooking_the_recipe_again() {
+    let h = harness();
+    let rice_id = crate::domain::IngredientId::new();
+    let tesco = mapped_product("Tesco Basmati", rice_id);
+    h.products.seed(tesco.clone());
+    let rice = h.seed_stock_grams(tesco.id, 2000);
+
+    let curry = seed_recipe(&h, "Curry", 4, vec![ingredient_line(rice_id, 400)]).await;
+    let cooked = h
+        .preparation
+        .record(crate::services::RecordPreparation {
+            recipe_id: curry.id,
+            source: crate::domain::PreparationSource::Standalone,
+            servings_produced: Decimal::new(4, 0),
+            placements: vec![crate::domain::PortionPlacement::new(
+                StorageLocation::Frozen,
+                Decimal::new(4, 0),
+            )],
+            prepared_at: None,
+            actor: h.actor_id,
+        })
+        .await
+        .unwrap()
+        .into_value();
+
+    let raw_after_cooking = h.stock_grams(rice).await;
+
+    let entry = planned(
+        &h,
+        vec![NewMealPlanComponent {
+            id: None,
+            item: crate::domain::MealItemRef::dish(cooked.id),
+            amount: ConsumedAmount::Servings(Decimal::ONE),
+        }],
+    )
+    .await;
+    let component = entry.components[0].component.clone();
+    assert_eq!(entry.components[0].item_name, "Curry");
+
+    confirm_component(
+        &h,
+        entry.entry.id,
+        component.id,
+        component.revision,
+        ConsumedAmount::Servings(Decimal::ONE),
+    )
+    .await;
+
+    assert_eq!(
+        h.stock_grams(rice).await,
+        raw_after_cooking,
+        "eating a dish must not shop for the recipe's ingredients again"
+    );
+    assert_eq!(
+        h.stock_servings(h.portion_for_batch(cooked.id).await).await,
+        Decimal::new(3, 0),
+        "one of the four frozen servings was eaten"
     );
 }
 

@@ -6,8 +6,9 @@ use super::revision::{commit_outcome, require_revision};
 use crate::domain::{
     ConsumedAmount, ConsumedNutrition, ConsumptionRecord, ConsumptionRecordId,
     ConsumptionRecordPatch, HouseholdMemberId, MealItemRef, NewConsumptionRecord, NutritionFacts,
-    NutritionQuality, Product, ProductId, Recipe, RecipeId, RecipeRequirement, Revision,
-    StockEffectSource, nutrition_for, recipe_nutrition, recipe_nutrition_for, sum_nutrition,
+    NutritionQuality, PreparedBatch, Product, ProductId, Quantity, Recipe, RecipeId,
+    RecipeRequirement, Revision, StockEffectSource, Unit, nutrition_for, recipe_nutrition,
+    recipe_nutrition_for, sum_nutrition,
 };
 use crate::error::{CoreError, Result, ValidationErrors};
 use crate::ports::{
@@ -17,12 +18,14 @@ use crate::ports::{
 
 use super::fulfilment::{RecipeFulfilments, expand_recipe};
 use super::stock_effects::{
-    StockAffected, name_outcomes, record_deduction, record_release, requirement_deduction,
+    StockAffected, name_outcomes, portion_deduction, record_deduction, record_release,
+    requirement_deduction,
 };
 
 const CONSUMPTION_RECORD: &str = "consumption record";
 const PRODUCT: &str = "product";
 const RECIPE: &str = "recipe";
+const DISH: &str = "cooked food";
 
 #[derive(Debug, Clone)]
 pub struct DayTotals {
@@ -154,6 +157,21 @@ impl ConsumptionService {
                         )
                     })
                     .collect())
+            }
+            MealItemRef::Dish { prepared_batch_id } => {
+                let batch = self.get_dish(prepared_batch_id).await?;
+                let ConsumedAmount::Servings(servings) = record.amount else {
+                    return Ok(Vec::new());
+                };
+                Ok(vec![portion_deduction(
+                    record.id.as_uuid(),
+                    record.member_id.as_uuid(),
+                    prepared_batch_id,
+                    Quantity::new(servings, Unit::Serving),
+                    format!("Logged food \u{2014} {}", batch.item_name),
+                    record.recorded_by,
+                    Some(record.member_id),
+                )])
             }
         }
     }
@@ -296,6 +314,9 @@ impl ConsumptionService {
         let name = match record.item {
             MealItemRef::Product { product_id } => self.get_product(product_id).await?.name,
             MealItemRef::Recipe { recipe_id } => self.get_recipe(recipe_id, None).await?.name,
+            MealItemRef::Dish { prepared_batch_id } => {
+                self.get_dish(prepared_batch_id).await?.item_name
+            }
         };
         Ok(format!("Logged food \u{2014} {name}"))
     }
@@ -305,6 +326,13 @@ impl ConsumptionService {
             .get(id)
             .await?
             .ok_or_else(|| CoreError::not_found(PRODUCT, id))
+    }
+
+    async fn get_dish(&self, id: crate::domain::PreparedBatchId) -> Result<PreparedBatch> {
+        self.batches
+            .get(id)
+            .await?
+            .ok_or_else(|| CoreError::not_found(DISH, id))
     }
 
     async fn get_recipe(
@@ -329,6 +357,12 @@ impl ConsumptionService {
                 Some(recipe) => Ok(recipe.name),
                 None => Ok("Missing recipe".to_owned()),
             },
+            MealItemRef::Dish { prepared_batch_id } => {
+                match self.batches.get(prepared_batch_id).await? {
+                    Some(batch) => Ok(batch.item_name),
+                    None => Ok("Missing cooked food".to_owned()),
+                }
+            }
         }
     }
 
@@ -370,6 +404,15 @@ impl ConsumptionService {
                     recipe.servings,
                 );
                 Ok(recipe_nutrition_for(&per_serving, amount))
+            }
+            MealItemRef::Dish { prepared_batch_id } => {
+                let batch = self.get_dish(prepared_batch_id).await?;
+                if !matches!(amount, ConsumedAmount::Servings(_)) {
+                    let mut errors = ValidationErrors::new();
+                    errors.push("amount", "Cooked food is measured in servings");
+                    return Err(errors.into());
+                }
+                Ok(recipe_nutrition_for(&batch.nutrition, amount))
             }
         }
     }

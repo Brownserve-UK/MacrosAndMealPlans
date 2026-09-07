@@ -20,15 +20,18 @@ import {
   validateAmountDraft,
   type AmountDraft,
 } from './AmountFields';
-import { FoodSearch, type FoodChoice } from './FoodSearch';
+import { FoodSearch, type Dish, type FoodChoice } from './FoodSearch';
 import { formatAmount } from './format';
 
 type Picked =
   | { key: string; kind: 'product'; product: Product; amount: AmountDraft }
-  | { key: string; kind: 'recipe'; recipe: RecipeSummary; servings: string };
+  | { key: string; kind: 'recipe'; recipe: RecipeSummary; servings: string }
+  | { key: string; kind: 'dish'; dish: Dish; servings: string };
 
 function nameOf(picked: Picked) {
-  return picked.kind === 'product' ? picked.product.name : picked.recipe.name;
+  if (picked.kind === 'product') return picked.product.name;
+  if (picked.kind === 'dish') return picked.dish.name;
+  return picked.recipe.name;
 }
 
 export function AteSomethingElseDialog({
@@ -56,7 +59,9 @@ export function AteSomethingElseDialog({
       ...current,
       choice.kind === 'product'
         ? { key, kind: 'product', product: choice.product, amount: amountDraftFrom(choice.product) }
-        : { key, kind: 'recipe', recipe: choice.recipe, servings: '1' },
+        : choice.kind === 'dish'
+          ? { key, kind: 'dish', dish: choice.dish, servings: '1' }
+          : { key, kind: 'recipe', recipe: choice.recipe, servings: '1' },
     ]);
   }
 
@@ -82,15 +87,24 @@ export function AteSomethingElseDialog({
         replacements.push({ item_kind: 'product', product_id: entry.product.id, amount });
       } else {
         const servings = Number(entry.servings);
+        const name = entry.kind === 'dish' ? entry.dish.name : entry.recipe.name;
         if (!entry.servings.trim() || Number.isNaN(servings) || servings <= 0) {
-          setFailure(`Check the servings for ${entry.recipe.name}.`);
+          setFailure(`Check the servings for ${name}.`);
           return;
         }
-        replacements.push({
-          item_kind: 'recipe',
-          recipe_id: entry.recipe.id,
-          amount: { kind: 'servings', value: servings },
-        });
+        replacements.push(
+          entry.kind === 'dish'
+            ? {
+                item_kind: 'dish',
+                prepared_batch_id: entry.dish.preparedBatchId,
+                amount: { kind: 'servings', value: servings },
+              }
+            : {
+                item_kind: 'recipe',
+                recipe_id: entry.recipe.id,
+                amount: { kind: 'servings', value: servings },
+              },
+        );
       }
     }
 

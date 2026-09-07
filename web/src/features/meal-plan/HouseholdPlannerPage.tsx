@@ -17,6 +17,7 @@ import { ErrorState, Loading } from '../../components/States';
 import { addDays, defaultDayFor, parseIsoDate, startOfWeekIso, todayIso } from './date';
 import { MealRow, plannerMealRow, type MealAction } from './MealRow';
 import { PlannerLens } from './PlannerLens';
+import { UseItUp } from './UseItUp';
 import { CookDialog } from './CookDialog';
 import { CookedSection } from './CookedSection';
 import { CookSomethingDialog } from './CookSomethingDialog';
@@ -144,6 +145,8 @@ export function HouseholdPlannerPage({ weekStart, day }: { weekStart: string; da
           onDayChange={goToDay}
         />
       ) : null}
+
+      <UseItUp today={todayIso()} />
 
       <Typography variant="h2" sx={{ mb: 2 }}>{fullDayLabel(activeDate)}</Typography>
       {week.isLoading ? <Loading label="Loading household planner" /> : null}

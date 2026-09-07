@@ -1181,3 +1181,37 @@ ALTER TABLE meal_plan_entry
 
 ALTER TABLE prepared_batch
     DROP CONSTRAINT prepared_batch_component_needs_entry;
+
+ALTER TABLE meal_plan_component
+    ADD COLUMN dish_batch_id UUID REFERENCES prepared_batch (id) ON DELETE RESTRICT;
+
+ALTER TABLE meal_plan_component
+    DROP CONSTRAINT meal_plan_component_item_kind_valid,
+    DROP CONSTRAINT meal_plan_component_item_ref_exclusive;
+
+ALTER TABLE meal_plan_component
+    ADD CONSTRAINT meal_plan_component_item_kind_valid
+        CHECK (item_kind IN ('product', 'recipe', 'dish')),
+    ADD CONSTRAINT meal_plan_component_item_ref_exclusive
+        CHECK (
+            num_nonnulls(product_id, recipe_id, dish_batch_id) = 1
+            AND (item_kind = 'product') = (product_id IS NOT NULL)
+            AND (item_kind = 'dish') = (dish_batch_id IS NOT NULL)
+        );
+
+ALTER TABLE consumption_record
+    ADD COLUMN dish_batch_id UUID REFERENCES prepared_batch (id) ON DELETE RESTRICT;
+
+ALTER TABLE consumption_record
+    DROP CONSTRAINT consumption_record_item_kind_valid,
+    DROP CONSTRAINT consumption_record_item_ref_exclusive;
+
+ALTER TABLE consumption_record
+    ADD CONSTRAINT consumption_record_item_kind_valid
+        CHECK (item_kind IN ('product', 'recipe', 'dish')),
+    ADD CONSTRAINT consumption_record_item_ref_exclusive
+        CHECK (
+            num_nonnulls(product_id, recipe_id, dish_batch_id) = 1
+            AND (item_kind = 'product') = (product_id IS NOT NULL)
+            AND (item_kind = 'dish') = (dish_batch_id IS NOT NULL)
+        );

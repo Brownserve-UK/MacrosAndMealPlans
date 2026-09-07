@@ -4,8 +4,8 @@ use std::sync::Arc;
 use time::{Date, Duration};
 
 use crate::domain::{
-    AssumptionRules, ConsumptionRecord, HouseholdMemberId, MEAL_PLAN_ENTRY, MealItemRef,
-    MealPlanEntry, MealPlanEntryId, NewMealPlanComponent, RecipeVisibility, UserId,
+    AssumptionRules, ConsumedAmount, ConsumptionRecord, HouseholdMemberId, MEAL_PLAN_ENTRY,
+    MealItemRef, MealPlanEntry, MealPlanEntryId, NewMealPlanComponent, RecipeVisibility, UserId,
 };
 use crate::error::{CoreError, Result, ValidationErrors};
 use crate::ports::{
@@ -27,6 +27,7 @@ pub use view::{
 
 const PRODUCT: &str = "product";
 const RECIPE: &str = "recipe";
+const DISH: &str = "cooked food";
 
 #[derive(Clone)]
 pub struct MealPlanService {
@@ -138,6 +139,18 @@ impl MealPlanService {
                         errors.push(
                             format!("components.{index}.item"),
                             "That recipe is archived",
+                        );
+                    }
+                }
+                MealItemRef::Dish { prepared_batch_id } => {
+                    self.batches
+                        .get(prepared_batch_id)
+                        .await?
+                        .ok_or_else(|| CoreError::not_found(DISH, prepared_batch_id))?;
+                    if !matches!(component.amount, ConsumedAmount::Servings(_)) {
+                        errors.push(
+                            format!("components.{index}.amount"),
+                            "Cooked food is measured in servings",
                         );
                     }
                 }
