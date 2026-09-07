@@ -562,6 +562,7 @@ impl ShoppingService {
         expected: Revision,
         product_id: ProductId,
         quantity: Quantity,
+        storage: Option<StorageLocation>,
         actor: UserId,
     ) -> Result<Purchase> {
         let Some(mut purchase) = self.purchases.get(id).await? else {
@@ -577,7 +578,7 @@ impl ShoppingService {
         purchase.product_id = Some(product_id);
         purchase.quantity = Some(quantity);
 
-        let Some(stock) = self.stock_for(&purchase, actor).await? else {
+        let Some(stock) = self.stock_for(&purchase, actor, storage).await? else {
             return Err(CoreError::conflict("Say which product and how much."));
         };
 
@@ -670,7 +671,7 @@ impl ShoppingService {
         let mut finished = FinishedShop::default();
         let mut ready: Vec<FinishedPurchase> = Vec::new();
         for mut purchase in pending {
-            let Some(stock) = self.stock_for(&purchase, actor).await? else {
+            let Some(stock) = self.stock_for(&purchase, actor, None).await? else {
                 finished.still_pending += 1;
                 continue;
             };
@@ -725,6 +726,7 @@ impl ShoppingService {
         &self,
         purchase: &Purchase,
         actor: UserId,
+        storage: Option<StorageLocation>,
     ) -> Result<Option<NewStockFromPurchase>> {
         let (Some(product_id), Some(quantity)) = (purchase.product_id, purchase.quantity) else {
             return Ok(None);
@@ -751,7 +753,7 @@ impl ShoppingService {
         let input = NewStockItem {
             subject: StockSubject::product(product_id),
             level: StockLevel::Exact { quantity },
-            storage_location: storage_for(section),
+            storage_location: storage.unwrap_or_else(|| storage_for(section)),
             source_date: None,
             usability_deadline: None,
             note: purchase.note.clone(),

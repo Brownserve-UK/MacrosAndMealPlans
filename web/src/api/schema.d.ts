@@ -2396,6 +2396,7 @@ export interface components {
             /** Format: uuid */
             product_id: string;
             quantity: components["schemas"]["QuantityDto"];
+            storage_location?: null | components["schemas"]["StorageLocationDto"];
         };
         QuantityDto: {
             /**

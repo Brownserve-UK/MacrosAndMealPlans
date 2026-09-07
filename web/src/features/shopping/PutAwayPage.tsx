@@ -8,7 +8,7 @@ import Typography from '@mui/material/Typography';
 import { useNavigate } from '@tanstack/react-router';
 import { useState } from 'react';
 import { ApiError } from '../../api/client';
-import type { Purchase, Unit } from '../../api/client';
+import type { Purchase, ShoppingSection, StorageLocation, Unit } from '../../api/client';
 import { useIngredients, usePendingPutAway, useProducts, usePutAway } from '../../api/queries';
 import { PageHeader } from '../../components/PageHeader';
 import { UnitSelect } from '../../components/UnitSelect';
@@ -57,25 +57,41 @@ export function PutAwayPage() {
   );
 }
 
+const STORAGE_LOCATIONS: { value: StorageLocation; label: string }[] = [
+  { value: 'ambient', label: 'Ambient' },
+  { value: 'chilled', label: 'Chilled' },
+  { value: 'frozen', label: 'Frozen' },
+];
+
+function storageFor(section: ShoppingSection | null | undefined): StorageLocation {
+  if (section === 'frozen') return 'frozen';
+  if (section === 'meat_fish' || section === 'dairy' || section === 'fresh_produce') return 'chilled';
+  return 'ambient';
+}
+
 function PutAwayRow({ purchase, named }: { purchase: Purchase; named: Map<string, string> }) {
   const update = usePutAway();
   const [search, setSearch] = useState('');
   const [productId, setProductId] = useState(purchase.product_id ?? '');
   const [amount, setAmount] = useState(purchase.quantity ? String(purchase.quantity.amount) : '');
   const [unit, setUnit] = useState<Unit | ''>(purchase.quantity?.unit ?? '');
+  const [storage, setStorage] = useState<StorageLocation | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   const [done, setDone] = useState(false);
 
+  const catalogue = useProducts({ per_page: 200 });
   const products = useProducts(
-    search.trim() ? { q: search.trim(), per_page: 8 } : { per_page: 20 },
+    search.trim() ? { q: search.trim(), per_page: 8 } : { per_page: 200 },
   );
   const choices = products.data?.items ?? [];
+  const known = (id: string) => (catalogue.data?.items ?? []).find((product) => product.id === id);
   const name =
     purchase.name ??
-    choices.find((product) => product.id === purchase.product_id)?.name ??
+    (purchase.product_id ? known(purchase.product_id)?.name : undefined) ??
     (purchase.ingredient_id ? named.get(purchase.ingredient_id) : undefined) ??
     'Something you bought';
 
+  const where = storage ?? storageFor(known(productId)?.shopping_section);
   const parsed = amount.trim() === '' ? null : Number(amount);
   const complete = productId !== '' && parsed != null && !Number.isNaN(parsed) && parsed > 0 && unit !== '';
 
@@ -87,6 +103,7 @@ function PutAwayRow({ purchase, named }: { purchase: Purchase; named: Map<string
         revision: purchase.revision,
         product_id: productId,
         quantity: { amount: parsed as number, unit: unit as Unit },
+        storage_location: where,
       });
       setDone(true);
     } catch (caught) {
@@ -108,13 +125,20 @@ function PutAwayRow({ purchase, named }: { purchase: Purchase; named: Map<string
             select
             label="Product"
             value={productId}
-            onChange={(e) => setProductId(e.target.value)}
+            onChange={(e) => {
+              setProductId(e.target.value);
+              const picked =
+                choices.find((product) => product.id === e.target.value) ?? known(e.target.value);
+              setStorage(storageFor(picked?.shopping_section));
+            }}
             sx={{ flexGrow: 1 }}
             slotProps={{
               select: {
                 MenuProps: { autoFocus: false },
                 renderValue: (value) =>
-                  choices.find((p) => p.id === value)?.name ?? 'Which product?',
+                  choices.find((p) => p.id === value)?.name ??
+                  known(value as string)?.name ??
+                  'Which product?',
               },
             }}
           >
@@ -143,6 +167,20 @@ function PutAwayRow({ purchase, named }: { purchase: Purchase; named: Map<string
             sx={{ width: { sm: 120 } }}
           />
           <UnitSelect label="Unit" value={unit} onChange={setUnit} sx={{ width: { sm: 140 } }} />
+
+          <TextField
+            select
+            label="Where"
+            value={where}
+            onChange={(event) => setStorage(event.target.value as StorageLocation)}
+            sx={{ width: { sm: 160 } }}
+          >
+            {STORAGE_LOCATIONS.map((location) => (
+              <MenuItem key={location.value} value={location.value}>
+                {location.label}
+              </MenuItem>
+            ))}
+          </TextField>
         </Stack>
 
         <Stack direction="row" spacing={1}>

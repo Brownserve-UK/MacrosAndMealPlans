@@ -27,8 +27,3 @@ const LABELS: Record<ShoppingSection, string> = {
 export function sectionLabel(section: ShoppingSection): string {
   return LABELS[section] ?? 'Other';
 }
-
-export function sectionRank(section: ShoppingSection): number {
-  const index = SECTION_ORDER.indexOf(section);
-  return index === -1 ? SECTION_ORDER.length : index;
-}

@@ -19,8 +19,21 @@ vi.mock('@tanstack/react-router', () => ({
   useParams: () => ({ date: '2026-09-05' }),
 }));
 
+const withManual = {
+  ...shoppingList,
+  manual: [
+    {
+      id: 'm1',
+      name: 'Onion Salt',
+      section: 'ambient' as const,
+      opportunity_date: '2026-09-05',
+      revision: 1,
+    },
+  ],
+};
+
 vi.mock('../../api/queries', () => ({
-  useShoppingList: () => ({ isLoading: false, isError: false, data: shoppingList }),
+  useShoppingList: () => ({ isLoading: false, isError: false, data: withManual }),
   useStartShop: () => ({ isPending: false, mutateAsync: vi.fn() }),
   useFinishShop: () => ({ isPending: false, mutateAsync: vi.fn() }),
   useRecordPurchase: () => ({ isPending: false, mutate: vi.fn(), mutateAsync: vi.fn() }),
@@ -46,6 +59,21 @@ describe('TripPage', () => {
 
     const headings = screen.getAllByText(/Fresh produce|Meat & fish|Dairy|Ambient/);
     expect(headings.map((node) => node.textContent)).toEqual(['Dairy', 'Ambient']);
+  });
+
+  it('puts what you added by hand in its own aisle', () => {
+    renderPage();
+
+    const ambient = screen.getByText('Ambient').closest('div');
+    expect(ambient).not.toBeNull();
+    expect(ambient!.textContent).toContain('Onion Salt');
+    expect(screen.queryByText('You added')).not.toBeInTheDocument();
+  });
+
+  it('lets you tick off what you added by hand', () => {
+    renderPage();
+
+    expect(screen.getByLabelText('Bought Onion Salt')).toBeInTheDocument();
   });
 
   it('shows the shelf life on the row itself', () => {

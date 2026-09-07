@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::fmt;
 use std::str::FromStr;
 
@@ -13,7 +14,8 @@ use mmp_core::domain::{
     NewRecipeInstruction, NewShoppingCadence, NewShoppingListItem, NewStockItem, NewUser,
     NewWeightGoal,
     NewWeightRecord, NutritionFacts, NutritionGoals, OutcomeActor, Patch, ProductId, Provenance,
-    Quantity, RecipeId, RecipePatch, RecipeRequirement, Role, ShoppingSection, SourceDate,
+    HouseholdSettingsPatch, Quantity, RecipeId, RecipePatch, RecipeRequirement, Role, SectionOrder,
+    ShoppingSection, SourceDate,
     SourceDateKind, StockLevel, StorageLocation, Unit, UsabilityDeadline, User, UserId,
     WeightObjective, WeightSource,
 StockSubject,
@@ -654,7 +656,37 @@ impl Loader<'_> {
         self.load_assumed_meals().await?;
         self.load_pooled_ingredient_demand().await?;
         self.load_batch_cook().await?;
-        self.load_shopping().await
+        self.load_shopping().await?;
+        self.load_planning_horizon().await
+    }
+
+    async fn load_planning_horizon(&mut self) -> anyhow::Result<()> {
+        let start = self.week_start + Duration::days(7);
+        let horizon = self.today + Duration::days(30);
+
+        let mut taken: HashSet<(Date, MealSlot)> = HashSet::new();
+        let mut week = start;
+        while week <= horizon {
+            let view = self.state.meal_plan.week(self.member.id, week).await?;
+            for day in view.days {
+                for entry in day.entries {
+                    taken.insert((entry.entry.planned_on, entry.entry.slot));
+                }
+            }
+            week += Duration::weeks(1);
+        }
+
+        let mut date = start;
+        while date <= horizon {
+            for slot in MealSlot::ALL {
+                if taken.contains(&(date, slot)) {
+                    continue;
+                }
+                self.ensure_meal(date, slot, Outcome::Planned).await?;
+            }
+            date += Duration::days(1);
+        }
+        Ok(())
     }
 
     async fn cook_planned_recipes(
@@ -1021,6 +1053,16 @@ impl Loader<'_> {
             self.report.stock_items_created += 1;
         }
 
+        self.ensure_product_meal(
+            self.today + Duration::days(12),
+            "large-pack-roast",
+            MealSlot::Dinner,
+            Time::from_hms(18, 30, 0).unwrap(),
+            "chicken-breast-large",
+            measured(900, Unit::Gram),
+        )
+        .await?;
+
         self.ensure_timed_snack(
             self.today + Duration::days(2),
             "paprika-rub",
@@ -1061,7 +1103,46 @@ impl Loader<'_> {
                     self.actor.id,
                 )
                 .await?;
-            self.report.shopping_seeded += 2;
+            self.state
+                .shopping
+                .record_purchase(
+                    NewPurchase {
+                        ingredient_id: Some(IngredientId::seeded("potato")),
+                        product_id: None,
+                        name: None,
+                        quantity: None,
+                        opportunity_date: Some(self.today - Duration::days(2)),
+                        note: Some("last Saturday's shop, never unpacked".to_owned()),
+                    },
+                    self.actor.id,
+                )
+                .await?;
+            self.report.shopping_seeded += 3;
+        }
+
+        let settings = self.state.household_settings.get().await?;
+        if settings.section_order == SectionOrder::default() {
+            self.state
+                .household_settings
+                .update(
+                    settings.revision,
+                    HouseholdSettingsPatch {
+                        section_order: Some(vec![
+                            ShoppingSection::MeatFish,
+                            ShoppingSection::FreshProduce,
+                            ShoppingSection::Dairy,
+                            ShoppingSection::Bakery,
+                            ShoppingSection::Ambient,
+                            ShoppingSection::Frozen,
+                            ShoppingSection::Drinks,
+                            ShoppingSection::Household,
+                            ShoppingSection::Other,
+                        ]),
+                        ..Default::default()
+                    },
+                )
+                .await?;
+            self.report.shopping_seeded += 1;
         }
 
         if self.state.shopping.list_items().await?.is_empty() {
@@ -1547,6 +1628,45 @@ impl Loader<'_> {
                 .await?;
         }
 
+        Ok(())
+    }
+
+    async fn ensure_product_meal(
+        &mut self,
+        date: Date,
+        key: &str,
+        slot: MealSlot,
+        planned_time: Time,
+        product_key: &str,
+        amount: ConsumedAmount,
+    ) -> anyhow::Result<()> {
+        let id = snack_id(date, key);
+        if !matches!(
+            self.state.meal_plan.get(id).await,
+            Err(CoreError::NotFound { .. })
+        ) {
+            return Ok(());
+        }
+        self.report.meals_created += 1;
+        self.state
+            .meal_plan
+            .create_backdated(NewMealPlanEntry {
+                id: Some(id),
+                scope: MealPlanScope::Member,
+                member_id: Some(self.member.id),
+                planned_on: date,
+                planned_time: Some(planned_time),
+                slot,
+                components: vec![NewMealPlanComponent {
+                    id: None,
+                    item: MealItemRef::product(product_id(product_key)),
+                    amount,
+                }],
+                participants: None,
+                guest_groups: Vec::new(),
+                actor_id: self.actor.id,
+            })
+            .await?;
         Ok(())
     }
 

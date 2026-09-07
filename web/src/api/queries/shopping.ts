@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ApiError, client, ifMatch, unwrap } from '../client';
-import type { ShoppingSection, Unit } from '../client';
+import type { ShoppingSection, StorageLocation, Unit } from '../client';
 import { stockKeys, shoppingKeys } from '../keys';
 
 export function useShoppingList(opportunityDate?: string, options?: { enabled?: boolean }) {
@@ -103,11 +103,16 @@ export function usePutAway() {
       revision: number;
       product_id: string;
       quantity: { amount: number; unit: Unit };
+      storage_location?: StorageLocation;
     }) =>
       unwrap(
         await client.POST('/api/v1/shopping/put-away/{id}', {
           params: { path: { id: input.id }, header: ifMatch(input.revision) },
-          body: { product_id: input.product_id, quantity: input.quantity },
+          body: {
+            product_id: input.product_id,
+            quantity: input.quantity,
+            storage_location: input.storage_location,
+          },
         }),
       ),
     onSuccess: invalidate,

@@ -406,6 +406,7 @@ async fn put_one_away(
             expected,
             body.product_id.into(),
             body.quantity.into(),
+            body.storage_location.map(Into::into),
             principal.user_id,
         )
         .await?;

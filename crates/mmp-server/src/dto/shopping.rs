@@ -273,6 +273,8 @@ pub struct ShoppingListDto {
 pub struct PutAwayRequest {
     pub product_id: Uuid,
     pub quantity: QuantityDto,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub storage_location: Option<crate::dto::stock::StorageLocationDto>,
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]

@@ -21,6 +21,7 @@ import { UnitSelect } from '../../components/UnitSelect';
 import { formatDayLabel } from '../meal-plan/date';
 import { labelForSlot } from '../meal-plan/slots';
 import { formatQuantity } from '../stock/SpokenFor';
+import { boughtSentence, boughtSoFar } from './bought';
 import { purchasesOf, requirementKey } from './requirementKey';
 import { sectionLabel } from './sections';
 
@@ -143,6 +144,8 @@ function Body({
     }
   }
 
+  const bought = boughtSoFar(requirement);
+
   const dates = [
     requirement.required_by ? { label: 'Needed by', value: requirement.required_by } : null,
     requirement.use_by_at_least
@@ -178,11 +181,16 @@ function Body({
 
           <Box>
             <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
-              Still to buy
+              {bought ? 'Needed' : 'Still to buy'}
             </Typography>
-            <Typography variant="h4" component="p">
+            <Typography variant="h4" component="p" className="numeral">
               {requirement.quantity ? formatQuantity(requirement.quantity) : 'Nothing'}
             </Typography>
+            {bought ? (
+              <Typography variant="body2" color="text.secondary" className="numeral" sx={{ mt: 0.5 }}>
+                {boughtSentence(bought)}
+              </Typography>
+            ) : null}
           </Box>
 
           {flags(requirement).map((flag) => (
@@ -215,14 +223,12 @@ function Body({
                       spacing={1}
                       sx={{ alignItems: 'center', py: 0.75 }}
                     >
-                      <Box sx={{ flex: 1, minWidth: 0 }}>
-                        <Typography variant="body2">{nameFor(purchase)}</Typography>
-                        <Typography variant="caption" color="text.secondary">
-                          {purchase.quantity
-                            ? formatQuantity(purchase.quantity)
-                            : 'Amount not said yet'}
-                        </Typography>
-                      </Box>
+                      <Typography variant="body2" sx={{ flex: 1, minWidth: 0 }}>
+                        {nameFor(purchase)}
+                      </Typography>
+                      <Typography variant="body2" color="text.secondary" className="numeral">
+                        {purchase.quantity ? formatQuantity(purchase.quantity) : 'Amount to follow'}
+                      </Typography>
                       <IconButton
                         size="small"
                         aria-label={`Change ${nameFor(purchase)}`}
