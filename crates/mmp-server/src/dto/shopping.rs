@@ -1,7 +1,9 @@
 use mmp_core::domain::{
-    Assignment, Certainty, DemandSubject, NewPurchase, NewShoppingCadence, OpportunityState,
-    Purchase, PurchasePatch, PurchaseState, ShoppingCadence, ShoppingListItem, ShoppingOpportunity,
-    ShoppingRequirement, ShoppingSection, SuggestionReason, week_day_from_number, week_day_number,
+    Assignment, Certainty, DemandSubject, NewPurchase, NewShoppingCadence, NewShoppingListItem,
+    OpportunityState, Patch, Purchase, PurchasePatch, PurchaseState, ShoppingCadence,
+    ShoppingListItem, ShoppingListItemPatch, ShoppingOpportunity, ShoppingRequirement,
+    ShoppingSection, ShoppingTrip, ShoppingTripRow, SuggestionReason, TripState,
+    week_day_from_number, week_day_number,
 };
 use mmp_core::services::{FinishedShop, ShoppingList};
 use serde::{Deserialize, Serialize};
@@ -261,7 +263,143 @@ pub struct ShoppingListDto {
     pub requirements: Vec<ShoppingRequirementDto>,
     pub manual: Vec<ShoppingListItemDto>,
     pub unplanned: Vec<PurchaseDto>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trip: Option<ShoppingTripDto>,
     pub cadence_configured: bool,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum TripStateDto {
+    Shopping,
+    Finished,
+}
+
+impl From<TripState> for TripStateDto {
+    fn from(value: TripState) -> Self {
+        match value {
+            TripState::Shopping => Self::Shopping,
+            TripState::Finished => Self::Finished,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct ShoppingTripRowDto {
+    pub id: Uuid,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ingredient_id: Option<Uuid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub product_id: Option<Uuid>,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quantity: Option<QuantityDto>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub section: Option<ShoppingSection>,
+}
+
+impl From<ShoppingTripRow> for ShoppingTripRowDto {
+    fn from(value: ShoppingTripRow) -> Self {
+        Self {
+            id: value.id.as_uuid(),
+            ingredient_id: value.ingredient_id.map(|id| id.as_uuid()),
+            product_id: value.product_id.map(|id| id.as_uuid()),
+            name: value.name,
+            quantity: value.quantity.map(Into::into),
+            section: value.section,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct ShoppingTripDto {
+    pub id: Uuid,
+    #[serde(with = "iso_date")]
+    #[schema(value_type = String, format = Date, example = "2026-09-05")]
+    pub opportunity_date: Date,
+    pub state: TripStateDto,
+    #[serde(with = "time::serde::rfc3339")]
+    #[schema(value_type = String, format = DateTime)]
+    pub started_at: OffsetDateTime,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "time::serde::rfc3339::option"
+    )]
+    #[schema(value_type = Option<String>, format = DateTime)]
+    pub finished_at: Option<OffsetDateTime>,
+    pub rows: Vec<ShoppingTripRowDto>,
+    pub revision: i64,
+}
+
+impl From<ShoppingTrip> for ShoppingTripDto {
+    fn from(value: ShoppingTrip) -> Self {
+        Self {
+            id: value.id.as_uuid(),
+            opportunity_date: value.opportunity_date,
+            state: value.state.into(),
+            started_at: value.started_at,
+            finished_at: value.finished_at,
+            rows: value.rows.into_iter().map(Into::into).collect(),
+            revision: value.revision.get(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+pub struct CreateShoppingListItemRequest {
+    #[serde(default)]
+    pub ingredient_id: Option<Uuid>,
+    #[serde(default)]
+    pub product_id: Option<Uuid>,
+    #[schema(example = "Onion Salt")]
+    pub name: String,
+    #[serde(default)]
+    pub quantity: Option<QuantityDto>,
+    #[serde(default)]
+    pub section: Option<ShoppingSection>,
+    #[serde(default, with = "iso_date::option")]
+    #[schema(value_type = Option<String>, format = Date)]
+    pub opportunity_date: Option<Date>,
+}
+
+impl From<CreateShoppingListItemRequest> for NewShoppingListItem {
+    fn from(value: CreateShoppingListItemRequest) -> Self {
+        Self {
+            ingredient_id: value.ingredient_id.map(Into::into),
+            product_id: value.product_id.map(Into::into),
+            name: value.name,
+            quantity: value.quantity.map(Into::into),
+            section: value.section,
+            opportunity_date: value.opportunity_date,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Deserialize, ToSchema)]
+pub struct UpdateShoppingListItemRequest {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    #[schema(value_type = Option<QuantityDto>)]
+    pub quantity: Patch<QuantityDto>,
+    #[serde(default)]
+    #[schema(value_type = Option<ShoppingSection>)]
+    pub section: Patch<ShoppingSection>,
+    #[serde(default)]
+    #[schema(value_type = Option<String>, format = Date)]
+    pub opportunity_date: Patch<Date>,
+}
+
+impl From<UpdateShoppingListItemRequest> for ShoppingListItemPatch {
+    fn from(value: UpdateShoppingListItemRequest) -> Self {
+        Self {
+            name: value.name,
+            quantity: value.quantity.map(Into::into),
+            section: value.section,
+            opportunity_date: value.opportunity_date,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
@@ -309,6 +447,7 @@ impl From<ShoppingList> for ShoppingListDto {
             requirements: value.requirements.into_iter().map(Into::into).collect(),
             manual: value.manual.into_iter().map(Into::into).collect(),
             unplanned: value.unplanned.into_iter().map(Into::into).collect(),
+            trip: value.trip.map(Into::into),
             cadence_configured: value.cadence_configured,
         }
     }
@@ -512,6 +651,10 @@ impl From<PurchaseStateDto> for PurchaseState {
 
 pub fn purchase_id(id: Uuid) -> mmp_core::domain::PurchaseId {
     mmp_core::domain::PurchaseId::from(id)
+}
+
+pub fn list_item_id(id: Uuid) -> mmp_core::domain::ShoppingListItemId {
+    mmp_core::domain::ShoppingListItemId::from(id)
 }
 
 pub type RequirementSubject = DemandSubject;

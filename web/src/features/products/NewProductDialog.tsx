@@ -55,7 +55,7 @@ function toBody(draft: ProductDraft, mappedIngredientId?: string) {
     brand: draft.brand.trim() || null,
     barcode: draft.barcode.trim() || null,
     retailer: draft.retailer.trim() || null,
-    shopping_section: draft.section.trim() || null,
+    shopping_section: draft.section || null,
     package_quantity: draft.packAmount.trim()
       ? { amount: Number(draft.packAmount), unit: draft.packUnit }
       : null,

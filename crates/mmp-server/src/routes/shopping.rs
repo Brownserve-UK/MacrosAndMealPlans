@@ -9,10 +9,11 @@ use uuid::Uuid;
 
 use crate::auth::{Permission, Principal};
 use crate::dto::{
-    CreateOpportunityRequest, CreatePurchaseRequest, FinishShopResponse, MoveOpportunityRequest,
-    OpportunityRangeQuery, PageMeta, PurchaseDto, PurchaseListQuery, PurchasePage,
-    SetShoppingCadenceRequest, ShoppingCadenceDto, ShoppingListDto, ShoppingListQuery,
-    ShoppingOpportunityDto, purchase_id,
+    CreateOpportunityRequest, CreatePurchaseRequest, CreateShoppingListItemRequest,
+    FinishShopResponse, MoveOpportunityRequest, OpportunityRangeQuery, PageMeta, PurchaseDto,
+    PurchaseListQuery, PurchasePage, SetShoppingCadenceRequest, ShoppingCadenceDto,
+    ShoppingListDto, ShoppingListItemDto, ShoppingListQuery, ShoppingOpportunityDto,
+    ShoppingTripDto, UpdateShoppingListItemRequest, list_item_id, purchase_id,
 };
 use crate::error::ApiResult;
 use crate::http::Created;
@@ -23,7 +24,10 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(requirements))
         .routes(routes!(opportunities, create_opportunity))
         .routes(routes!(move_opportunity, skip_opportunity))
+        .routes(routes!(start_shop))
         .routes(routes!(finish_shop))
+        .routes(routes!(list_items, create_list_item))
+        .routes(routes!(update_list_item, delete_list_item))
         .routes(routes!(get_cadence, set_cadence, clear_cadence))
         .routes(routes!(list_purchases, create_purchase))
         .routes(routes!(update_purchase))
@@ -323,6 +327,125 @@ async fn finish_shop(
         .finish_shop(parse_date(&date)?, principal.user_id)
         .await?;
     Ok(Json(finished.into()))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/shopping/opportunities/{date}/start",
+    params(("date" = String, Path, description = "The shop being started, as YYYY-MM-DD")),
+    operation_id = "startShop",
+    responses(
+        (status = 200, description = "The trip, with the list it set off with",
+            body = ShoppingTripDto),
+        (status = 400, description = "The date could not be read", body = crate::error::Problem),
+    ),
+    tag = "shopping",
+    security(("basic" = []))
+)]
+async fn start_shop(
+    State(state): State<AppState>,
+    principal: Principal,
+    Path(date): Path<String>,
+) -> ApiResult<Json<ShoppingTripDto>> {
+    principal.require(Permission::ShoppingWrite)?;
+    let trip = state
+        .shopping
+        .start_shop(parse_date(&date)?, principal.user_id)
+        .await?;
+    Ok(Json(trip.into()))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/shopping/items",
+    operation_id = "listShoppingListItems",
+    responses((status = 200, description = "Everything added to the list by hand",
+        body = Vec<ShoppingListItemDto>)),
+    tag = "shopping",
+    security(("basic" = []))
+)]
+async fn list_items(
+    State(state): State<AppState>,
+    principal: Principal,
+) -> ApiResult<Json<Vec<ShoppingListItemDto>>> {
+    principal.require(Permission::ShoppingRead)?;
+    let items = state.shopping.list_items().await?;
+    Ok(Json(items.into_iter().map(Into::into).collect()))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/shopping/items",
+    request_body = CreateShoppingListItemRequest,
+    operation_id = "addShoppingListItem",
+    responses(
+        (status = 201, description = "It was added to the list", body = ShoppingListItemDto),
+        (status = 422, description = "The item could not be read", body = crate::error::Problem),
+    ),
+    tag = "shopping",
+    security(("basic" = []))
+)]
+async fn create_list_item(
+    State(state): State<AppState>,
+    principal: Principal,
+    Json(body): Json<CreateShoppingListItemRequest>,
+) -> ApiResult<Created<ShoppingListItemDto>> {
+    principal.require(Permission::ShoppingWrite)?;
+    let item = state
+        .shopping
+        .add_list_item(body.into(), principal.user_id)
+        .await?;
+    Ok(Created(item.revision, item.into()))
+}
+
+#[utoipa::path(
+    patch,
+    path = "/api/v1/shopping/items/{id}",
+    params(("id" = Uuid, Path, description = "The item")),
+    request_body = UpdateShoppingListItemRequest,
+    operation_id = "updateShoppingListItem",
+    responses(
+        (status = 200, description = "The item was changed", body = ShoppingListItemDto),
+        (status = 404, description = "No such item", body = crate::error::Problem),
+    ),
+    tag = "shopping",
+    security(("basic" = []))
+)]
+async fn update_list_item(
+    State(state): State<AppState>,
+    principal: Principal,
+    Path(id): Path<Uuid>,
+    crate::http::IfMatch(expected): crate::http::IfMatch,
+    Json(body): Json<UpdateShoppingListItemRequest>,
+) -> ApiResult<crate::http::Tagged<ShoppingListItemDto>> {
+    principal.require(Permission::ShoppingWrite)?;
+    let item = state
+        .shopping
+        .update_list_item(list_item_id(id), expected, body.into())
+        .await?;
+    Ok(crate::http::Tagged(item.revision, item.into()))
+}
+
+#[utoipa::path(
+    delete,
+    path = "/api/v1/shopping/items/{id}",
+    params(("id" = Uuid, Path, description = "The item")),
+    operation_id = "removeShoppingListItem",
+    responses(
+        (status = 204, description = "It was taken off the list"),
+        (status = 404, description = "No such item", body = crate::error::Problem),
+    ),
+    tag = "shopping",
+    security(("basic" = []))
+)]
+async fn delete_list_item(
+    State(state): State<AppState>,
+    principal: Principal,
+    Path(id): Path<Uuid>,
+) -> ApiResult<StatusCode> {
+    principal.require(Permission::ShoppingWrite)?;
+    state.shopping.remove_list_item(list_item_id(id)).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 fn parse_date(raw: &str) -> Result<Date, crate::error::ApiError> {

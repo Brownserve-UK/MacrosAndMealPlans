@@ -3444,6 +3444,29 @@ async fn the_shopping_routes_need_the_shopping_permissions() {
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN);
 
+    let (status, _, _) = send(
+        &app,
+        Call::new("POST", "/api/v1/shopping/opportunities/2026-09-05/start").signed_in_as("nina"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    let (status, _, _) = send(
+        &app,
+        Call::new("GET", "/api/v1/shopping/items").signed_in_as("nina"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    let (status, _, _) = send(
+        &app,
+        Call::new("POST", "/api/v1/shopping/items")
+            .signed_in_as("nina")
+            .body(json!({ "name": "Onion Salt" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
     create_user(&app, "sam", &["basic_user"]).await;
     let (status, _, _) = send(
         &app,
@@ -3507,4 +3530,40 @@ async fn with_no_cadence_the_shopping_list_says_so_rather_than_inventing_one() {
     assert_eq!(body["cadence_configured"], json!(false));
     assert!(body["opportunities"].as_array().unwrap().is_empty());
     assert!(body["focus"].is_null());
+}
+
+#[tokio::test]
+async fn something_put_on_the_list_by_hand_comes_back_on_it() {
+    let app = app().await;
+
+    let (status, created, _) = send(
+        &app,
+        Call::new("POST", "/api/v1/shopping/items").body(json!({
+            "name": "Onion Salt",
+            "section": "ambient",
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(created["name"], json!("Onion Salt"));
+    assert_eq!(created["section"], json!("ambient"));
+    let id = created["id"].as_str().expect("an id").to_owned();
+
+    let (status, listed, _) = send(&app, Call::new("GET", "/api/v1/shopping/items")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(listed.as_array().unwrap().len(), 1);
+
+    let (status, body, _) = send(&app, Call::new("GET", "/api/v1/shopping/requirements")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["manual"].as_array().unwrap().len(), 1);
+
+    let (status, _, _) = send(
+        &app,
+        Call::new("DELETE", format!("/api/v1/shopping/items/{id}")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let (_, listed, _) = send(&app, Call::new("GET", "/api/v1/shopping/items")).await;
+    assert!(listed.as_array().unwrap().is_empty());
 }

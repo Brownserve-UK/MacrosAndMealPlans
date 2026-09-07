@@ -996,6 +996,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/shopping/items": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listShoppingListItems"];
+        put?: never;
+        post: operations["addShoppingListItem"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/shopping/items/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete: operations["removeShoppingListItem"];
+        options?: never;
+        head?: never;
+        patch: operations["updateShoppingListItem"];
+        trace?: never;
+    };
     "/api/v1/shopping/opportunities": {
         parameters: {
             query?: never;
@@ -1038,6 +1070,22 @@ export interface paths {
         get?: never;
         put?: never;
         post: operations["finishShop"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/shopping/opportunities/{date}/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["startShop"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1502,12 +1550,13 @@ export interface components {
             retailer?: string | null;
             /** Format: int32 */
             servings_per_pack?: number | null;
-            shopping_section?: string | null;
+            shopping_section?: null | components["schemas"]["ShoppingSection"];
             track_stock?: boolean | null;
         };
         CreatePurchaseRequest: {
             /** Format: uuid */
             ingredient_id?: string | null;
+            name?: string | null;
             note?: string | null;
             /** Format: date */
             opportunity_date?: string | null;
@@ -1536,6 +1585,18 @@ export interface components {
              */
             servings: number;
             tags?: string[];
+        };
+        CreateShoppingListItemRequest: {
+            /** Format: uuid */
+            ingredient_id?: string | null;
+            /** @example Onion Salt */
+            name: string;
+            /** Format: date */
+            opportunity_date?: string | null;
+            /** Format: uuid */
+            product_id?: string | null;
+            quantity?: null | components["schemas"]["QuantityDto"];
+            section?: null | components["schemas"]["ShoppingSection"];
         };
         CreateStockItemRequest: {
             level: components["schemas"]["StockLevelDto"];
@@ -1683,6 +1744,7 @@ export interface components {
             missing_stock_interpretation: components["schemas"]["MissingStockInterpretationDto"];
             /** Format: int64 */
             revision: number;
+            shopping_section_order: components["schemas"]["ShoppingSection"][];
             /** Format: date-time */
             updated_at: string;
         };
@@ -2241,7 +2303,7 @@ export interface components {
              * @example 6
              */
             servings_per_pack?: number | null;
-            shopping_section?: string | null;
+            shopping_section?: null | components["schemas"]["ShoppingSection"];
             track_stock?: boolean | null;
             /** Format: date-time */
             updated_at: string;
@@ -2277,6 +2339,7 @@ export interface components {
             id: string;
             /** Format: uuid */
             ingredient_id?: string | null;
+            name?: string | null;
             note?: string | null;
             /** Format: date */
             opportunity_date?: string | null;
@@ -2561,8 +2624,26 @@ export interface components {
             cadence_configured: boolean;
             /** Format: date */
             focus?: string | null;
+            manual: components["schemas"]["ShoppingListItemDto"][];
             opportunities: components["schemas"]["ShoppingOpportunityDto"][];
             requirements: components["schemas"]["ShoppingRequirementDto"][];
+            trip?: null | components["schemas"]["ShoppingTripDto"];
+            unplanned: components["schemas"]["PurchaseDto"][];
+        };
+        ShoppingListItemDto: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            ingredient_id?: string | null;
+            name: string;
+            /** Format: date */
+            opportunity_date?: string | null;
+            /** Format: uuid */
+            product_id?: string | null;
+            quantity?: null | components["schemas"]["QuantityDto"];
+            /** Format: int64 */
+            revision: number;
+            section?: null | components["schemas"]["ShoppingSection"];
         };
         ShoppingOpportunityDto: {
             /**
@@ -2595,6 +2676,34 @@ export interface components {
         };
         /** @enum {string} */
         ShoppingSection: "fresh_produce" | "meat_fish" | "dairy" | "bakery" | "frozen" | "ambient" | "drinks" | "household" | "other";
+        ShoppingTripDto: {
+            /** Format: date-time */
+            finished_at?: string | null;
+            /** Format: uuid */
+            id: string;
+            /**
+             * Format: date
+             * @example 2026-09-05
+             */
+            opportunity_date: string;
+            /** Format: int64 */
+            revision: number;
+            rows: components["schemas"]["ShoppingTripRowDto"][];
+            /** Format: date-time */
+            started_at: string;
+            state: components["schemas"]["TripStateDto"];
+        };
+        ShoppingTripRowDto: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            ingredient_id?: string | null;
+            name: string;
+            /** Format: uuid */
+            product_id?: string | null;
+            quantity?: null | components["schemas"]["QuantityDto"];
+            section?: null | components["schemas"]["ShoppingSection"];
+        };
         ShortfallDto: {
             /** @enum {string} */
             state: "covered";
@@ -2712,6 +2821,8 @@ export interface components {
         /** @enum {string} */
         TrackingModeDto: "exact" | "estimated" | "not_tracked";
         /** @enum {string} */
+        TripStateDto: "shopping" | "finished";
+        /** @enum {string} */
         Unit: "mg" | "g" | "kg" | "oz" | "lb" | "ml" | "l" | "tsp" | "tbsp" | "fl_oz" | "cup" | "item" | "piece" | "slice" | "clove" | "can" | "pack" | "bunch" | "serving";
         UnitDto: {
             /** @example g */
@@ -2758,6 +2869,7 @@ export interface components {
             /** @example 12:30 */
             lunch?: string | null;
             missing_stock_interpretation?: null | components["schemas"]["MissingStockInterpretationDto"];
+            shopping_section_order?: components["schemas"]["ShoppingSection"][] | null;
         };
         UpdateMemberRequest: {
             display_name?: string | null;
@@ -2794,7 +2906,7 @@ export interface components {
             retailer?: string | null;
             /** Format: int32 */
             servings_per_pack?: number | null;
-            shopping_section?: string | null;
+            shopping_section?: null | components["schemas"]["ShoppingSection"];
             track_stock?: boolean | null;
         };
         UpdatePurchaseRequest: {
@@ -2819,6 +2931,13 @@ export interface components {
             /** Format: int32 */
             servings?: number | null;
             tags?: string[] | null;
+        };
+        UpdateShoppingListItemRequest: {
+            name?: string | null;
+            /** Format: date */
+            opportunity_date?: string | null;
+            quantity?: null | components["schemas"]["QuantityDto"];
+            section?: null | components["schemas"]["ShoppingSection"];
         };
         UpdateStockItemRequest: {
             level?: null | components["schemas"]["StockLevelDto"];
@@ -6045,6 +6164,125 @@ export interface operations {
             };
         };
     };
+    listShoppingListItems: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Everything added to the list by hand */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShoppingListItemDto"][];
+                };
+            };
+        };
+    };
+    addShoppingListItem: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateShoppingListItemRequest"];
+            };
+        };
+        responses: {
+            /** @description It was added to the list */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShoppingListItemDto"];
+                };
+            };
+            /** @description The item could not be read */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    removeShoppingListItem: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The item */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description It was taken off the list */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No such item */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    updateShoppingListItem: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The item */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateShoppingListItemRequest"];
+            };
+        };
+        responses: {
+            /** @description The item was changed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShoppingListItemDto"];
+                };
+            };
+            /** @description No such item */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     listShoppingOpportunities: {
         parameters: {
             query?: {
@@ -6182,6 +6420,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["FinishShopResponse"];
+                };
+            };
+            /** @description The date could not be read */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    startShop: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The shop being started, as YYYY-MM-DD */
+                date: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The trip, with the list it set off with */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShoppingTripDto"];
                 };
             };
             /** @description The date could not be read */

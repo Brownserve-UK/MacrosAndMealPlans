@@ -2,8 +2,9 @@ import Grid from '@mui/material/Grid';
 import MenuItem from '@mui/material/MenuItem';
 import Stack from '@mui/material/Stack';
 import TextField from '@mui/material/TextField';
-import type { Unit } from '../../api/client';
+import type { ShoppingSection, Unit } from '../../api/client';
 import { UnitSelect } from '../../components/UnitSelect';
+import { SECTION_ORDER, sectionLabel } from '../shopping/sections';
 import {
   NutritionFields,
   type NutritionDraft,
@@ -15,7 +16,7 @@ export type ProductDraft = {
   brand: string;
   barcode: string;
   retailer: string;
-  section: string;
+  section: ShoppingSection | '';
   packAmount: string;
   packUnit: Unit;
   servingsPerPack: string;
@@ -42,7 +43,6 @@ const TEXT: Array<{ key: keyof ProductDraft; label: string; span: number; errorK
   { key: 'brand', label: 'Brand', span: 6 },
   { key: 'retailer', label: 'Shop', span: 6 },
   { key: 'barcode', label: 'Barcode', span: 6 },
-  { key: 'section', label: 'Aisle', span: 6, errorKey: 'shopping_section' },
 ];
 
 export function ProductFields({
@@ -80,6 +80,25 @@ export function ProductFields({
             </Grid>
           );
         })}
+
+        <Grid size={{ xs: 12, sm: 6 }}>
+          <TextField
+            select
+            label="Aisle"
+            value={draft.section}
+            onChange={(e) => set('section', e.target.value as ProductDraft['section'])}
+            error={Boolean(errors.shopping_section)}
+            helperText={errors.shopping_section}
+            fullWidth
+          >
+            <MenuItem value="">Not said</MenuItem>
+            {SECTION_ORDER.map((section) => (
+              <MenuItem key={section} value={section}>
+                {sectionLabel(section)}
+              </MenuItem>
+            ))}
+          </TextField>
+        </Grid>
 
         <Grid size={{ xs: 12, sm: 6 }}>
           <TextField

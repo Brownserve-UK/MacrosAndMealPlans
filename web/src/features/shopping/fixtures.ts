@@ -20,6 +20,8 @@ export const shoppingList: ShoppingList = {
   ],
   focus: '2026-09-05',
   cadence_configured: true,
+  manual: [],
+  unplanned: [],
   requirements: [
     {
       subject: { kind: 'ingredient', ingredient_id: 'milk' },
