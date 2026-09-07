@@ -213,27 +213,27 @@ async function showPrepared() {
 }
 
 describe('StockPage prepared view', () => {
-  it('pools two cooks of the same food in the same place into one row', async () => {
+  it('pools every cook of a food into one row, wherever it is kept', async () => {
     renderPage();
     await showPrepared();
-    expect(screen.getAllByText('Chicken Curry')).toHaveLength(2);
-    const fridge = screen.getByTestId('stock-portion-curry:chilled');
-    expect(within(fridge).getByText('3 servings')).toBeInTheDocument();
+    expect(screen.getAllByText('Chicken Curry')).toHaveLength(1);
+    const curry = screen.getByTestId('stock-portion-curry');
+    expect(within(curry).getByText('6 servings')).toBeInTheDocument();
   });
 
-  it('takes the soonest date of the cooks it pooled', async () => {
+  it('breaks the caption down by place, with each place its own count and date', async () => {
     renderPage();
     await showPrepared();
-    const fridge = screen.getByTestId('stock-portion-curry:chilled');
-    expect(within(fridge).getByText(/^Fridge, use by Thu 10 Sept?$/)).toBeInTheDocument();
+    const curry = screen.getByTestId('stock-portion-curry');
+    expect(curry.textContent).toMatch(/Fridge: 3 · Thu 10 Sept?\|Freezer: 3/);
   });
 
-  it('keeps a food split across places as one row per place', async () => {
+  it('keeps a food in one place to a single caption segment', async () => {
     renderPage();
     await showPrepared();
-    const freezer = screen.getByTestId('stock-portion-curry:frozen');
-    expect(within(freezer).getByText('3 servings')).toBeInTheDocument();
-    expect(within(freezer).getByText('Freezer')).toBeInTheDocument();
+    const chilli = screen.getByTestId('stock-portion-chilli');
+    expect(within(chilli).getByText('4 servings')).toBeInTheDocument();
+    expect(chilli.textContent).toMatch(/Freezer: 4/);
   });
 
   it('puts the soonest date first', async () => {
@@ -241,13 +241,13 @@ describe('StockPage prepared view', () => {
     await showPrepared();
     await userEvent.setup().click(screen.getByRole('combobox', { name: 'Sort' }));
     await userEvent.setup().click(within(screen.getByRole('listbox')).getByText('Use-by'));
-    expect(preparedOrder()[0]).toBe('stock-portion-curry:chilled');
+    expect(preparedOrder()[0]).toBe('stock-portion-curry');
   });
 
   it('never shows a cooked row as an unknown quantity', async () => {
     renderPage();
     await showPrepared();
     expect(screen.queryByText('Not known')).toBeNull();
-    expect(preparedOrder()).toHaveLength(3);
+    expect(preparedOrder()).toHaveLength(2);
   });
 });

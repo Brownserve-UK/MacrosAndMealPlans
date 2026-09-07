@@ -6,7 +6,7 @@ import Tab from '@mui/material/Tab';
 import Tabs from '@mui/material/Tabs';
 import TextField from '@mui/material/TextField';
 import { useMemo, useState } from 'react';
-import type { IngredientAvailability, ProductAvailability } from '../../api/client';
+import type { IngredientAvailability, ProductAvailability, StockItem } from '../../api/client';
 import { useProducts, useStock, useStockAvailability } from '../../api/queries';
 import { PageHeader } from '../../components/PageHeader';
 import { RecordListShell } from '../../components/RecordList';
@@ -16,6 +16,7 @@ import { NewStockDialog } from './NewStockDialog';
 import {
   groupSortDate,
   IngredientCard,
+  PLACE_ORDER,
   PreparedPortionCard,
   StockCard,
   type CookedFoodRow,
@@ -58,8 +59,7 @@ function sortGroups(groups: StockGroup[], key: SortKey): StockGroup[] {
 }
 
 function sortCooked(rows: CookedFoodRow[], key: SortKey): CookedFoodRow[] {
-  const byName = (a: CookedFoodRow, b: CookedFoodRow) =>
-    a.name.localeCompare(b.name) || a.location.localeCompare(b.location);
+  const byName = (a: CookedFoodRow, b: CookedFoodRow) => a.name.localeCompare(b.name);
   const sorted = [...rows];
   if (key === 'name') return sorted.sort(byName);
   if (key === 'level') return sorted.sort((a, b) => a.servings - b.servings || byName(a, b));
@@ -129,30 +129,48 @@ export function StockPage() {
   }, [stock.data, productName, availabilityByProduct]);
 
   const preparedRows = useMemo<CookedFoodRow[]>(() => {
-    const byPlace = new Map<string, CookedFoodRow>();
+    type Place = { servings: number; useBy: string | null };
+    const byRecipe = new Map<
+      string,
+      { name: string; total: number; soonest: string | null; places: Map<StockItem['storage_location'], Place> }
+    >();
     for (const item of stock.data?.items ?? []) {
       const recipeId = item.prepared_recipe_id;
       if (!recipeId) continue;
       const servings = 'quantity' in item.level ? item.level.quantity.amount : 0;
       if (servings <= 0) continue;
-      const key = `${recipeId}:${item.storage_location}`;
       const useBy = item.usability_deadline?.date ?? null;
-      const row = byPlace.get(key);
-      if (row) {
-        row.servings += servings;
-        if (useBy && (!row.useBy || useBy < row.useBy)) row.useBy = useBy;
-      } else {
-        byPlace.set(key, {
-          key,
-          recipeId,
+      let row = byRecipe.get(recipeId);
+      if (!row) {
+        row = {
           name: item.prepared_batch_name ?? 'Cooked food',
-          location: item.storage_location,
-          servings,
-          useBy,
-        });
+          total: 0,
+          soonest: null,
+          places: new Map(),
+        };
+        byRecipe.set(recipeId, row);
+      }
+      row.total += servings;
+      if (useBy && (!row.soonest || useBy < row.soonest)) row.soonest = useBy;
+      const place = row.places.get(item.storage_location);
+      if (place) {
+        place.servings += servings;
+        if (useBy && (!place.useBy || useBy < place.useBy)) place.useBy = useBy;
+      } else {
+        row.places.set(item.storage_location, { servings, useBy });
       }
     }
-    return [...byPlace.values()];
+    return [...byRecipe.entries()].map(([recipeId, row]) => ({
+      key: recipeId,
+      recipeId,
+      name: row.name,
+      servings: row.total,
+      useBy: row.soonest,
+      places: PLACE_ORDER.filter((location) => row.places.has(location)).map((location) => {
+        const place = row.places.get(location) as Place;
+        return { location, servings: place.servings, useBy: place.useBy };
+      }),
+    }));
   }, [stock.data]);
 
   const ingredientGroups = useMemo<{ group: StockGroup; productCount: number }[]>(() => {

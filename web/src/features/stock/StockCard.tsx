@@ -3,6 +3,7 @@ import Box from '@mui/material/Box';
 import Stack from '@mui/material/Stack';
 import Typography from '@mui/material/Typography';
 import { Link } from '@tanstack/react-router';
+import { Fragment, type ReactNode } from 'react';
 import type { Availability, StockItem } from '../../api/client';
 import { InitialsAvatar } from '../../components/InitialsAvatar';
 import { levelFor } from './stockLevel';
@@ -42,7 +43,7 @@ export function StockRow({
 }: {
   testId: string;
   name: string;
-  subtitle: string;
+  subtitle: ReactNode;
   availability: Availability | null;
   figure?: string;
 }) {
@@ -150,11 +151,17 @@ export function StockCard({ group }: { group: StockGroup }) {
   );
 }
 
+export type CookedFoodPlace = {
+  location: StockItem['storage_location'];
+  servings: number;
+  useBy: string | null;
+};
+
 export type CookedFoodRow = {
   key: string;
   recipeId: string;
   name: string;
-  location: StockItem['storage_location'];
+  places: CookedFoodPlace[];
   servings: number;
   useBy: string | null;
 };
@@ -165,19 +172,39 @@ const PLACE_LABEL: Record<StockItem['storage_location'], string> = {
   frozen: 'Freezer',
 };
 
-function cookedSubtitle(row: CookedFoodRow): string {
-  const place = PLACE_LABEL[row.location];
-  if (!row.useBy) return place;
-  const when = new Date(`${row.useBy}T00:00:00`).toLocaleDateString('en-GB', {
+export const PLACE_ORDER: StockItem['storage_location'][] = ['chilled', 'frozen', 'ambient'];
+
+function servingsFigure(servings: number): number {
+  return Number.isInteger(servings) ? servings : Number(servings.toFixed(1));
+}
+
+function shortDate(date: string): string {
+  return new Date(`${date}T00:00:00`).toLocaleDateString('en-GB', {
     weekday: 'short',
     day: 'numeric',
     month: 'short',
   });
-  return `${place}, use by ${when}`;
+}
+
+function cookedSubtitle(row: CookedFoodRow): ReactNode {
+  return row.places.map((place, index) => (
+    <Fragment key={place.location}>
+      {index > 0 ? (
+        <Box component="span" sx={{ mx: 1, color: 'text.disabled' }}>
+          |
+        </Box>
+      ) : null}
+      <Box component="span" sx={{ fontWeight: 600 }}>
+        {PLACE_LABEL[place.location]}
+      </Box>
+      {`: ${servingsFigure(place.servings)}`}
+      {place.useBy ? ` · ${shortDate(place.useBy)}` : ''}
+    </Fragment>
+  ));
 }
 
 export function PreparedPortionCard({ row }: { row: CookedFoodRow }) {
-  const servings = Number.isInteger(row.servings) ? row.servings : Number(row.servings.toFixed(1));
+  const servings = servingsFigure(row.servings);
 
   return (
     <Link
