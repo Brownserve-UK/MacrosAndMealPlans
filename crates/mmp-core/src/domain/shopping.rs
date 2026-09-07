@@ -4,7 +4,8 @@ use time::{Date, OffsetDateTime, Time, Weekday};
 
 use super::{
     DemandClaim, DemandGap, DemandSubject, IngredientId, ProductId, PurchaseId, Quantity, Revision,
-    ShoppingListItemId, ShoppingOpportunityId, StockItemId, UserId,
+    ShoppingListItemId, ShoppingOpportunityId, ShoppingTripId, ShoppingTripRowId, StockItemId,
+    UserId,
 };
 use crate::error::{Result, ValidationErrors};
 
@@ -441,6 +442,66 @@ impl NewPurchase {
             errors.push("quantity", "Enter an amount above zero.");
         }
         errors.into_result()
+    }
+}
+
+str_enum!(TripState, UnknownTripState, "trip state");
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TripState {
+    Shopping,
+    Finished,
+}
+
+impl TripState {
+    pub const ALL: [TripState; 2] = [TripState::Shopping, TripState::Finished];
+
+    pub const fn code(&self) -> &'static str {
+        match self {
+            TripState::Shopping => "shopping",
+            TripState::Finished => "finished",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShoppingTripRow {
+    pub id: ShoppingTripRowId,
+    pub ingredient_id: Option<IngredientId>,
+    pub product_id: Option<ProductId>,
+    pub name: String,
+    pub quantity: Option<Quantity>,
+    pub section: Option<ShoppingSection>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShoppingTrip {
+    pub id: ShoppingTripId,
+    pub opportunity_date: Date,
+    pub state: TripState,
+    pub started_at: OffsetDateTime,
+    pub finished_at: Option<OffsetDateTime>,
+    pub started_by: UserId,
+    pub rows: Vec<ShoppingTripRow>,
+    pub revision: Revision,
+    pub created_at: OffsetDateTime,
+    pub updated_at: OffsetDateTime,
+}
+
+impl ShoppingTrip {
+    pub fn is_finished(&self) -> bool {
+        self.state == TripState::Finished
+    }
+
+    pub fn holds(&self, subject: &DemandSubject) -> bool {
+        self.rows.iter().any(|row| match subject {
+            DemandSubject::Ingredient { ingredient_id } => {
+                row.ingredient_id == Some(*ingredient_id)
+            }
+            DemandSubject::Product { product_id } => row.product_id == Some(*product_id),
+            DemandSubject::PreparedPortion { .. } | DemandSubject::CookedFood { .. } => false,
+        })
     }
 }
 

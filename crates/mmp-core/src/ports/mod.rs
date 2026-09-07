@@ -9,8 +9,8 @@ pub use repository::{
     NewStockFromPurchase, NutritionTargetRepository, PreparedBatchRepository, ProductQuery,
     ProductRepository, PurchaseQuery, PurchaseRepository, RecipeQuery, RecipeRepository,
     ShoppingCadenceRepository, ShoppingListItemRepository, ShoppingOpportunityRepository,
-    SnapshotOp, SortDirection, StockDeduction, StockQuery, StockRelease, StockRepository,
-    StockWrite, UpdateOutcome, UserQuery, UserRepository, WeightGoalRepository,
+    ShoppingTripRepository, SnapshotOp, SortDirection, StockDeduction, StockQuery, StockRelease,
+    StockRepository, StockWrite, UpdateOutcome, UserQuery, UserRepository, WeightGoalRepository,
     WeightRecordRepository,
 };
 

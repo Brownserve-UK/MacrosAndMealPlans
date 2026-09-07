@@ -1039,6 +1039,47 @@ CREATE TABLE shopping_list_item (
 CREATE INDEX shopping_list_item_opportunity_date ON shopping_list_item (opportunity_date)
     WHERE opportunity_date IS NOT NULL;
 
+CREATE TABLE shopping_trip (
+    id                UUID PRIMARY KEY,
+
+    opportunity_date  DATE NOT NULL,
+    state             TEXT NOT NULL,
+    started_at        TIMESTAMPTZ NOT NULL,
+    finished_at       TIMESTAMPTZ,
+    started_by        UUID NOT NULL REFERENCES app_user (id) ON DELETE RESTRICT,
+
+    revision          BIGINT NOT NULL DEFAULT 1,
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    CONSTRAINT shopping_trip_state_valid
+        CHECK (state IN ('shopping', 'finished')),
+    CONSTRAINT shopping_trip_finished_has_a_time
+        CHECK ((state = 'finished') = (finished_at IS NOT NULL))
+);
+
+CREATE UNIQUE INDEX shopping_trip_one_per_shop ON shopping_trip (opportunity_date);
+
+CREATE TABLE shopping_trip_row (
+    id                UUID PRIMARY KEY,
+    trip_id           UUID NOT NULL REFERENCES shopping_trip (id) ON DELETE CASCADE,
+
+    ingredient_id     UUID REFERENCES ingredient (id) ON DELETE CASCADE,
+    product_id        UUID REFERENCES product (id) ON DELETE CASCADE,
+    name              TEXT NOT NULL,
+    quantity_value    NUMERIC(16, 4),
+    quantity_unit     unit_code,
+    section           shopping_section_code,
+    position          INTEGER NOT NULL,
+
+    CONSTRAINT shopping_trip_row_name_not_blank
+        CHECK (btrim(name) <> ''),
+    CONSTRAINT shopping_trip_row_quantity_complete
+        CHECK ((quantity_value IS NULL) = (quantity_unit IS NULL))
+);
+
+CREATE INDEX shopping_trip_row_trip ON shopping_trip_row (trip_id);
+
 ALTER TABLE purchase
     ADD COLUMN name TEXT,
     DROP CONSTRAINT purchase_has_a_subject,

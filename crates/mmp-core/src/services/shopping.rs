@@ -10,8 +10,9 @@ use crate::domain::{
     NewStockItem, OpportunityException, ProductId, Purchase, PurchaseId, PurchasePatch,
     PurchaseState, Quantity, Revision, ShoppingCadence, ShoppingListItem, ShoppingListItemId,
     ShoppingListItemPatch, ShoppingOpportunity, ShoppingOpportunityId, ShoppingRequirement,
-    ShoppingSection, StockEffectSource, StockEventKind, StockEventSource, StockItem, StockLevel,
-    StockSubject, StorageLocation, SuggestionReason, UncoveredClaim, UserId, assign, cover,
+    ShoppingSection, ShoppingTrip, ShoppingTripId, ShoppingTripRow, ShoppingTripRowId,
+    StockEffectSource, StockEventKind, StockEventSource, StockItem, StockLevel, StockSubject,
+    StorageLocation, SuggestionReason, TripState, UncoveredClaim, UserId, assign, cover,
     expand_opportunities,
 };
 use crate::error::{CoreError, Result};
@@ -19,7 +20,7 @@ use crate::ports::{
     Clock, FinishedPurchase, HouseholdSettingsRepository, IngredientRepository,
     NewStockFromPurchase, Paginated, ProductRepository, PurchaseQuery, PurchaseRepository,
     ShoppingCadenceRepository, ShoppingListItemRepository, ShoppingOpportunityRepository,
-    UpdateOutcome,
+    ShoppingTripRepository, UpdateOutcome,
 };
 use crate::services::StockService;
 
@@ -45,6 +46,7 @@ pub struct ShoppingList {
     pub requirements: Vec<ShoppingRequirement>,
     pub manual: Vec<ShoppingListItem>,
     pub unplanned: Vec<Purchase>,
+    pub trip: Option<ShoppingTrip>,
     pub cadence_configured: bool,
 }
 
@@ -54,6 +56,7 @@ pub struct ShoppingService {
     opportunities: Arc<dyn ShoppingOpportunityRepository>,
     purchases: Arc<dyn PurchaseRepository>,
     list_items: Arc<dyn ShoppingListItemRepository>,
+    trips: Arc<dyn ShoppingTripRepository>,
     ingredients: Arc<dyn IngredientRepository>,
     products: Arc<dyn ProductRepository>,
     settings: Arc<dyn HouseholdSettingsRepository>,
@@ -68,6 +71,7 @@ impl ShoppingService {
         opportunities: Arc<dyn ShoppingOpportunityRepository>,
         purchases: Arc<dyn PurchaseRepository>,
         list_items: Arc<dyn ShoppingListItemRepository>,
+        trips: Arc<dyn ShoppingTripRepository>,
         ingredients: Arc<dyn IngredientRepository>,
         products: Arc<dyn ProductRepository>,
         settings: Arc<dyn HouseholdSettingsRepository>,
@@ -79,12 +83,61 @@ impl ShoppingService {
             opportunities,
             purchases,
             list_items,
+            trips,
             ingredients,
             products,
             settings,
             stock,
             clock,
         }
+    }
+
+    pub async fn trip(&self, date: Date) -> Result<Option<ShoppingTrip>> {
+        self.trips.for_date(date).await
+    }
+
+    pub async fn start_shop(&self, date: Date, actor: UserId) -> Result<ShoppingTrip> {
+        if let Some(existing) = self.trips.for_date(date).await? {
+            return Ok(existing);
+        }
+
+        let list = self.requirements(Some(date)).await?;
+        let mut rows: Vec<ShoppingTripRow> = list
+            .requirements
+            .iter()
+            .map(|requirement| ShoppingTripRow {
+                id: ShoppingTripRowId::new(),
+                ingredient_id: requirement.subject.ingredient_id(),
+                product_id: requirement.subject.product_id(),
+                name: requirement.name.clone(),
+                quantity: requirement.quantity,
+                section: Some(requirement.section),
+            })
+            .collect();
+        rows.extend(list.manual.iter().map(|item| ShoppingTripRow {
+            id: ShoppingTripRowId::new(),
+            ingredient_id: item.ingredient_id,
+            product_id: item.product_id,
+            name: item.name.clone(),
+            quantity: item.quantity,
+            section: item.section,
+        }));
+
+        let now = self.clock.now();
+        let trip = ShoppingTrip {
+            id: ShoppingTripId::new(),
+            opportunity_date: date,
+            state: TripState::Shopping,
+            started_at: now,
+            finished_at: None,
+            started_by: actor,
+            rows,
+            revision: Revision::INITIAL,
+            created_at: now,
+            updated_at: now,
+        };
+        self.trips.insert(&trip).await?;
+        Ok(trip)
     }
 
     pub async fn list_items(&self) -> Result<Vec<ShoppingListItem>> {
@@ -391,12 +444,18 @@ impl ShoppingService {
             .filter(|purchase| !claimed.contains(&purchase.id))
             .collect();
 
+        let trip = match focus {
+            Some(focus) => self.trips.for_date(focus).await?,
+            None => None,
+        };
+
         Ok(ShoppingList {
             opportunities,
             focus,
             requirements,
             manual,
             unplanned,
+            trip,
             cadence_configured: cadence.is_some(),
         })
     }
@@ -545,6 +604,17 @@ impl ShoppingService {
         }
 
         self.list_items.delete_for_opportunity(date).await?;
+
+        if let Some(mut trip) = self.trips.for_date(date).await?
+            && !trip.is_finished()
+        {
+            let expected = trip.revision;
+            trip.state = TripState::Finished;
+            trip.finished_at = Some(self.clock.now());
+            trip.updated_at = self.clock.now();
+            trip.revision = expected.next();
+            self.trips.update(&trip, expected).await?;
+        }
 
         Ok(finished)
     }

@@ -135,6 +135,7 @@ pub fn stub_state() -> AppState {
             Arc::new(NoopShoppingOpportunities),
             Arc::new(NoopPurchases),
             Arc::new(NoopShoppingListItems),
+            Arc::new(NoopShoppingTrips),
             Arc::new(NoopIngredients),
             Arc::new(NoopProducts),
             Arc::new(NoopHouseholdSettings),
@@ -922,6 +923,30 @@ impl mmp_core::ports::PurchaseRepository for NoopPurchases {
     async fn finish(
         &self,
         _: &[mmp_core::ports::FinishedPurchase],
+    ) -> mmp_core::Result<mmp_core::ports::UpdateOutcome> {
+        Ok(mmp_core::ports::UpdateOutcome::NotFound)
+    }
+}
+
+struct NoopShoppingTrips;
+
+#[async_trait::async_trait]
+impl mmp_core::ports::ShoppingTripRepository for NoopShoppingTrips {
+    async fn for_date(
+        &self,
+        _: time::Date,
+    ) -> mmp_core::Result<Option<mmp_core::domain::ShoppingTrip>> {
+        Ok(None)
+    }
+
+    async fn insert(&self, _: &mmp_core::domain::ShoppingTrip) -> mmp_core::Result<()> {
+        Ok(())
+    }
+
+    async fn update(
+        &self,
+        _: &mmp_core::domain::ShoppingTrip,
+        _: mmp_core::domain::Revision,
     ) -> mmp_core::Result<mmp_core::ports::UpdateOutcome> {
         Ok(mmp_core::ports::UpdateOutcome::NotFound)
     }

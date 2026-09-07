@@ -14,9 +14,9 @@ use crate::domain::{
     NutritionTargetId, OpportunityException, PreparedBatch, PreparedBatchId, Product, ProductId,
     Purchase, PurchaseId, PurchaseState, Quantity, Recipe, RecipeId, RecipePhoto, RecipeSummary,
     RecipeVisibility, Revision, Role, SectionOrder, ShoppingCadence, ShoppingListItem,
-    ShoppingListItemId, ShoppingOpportunityId, StockEffect, StockEffectSource, StockEvent,
-    StockEventId, StockItem, StockItemId, StockOutcome, StockSubject, Unit, User, UserId,
-    WeightGoal, WeightGoalId, WeightRecord, WeightRecordId,
+    ShoppingListItemId, ShoppingOpportunityId, ShoppingTrip, StockEffect, StockEffectSource,
+    StockEvent, StockEventId, StockItem, StockItemId, StockOutcome, StockSubject, Unit, User,
+    UserId, WeightGoal, WeightGoalId, WeightRecord, WeightRecordId,
 };
 use crate::error::{CoreError, Result};
 use crate::ports::{
@@ -25,9 +25,9 @@ use crate::ports::{
     IngredientSort, MealPlanComponentUpdate, MealPlanQuery, MealPlanRepository, MemberQuery,
     NewStockFromPurchase, NutritionTargetRepository, Paginated, ProductQuery, ProductRepository,
     PurchaseQuery, PurchaseRepository, RecipeQuery, RecipeRepository, ShoppingCadenceRepository,
-    ShoppingListItemRepository, ShoppingOpportunityRepository, SnapshotOp, SortDirection,
-    StockQuery, StockRepository, StockWrite, UpdateOutcome, UserQuery, UserRepository,
-    WeightGoalRepository, WeightRecordRepository,
+    ShoppingListItemRepository, ShoppingOpportunityRepository, ShoppingTripRepository, SnapshotOp,
+    SortDirection, StockQuery, StockRepository, StockWrite, UpdateOutcome, UserQuery,
+    UserRepository, WeightGoalRepository, WeightRecordRepository,
 };
 
 // This _should_ reflect the indexes that a real database would enforce
@@ -2520,6 +2520,49 @@ impl PurchaseRepository for InMemoryPurchaseRepository {
             }
             self.stock.lock().unwrap().push(held.stock.item.clone());
         }
+        Ok(UpdateOutcome::Updated)
+    }
+}
+
+#[derive(Clone, Default)]
+pub struct InMemoryShoppingTripRepository {
+    rows: Arc<Mutex<Vec<ShoppingTrip>>>,
+}
+
+impl InMemoryShoppingTripRepository {
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+#[async_trait]
+impl ShoppingTripRepository for InMemoryShoppingTripRepository {
+    async fn for_date(&self, date: Date) -> Result<Option<ShoppingTrip>> {
+        Ok(self
+            .rows
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|row| row.opportunity_date == date)
+            .cloned())
+    }
+
+    async fn insert(&self, trip: &ShoppingTrip) -> Result<()> {
+        self.rows.lock().unwrap().push(trip.clone());
+        Ok(())
+    }
+
+    async fn update(&self, trip: &ShoppingTrip, expected: Revision) -> Result<UpdateOutcome> {
+        let mut rows = self.rows.lock().unwrap();
+        let Some(existing) = rows.iter_mut().find(|row| row.id == trip.id) else {
+            return Ok(UpdateOutcome::NotFound);
+        };
+        if existing.revision != expected {
+            return Ok(UpdateOutcome::RevisionMismatch {
+                actual: existing.revision,
+            });
+        }
+        *existing = trip.clone();
         Ok(UpdateOutcome::Updated)
     }
 }

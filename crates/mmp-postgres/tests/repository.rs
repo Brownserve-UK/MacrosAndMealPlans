@@ -14,8 +14,9 @@ use mmp_core::domain::{
     RecipeComponentId, RecipeId, RecipeInstruction, RecipeInstructionId, RecipePhoto,
     RecipePhotoDerivatives, RecipeRequirement, RecipeVisibility, Revision, Role, SectionOrder,
     ShoppingCadence, ShoppingListItem, ShoppingListItemId, ShoppingOpportunityId, ShoppingSection,
-    StockEventKind, StockItem, StockItemId, StockLevel, StockSubject, StorageLocation, Unit, User,
-    UserId, WeightDisplay, WeightGoal, WeightGoalId, WeightObjective, WeightRecord, WeightRecordId,
+    ShoppingTrip, ShoppingTripId, ShoppingTripRow, ShoppingTripRowId, StockEventKind, StockItem,
+    StockItemId, StockLevel, StockSubject, StorageLocation, TripState, Unit, User, UserId,
+    WeightDisplay, WeightGoal, WeightGoalId, WeightObjective, WeightRecord, WeightRecordId,
     WeightSource,
 };
 use mmp_core::domain::{DeductionTarget, StockEffectSource, StockEventSource};
@@ -25,9 +26,9 @@ use mmp_core::ports::{
     IngredientSort, MealPlanComponentUpdate, MealPlanQuery, MealPlanRepository, MemberQuery,
     NewStockFromPurchase, NutritionTargetRepository, PageRequest, ProductQuery, ProductRepository,
     PurchaseRepository, RecipeQuery, RecipeRepository, ShoppingCadenceRepository,
-    ShoppingListItemRepository, ShoppingOpportunityRepository, SnapshotOp, SortDirection,
-    StockDeduction, StockQuery, StockRepository, StockWrite, UpdateOutcome, UserRepository,
-    WeightGoalRepository, WeightRecordRepository,
+    ShoppingListItemRepository, ShoppingOpportunityRepository, ShoppingTripRepository, SnapshotOp,
+    SortDirection, StockDeduction, StockQuery, StockRepository, StockWrite, UpdateOutcome,
+    UserRepository, WeightGoalRepository, WeightRecordRepository,
 };
 
 fn no_stock() -> StockWrite {
@@ -38,7 +39,8 @@ use mmp_postgres::{
     PgHouseholdSettingsRepository, PgIngredientRepository, PgMealPlanRepository,
     PgNutritionTargetRepository, PgProductRepository, PgPurchaseRepository, PgRecipeRepository,
     PgShoppingCadenceRepository, PgShoppingListItemRepository, PgShoppingOpportunityRepository,
-    PgStockRepository, PgUserRepository, PgWeightGoalRepository, PgWeightRecordRepository,
+    PgShoppingTripRepository, PgStockRepository, PgUserRepository, PgWeightGoalRepository,
+    PgWeightRecordRepository,
 };
 use rust_decimal::Decimal;
 use sqlx::PgPool;
@@ -3199,6 +3201,64 @@ async fn an_occurrence_can_only_carry_one_exception(pool: PgPool) {
 
     let in_range = repo.list_in_range(occurrence, occurrence).await.unwrap();
     assert_eq!(in_range.len(), 1);
+}
+
+#[sqlx::test]
+async fn a_trip_keeps_the_list_it_set_off_with(pool: PgPool) {
+    let users = PgUserRepository::new(pool.clone());
+    let ingredients = PgIngredientRepository::new(pool.clone());
+    let trips = PgShoppingTripRepository::new(pool.clone());
+
+    let actor = user("shopper", vec![Role::Admin]);
+    users.insert(&actor).await.unwrap();
+    let milk = ingredient("Whole Milk");
+    ingredients.insert(&milk).await.unwrap();
+
+    let now = OffsetDateTime::now_utc();
+    let saturday = date!(2026 - 09 - 05);
+    let trip = ShoppingTrip {
+        id: ShoppingTripId::new(),
+        opportunity_date: saturday,
+        state: TripState::Shopping,
+        started_at: now,
+        finished_at: None,
+        started_by: actor.id,
+        rows: vec![ShoppingTripRow {
+            id: ShoppingTripRowId::new(),
+            ingredient_id: Some(milk.id),
+            product_id: None,
+            name: "Whole Milk".to_owned(),
+            quantity: Some(Quantity::new(Decimal::new(400, 0), Unit::Millilitre)),
+            section: Some(ShoppingSection::Dairy),
+        }],
+        revision: Revision::INITIAL,
+        created_at: now,
+        updated_at: now,
+    };
+    trips.insert(&trip).await.unwrap();
+
+    let stored = trips.for_date(saturday).await.unwrap().expect("a trip");
+    assert_eq!(stored.state, TripState::Shopping);
+    assert_eq!(stored.rows.len(), 1);
+    assert_eq!(stored.rows[0].name, "Whole Milk");
+    assert_eq!(stored.rows[0].section, Some(ShoppingSection::Dairy));
+
+    let mut finished = stored.clone();
+    finished.state = TripState::Finished;
+    finished.finished_at = Some(now);
+    finished.revision = stored.revision.next();
+    assert_eq!(
+        trips.update(&finished, stored.revision).await.unwrap(),
+        UpdateOutcome::Updated
+    );
+    assert!(matches!(
+        trips.update(&finished, stored.revision).await.unwrap(),
+        UpdateOutcome::RevisionMismatch { .. }
+    ));
+
+    let closed = trips.for_date(saturday).await.unwrap().expect("a trip");
+    assert!(closed.is_finished());
+    assert_eq!(closed.rows.len(), 1);
 }
 
 #[sqlx::test]

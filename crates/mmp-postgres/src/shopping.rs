@@ -2,18 +2,21 @@ use async_trait::async_trait;
 use mmp_core::Result;
 use mmp_core::domain::{
     OpportunityException, Purchase, PurchaseId, Revision, ShoppingCadence, ShoppingListItem,
-    ShoppingListItemId, ShoppingOpportunityId,
+    ShoppingListItemId, ShoppingOpportunityId, ShoppingTrip, ShoppingTripRow,
 };
 use mmp_core::ports::{
     FinishedPurchase, NewStockFromPurchase, Paginated, PurchaseQuery, PurchaseRepository,
     ShoppingCadenceRepository, ShoppingListItemRepository, ShoppingOpportunityRepository,
-    SortDirection, UpdateOutcome,
+    ShoppingTripRepository, SortDirection, UpdateOutcome,
 };
 use sqlx::PgPool;
 use time::Date;
 
 use crate::error::{map_db_error, repository_error};
-use crate::rows::{OpportunityExceptionRow, PurchaseRow, ShoppingCadenceRow, ShoppingListItemRow};
+use crate::rows::{
+    OpportunityExceptionRow, PurchaseRow, ShoppingCadenceRow, ShoppingListItemRow,
+    ShoppingTripHeadRow, ShoppingTripRowRow,
+};
 use crate::stock::insert_stock_item;
 
 macro_rules! cadence_columns {
@@ -453,6 +456,132 @@ impl PurchaseRepository for PgPurchaseRepository {
             .await
             .map_err(|e| repository_error("committing a finished shop", e))?;
         Ok(UpdateOutcome::Updated)
+    }
+}
+
+const GET_TRIP: &str = "SELECT id, opportunity_date, state, started_at, finished_at, started_by, \
+     revision, created_at, updated_at FROM shopping_trip WHERE opportunity_date = $1";
+const GET_TRIP_ROWS: &str = "SELECT id, ingredient_id, product_id, name, quantity_value, \
+     quantity_unit, section FROM shopping_trip_row WHERE trip_id = $1 ORDER BY position";
+
+pub struct PgShoppingTripRepository {
+    pool: PgPool,
+}
+
+impl PgShoppingTripRepository {
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+}
+
+#[async_trait]
+impl ShoppingTripRepository for PgShoppingTripRepository {
+    async fn for_date(&self, date: Date) -> Result<Option<ShoppingTrip>> {
+        let head: Option<ShoppingTripHeadRow> = sqlx::query_as(GET_TRIP)
+            .bind(date)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| repository_error("loading a shopping trip", e))?;
+        let Some(head) = head else {
+            return Ok(None);
+        };
+        let rows: Vec<ShoppingTripRowRow> = sqlx::query_as(GET_TRIP_ROWS)
+            .bind(head.id)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| repository_error("loading a shopping trip", e))?;
+        let rows: Vec<ShoppingTripRow> = rows
+            .into_iter()
+            .map(TryInto::try_into)
+            .collect::<Result<_>>()?;
+        head.into_trip(rows).map(Some)
+    }
+
+    async fn insert(&self, trip: &ShoppingTrip) -> Result<()> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| repository_error("starting a shopping trip", e))?;
+
+        sqlx::query(
+            "INSERT INTO shopping_trip (
+                 id, opportunity_date, state, started_at, finished_at, started_by,
+                 revision, created_at, updated_at
+             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+        )
+        .bind(trip.id.as_uuid())
+        .bind(trip.opportunity_date)
+        .bind(trip.state.code())
+        .bind(trip.started_at)
+        .bind(trip.finished_at)
+        .bind(trip.started_by.as_uuid())
+        .bind(trip.revision.get())
+        .bind(trip.created_at)
+        .bind(trip.updated_at)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| map_db_error(e, "saving a shopping trip"))?;
+
+        for (position, row) in trip.rows.iter().enumerate() {
+            sqlx::query(
+                "INSERT INTO shopping_trip_row (
+                     id, trip_id, ingredient_id, product_id, name, quantity_value,
+                     quantity_unit, section, position
+                 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+            )
+            .bind(row.id.as_uuid())
+            .bind(trip.id.as_uuid())
+            .bind(row.ingredient_id.map(|id| id.as_uuid()))
+            .bind(row.product_id.map(|id| id.as_uuid()))
+            .bind(&row.name)
+            .bind(row.quantity.map(|quantity| quantity.amount))
+            .bind(row.quantity.map(|quantity| quantity.unit.code()))
+            .bind(row.section.map(|section| section.code()))
+            .bind(position as i32)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| map_db_error(e, "saving a shopping trip"))?;
+        }
+
+        tx.commit()
+            .await
+            .map_err(|e| repository_error("committing a shopping trip", e))?;
+        Ok(())
+    }
+
+    async fn update(&self, trip: &ShoppingTrip, expected: Revision) -> Result<UpdateOutcome> {
+        let affected = sqlx::query(
+            "UPDATE shopping_trip SET state = $2, finished_at = $3, revision = $4, \
+             updated_at = $5 WHERE id = $1 AND revision = $6",
+        )
+        .bind(trip.id.as_uuid())
+        .bind(trip.state.code())
+        .bind(trip.finished_at)
+        .bind(trip.revision.get())
+        .bind(trip.updated_at)
+        .bind(expected.get())
+        .execute(&self.pool)
+        .await
+        .map_err(|e| map_db_error(e, "updating a shopping trip"))?
+        .rows_affected();
+
+        if affected == 1 {
+            return Ok(UpdateOutcome::Updated);
+        }
+
+        let current: Option<(i64,)> =
+            sqlx::query_as("SELECT revision FROM shopping_trip WHERE id = $1")
+                .bind(trip.id.as_uuid())
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(|e| repository_error("checking a shopping trip revision", e))?;
+        Ok(match current {
+            Some((actual,)) => UpdateOutcome::RevisionMismatch {
+                actual: Revision::new(actual),
+            },
+            None => UpdateOutcome::NotFound,
+        })
     }
 }
 

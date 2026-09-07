@@ -40,7 +40,8 @@ pub use ids::{
     MealGuestAllocationId, MealGuestGroupId, MealParticipantAllocationId, MealParticipantId,
     MealPlanComponentId, MealPlanEntryId, NutritionTargetId, PreparedBatchId, PurchaseId,
     RecipeComponentId, RecipeId, RecipeInstructionId, ShoppingListItemId, ShoppingOpportunityId,
-    StockEffectId, StockEventId, StockItemId, WeightGoalId, WeightRecordId,
+    ShoppingTripId, ShoppingTripRowId, StockEffectId, StockEventId, StockItemId, WeightGoalId,
+    WeightRecordId,
 };
 pub use ingredient::{
     Ingredient, IngredientPatch, IngredientSummary, MAX_NAME_LEN, NewIngredient, validate_name,
@@ -94,9 +95,10 @@ pub use shopping::{
     Assignment, Certainty, ExceptionState, NewPurchase, NewShoppingCadence, NewShoppingListItem,
     OpportunityException, OpportunityState, Purchase, PurchasePatch, PurchaseState,
     ShoppingCadence, ShoppingListItem, ShoppingListItemPatch, ShoppingOpportunity,
-    ShoppingRequirement, ShoppingSection, SuggestionReason, UnknownExceptionState,
-    UnknownOpportunityState, UnknownPurchaseState, UnknownShoppingSection, assign,
-    expand_opportunities, week_day_from_number, week_day_number,
+    ShoppingRequirement, ShoppingSection, ShoppingTrip, ShoppingTripRow, SuggestionReason,
+    TripState, UnknownExceptionState, UnknownOpportunityState, UnknownPurchaseState,
+    UnknownShoppingSection, UnknownTripState, assign, expand_opportunities, week_day_from_number,
+    week_day_number,
 };
 pub use stock::{
     AppliedDelta, Availability, AvailabilityReport, Confidence, CookedFoodAvailability,

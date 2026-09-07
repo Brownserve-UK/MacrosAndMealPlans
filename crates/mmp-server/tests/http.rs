@@ -21,8 +21,8 @@ use mmp_core::testing::{
     InMemoryPreparedBatchRepository, InMemoryProductRepository, InMemoryPurchaseRepository,
     InMemoryRecipeRepository, InMemoryShoppingCadenceRepository,
     InMemoryShoppingListItemRepository, InMemoryShoppingOpportunityRepository,
-    InMemoryStockRepository, InMemoryUserRepository, InMemoryWeightGoalRepository,
-    InMemoryWeightRecordRepository,
+    InMemoryShoppingTripRepository, InMemoryStockRepository, InMemoryUserRepository,
+    InMemoryWeightGoalRepository, InMemoryWeightRecordRepository,
 };
 use mmp_server::AppState;
 use mmp_server::auth::DevBasicAuthProvider;
@@ -131,6 +131,7 @@ async fn app() -> Router {
             Arc::new(opportunities),
             Arc::new(purchases),
             Arc::new(list_items),
+            Arc::new(InMemoryShoppingTripRepository::new()),
             ingredients,
             Arc::new(products_for_shopping),
             Arc::new(settings_repo.clone()),

@@ -17,7 +17,7 @@ use crate::testing::{
     InMemoryIngredientRepository, InMemoryMealPlanRepository, InMemoryPreparedBatchRepository,
     InMemoryProductRepository, InMemoryPurchaseRepository, InMemoryRecipeRepository,
     InMemoryShoppingCadenceRepository, InMemoryShoppingListItemRepository,
-    InMemoryShoppingOpportunityRepository, InMemoryStockRepository,
+    InMemoryShoppingOpportunityRepository, InMemoryShoppingTripRepository, InMemoryStockRepository,
 };
 use time::Weekday;
 
@@ -77,6 +77,7 @@ fn harness() -> Harness {
         Arc::new(opportunities),
         Arc::new(purchases.clone()),
         Arc::new(list_items.clone()),
+        Arc::new(InMemoryShoppingTripRepository::new()),
         Arc::new(ingredients.clone()),
         Arc::new(products.clone()),
         Arc::new(settings.clone()),
@@ -359,6 +360,99 @@ async fn a_not_tracked_staple_never_asks_to_be_bought() {
     let list = h.shopping.requirements(None).await.unwrap();
 
     assert!(list.requirements.is_empty());
+}
+
+#[tokio::test]
+async fn starting_a_shop_pins_the_list_you_set_off_with() {
+    let h = harness();
+    weekly_saturdays(&h).await;
+    let milk = IngredientId::new();
+    seed_ingredient(&h, milk, "Whole Milk");
+    let bottle = mapped("Sample Whole Milk", milk);
+    h.products.seed(bottle.clone());
+    plan_product(&h, bottle.id, ml(400), date!(2026 - 09 - 08)).await;
+
+    let trip = h
+        .shopping
+        .start_shop(date!(2026 - 09 - 05), h.actor_id)
+        .await
+        .unwrap();
+    assert_eq!(trip.state, TripState::Shopping);
+    assert_eq!(trip.rows.len(), 1);
+    assert_eq!(trip.rows[0].name, "Whole Milk");
+    assert_eq!(trip.rows[0].quantity, Some(ml(400)));
+
+    let bread = IngredientId::new();
+    seed_ingredient_in(&h, bread, "Bread", ShoppingSection::Bakery);
+    let loaf = mapped("Sample Bread", bread);
+    h.products.seed(loaf.clone());
+    plan_product(&h, loaf.id, ml(400), date!(2026 - 09 - 08)).await;
+
+    let pinned = h
+        .shopping
+        .trip(date!(2026 - 09 - 05))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(pinned.rows.len(), 1);
+    assert_eq!(pinned.rows[0].name, "Whole Milk");
+
+    let live = h
+        .shopping
+        .requirements(Some(date!(2026 - 09 - 05)))
+        .await
+        .unwrap();
+    assert_eq!(live.requirements.len(), 2);
+    assert!(live.trip.is_some());
+}
+
+#[tokio::test]
+async fn setting_off_twice_keeps_the_first_trip() {
+    let h = harness();
+    weekly_saturdays(&h).await;
+    let milk = IngredientId::new();
+    seed_ingredient(&h, milk, "Whole Milk");
+    let bottle = mapped("Sample Whole Milk", milk);
+    h.products.seed(bottle.clone());
+    plan_product(&h, bottle.id, ml(400), date!(2026 - 09 - 08)).await;
+
+    let first = h
+        .shopping
+        .start_shop(date!(2026 - 09 - 05), h.actor_id)
+        .await
+        .unwrap();
+    let again = h
+        .shopping
+        .start_shop(date!(2026 - 09 - 05), h.actor_id)
+        .await
+        .unwrap();
+
+    assert_eq!(first.id, again.id);
+    assert_eq!(first.started_at, again.started_at);
+}
+
+#[tokio::test]
+async fn finishing_closes_the_trip_it_was_started_as() {
+    let h = harness();
+    weekly_saturdays(&h).await;
+
+    h.shopping
+        .start_shop(date!(2026 - 09 - 05), h.actor_id)
+        .await
+        .unwrap();
+    h.shopping
+        .finish_shop(date!(2026 - 09 - 05), h.actor_id)
+        .await
+        .unwrap();
+
+    let trip = h
+        .shopping
+        .trip(date!(2026 - 09 - 05))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(trip.is_finished());
+    assert!(trip.finished_at.is_some());
 }
 
 #[tokio::test]

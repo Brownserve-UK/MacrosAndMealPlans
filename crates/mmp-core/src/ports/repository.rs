@@ -11,9 +11,9 @@ use crate::domain::{
     MealPlanEntryId, MemberAccessGrant, NewStockEvent, NutritionTarget, NutritionTargetId,
     OpportunityException, PreparedBatch, PreparedBatchId, Product, ProductId, Purchase, PurchaseId,
     PurchaseState, Quantity, Recipe, RecipeId, RecipePhoto, RecipeSummary, Revision, Role,
-    ShoppingCadence, ShoppingListItem, ShoppingListItemId, ShoppingOpportunityId, StockEffect,
-    StockEffectSource, StockEvent, StockItem, StockItemId, StockOutcome, User, UserId, WeightGoal,
-    WeightGoalId, WeightRecord, WeightRecordId,
+    ShoppingCadence, ShoppingListItem, ShoppingListItemId, ShoppingOpportunityId, ShoppingTrip,
+    StockEffect, StockEffectSource, StockEvent, StockItem, StockItemId, StockOutcome, User, UserId,
+    WeightGoal, WeightGoalId, WeightRecord, WeightRecordId,
 };
 use crate::error::Result;
 
@@ -592,6 +592,15 @@ pub struct FinishedPurchase {
     pub purchase: Purchase,
     pub expected: Revision,
     pub stock: NewStockFromPurchase,
+}
+
+#[async_trait]
+pub trait ShoppingTripRepository: Send + Sync + 'static {
+    async fn for_date(&self, date: Date) -> Result<Option<ShoppingTrip>>;
+
+    async fn insert(&self, trip: &ShoppingTrip) -> Result<()>;
+
+    async fn update(&self, trip: &ShoppingTrip, expected: Revision) -> Result<UpdateOutcome>;
 }
 
 #[async_trait]

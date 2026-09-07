@@ -9,12 +9,13 @@ use mmp_core::domain::{
     NutritionQuality, NutritionTarget, NutritionTargetId, OpportunityException, PreparationSource,
     PreparedBatch, PreparedBatchId, Product, ProductId, Provenance, Purchase, PurchaseId,
     PurchaseState, Quantity, RecipeId, Revision, Role, SectionOrder, ShoppingCadence,
-    ShoppingListItem, ShoppingListItemId, ShoppingOpportunityId, ShoppingSection, SourceDate,
-    SourceDateKind, StockEffect, StockEffectId, StockEffectSource, StockEffectState, StockEvent,
-    StockEventId, StockEventKind, StockEventSource, StockItem, StockItemId, StockLevel,
-    StockSubject, StorageLocation, TrackingMode, Unit, UsabilityDeadline, User, UserId,
-    WeightDisplay, WeightGoal, WeightGoalId, WeightObjective, WeightRecord, WeightRecordId,
-    WeightSource, week_day_from_number,
+    ShoppingListItem, ShoppingListItemId, ShoppingOpportunityId, ShoppingSection, ShoppingTrip,
+    ShoppingTripId, ShoppingTripRow, ShoppingTripRowId, SourceDate, SourceDateKind, StockEffect,
+    StockEffectId, StockEffectSource, StockEffectState, StockEvent, StockEventId, StockEventKind,
+    StockEventSource, StockItem, StockItemId, StockLevel, StockSubject, StorageLocation,
+    TrackingMode, TripState, Unit, UsabilityDeadline, User, UserId, WeightDisplay, WeightGoal,
+    WeightGoalId, WeightObjective, WeightRecord, WeightRecordId, WeightSource,
+    week_day_from_number,
 };
 use mmp_core::{CoreError, RepositoryError};
 use rust_decimal::Decimal;
@@ -950,6 +951,75 @@ pub struct PurchaseRow {
     pub revision: i64,
     pub created_at: OffsetDateTime,
     pub updated_at: OffsetDateTime,
+}
+
+#[derive(sqlx::FromRow)]
+pub struct ShoppingTripRowRow {
+    pub id: Uuid,
+    pub ingredient_id: Option<Uuid>,
+    pub product_id: Option<Uuid>,
+    pub name: String,
+    pub quantity_value: Option<Decimal>,
+    pub quantity_unit: Option<String>,
+    pub section: Option<String>,
+}
+
+impl TryFrom<ShoppingTripRowRow> for ShoppingTripRow {
+    type Error = CoreError;
+
+    fn try_from(row: ShoppingTripRowRow) -> Result<Self, Self::Error> {
+        let quantity = match (row.quantity_value, row.quantity_unit.as_deref()) {
+            (Some(amount), Some(unit)) => Some(Quantity::new(
+                amount,
+                Unit::from_str(unit).map_err(|_| bad_value("quantity_unit", unit))?,
+            )),
+            _ => None,
+        };
+        let section = match row.section.as_deref() {
+            Some(code) => {
+                Some(ShoppingSection::from_str(code).map_err(|_| bad_value("section", code))?)
+            }
+            None => None,
+        };
+        Ok(ShoppingTripRow {
+            id: ShoppingTripRowId::from(row.id),
+            ingredient_id: row.ingredient_id.map(IngredientId::from),
+            product_id: row.product_id.map(ProductId::from),
+            name: row.name,
+            quantity,
+            section,
+        })
+    }
+}
+
+#[derive(sqlx::FromRow)]
+pub struct ShoppingTripHeadRow {
+    pub id: Uuid,
+    pub opportunity_date: Date,
+    pub state: String,
+    pub started_at: OffsetDateTime,
+    pub finished_at: Option<OffsetDateTime>,
+    pub started_by: Uuid,
+    pub revision: i64,
+    pub created_at: OffsetDateTime,
+    pub updated_at: OffsetDateTime,
+}
+
+impl ShoppingTripHeadRow {
+    pub fn into_trip(self, rows: Vec<ShoppingTripRow>) -> Result<ShoppingTrip, CoreError> {
+        Ok(ShoppingTrip {
+            id: ShoppingTripId::from(self.id),
+            opportunity_date: self.opportunity_date,
+            state: TripState::from_str(&self.state).map_err(|_| bad_value("state", &self.state))?,
+            started_at: self.started_at,
+            finished_at: self.finished_at,
+            started_by: UserId::from(self.started_by),
+            rows,
+            revision: Revision::new(self.revision),
+            created_at: self.created_at,
+            updated_at: self.updated_at,
+        })
+    }
 }
 
 #[derive(sqlx::FromRow)]
