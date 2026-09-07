@@ -23,7 +23,7 @@ pub use meal_plan::{
     MealPlanEntryView, MealPlanService, MealPlanWeek, MealSlotView, NeedsReview, NutritionSummary,
 };
 pub use nutrition_target::NutritionTargetService;
-pub use preparation::{PreparationService, RecordPreparation};
+pub use preparation::{MoveCookedFood, PreparationService, RecordPreparation};
 pub use recipe::{
     NutritionGapReason, RecipeNames, RecipeNutrition, RecipeNutritionGap, RecipeService,
     ResolveRequirement,

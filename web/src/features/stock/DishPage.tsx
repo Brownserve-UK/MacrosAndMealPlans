@@ -1,4 +1,5 @@
 import Box from '@mui/material/Box';
+import Button from '@mui/material/Button';
 import Chip from '@mui/material/Chip';
 import Divider from '@mui/material/Divider';
 import Paper from '@mui/material/Paper';
@@ -11,6 +12,7 @@ import { useRecipe, useRecipeNutrition, useStock, useStockAvailability, useStock
 import { BackLabel } from '../../components/BackLink';
 import { IconTile } from '../../components/IconTile';
 import { EmptyState, ErrorState, Loading } from '../../components/States';
+import { MoveCookedDialog } from './MoveCookedDialog';
 import { MealEditorDialog } from '../meal-plan/MealEditorDialog';
 import { MealSlotMenu } from '../meal-plan/MealSlotMenu';
 import { todayIso } from '../meal-plan/date';
@@ -28,6 +30,12 @@ type Place = {
   location: StockItem['storage_location'];
   servings: number;
   useBy: string | null;
+};
+
+type Move = {
+  from: StockItem['storage_location'];
+  to: StockItem['storage_location'];
+  available: number;
 };
 
 function show(value: number) {
@@ -75,6 +83,7 @@ export function DishPage({ recipeId }: { recipeId: string }) {
   const stock = useStock({ per_page: 200 });
   const availability = useStockAvailability();
   const [planning, setPlanning] = useState<MealSlot | null>(null);
+  const [moving, setMoving] = useState<Move | null>(null);
 
   const portions = (stock.data?.items ?? []).filter(
     (item) => item.prepared_recipe_id === recipeId && servingsOf(item) > 0,
@@ -141,22 +150,31 @@ export function DishPage({ recipeId }: { recipeId: string }) {
 
           {left > 0 ? (
             <Stack spacing={1.25}>
-              {places.map((place) => (
-                <Stack
-                  key={place.location}
-                  direction="row"
-                  spacing={2}
-                  sx={{ alignItems: 'baseline', justifyContent: 'space-between' }}
-                >
-                  <Typography variant="subtitle1">{PLACE_LABEL[place.location]}</Typography>
-                  <Typography variant="caption" color="text.secondary" sx={{ flexGrow: 1 }}>
-                    {place.useBy ? `use by ${dateLabel(place.useBy)}` : 'no date'}
-                  </Typography>
-                  <Typography variant="subtitle1" className="numeral" sx={{ fontWeight: 600 }}>
-                    {place.servings === 1 ? '1 serving' : `${show(place.servings)} servings`}
-                  </Typography>
-                </Stack>
-              ))}
+              {places.map((place) => {
+                const destination = place.location === 'frozen' ? 'chilled' : 'frozen';
+                return (
+                  <Stack
+                    key={place.location}
+                    direction="row"
+                    spacing={2}
+                    sx={{ alignItems: 'baseline', justifyContent: 'space-between' }}
+                  >
+                    <Typography variant="subtitle1">{PLACE_LABEL[place.location]}</Typography>
+                    <Typography variant="caption" color="text.secondary" sx={{ flexGrow: 1 }}>
+                      {place.useBy ? `use by ${dateLabel(place.useBy)}` : 'no date'}
+                    </Typography>
+                    <Button
+                      size="small"
+                      onClick={() => setMoving({ from: place.location, to: destination, available: place.servings })}
+                    >
+                      {destination === 'frozen' ? 'Freeze some' : 'Get some out'}
+                    </Button>
+                    <Typography variant="subtitle1" className="numeral" sx={{ fontWeight: 600 }}>
+                      {place.servings === 1 ? '1 serving' : `${show(place.servings)} servings`}
+                    </Typography>
+                  </Stack>
+                );
+              })}
             </Stack>
           ) : (
             <Typography variant="body2" color="text.secondary">
@@ -245,6 +263,17 @@ export function DishPage({ recipeId }: { recipeId: string }) {
           ) : null}
         </Stack>
       </Paper>
+
+      {moving ? (
+        <MoveCookedDialog
+          recipeId={recipeId}
+          name={recipe.data.name}
+          from={moving.from}
+          to={moving.to}
+          available={moving.available}
+          onClose={() => setMoving(null)}
+        />
+      ) : null}
 
       {planning ? (
         <MealEditorDialog

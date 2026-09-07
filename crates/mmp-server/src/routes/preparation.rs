@@ -1,15 +1,15 @@
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use mmp_core::domain::{PreparedBatchId, RecipeId};
-use mmp_core::services::RecordPreparation;
+use mmp_core::services::{MoveCookedFood, RecordPreparation};
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
 use uuid::Uuid;
 
-use crate::auth::Principal;
+use crate::auth::{Permission, Principal};
 use crate::dto::{
-    PlacePortionsRequest, PreparationRangeQuery, PreparationResponse, PreparedBatchDto,
-    RecordPreparationRequest,
+    MoveCookedFoodRequest, PlacePortionsRequest, PreparationRangeQuery, PreparationResponse,
+    PreparedBatchDto, RecordPreparationRequest, StockItemDto,
 };
 use crate::error::ApiResult;
 use crate::http::Created;
@@ -20,6 +20,42 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(record, list))
         .routes(routes!(get))
         .routes(routes!(place))
+        .routes(routes!(move_cooked))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/cooked-food/{recipe_id}/move",
+    operation_id = "moveCookedFood",
+    params(("recipe_id" = Uuid, Path, description = "The recipe the cooked food came from")),
+    request_body = MoveCookedFoodRequest,
+    responses(
+        (status = 200, description = "Where the moved servings now live", body = Vec<StockItemDto>),
+        (status = 409, description = "There is not that much there, or it is already there",
+         body = crate::error::Problem),
+        (status = 422, description = "Validation failed", body = crate::error::Problem),
+    ),
+    tag = "preparation",
+    security(("basic" = []))
+)]
+async fn move_cooked(
+    State(state): State<AppState>,
+    principal: Principal,
+    Path(recipe_id): Path<Uuid>,
+    Json(body): Json<MoveCookedFoodRequest>,
+) -> ApiResult<Json<Vec<StockItemDto>>> {
+    principal.require(Permission::StockWrite)?;
+    let landed = state
+        .preparation
+        .move_cooked(MoveCookedFood {
+            recipe_id: RecipeId::from(recipe_id),
+            from: body.from.into(),
+            to: body.to.into(),
+            servings: body.servings,
+            actor: principal.user_id,
+        })
+        .await?;
+    Ok(Json(landed.into_iter().map(Into::into).collect()))
 }
 
 #[utoipa::path(

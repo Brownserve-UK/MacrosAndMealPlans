@@ -84,6 +84,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/cooked-food/{recipe_id}/move": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["moveCookedFood"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/health": {
         parameters: {
             query?: never;
@@ -1569,7 +1585,6 @@ export interface components {
             unknown_count: number;
         };
         DemandClaimDto: {
-            /** @description The meal is past its time but nobody has said what happened. */
             assumed: boolean;
             /** Format: uuid */
             entry_id: string;
@@ -1968,6 +1983,12 @@ export interface components {
         };
         /** @enum {string} */
         MissingStockInterpretationDto: "absent" | "unknown";
+        MoveCookedFoodRequest: {
+            from: components["schemas"]["StorageLocationDto"];
+            /** Format: double */
+            servings: number;
+            to: components["schemas"]["StorageLocationDto"];
+        };
         MoveOpportunityRequest: {
             /**
              * Format: date
@@ -3252,6 +3273,51 @@ export interface operations {
             };
             /** @description Not permitted */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    moveCookedFood: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The recipe the cooked food came from */
+                recipe_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MoveCookedFoodRequest"];
+            };
+        };
+        responses: {
+            /** @description Where the moved servings now live */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StockItemDto"][];
+                };
+            };
+            /** @description There is not that much there, or it is already there */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation failed */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };

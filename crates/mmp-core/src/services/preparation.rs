@@ -9,9 +9,10 @@ use crate::domain::{
     ConsumedNutrition, MealPlanComponentId, NewPreparedBatch, NewStockEvent, PortionPlacement,
     PreparationSource, PreparedBatch, PreparedBatchId, Quantity, Recipe, RecipeId,
     RecipeRequirement, Revision, StockEffectSource, StockEventKind, StockEventSource, StockItem,
-    StockItemId, StockLevel, StockSubject, Unit, UserId, recipe_nutrition, validate_placements,
+    StockItemId, StockLevel, StockSubject, StorageLocation, Unit, UserId, cooked_deadline,
+    recipe_nutrition, validate_placements,
 };
-use crate::error::{CoreError, Result};
+use crate::error::{CoreError, Result, ValidationErrors};
 use crate::ports::{
     Clock, IngredientRepository, PreparedBatchRepository, ProductRepository, RecipeRepository,
     StockDeduction, StockWrite,
@@ -26,6 +27,15 @@ pub struct RecordPreparation {
     pub servings_produced: Decimal,
     pub placements: Vec<PortionPlacement>,
     pub prepared_at: Option<OffsetDateTime>,
+    pub actor: UserId,
+}
+
+#[derive(Debug, Clone)]
+pub struct MoveCookedFood {
+    pub recipe_id: RecipeId,
+    pub from: StorageLocation,
+    pub to: StorageLocation,
+    pub servings: Decimal,
     pub actor: UserId,
 }
 
@@ -169,6 +179,112 @@ impl PreparationService {
         )
         .await?;
         Ok(StockAffected::new(batch, named))
+    }
+
+    pub async fn move_cooked(&self, input: MoveCookedFood) -> Result<Vec<StockItem>> {
+        if input.servings <= Decimal::ZERO {
+            let mut errors = ValidationErrors::new();
+            errors.push("servings", "Say how many servings you are moving");
+            return errors.into_result().map(|()| Vec::new());
+        }
+        if input.from == input.to {
+            return Err(CoreError::conflict("That food is already there."));
+        }
+        if input.to == StorageLocation::Ambient {
+            return Err(CoreError::conflict(
+                "Cooked food cannot be kept in the cupboard.",
+            ));
+        }
+
+        let mut sources = Vec::new();
+        for batch in self.batches.held_for_recipe(input.recipe_id).await? {
+            for item in self.batches.portions(batch.id).await? {
+                if item.storage_location == input.from {
+                    sources.push(item);
+                }
+            }
+        }
+
+        let available: Decimal = sources
+            .iter()
+            .filter_map(|item| item.level.conservative_quantity())
+            .map(|quantity| quantity.amount)
+            .sum();
+        if available < input.servings {
+            return Err(CoreError::conflict(format!(
+                "There are only {available} servings there."
+            )));
+        }
+
+        let now = self.clock.now();
+        let deadline = cooked_deadline(input.to, now.date());
+        let mut wanted = input.servings;
+        let mut writes: Vec<(StockItem, NewStockEvent)> = Vec::new();
+        let mut archive: Vec<StockItemId> = Vec::new();
+        let mut landed: Vec<StockItem> = Vec::new();
+
+        for source in sources {
+            if wanted <= Decimal::ZERO {
+                break;
+            }
+            let Some(held) = source.level.conservative_quantity() else {
+                continue;
+            };
+            let taken = held.amount.min(wanted);
+            if taken <= Decimal::ZERO {
+                continue;
+            }
+            wanted -= taken;
+
+            let Some(batch_id) = source.prepared_batch_id() else {
+                continue;
+            };
+            let drained = held.amount == taken;
+            let mut emptied = source.clone();
+            emptied.level = StockLevel::Exact {
+                quantity: Quantity::new(held.amount - taken, Unit::Serving),
+            };
+            emptied.revision = emptied.revision.next();
+            emptied.updated_at = now;
+            if drained {
+                emptied.archived_at = Some(now);
+                archive.push(emptied.id);
+            }
+            writes.push((emptied, self.moved(input.actor, -taken)));
+
+            let arriving = StockItem {
+                id: StockItemId::new(),
+                subject: StockSubject::prepared_portion(batch_id),
+                level: StockLevel::Exact {
+                    quantity: Quantity::new(taken, Unit::Serving),
+                },
+                storage_location: input.to,
+                source_date: source.source_date,
+                usability_deadline: deadline.clone(),
+                note: None,
+                revision: Revision::INITIAL,
+                created_at: now,
+                updated_at: now,
+                archived_at: None,
+            };
+            landed.push(arriving.clone());
+            writes.push((arriving, self.moved(input.actor, taken)));
+        }
+
+        self.batches.place_portions(&writes, &archive).await?;
+        Ok(landed)
+    }
+
+    fn moved(&self, actor: UserId, delta: Decimal) -> NewStockEvent {
+        NewStockEvent {
+            kind: StockEventKind::Moved,
+            quantity_delta: Some(Quantity::new(delta, Unit::Serving)),
+            actor_user_id: Some(actor),
+            subject_member_id: None,
+            source: None,
+            reverses_event_id: None,
+            note: None,
+        }
     }
 
     pub async fn record(&self, input: RecordPreparation) -> Result<StockAffected<PreparedBatch>> {

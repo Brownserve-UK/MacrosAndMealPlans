@@ -1,5 +1,5 @@
 use rust_decimal::Decimal;
-use time::OffsetDateTime;
+use time::{Date, Duration, OffsetDateTime};
 
 use super::{
     ConsumedNutrition, MealPlanComponentId, MealPlanEntryId, PreparedBatchId, RecipeId, Revision,
@@ -50,6 +50,21 @@ impl PortionPlacement {
             note: None,
         }
     }
+}
+
+pub const CHILLED_LEFTOVER_DAYS: i64 = 2;
+pub const FROZEN_LEFTOVER_DAYS: i64 = 90;
+
+pub fn cooked_deadline(destination: StorageLocation, on: Date) -> Option<UsabilityDeadline> {
+    let (days, basis) = match destination {
+        StorageLocation::Chilled => (CHILLED_LEFTOVER_DAYS, "In the fridge"),
+        StorageLocation::Frozen => (FROZEN_LEFTOVER_DAYS, "In the freezer"),
+        StorageLocation::Ambient => return None,
+    };
+    Some(UsabilityDeadline {
+        date: on + Duration::days(days),
+        basis: Some(basis.to_owned()),
+    })
 }
 
 pub fn validate_placements(placements: &[PortionPlacement], produced: Decimal) -> Result<()> {

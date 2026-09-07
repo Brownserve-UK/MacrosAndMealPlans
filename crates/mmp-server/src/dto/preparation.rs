@@ -113,6 +113,15 @@ pub struct PlacePortionsRequest {
     pub placements: Vec<PortionPlacementRequest>,
 }
 
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+pub struct MoveCookedFoodRequest {
+    pub from: StorageLocationDto,
+    pub to: StorageLocationDto,
+    #[serde(with = "rust_decimal::serde::float")]
+    #[schema(value_type = f64)]
+    pub servings: Decimal,
+}
+
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct PreparationResponse {
     #[serde(flatten)]

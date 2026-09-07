@@ -1002,8 +1002,9 @@ impl crate::ports::PreparedBatchRepository for InMemoryPreparedBatchRepository {
                 item.archived_at = Some(item.updated_at);
             }
         }
-        for (item, _) in portions {
+        for (item, event) in portions {
             rows.insert(item.id, item.clone());
+            self.stock.record(item.id, event);
         }
         Ok(Vec::new())
     }

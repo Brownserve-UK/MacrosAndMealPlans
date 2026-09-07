@@ -74,7 +74,8 @@ pub use nutrition_target::{
 };
 pub use patch::Patch;
 pub use prepared::{
-    NewPreparedBatch, PortionPlacement, PreparationSource, PreparedBatch, validate_placements,
+    CHILLED_LEFTOVER_DAYS, FROZEN_LEFTOVER_DAYS, NewPreparedBatch, PortionPlacement,
+    PreparationSource, PreparedBatch, cooked_deadline, validate_placements,
 };
 pub use product::{
     MAX_BARCODE_LEN, MAX_SHORT_TEXT_LEN, MIN_BARCODE_LEN, NewProduct, Product, ProductPatch,

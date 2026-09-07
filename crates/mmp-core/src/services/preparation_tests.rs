@@ -3,7 +3,7 @@ use std::sync::Arc;
 use rust_decimal::Decimal;
 use time::macros::{date, datetime};
 
-use super::{PreparationService, RecordPreparation};
+use super::{MoveCookedFood, PreparationService, RecordPreparation};
 use crate::domain::{
     ConsumedAmount, NutritionFacts, PortionPlacement, PreparationSource, Product, ProductId,
     Provenance, Quantity, Recipe, RecipeComponent, RecipeComponentId, RecipeId, RecipeRequirement,
@@ -355,5 +355,168 @@ async fn the_places_have_to_add_up_to_what_was_made() {
     assert!(
         portions(&h).await.is_empty(),
         "nothing should be stored when the split does not balance"
+    );
+}
+
+async fn cook_chilled(h: &Harness, servings: i64, at: time::OffsetDateTime) {
+    h.service
+        .record(RecordPreparation {
+            recipe_id: h.recipe.id,
+            source: PreparationSource::Standalone,
+            servings_produced: d(servings),
+            placements: vec![PortionPlacement::new(StorageLocation::Chilled, d(servings))],
+            prepared_at: Some(at),
+            actor: UserId::new(),
+        })
+        .await
+        .unwrap();
+}
+
+fn servings_in(items: &[StockItem], location: StorageLocation) -> Decimal {
+    items
+        .iter()
+        .filter(|item| item.storage_location == location)
+        .filter_map(|item| item.level.conservative_quantity())
+        .map(|quantity| quantity.amount)
+        .sum()
+}
+
+fn move_to(
+    h: &Harness,
+    from: StorageLocation,
+    to: StorageLocation,
+    servings: i64,
+) -> MoveCookedFood {
+    MoveCookedFood {
+        recipe_id: h.recipe.id,
+        from,
+        to,
+        servings: d(servings),
+        actor: UserId::new(),
+    }
+}
+
+#[tokio::test]
+async fn moving_servings_empties_the_oldest_cook_first() {
+    let h = harness();
+    seed_rice(&h, 4000);
+    cook_chilled(&h, 2, NOW - time::Duration::days(1)).await;
+    cook_chilled(&h, 3, NOW).await;
+
+    h.service
+        .move_cooked(move_to(
+            &h,
+            StorageLocation::Chilled,
+            StorageLocation::Frozen,
+            3,
+        ))
+        .await
+        .unwrap();
+
+    let left = portions(&h).await;
+    assert_eq!(
+        servings_in(&left, StorageLocation::Frozen),
+        d(3),
+        "three servings went into the freezer"
+    );
+    assert_eq!(
+        servings_in(&left, StorageLocation::Chilled),
+        d(2),
+        "and two are still in the fridge"
+    );
+    assert_eq!(
+        left.iter()
+            .filter(|item| item.storage_location == StorageLocation::Chilled)
+            .count(),
+        1,
+        "the older cook was emptied outright rather than left as a nil row"
+    );
+}
+
+#[tokio::test]
+async fn moved_food_takes_its_new_deadline_from_where_it_lands() {
+    let h = harness();
+    seed_rice(&h, 4000);
+    cook_chilled(&h, 4, NOW).await;
+
+    h.service
+        .move_cooked(move_to(
+            &h,
+            StorageLocation::Chilled,
+            StorageLocation::Frozen,
+            4,
+        ))
+        .await
+        .unwrap();
+    let frozen = portions(&h).await;
+    assert_eq!(
+        frozen[0].usability_deadline.as_ref().map(|d| d.date),
+        Some(NOW.date() + time::Duration::days(90)),
+        "the freezer sets its own clock, nobody has to type a date"
+    );
+
+    h.service
+        .move_cooked(move_to(
+            &h,
+            StorageLocation::Frozen,
+            StorageLocation::Chilled,
+            4,
+        ))
+        .await
+        .unwrap();
+    let chilled = portions(&h).await;
+    assert_eq!(
+        chilled[0].usability_deadline.as_ref().map(|d| d.date),
+        Some(NOW.date() + time::Duration::days(2)),
+        "and defrosting it resets the clock to the fridge's"
+    );
+}
+
+#[tokio::test]
+async fn moving_more_than_is_there_is_refused_and_changes_nothing() {
+    let h = harness();
+    seed_rice(&h, 4000);
+    cook_chilled(&h, 2, NOW).await;
+
+    let error = h
+        .service
+        .move_cooked(move_to(
+            &h,
+            StorageLocation::Chilled,
+            StorageLocation::Frozen,
+            3,
+        ))
+        .await
+        .unwrap_err();
+
+    assert!(
+        matches!(error, crate::error::CoreError::Conflict { .. }),
+        "expected a conflict, got {error:?}"
+    );
+    let left = portions(&h).await;
+    assert_eq!(servings_in(&left, StorageLocation::Chilled), d(2));
+    assert_eq!(servings_in(&left, StorageLocation::Frozen), Decimal::ZERO);
+}
+
+#[tokio::test]
+async fn cooked_food_cannot_be_moved_to_the_cupboard() {
+    let h = harness();
+    seed_rice(&h, 4000);
+    cook_chilled(&h, 2, NOW).await;
+
+    let error = h
+        .service
+        .move_cooked(move_to(
+            &h,
+            StorageLocation::Chilled,
+            StorageLocation::Ambient,
+            1,
+        ))
+        .await
+        .unwrap_err();
+
+    assert!(
+        matches!(error, crate::error::CoreError::Conflict { .. }),
+        "expected a conflict, got {error:?}"
     );
 }

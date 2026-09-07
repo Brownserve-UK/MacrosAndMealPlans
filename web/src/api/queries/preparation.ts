@@ -21,6 +21,28 @@ export function useCook(id: string) {
   });
 }
 
+export function useMoveCookedFood() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: {
+      recipeId: string;
+      body: components['schemas']['MoveCookedFoodRequest'];
+    }) =>
+      unwrap(
+        await client.POST('/api/v1/cooked-food/{recipe_id}/move', {
+          params: { path: { recipe_id: input.recipeId } },
+          body: input.body,
+        }),
+      ),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: mealPlanKeys.myWeeks() });
+      void qc.invalidateQueries({ queryKey: mealPlanKeys.householdWeeks() });
+      void qc.invalidateQueries({ queryKey: stockKeys.all() });
+      void qc.invalidateQueries({ queryKey: preparationKeys.all() });
+    },
+  });
+}
+
 export function usePlacePortions() {
   const qc = useQueryClient();
   return useMutation({
