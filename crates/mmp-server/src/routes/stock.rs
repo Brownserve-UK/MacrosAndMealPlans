@@ -75,12 +75,16 @@ async fn name_portions(
         .filter_map(|item| item.prepared_batch_id())
         .collect();
     let names = state.preparation.names_for(&batch_ids).await?;
+    let recipes = state.preparation.recipes_for(&batch_ids).await?;
     Ok(items
         .into_iter()
         .map(|item| {
             let batch_id = item.prepared_batch_id();
             let mut dto: StockItemDto = item.into();
             dto.prepared_batch_name = batch_id.and_then(|id| names.get(&id).cloned());
+            dto.prepared_recipe_id = batch_id
+                .and_then(|id| recipes.get(&id))
+                .map(|id| id.as_uuid());
             dto
         })
         .collect())

@@ -18,7 +18,7 @@ use crate::ports::{
 
 use super::fulfilment::{RecipeFulfilments, expand_recipe};
 use super::stock_effects::{
-    StockAffected, name_outcomes, portion_deduction, record_deduction, record_release,
+    StockAffected, cooked_food_deduction, name_outcomes, record_deduction, record_release,
     requirement_deduction,
 };
 
@@ -158,17 +158,17 @@ impl ConsumptionService {
                     })
                     .collect())
             }
-            MealItemRef::Dish { prepared_batch_id } => {
-                let batch = self.get_dish(prepared_batch_id).await?;
+            MealItemRef::Dish { recipe_id } => {
+                let name = self.cooked_name(recipe_id).await?;
                 let ConsumedAmount::Servings(servings) = record.amount else {
                     return Ok(Vec::new());
                 };
-                Ok(vec![portion_deduction(
+                Ok(vec![cooked_food_deduction(
                     record.id.as_uuid(),
                     record.member_id.as_uuid(),
-                    prepared_batch_id,
+                    recipe_id,
                     Quantity::new(servings, Unit::Serving),
-                    format!("Logged food \u{2014} {}", batch.item_name),
+                    format!("Logged food \u{2014} {name}"),
                     record.recorded_by,
                     Some(record.member_id),
                 )])
@@ -314,9 +314,7 @@ impl ConsumptionService {
         let name = match record.item {
             MealItemRef::Product { product_id } => self.get_product(product_id).await?.name,
             MealItemRef::Recipe { recipe_id } => self.get_recipe(recipe_id, None).await?.name,
-            MealItemRef::Dish { prepared_batch_id } => {
-                self.get_dish(prepared_batch_id).await?.item_name
-            }
+            MealItemRef::Dish { recipe_id } => self.cooked_name(recipe_id).await?,
         };
         Ok(format!("Logged food \u{2014} {name}"))
     }
@@ -328,11 +326,20 @@ impl ConsumptionService {
             .ok_or_else(|| CoreError::not_found(PRODUCT, id))
     }
 
-    async fn get_dish(&self, id: crate::domain::PreparedBatchId) -> Result<PreparedBatch> {
+    async fn cooked_first(&self, recipe_id: RecipeId) -> Result<PreparedBatch> {
         self.batches
-            .get(id)
+            .held_for_recipe(recipe_id)
             .await?
-            .ok_or_else(|| CoreError::not_found(DISH, id))
+            .into_iter()
+            .next()
+            .ok_or_else(|| CoreError::not_found(DISH, recipe_id))
+    }
+
+    async fn cooked_name(&self, recipe_id: RecipeId) -> Result<String> {
+        match self.batches.held_for_recipe(recipe_id).await?.first() {
+            Some(batch) => Ok(batch.item_name.clone()),
+            None => Ok(self.get_recipe(recipe_id, None).await?.name),
+        }
     }
 
     async fn get_recipe(
@@ -357,10 +364,13 @@ impl ConsumptionService {
                 Some(recipe) => Ok(recipe.name),
                 None => Ok("Missing recipe".to_owned()),
             },
-            MealItemRef::Dish { prepared_batch_id } => {
-                match self.batches.get(prepared_batch_id).await? {
-                    Some(batch) => Ok(batch.item_name),
-                    None => Ok("Missing cooked food".to_owned()),
+            MealItemRef::Dish { recipe_id } => {
+                match self.batches.held_for_recipe(recipe_id).await?.first() {
+                    Some(batch) => Ok(batch.item_name.clone()),
+                    None => match self.recipes.get(recipe_id).await? {
+                        Some(recipe) => Ok(recipe.name),
+                        None => Ok("Missing cooked food".to_owned()),
+                    },
                 }
             }
         }
@@ -405,8 +415,8 @@ impl ConsumptionService {
                 );
                 Ok(recipe_nutrition_for(&per_serving, amount))
             }
-            MealItemRef::Dish { prepared_batch_id } => {
-                let batch = self.get_dish(prepared_batch_id).await?;
+            MealItemRef::Dish { recipe_id } => {
+                let batch = self.cooked_first(recipe_id).await?;
                 if !matches!(amount, ConsumedAmount::Servings(_)) {
                     let mut errors = ValidationErrors::new();
                     errors.push("amount", "Cooked food is measured in servings");

@@ -459,6 +459,8 @@ pub trait PreparedBatchRepository: Send + Sync + 'static {
 
     async fn list_in_range(&self, from: Date, to: Date) -> Result<Vec<PreparedBatch>>;
 
+    async fn held_for_recipe(&self, recipe_id: RecipeId) -> Result<Vec<PreparedBatch>>;
+
     async fn portions(&self, batch_id: PreparedBatchId) -> Result<Vec<StockItem>>;
 
     async fn place_portions(

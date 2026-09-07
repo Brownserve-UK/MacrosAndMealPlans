@@ -9,8 +9,8 @@ use mmp_core::domain::{
     MealGuestGroup, MealGuestGroupId, MealItemRef, MealOptOut, MealParticipant,
     MealParticipantAllocation, MealParticipantAllocationId, MealParticipantId, MealPlanComponent,
     MealPlanComponentId, MealPlanComponentSnapshot, MealPlanEntry, MealPlanEntryId, MealPlanScope,
-    MealSlot, NutritionFacts, NutritionQuality, ParticipantStatus, PreparedBatchId, ProductId,
-    RecipeId, Revision, UserId,
+    MealSlot, NutritionFacts, NutritionQuality, ParticipantStatus, ProductId, RecipeId, Revision,
+    UserId,
 };
 use mmp_core::ports::{
     MealPlanComponentUpdate, MealPlanQuery, MealPlanRepository, SnapshotOp, StockWrite,
@@ -54,7 +54,6 @@ struct ComponentRow {
     item_kind: String,
     product_id: Option<Uuid>,
     recipe_id: Option<Uuid>,
-    dish_batch_id: Option<Uuid>,
     amount_kind: String,
     amount_value: Decimal,
     amount_unit: Option<String>,
@@ -109,7 +108,6 @@ impl ComponentRow {
                 &self.item_kind,
                 self.product_id.map(ProductId::from),
                 self.recipe_id.map(RecipeId::from),
-                self.dish_batch_id.map(PreparedBatchId::from),
             )
             .map_err(|_| bad_value("item_kind", &self.item_kind))?,
             amount: parse_amount(&self.amount_kind, self.amount_value, self.amount_unit)?,
@@ -254,7 +252,7 @@ const LIST_ENTRIES: &str = "SELECT id, scope, member_id, planned_on, planned_tim
 const LIST_ALL_ENTRIES: &str = "SELECT id, scope, member_id, planned_on, planned_time, slot, created_by, updated_by, revision, created_at, updated_at FROM meal_plan_entry WHERE planned_on >= $1 AND planned_on <= $2 ORDER BY planned_on, CASE slot WHEN 'breakfast' THEN 0 WHEN 'lunch' THEN 1 WHEN 'dinner' THEN 2 ELSE 3 END, planned_time NULLS LAST, created_at, id";
 const LIST_ENTRIES_THROUGH: &str = "SELECT id, scope, member_id, planned_on, planned_time, slot, created_by, updated_by, revision, created_at, updated_at FROM meal_plan_entry WHERE (member_id = $1 OR EXISTS (SELECT 1 FROM meal_plan_participant p WHERE p.entry_id = meal_plan_entry.id AND p.member_id = $1)) AND planned_on <= $2 ORDER BY planned_on, CASE slot WHEN 'breakfast' THEN 0 WHEN 'lunch' THEN 1 WHEN 'dinner' THEN 2 ELSE 3 END, planned_time NULLS LAST, created_at, id";
 const LIST_ALL_ENTRIES_THROUGH: &str = "SELECT id, scope, member_id, planned_on, planned_time, slot, created_by, updated_by, revision, created_at, updated_at FROM meal_plan_entry WHERE planned_on <= $1 ORDER BY planned_on, CASE slot WHEN 'breakfast' THEN 0 WHEN 'lunch' THEN 1 WHEN 'dinner' THEN 2 ELSE 3 END, planned_time NULLS LAST, created_at, id";
-const LIST_COMPONENTS: &str = "SELECT id, entry_id, position, item_kind, product_id, recipe_id, dish_batch_id, amount_kind, amount_value, amount_unit, frozen_item_name, nutrition_basis_amount, nutrition_basis_unit, energy_kcal, protein_g, carbohydrate_g, sugar_g, fat_g, saturated_fat_g, fibre_g, salt_g, cholesterol_mg, nutrition_extra, nutrition_quality, revision, display_order FROM meal_plan_component WHERE entry_id = ANY($1) ORDER BY entry_id, position";
+const LIST_COMPONENTS: &str = "SELECT id, entry_id, position, item_kind, product_id, recipe_id, amount_kind, amount_value, amount_unit, frozen_item_name, nutrition_basis_amount, nutrition_basis_unit, energy_kcal, protein_g, carbohydrate_g, sugar_g, fat_g, saturated_fat_g, fibre_g, salt_g, cholesterol_mg, nutrition_extra, nutrition_quality, revision, display_order FROM meal_plan_component WHERE entry_id = ANY($1) ORDER BY entry_id, position";
 const LIST_PARTICIPANTS: &str = "SELECT id, entry_id, member_id, revision, created_at, updated_at FROM meal_plan_participant WHERE entry_id = ANY($1) ORDER BY entry_id, created_at, id";
 const LIST_ALLOCATIONS: &str = "SELECT id, participant_id, component_id, allocated_kind, allocated_value, allocated_unit, status, consumption_record_id, resolved_by, resolved_at FROM meal_plan_participant_allocation WHERE participant_id = ANY($1)";
 const LIST_OPT_OUTS: &str = "SELECT entry_id, member_id, created_by, created_at FROM meal_plan_opt_out WHERE entry_id = ANY($1) ORDER BY entry_id, created_at";
@@ -895,9 +893,8 @@ async fn insert_components(
 ) -> Result<()> {
     for component in &entry.components {
         let (kind, value, unit) = amount_bindings(&component.amount);
-        let (item_kind, item_product_id, item_recipe_id, item_dish_id) =
-            item_bindings(&component.item);
-        sqlx::query("INSERT INTO meal_plan_component (id, entry_id, position, product_id, amount_kind, amount_value, amount_unit, revision, display_order, item_kind, recipe_id, dish_batch_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)")
+        let (item_kind, item_product_id, item_recipe_id) = item_bindings(&component.item);
+        sqlx::query("INSERT INTO meal_plan_component (id, entry_id, position, product_id, amount_kind, amount_value, amount_unit, revision, display_order, item_kind, recipe_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)")
             .bind(component.id.as_uuid())
             .bind(entry.id.as_uuid())
             .bind(component.position)
@@ -909,7 +906,6 @@ async fn insert_components(
             .bind(component.display_order)
             .bind(item_kind)
             .bind(item_recipe_id)
-            .bind(item_dish_id)
             .execute(&mut **tx)
             .await
             .map_err(|error| map_db_error(error, "creating a meal plan component"))?;
@@ -1154,9 +1150,9 @@ async fn insert_consumption(
     record: &ConsumptionRecord,
 ) -> Result<()> {
     let (kind, value, unit) = amount_bindings(&record.amount);
-    let (item_kind, item_product_id, item_recipe_id, item_dish_id) = item_bindings(&record.item);
+    let (item_kind, item_product_id, item_recipe_id) = item_bindings(&record.item);
     let nutrition = nutrition_bindings(&record.nutrition);
-    sqlx::query("INSERT INTO consumption_record (id, member_id, product_id, recorded_by, meal_plan_entry_id, meal_plan_component_id, slot, amount_kind, amount_value, amount_unit, consumed_on, consumed_at, nutrition_basis_amount, nutrition_basis_unit, energy_kcal, protein_g, carbohydrate_g, sugar_g, fat_g, saturated_fat_g, fibre_g, salt_g, cholesterol_mg, nutrition_extra, nutrition_quality, revision, created_at, updated_at, item_kind, recipe_id, dish_batch_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31)")
+    sqlx::query("INSERT INTO consumption_record (id, member_id, product_id, recorded_by, meal_plan_entry_id, meal_plan_component_id, slot, amount_kind, amount_value, amount_unit, consumed_on, consumed_at, nutrition_basis_amount, nutrition_basis_unit, energy_kcal, protein_g, carbohydrate_g, sugar_g, fat_g, saturated_fat_g, fibre_g, salt_g, cholesterol_mg, nutrition_extra, nutrition_quality, revision, created_at, updated_at, item_kind, recipe_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30)")
         .bind(record.id.as_uuid())
         .bind(record.member_id.as_uuid())
         .bind(item_product_id)
@@ -1187,7 +1183,6 @@ async fn insert_consumption(
         .bind(record.updated_at)
         .bind(item_kind)
         .bind(item_recipe_id)
-        .bind(item_dish_id)
         .execute(&mut **tx)
         .await
         .map_err(|error| map_db_error(error, "confirming a meal plan component"))?;

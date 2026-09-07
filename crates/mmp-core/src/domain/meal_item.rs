@@ -1,11 +1,11 @@
-use super::{PreparedBatchId, ProductId, RecipeId};
+use super::{ProductId, RecipeId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum MealItemRef {
     Product { product_id: ProductId },
     Recipe { recipe_id: RecipeId },
-    Dish { prepared_batch_id: PreparedBatchId },
+    Dish { recipe_id: RecipeId },
 }
 
 impl MealItemRef {
@@ -17,10 +17,8 @@ impl MealItemRef {
         MealItemRef::Recipe { recipe_id: id }
     }
 
-    pub const fn dish(id: PreparedBatchId) -> Self {
-        MealItemRef::Dish {
-            prepared_batch_id: id,
-        }
+    pub const fn dish(id: RecipeId) -> Self {
+        MealItemRef::Dish { recipe_id: id }
     }
 
     pub const fn kind_code(&self) -> &'static str {
@@ -40,15 +38,8 @@ impl MealItemRef {
 
     pub const fn recipe_id(&self) -> Option<RecipeId> {
         match self {
-            MealItemRef::Recipe { recipe_id } => Some(*recipe_id),
-            _ => None,
-        }
-    }
-
-    pub const fn prepared_batch_id(&self) -> Option<PreparedBatchId> {
-        match self {
-            MealItemRef::Dish { prepared_batch_id } => Some(*prepared_batch_id),
-            _ => None,
+            MealItemRef::Recipe { recipe_id } | MealItemRef::Dish { recipe_id } => Some(*recipe_id),
+            MealItemRef::Product { .. } => None,
         }
     }
 
@@ -64,14 +55,11 @@ impl MealItemRef {
         kind: &str,
         product_id: Option<ProductId>,
         recipe_id: Option<RecipeId>,
-        prepared_batch_id: Option<PreparedBatchId>,
     ) -> Result<Self, UnknownMealItemRef> {
-        match (kind, product_id, recipe_id, prepared_batch_id) {
-            ("product", Some(product_id), None, None) => Ok(MealItemRef::Product { product_id }),
-            ("recipe", None, Some(recipe_id), None) => Ok(MealItemRef::Recipe { recipe_id }),
-            ("dish", None, None, Some(prepared_batch_id)) => {
-                Ok(MealItemRef::Dish { prepared_batch_id })
-            }
+        match (kind, product_id, recipe_id) {
+            ("product", Some(product_id), None) => Ok(MealItemRef::Product { product_id }),
+            ("recipe", None, Some(recipe_id)) => Ok(MealItemRef::Recipe { recipe_id }),
+            ("dish", None, Some(recipe_id)) => Ok(MealItemRef::Dish { recipe_id }),
             _ => Err(UnknownMealItemRef(kind.to_owned())),
         }
     }

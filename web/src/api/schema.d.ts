@@ -1327,6 +1327,7 @@ export interface components {
         };
         AvailabilityReportDto: {
             claims?: components["schemas"]["DemandClaimDto"][];
+            cooked_food: components["schemas"]["CookedFoodAvailabilityDto"][];
             demand_gaps: components["schemas"]["DemandGapDto"][];
             ingredients: components["schemas"]["IngredientAvailabilityDto"][];
             products: components["schemas"]["ProductAvailabilityDto"][];
@@ -1404,6 +1405,12 @@ export interface components {
             prepared_batch_id: string;
             /** Format: double */
             servings_produced: number;
+        };
+        CookedFoodAvailabilityDto: {
+            availability: components["schemas"]["AvailabilityDto"];
+            name: string;
+            /** Format: uuid */
+            recipe_id: string;
         };
         CreateConsumptionRequest: components["schemas"]["ItemRefRequest"] & {
             amount: components["schemas"]["AmountDto"];
@@ -1591,6 +1598,11 @@ export interface components {
             kind: "prepared_portion";
             /** Format: uuid */
             prepared_batch_id: string;
+        } | {
+            /** @enum {string} */
+            kind: "cooked_food";
+            /** Format: uuid */
+            recipe_id: string;
         };
         FieldProblem: {
             /** @example name */
@@ -1712,7 +1724,7 @@ export interface components {
             recipe_id: string;
         } | {
             /** Format: uuid */
-            prepared_batch_id: string;
+            dish_recipe_id: string;
         };
         LinkAccountRequest: {
             /** Format: uuid */
@@ -1778,10 +1790,10 @@ export interface components {
             /** Format: uuid */
             recipe_id: string;
         } | {
+            /** Format: uuid */
+            dish_recipe_id: string;
             /** @enum {string} */
             item_kind: "dish";
-            /** Format: uuid */
-            prepared_batch_id: string;
         };
         MealItemSourceDto: {
             /** Format: uuid */
@@ -2627,6 +2639,8 @@ export interface components {
             /** Format: uuid */
             prepared_batch_id?: string | null;
             prepared_batch_name?: string | null;
+            /** Format: uuid */
+            prepared_recipe_id?: string | null;
             /** Format: uuid */
             product_id?: string | null;
             /** Format: int64 */

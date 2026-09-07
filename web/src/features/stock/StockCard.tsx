@@ -38,11 +38,13 @@ export function StockRow({
   name,
   subtitle,
   availability,
+  figure,
 }: {
   testId: string;
   name: string;
   subtitle: string;
   availability: Availability | null;
+  figure?: string;
 }) {
   const level = levelFor(availability);
 
@@ -71,7 +73,15 @@ export function StockRow({
         </Typography>
       </Stack>
 
-      {level.figure ? (
+      {figure ? (
+        <Typography
+          variant="body2"
+          className="numeral"
+          sx={{ fontWeight: 600, flexShrink: 0, textAlign: 'right' }}
+        >
+          {figure}
+        </Typography>
+      ) : level.figure ? (
         <Stack spacing={0.5} sx={{ width: { xs: 128, sm: 176 }, flexShrink: 0 }}>
           <Box
             aria-hidden
@@ -140,21 +150,47 @@ export function StockCard({ group }: { group: StockGroup }) {
   );
 }
 
-export function PreparedPortionCard({ group }: { group: StockGroup }) {
-  const first = group.items[0];
-  if (!first) return null;
+export type CookedFoodRow = {
+  key: string;
+  recipeId: string;
+  name: string;
+  location: StockItem['storage_location'];
+  servings: number;
+  useBy: string | null;
+};
+
+const PLACE_LABEL: Record<StockItem['storage_location'], string> = {
+  ambient: 'Cupboard',
+  chilled: 'Fridge',
+  frozen: 'Freezer',
+};
+
+export function cookedSubtitle(row: CookedFoodRow): string {
+  const place = PLACE_LABEL[row.location];
+  if (!row.useBy) return place;
+  const when = new Date(`${row.useBy}T00:00:00`).toLocaleDateString('en-GB', {
+    weekday: 'short',
+    day: 'numeric',
+    month: 'short',
+  });
+  return `${place}, use by ${when}`;
+}
+
+export function PreparedPortionCard({ row }: { row: CookedFoodRow }) {
+  const servings = Number.isInteger(row.servings) ? row.servings : Number(row.servings.toFixed(1));
 
   return (
     <Link
-      to="/stock/dishes/$batchId"
-      params={{ batchId: group.id }}
+      to="/stock/dishes/$recipeId"
+      params={{ recipeId: row.recipeId }}
       style={{ textDecoration: 'none', color: 'inherit' }}
     >
       <StockRow
-        testId={`stock-portion-${group.id}`}
-        name={group.name}
-        subtitle={locationSubtitle(group.items)}
-        availability={group.availability}
+        testId={`stock-portion-${row.key}`}
+        name={row.name}
+        subtitle={cookedSubtitle(row)}
+        availability={null}
+        figure={servings === 1 ? '1 serving' : `${servings} servings`}
       />
     </Link>
   );

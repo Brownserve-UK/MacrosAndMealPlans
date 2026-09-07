@@ -106,7 +106,6 @@ fn unresolved_line_drags_quality_to_partial() {
         1,
     );
 
-    // The resolved line still contributes; the unresolved one is not guessed.
     assert_eq!(nutrition.facts.energy_kcal, Some(d(200)));
     assert_eq!(nutrition.quality, NutritionQuality::Partial);
 }

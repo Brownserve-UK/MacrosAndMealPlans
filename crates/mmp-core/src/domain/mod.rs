@@ -97,15 +97,15 @@ pub use shopping::{
     expand_opportunities, week_day_from_number, week_day_number,
 };
 pub use stock::{
-    AppliedDelta, Availability, AvailabilityReport, Confidence, DeductionCandidates, DeductionPlan,
-    DeductionTarget, DemandClaim, DemandGap, DemandSubject, IngredientAvailability, MissingStock,
-    NewStockEffect, NewStockEvent, NewStockItem, PlannedTake, ProductAvailability, ReleasePlan,
-    Shortfall, SourceDate, SourceDateKind, StockEffect, StockEffectSource, StockEffectState,
-    StockEvent, StockEventKind, StockEventSource, StockItem, StockItemPatch, StockLevel,
-    StockOutcome, StockSubject, StorageLocation, TrackingMode, UnknownSourceDateKind,
-    UnknownStockEffectSource, UnknownStockEffectState, UnknownStockEventKind,
-    UnknownStorageLocation, UnknownTrackingMode, UsabilityDeadline, apply_take, plan_deduction,
-    plan_release,
+    AppliedDelta, Availability, AvailabilityReport, Confidence, CookedFoodAvailability,
+    DeductionCandidates, DeductionPlan, DeductionTarget, DemandClaim, DemandGap, DemandSubject,
+    IngredientAvailability, MissingStock, NewStockEffect, NewStockEvent, NewStockItem, PlannedTake,
+    ProductAvailability, ReleasePlan, Shortfall, SourceDate, SourceDateKind, StockEffect,
+    StockEffectSource, StockEffectState, StockEvent, StockEventKind, StockEventSource, StockItem,
+    StockItemPatch, StockLevel, StockOutcome, StockSubject, StorageLocation, TrackingMode,
+    UnknownSourceDateKind, UnknownStockEffectSource, UnknownStockEffectState,
+    UnknownStockEventKind, UnknownStorageLocation, UnknownTrackingMode, UsabilityDeadline,
+    apply_take, plan_deduction, plan_release,
 };
 pub use weight::{
     GoalAmounts, GoalProjection, NewWeightGoal, NewWeightRecord, UnknownWeightDisplay,

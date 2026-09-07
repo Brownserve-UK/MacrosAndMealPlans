@@ -96,7 +96,7 @@ export function AteSomethingElseDialog({
           entry.kind === 'dish'
             ? {
                 item_kind: 'dish',
-                prepared_batch_id: entry.dish.preparedBatchId,
+                dish_recipe_id: entry.dish.recipeId,
                 amount: { kind: 'servings', value: servings },
               }
             : {

@@ -58,12 +58,16 @@ async fn app() -> Router {
     let opportunities = InMemoryShoppingOpportunityRepository::new();
     let purchases = InMemoryPurchaseRepository::new();
     let products_for_shopping = products.clone();
+    let batches = Arc::new(InMemoryPreparedBatchRepository::with_stock(
+        stock_repo.clone(),
+    ));
     let stock = StockService::new(
         Arc::new(stock_repo.clone()),
         Arc::new(products.clone()),
         ingredients.clone(),
         Arc::new(meal_plans.clone()),
         recipes_repo.clone(),
+        batches.clone(),
         Arc::new(members.clone()),
         Arc::new(settings_repo.clone()),
         clock.clone(),
@@ -74,7 +78,6 @@ async fn app() -> Router {
         ingredients.clone(),
         clock.clone(),
     );
-    let batches = Arc::new(InMemoryPreparedBatchRepository::new());
     let preparation2 = PreparationService::new(
         batches.clone(),
         recipes_repo.clone(),
@@ -1868,7 +1871,6 @@ async fn a_member_opts_out_of_a_household_meal_and_rejoins_from_their_own_planne
     assert!(opted_out["participants"].as_array().unwrap().is_empty());
     assert_eq!(opted_out["opted_out"][0]["member_id"], member_id);
 
-    // The opted-out household meal still surfaces on the member's own week so they can rejoin it.
     let (status, week, _) = send(&app, Call::new("GET", "/api/v1/meal-plan/2026-08-24")).await;
     assert_eq!(status, StatusCode::OK, "{week}");
     let mine = week["days"]
@@ -1923,7 +1925,6 @@ async fn the_household_planner_and_attendance_need_household_write() {
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN);
 
-    // The bootstrap admin holds household:write.
     let (status, _, _) = send(&app, Call::new("GET", "/api/v1/planner/2026-08-24")).await;
     assert_eq!(status, StatusCode::OK);
 }
@@ -2872,7 +2873,6 @@ async fn creates_a_recipe_and_derives_its_nutrition() {
     assert_eq!(fetched["tags"], json!(["Quick"]));
     assert!(!etag(&headers).is_empty());
 
-    // 100g of a 64 kcal/100g product across 2 servings => 32 kcal per serving.
     let (status, nutrition, _) = send(
         &app,
         Call::new("GET", format!("/api/v1/recipes/{recipe_id}/nutrition")),
@@ -3187,7 +3187,6 @@ async fn a_recipe_estimates_nutrition_for_a_generic_ingredient() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{nutrition}");
-    // One resolved estimate plus one unresolved line => incomplete overall.
     assert_eq!(nutrition["quality"], "partial");
     assert_eq!(nutrition["gaps"].as_array().unwrap().len(), 2);
     assert_eq!(nutrition["gaps"][0]["name"], "Whole Milk");
@@ -3477,7 +3476,6 @@ async fn changing_when_the_household_shops_needs_household_write() {
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN);
 
-    // The bootstrap admin holds household:write.
     let (status, body, _) = send(
         &app,
         Call::new("PUT", "/api/v1/shopping/cadence").body(cadence),

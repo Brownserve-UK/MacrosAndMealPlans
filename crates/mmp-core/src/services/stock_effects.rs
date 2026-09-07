@@ -125,6 +125,27 @@ pub fn portion_deduction(
     }
 }
 
+pub fn cooked_food_deduction(
+    source_id: uuid::Uuid,
+    eater_id: uuid::Uuid,
+    recipe_id: crate::domain::RecipeId,
+    want: Quantity,
+    source_label: String,
+    actor: Option<UserId>,
+    subject: Option<HouseholdMemberId>,
+) -> StockDeduction {
+    StockDeduction {
+        source_kind: StockEffectSource::MealPlanComponent,
+        source_id,
+        source_detail_id: Some(eater_id),
+        target: DeductionTarget::cooked_food(recipe_id),
+        want,
+        actor_user_id: actor,
+        subject_member_id: subject,
+        source_label,
+    }
+}
+
 pub fn component_release(
     component_id: uuid::Uuid,
     eater_id: Option<uuid::Uuid>,
@@ -196,6 +217,19 @@ pub async fn name_outcomes(
         .collect();
     batch_ids.sort_unstable_by_key(|id| id.as_uuid());
     batch_ids.dedup();
+    let mut cooked_ids: Vec<crate::domain::RecipeId> = outcomes
+        .iter()
+        .filter_map(|o| o.subject.cooked_recipe_id())
+        .collect();
+    cooked_ids.sort_unstable_by_key(|id| id.as_uuid());
+    cooked_ids.dedup();
+
+    let mut cooked_names: HashMap<crate::domain::RecipeId, String> = HashMap::new();
+    for recipe_id in cooked_ids {
+        if let Some(batch) = batches.held_for_recipe(recipe_id).await?.first() {
+            cooked_names.insert(recipe_id, batch.item_name.clone());
+        }
+    }
 
     let product_names: HashMap<ProductId, String> = products
         .get_many(&product_ids)
@@ -233,6 +267,10 @@ pub async fn name_outcomes(
                     .get(&prepared_batch_id)
                     .cloned()
                     .unwrap_or_else(|| "Unknown prepared portion".to_owned()),
+                DemandSubject::CookedFood { recipe_id } => cooked_names
+                    .get(&recipe_id)
+                    .cloned()
+                    .unwrap_or_else(|| "Cooked food".to_owned()),
             },
             wanted: o.wanted,
             deducted: o.deducted,

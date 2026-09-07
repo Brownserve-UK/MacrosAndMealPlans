@@ -16,7 +16,7 @@ use crate::stock::apply_stock_write;
 
 macro_rules! columns {
     () => {
-        "c.id, c.member_id, c.item_kind, c.product_id, c.recipe_id, c.dish_batch_id, c.recorded_by, c.meal_plan_entry_id, c.meal_plan_component_id, c.slot, c.amount_kind, c.amount_value, c.amount_unit, c.consumed_on, c.consumed_at, c.nutrition_basis_amount, c.nutrition_basis_unit, c.energy_kcal, c.protein_g, c.carbohydrate_g, c.sugar_g, c.fat_g, c.saturated_fat_g, c.fibre_g, c.salt_g, c.cholesterol_mg, c.nutrition_extra, c.nutrition_quality, c.revision, c.created_at, c.updated_at"
+        "c.id, c.member_id, c.item_kind, c.product_id, c.recipe_id, c.recorded_by, c.meal_plan_entry_id, c.meal_plan_component_id, c.slot, c.amount_kind, c.amount_value, c.amount_unit, c.consumed_on, c.consumed_at, c.nutrition_basis_amount, c.nutrition_basis_unit, c.energy_kcal, c.protein_g, c.carbohydrate_g, c.sugar_g, c.fat_g, c.saturated_fat_g, c.fibre_g, c.salt_g, c.cholesterol_mg, c.nutrition_extra, c.nutrition_quality, c.revision, c.created_at, c.updated_at"
     };
 }
 
@@ -150,8 +150,7 @@ impl ConsumptionRecordRepository for PgConsumptionRecordRepository {
         stock: &StockWrite,
     ) -> Result<Vec<StockOutcome>> {
         let (amount_kind, amount_value, amount_unit) = amount_bindings(&record.amount);
-        let (item_kind, item_product_id, item_recipe_id, item_dish_id) =
-            item_bindings(&record.item);
+        let (item_kind, item_product_id, item_recipe_id) = item_bindings(&record.item);
         let n = nutrition_bindings(&record.nutrition);
         let mut tx = self
             .pool
@@ -169,7 +168,7 @@ impl ConsumptionRecordRepository for PgConsumptionRecordRepository {
                  saturated_fat_g, fibre_g, salt_g, cholesterol_mg, nutrition_extra,
                  nutrition_quality,
                  revision, created_at, updated_at,
-                 item_kind, recipe_id, dish_batch_id
+                 item_kind, recipe_id
              ) VALUES (
                  $1, $2, $3, $4, $5,
                  $6, $7,
@@ -180,7 +179,7 @@ impl ConsumptionRecordRepository for PgConsumptionRecordRepository {
                  $20, $21, $22, $23, $24,
                  $25,
                  $26, $27, $28,
-                 $29, $30, $31
+                 $29, $30
              )",
         )
         .bind(record.id.as_uuid())
@@ -213,7 +212,6 @@ impl ConsumptionRecordRepository for PgConsumptionRecordRepository {
         .bind(record.updated_at)
         .bind(item_kind)
         .bind(item_recipe_id)
-        .bind(item_dish_id)
         .execute(&mut *tx)
         .await
         .map_err(|e| map_db_error(e, "creating a consumption record"))?;
@@ -231,8 +229,7 @@ impl ConsumptionRecordRepository for PgConsumptionRecordRepository {
         stock: &StockWrite,
     ) -> Result<(UpdateOutcome, Vec<StockOutcome>)> {
         let (amount_kind, amount_value, amount_unit) = amount_bindings(&record.amount);
-        let (item_kind, item_product_id, item_recipe_id, item_dish_id) =
-            item_bindings(&record.item);
+        let (item_kind, item_product_id, item_recipe_id) = item_bindings(&record.item);
         let n = nutrition_bindings(&record.nutrition);
         let mut tx = self
             .pool
@@ -250,7 +247,7 @@ impl ConsumptionRecordRepository for PgConsumptionRecordRepository {
                  salt_g = $20, cholesterol_mg = $21, nutrition_extra = $22,
                  nutrition_quality = $23,
                  revision = $24, updated_at = $25,
-                 item_kind = $27, recipe_id = $28, dish_batch_id = $29
+                 item_kind = $27, recipe_id = $28
              WHERE id = $1 AND revision = $26",
         )
         .bind(record.id.as_uuid())
@@ -281,7 +278,6 @@ impl ConsumptionRecordRepository for PgConsumptionRecordRepository {
         .bind(expected.get())
         .bind(item_kind)
         .bind(item_recipe_id)
-        .bind(item_dish_id)
         .execute(&mut *tx)
         .await
         .map_err(|e| map_db_error(e, "updating a consumption record"))?

@@ -21,8 +21,8 @@ use super::view::MealPlanEntryView;
 use super::{DISH, MealPlanService, PRODUCT, RECIPE, ensure_due};
 use crate::services::revision::{commit_outcome, require_revision};
 use crate::services::stock_effects::{
-    StockAffected, component_release, name_outcomes, portion_deduction, product_deduction,
-    record_deduction, requirement_deduction,
+    StockAffected, component_release, cooked_food_deduction, name_outcomes, portion_deduction,
+    product_deduction, record_deduction, requirement_deduction,
 };
 
 impl MealPlanService {
@@ -821,15 +821,15 @@ impl MealPlanService {
                     subject,
                 )])
             }
-            MealItemRef::Dish { prepared_batch_id } => {
+            MealItemRef::Dish { recipe_id } => {
                 let ConsumedAmount::Servings(servings) = *eaten_amount else {
                     return Ok(Vec::new());
                 };
                 let name = catalogue.name_of(item);
-                Ok(vec![portion_deduction(
+                Ok(vec![cooked_food_deduction(
                     component_id.as_uuid(),
                     eater_id,
-                    prepared_batch_id,
+                    recipe_id,
                     Quantity::new(servings, Unit::Serving),
                     stock_source_label(entry, &name),
                     Some(actor),
@@ -886,14 +886,14 @@ impl MealPlanService {
                     })
                     .collect()
             }
-            MealItemRef::Dish { prepared_batch_id } => {
+            MealItemRef::Dish { recipe_id } => {
                 let ConsumedAmount::Servings(servings) = record.amount else {
                     return Vec::new();
                 };
-                vec![portion_deduction(
+                vec![cooked_food_deduction(
                     record.id.as_uuid(),
                     record.member_id.as_uuid(),
-                    prepared_batch_id,
+                    recipe_id,
                     Quantity::new(servings, Unit::Serving),
                     catalogue.name_of(record.item),
                     record.recorded_by,
@@ -918,11 +918,10 @@ impl MealPlanService {
                         .await?
                         .ok_or_else(|| CoreError::not_found(RECIPE, recipe_id))?;
                 }
-                MealItemRef::Dish { prepared_batch_id } => {
-                    self.batches
-                        .get(prepared_batch_id)
-                        .await?
-                        .ok_or_else(|| CoreError::not_found(DISH, prepared_batch_id))?;
+                MealItemRef::Dish { recipe_id } => {
+                    if self.batches.held_for_recipe(recipe_id).await?.is_empty() {
+                        return Err(CoreError::not_found(DISH, recipe_id));
+                    }
                 }
             }
         }

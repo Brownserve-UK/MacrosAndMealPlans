@@ -726,7 +726,6 @@ async fn an_ad_hoc_recipe_record_draws_its_ingredients_from_stock() {
         .await
         .unwrap();
 
-    // The recipe needs 200 g across 2 servings, so one serving draws 100 g and covers it cleanly.
     assert!(recorded.stock.is_empty());
     assert_eq!(h.stock_grams(item).await, dgrams(400));
 }

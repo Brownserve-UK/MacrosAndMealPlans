@@ -10,7 +10,9 @@ import { addDays, parseIsoDate } from './date';
 import { MealSlotMenu } from './MealSlotMenu';
 import { MAIN_SLOTS } from './slots';
 
-export type PlannableDish = { preparedBatchId: string; name: string; servings: number };
+export type PlannableDish = { recipeId: string; name: string; servings: number };
+
+type Pressing = PlannableDish & { useBy: string };
 
 const HORIZON_DAYS = 4;
 
@@ -35,12 +37,28 @@ export function UseItUp({
   const stock = useStock({ per_page: 200 });
   const horizon = addDays(today, HORIZON_DAYS);
 
-  const pressing = (stock.data?.items ?? [])
-    .filter((item) => item.subject_kind === 'prepared_portion')
-    .filter((item) => item.usability_deadline && item.usability_deadline.date <= horizon)
-    .sort((a, b) =>
-      (a.usability_deadline?.date ?? '').localeCompare(b.usability_deadline?.date ?? ''),
-    );
+  const byPlace = new Map<string, Pressing>();
+  for (const item of stock.data?.items ?? []) {
+    const recipeId = item.prepared_recipe_id;
+    const useBy = item.usability_deadline?.date;
+    if (!recipeId || !useBy || useBy > horizon) continue;
+    const servings = servingsOf(item.level) ?? 0;
+    if (servings <= 0) continue;
+    const key = `${recipeId}:${item.storage_location}`;
+    const found = byPlace.get(key);
+    if (found) {
+      found.servings += servings;
+      if (useBy < found.useBy) found.useBy = useBy;
+    } else {
+      byPlace.set(key, {
+        recipeId,
+        name: item.prepared_batch_name ?? 'Cooked food',
+        servings,
+        useBy,
+      });
+    }
+  }
+  const pressing = [...byPlace.values()].sort((a, b) => a.useBy.localeCompare(b.useBy));
 
   if (pressing.length === 0) return null;
   const soonest = pressing[0];
@@ -63,31 +81,21 @@ export function UseItUp({
             {pressing
               .slice(0, 3)
               .map((item) => {
-                const servings = servingsOf(item.level);
-                const amount = servings == null
-                  ? ''
-                  : `, ${servings === 1 ? '1 serving' : `${servings} servings`}`;
-                const when = item.usability_deadline
-                  ? `, ${deadlineLabel(item.usability_deadline.date, today)}`
-                  : '';
-                return `${item.prepared_batch_name ?? 'Cooked food'}${amount}${when}`;
+                const amount = item.servings === 1 ? '1 serving' : `${item.servings} servings`;
+                return `${item.name}, ${amount}, ${deadlineLabel(item.useBy, today)}`;
               })
               .join(' · ')}
           </Typography>
         </Stack>
 
-        {onPlan && soonest?.prepared_batch_id ? (
+        {onPlan && soonest ? (
           <MealSlotMenu
             choices={MAIN_SLOTS}
             label="Plan it"
             variant="text"
             onSelect={(slot) =>
               onPlan(
-                {
-                  preparedBatchId: soonest.prepared_batch_id!,
-                  name: soonest.prepared_batch_name ?? 'Cooked food',
-                  servings: servingsOf(soonest.level) ?? 1,
-                },
+                { recipeId: soonest.recipeId, name: soonest.name, servings: soonest.servings },
                 slot,
               )
             }

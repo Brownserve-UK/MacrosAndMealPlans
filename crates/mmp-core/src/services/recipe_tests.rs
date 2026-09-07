@@ -572,7 +572,6 @@ async fn a_generic_ingredient_line_yields_estimated_nutrition() {
         .unwrap();
 
     let nutrition = h.service.nutrition_for(recipe.id, actor).await.unwrap();
-    // Mean of 200 and 400 kcal/100g over 100g => 300 kcal, across 2 servings => 150 each.
     assert_eq!(nutrition.consumed.facts.energy_kcal, Some(d(150)));
     assert_eq!(nutrition.consumed.quality, NutritionQuality::Estimated);
     assert!(nutrition.gaps.is_empty());

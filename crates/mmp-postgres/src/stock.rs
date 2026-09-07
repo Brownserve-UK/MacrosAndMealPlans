@@ -461,6 +461,19 @@ pub(crate) async fn apply_stock_write(
             .bind(batch_id.as_uuid())
             .fetch_all(&mut *conn)
             .await,
+            DeductionCandidates::CookedFood(recipe_id) => {
+                sqlx::query_as(
+                    "SELECT s.id, s.product_id, s.prepared_batch_id, s.tracking_mode, \
+                     s.quantity_value, s.quantity_unit, s.storage_location, s.source_date, \
+                     s.source_date_kind, s.usability_deadline, s.usability_deadline_basis, \
+                     s.note, s.revision, s.created_at, s.updated_at, s.archived_at \
+                     FROM stock_item s JOIN prepared_batch b ON b.id = s.prepared_batch_id \
+                     WHERE b.recipe_id = $1 AND s.archived_at IS NULL FOR UPDATE OF s",
+                )
+                .bind(recipe_id.as_uuid())
+                .fetch_all(&mut *conn)
+                .await
+            }
         }
         .map_err(|e| repository_error("locking stock for a deduction", e))?;
         let items: Vec<StockItem> = rows

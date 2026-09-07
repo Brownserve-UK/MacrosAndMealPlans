@@ -527,7 +527,7 @@ fn claims_for_pool(
         .filter(|claim| match claim.subject {
             DemandSubject::Ingredient { ingredient_id: id } => id == ingredient_id,
             DemandSubject::Product { product_id } => pool.contains(&product_id),
-            DemandSubject::PreparedPortion { .. } => false,
+            DemandSubject::PreparedPortion { .. } | DemandSubject::CookedFood { .. } => false,
         })
         .cloned()
         .collect()

@@ -84,6 +84,7 @@ pub fn stub_state() -> AppState {
         Arc::new(NoopIngredients),
         Arc::new(NoopMealPlans),
         Arc::new(NoopRecipes),
+        Arc::new(NoopPreparedBatches),
         Arc::new(NoopMembers),
         Arc::new(NoopHouseholdSettings),
         Arc::new(SystemClock),
@@ -314,6 +315,13 @@ impl mmp_core::ports::PreparedBatchRepository for NoopPreparedBatches {
         &self,
         _: time::Date,
         _: time::Date,
+    ) -> mmp_core::Result<Vec<mmp_core::domain::PreparedBatch>> {
+        Ok(Vec::new())
+    }
+
+    async fn held_for_recipe(
+        &self,
+        _: mmp_core::domain::RecipeId,
     ) -> mmp_core::Result<Vec<mmp_core::domain::PreparedBatch>> {
         Ok(Vec::new())
     }

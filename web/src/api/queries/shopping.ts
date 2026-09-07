@@ -29,7 +29,6 @@ export function useShoppingCadence() {
       try {
         return await unwrap(await client.GET('/api/v1/shopping/cadence', {}));
       } catch (error) {
-        // No cadence configured is a normal state, not a failure.
         if (error instanceof ApiError && error.status === 404) return null;
         throw error;
       }
@@ -49,7 +48,6 @@ function useShoppingInvalidation() {
   const qc = useQueryClient();
   return () => {
     void qc.invalidateQueries({ queryKey: shoppingKeys.all() });
-    // Buying something changes what is in the cupboard too.
     void qc.invalidateQueries({ queryKey: stockKeys.all() });
   };
 }

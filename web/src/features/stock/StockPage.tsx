@@ -18,6 +18,7 @@ import {
   IngredientCard,
   PreparedPortionCard,
   StockCard,
+  type CookedFoodRow,
   type StockGroup,
 } from './StockCard';
 import { levelFor } from './stockLevel';
@@ -53,6 +54,20 @@ function sortGroups(groups: StockGroup[], key: SortKey): StockGroup[] {
       la.freeFraction - lb.freeFraction ||
       byName(a, b)
     );
+  });
+}
+
+function sortCooked(rows: CookedFoodRow[], key: SortKey): CookedFoodRow[] {
+  const byName = (a: CookedFoodRow, b: CookedFoodRow) =>
+    a.name.localeCompare(b.name) || a.location.localeCompare(b.location);
+  const sorted = [...rows];
+  if (key === 'name') return sorted.sort(byName);
+  if (key === 'level') return sorted.sort((a, b) => a.servings - b.servings || byName(a, b));
+  return sorted.sort((a, b) => {
+    if (a.useBy && b.useBy) return a.useBy.localeCompare(b.useBy) || byName(a, b);
+    if (a.useBy) return -1;
+    if (b.useBy) return 1;
+    return byName(a, b);
   });
 }
 
@@ -113,28 +128,33 @@ export function StockPage() {
     return [...byProduct.values()];
   }, [stock.data, productName, availabilityByProduct]);
 
-  const preparedGroups = useMemo<StockGroup[]>(() => {
-    const byBatch = new Map<string, StockGroup>();
+  const preparedRows = useMemo<CookedFoodRow[]>(() => {
+    const byPlace = new Map<string, CookedFoodRow>();
     for (const item of stock.data?.items ?? []) {
-      const batchId = item.prepared_batch_id;
-      if (!batchId) continue;
-      let group = byBatch.get(batchId);
-      if (!group) {
-        group = {
-          id: batchId,
-          name: item.prepared_batch_name ?? 'Prepared portion',
-          items: [],
-          availability: null,
-        };
-        byBatch.set(batchId, group);
+      const recipeId = item.prepared_recipe_id;
+      if (!recipeId) continue;
+      const servings = 'quantity' in item.level ? item.level.quantity.amount : 0;
+      if (servings <= 0) continue;
+      const key = `${recipeId}:${item.storage_location}`;
+      const useBy = item.usability_deadline?.date ?? null;
+      const row = byPlace.get(key);
+      if (row) {
+        row.servings += servings;
+        if (useBy && (!row.useBy || useBy < row.useBy)) row.useBy = useBy;
+      } else {
+        byPlace.set(key, {
+          key,
+          recipeId,
+          name: item.prepared_batch_name ?? 'Cooked food',
+          location: item.storage_location,
+          servings,
+          useBy,
+        });
       }
-      group.items.push(item);
     }
-    return [...byBatch.values()];
+    return [...byPlace.values()];
   }, [stock.data]);
 
-  // Products we hold that aren't mapped to an ingredient have nowhere to sit here, so they only
-  // ever appear under Products.
   const ingredientGroups = useMemo<{ group: StockGroup; productCount: number }[]>(() => {
     const byIngredient = new Map<string, { group: StockGroup; products: Set<string> }>();
     for (const item of stock.data?.items ?? []) {
@@ -174,10 +194,10 @@ export function StockPage() {
   const visiblePrepared = useMemo(() => {
     const needle = debounced.trim().toLowerCase();
     const filtered = needle
-      ? preparedGroups.filter((group) => group.name.toLowerCase().includes(needle))
-      : preparedGroups;
-    return sortGroups(filtered, sort);
-  }, [preparedGroups, debounced, sort]);
+      ? preparedRows.filter((row) => row.name.toLowerCase().includes(needle))
+      : preparedRows;
+    return sortCooked(filtered, sort);
+  }, [preparedRows, debounced, sort]);
 
   const visibleIngredients = useMemo(() => {
     const needle = debounced.trim().toLowerCase();
@@ -196,7 +216,7 @@ export function StockPage() {
   if (stock.isLoading) return <Loading label="Loading stock" />;
   if (stock.isError) return <ErrorState error={stock.error} onRetry={() => stock.refetch()} />;
 
-  const empty = productGroups.length === 0 && preparedGroups.length === 0;
+  const empty = productGroups.length === 0 && preparedRows.length === 0;
   const showing =
     view === 'ingredients'
       ? visibleIngredients.length
@@ -289,8 +309,8 @@ export function StockPage() {
         </RecordListShell>
       ) : view === 'prepared' ? (
         <RecordListShell>
-          {visiblePrepared.map((group) => (
-            <PreparedPortionCard key={group.id} group={group} />
+          {visiblePrepared.map((row) => (
+            <PreparedPortionCard key={row.key} row={row} />
           ))}
         </RecordListShell>
       ) : (

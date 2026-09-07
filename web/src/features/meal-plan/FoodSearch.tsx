@@ -11,7 +11,7 @@ import { useDebounced } from '../../hooks/useDebounced';
 import { parseIsoDate } from './date';
 
 export type Dish = {
-  preparedBatchId: string;
+  recipeId: string;
   name: string;
   servings: number;
   useBy: string | null;
@@ -63,20 +63,20 @@ export function FoodSearch({
   const stock = useStock({ per_page: 200 });
 
   const dishes = useMemo<Dish[]>(() => {
-    const byBatch = new Map<string, Dish>();
+    const byRecipe = new Map<string, Dish>();
     for (const item of stock.data?.items ?? []) {
-      if (item.subject_kind !== 'prepared_portion' || !item.prepared_batch_id) continue;
+      if (item.subject_kind !== 'prepared_portion' || !item.prepared_recipe_id) continue;
       const servings = 'quantity' in item.level ? item.level.quantity.amount : 0;
       if (servings <= 0) continue;
       const useBy = item.usability_deadline?.date ?? null;
-      const found = byBatch.get(item.prepared_batch_id);
+      const found = byRecipe.get(item.prepared_recipe_id);
       if (found) {
         found.servings += servings;
         found.chilled = found.chilled || item.storage_location === 'chilled';
         if (useBy && (!found.useBy || useBy < found.useBy)) found.useBy = useBy;
       } else {
-        byBatch.set(item.prepared_batch_id, {
-          preparedBatchId: item.prepared_batch_id,
+        byRecipe.set(item.prepared_recipe_id, {
+          recipeId: item.prepared_recipe_id,
           name: item.prepared_batch_name ?? 'Cooked food',
           servings,
           useBy,
@@ -84,7 +84,7 @@ export function FoodSearch({
         });
       }
     }
-    return [...byBatch.values()].sort((a, b) => (a.useBy ?? '9999').localeCompare(b.useBy ?? '9999'));
+    return [...byRecipe.values()].sort((a, b) => (a.useBy ?? '9999').localeCompare(b.useBy ?? '9999'));
   }, [stock.data]);
 
   const options = useMemo<Option[]>(() => {
@@ -94,10 +94,10 @@ export function FoodSearch({
     const needle = debounced.trim().toLowerCase();
 
     const dishOptions: Option[] = dishes
-      .filter((dish) => !skipDishes.has(dish.preparedBatchId))
+      .filter((dish) => !skipDishes.has(dish.recipeId))
       .filter((dish) => !needle || dish.name.toLowerCase().includes(needle))
       .map((dish) => ({
-        id: `dish:${dish.preparedBatchId}`,
+        id: `dish:${dish.recipeId}`,
         name: dish.name,
         caption: dishCaption(dish),
         chip: dish.chilled ? ('fridge' as const) : ('freezer' as const),

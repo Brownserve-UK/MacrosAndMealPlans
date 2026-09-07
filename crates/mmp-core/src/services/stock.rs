@@ -7,8 +7,8 @@ use time::Date;
 use super::fulfilment::{RecipeFulfilments, RecipeWant, expand_recipe};
 use super::revision::{commit_outcome, require_revision};
 use crate::domain::{
-    Availability, AvailabilityReport, Confidence, ConsumedAmount, DeductionCandidates,
-    DeductionPlan, DemandClaim, DemandGap, DemandSubject, HouseholdMemberId,
+    Availability, AvailabilityReport, Confidence, ConsumedAmount, CookedFoodAvailability,
+    DeductionCandidates, DeductionPlan, DemandClaim, DemandGap, DemandSubject, HouseholdMemberId,
     IngredientAvailability, IngredientId, MealItemRef, MissingStock, NewStockEvent, NewStockItem,
     ProductAvailability, ProductId, Quantity, Recipe, RecipeId, RecipeRequirement, Revision,
     StockEvent, StockEventKind, StockItem, StockItemId, StockItemPatch, StockLevel, Unit, UserId,
@@ -17,8 +17,8 @@ use crate::domain::{
 use crate::error::{CoreError, Result};
 use crate::ports::{
     Clock, HouseholdMemberRepository, HouseholdSettingsRepository, IngredientRepository,
-    MealPlanQuery, MealPlanRepository, MemberQuery, PageRequest, Paginated, ProductRepository,
-    RecipeRepository, StockQuery, StockRepository,
+    MealPlanQuery, MealPlanRepository, MemberQuery, PageRequest, Paginated,
+    PreparedBatchRepository, ProductRepository, RecipeRepository, StockQuery, StockRepository,
 };
 
 const STOCK_ITEM: &str = "stock item";
@@ -37,6 +37,7 @@ pub struct StockService {
     ingredients: Arc<dyn IngredientRepository>,
     meal_plans: Arc<dyn MealPlanRepository>,
     recipes: Arc<dyn RecipeRepository>,
+    batches: Arc<dyn PreparedBatchRepository>,
     members: Arc<dyn HouseholdMemberRepository>,
     settings: Arc<dyn HouseholdSettingsRepository>,
     clock: Arc<dyn Clock>,
@@ -50,6 +51,7 @@ impl StockService {
         ingredients: Arc<dyn IngredientRepository>,
         meal_plans: Arc<dyn MealPlanRepository>,
         recipes: Arc<dyn RecipeRepository>,
+        batches: Arc<dyn PreparedBatchRepository>,
         members: Arc<dyn HouseholdMemberRepository>,
         settings: Arc<dyn HouseholdSettingsRepository>,
         clock: Arc<dyn Clock>,
@@ -60,6 +62,7 @@ impl StockService {
             ingredients,
             meal_plans,
             recipes,
+            batches,
             members,
             settings,
             clock,
@@ -322,6 +325,7 @@ impl StockService {
                     ingredient_ids.contains(&ingredient_id)
                 }
                 DemandSubject::PreparedPortion { .. } => false,
+                DemandSubject::CookedFood { .. } => all_ingredients,
             })
             .cloned()
             .collect();
@@ -483,16 +487,93 @@ impl StockService {
             );
         }
 
+        let cooked_food = if all_ingredients {
+            self.cooked_availability(&demand).await?
+        } else {
+            Vec::new()
+        };
+
         Ok(StockSnapshot {
             report: AvailabilityReport {
                 products,
                 ingredients,
+                cooked_food,
                 demand_gaps: demand.loose_gaps(),
                 claims,
             },
             pools,
             items,
         })
+    }
+
+    async fn cooked_availability(&self, demand: &Demand) -> Result<Vec<CookedFoodAvailability>> {
+        let held = self
+            .stock
+            .list(&StockQuery {
+                include_archived: false,
+                page: PageRequest::new(1, PageRequest::MAX_PER_PAGE),
+                ..Default::default()
+            })
+            .await?;
+        let portions: Vec<StockItem> = held
+            .items
+            .into_iter()
+            .filter(|item| item.prepared_batch_id().is_some())
+            .collect();
+
+        let mut batch_ids: Vec<_> = portions
+            .iter()
+            .filter_map(|item| item.prepared_batch_id())
+            .collect();
+        sort_dedup(&mut batch_ids, |id| id.as_uuid());
+        let batches = self.batches.get_many(&batch_ids).await?;
+        let batch_recipe: HashMap<_, _> = batches
+            .iter()
+            .filter_map(|batch| batch.recipe_id.map(|recipe_id| (batch.id, recipe_id)))
+            .collect();
+
+        let mut by_recipe: HashMap<RecipeId, Vec<&StockItem>> = HashMap::new();
+        for item in &portions {
+            let Some(recipe_id) = item
+                .prepared_batch_id()
+                .and_then(|id| batch_recipe.get(&id).copied())
+            else {
+                continue;
+            };
+            by_recipe.entry(recipe_id).or_default().push(item);
+        }
+
+        let mut recipe_ids: Vec<RecipeId> = by_recipe.keys().copied().collect();
+        recipe_ids.extend(
+            demand
+                .quantities
+                .keys()
+                .filter_map(DemandSubject::cooked_recipe_id),
+        );
+        sort_dedup(&mut recipe_ids, RecipeId::as_uuid);
+
+        let names: HashMap<RecipeId, String> = self
+            .recipes
+            .get_many(&recipe_ids)
+            .await?
+            .into_iter()
+            .map(|recipe| (recipe.id, recipe.name))
+            .collect();
+
+        let mut cooked: Vec<CookedFoodAvailability> = recipe_ids
+            .into_iter()
+            .map(|recipe_id| {
+                let pool = by_recipe.remove(&recipe_id).unwrap_or_default();
+                let want = demand.quantity(&DemandSubject::cooked_food(recipe_id));
+                CookedFoodAvailability {
+                    recipe_id,
+                    name: names.get(&recipe_id).cloned().unwrap_or_default(),
+                    availability: resolve_availability(&pool, want, MissingStock::Absent),
+                }
+            })
+            .collect();
+        cooked.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok(cooked)
     }
 
     async fn seed_pools_from_stock(
@@ -646,12 +727,12 @@ impl StockService {
                             demand.note_loose(gap);
                         }
                     }
-                    MealItemRef::Dish { prepared_batch_id } => {
+                    MealItemRef::Dish { recipe_id } => {
                         let ConsumedAmount::Servings(servings) = wanted else {
                             demand.note_loose(DemandGap::AmountUnresolvable);
                             continue;
                         };
-                        let subject = DemandSubject::prepared_portion(prepared_batch_id);
+                        let subject = DemandSubject::cooked_food(recipe_id);
                         let quantity = Quantity::new(servings, Unit::Serving);
                         demand.add(subject, quantity);
                         demand.note_claim(entry, subject, quantity, None, assumed);

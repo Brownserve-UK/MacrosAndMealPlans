@@ -14,8 +14,8 @@ use crate::domain::{
 use crate::ports::{FixedClock, MealPlanRepository, StockQuery};
 use crate::testing::{
     InMemoryHouseholdMemberRepository, InMemoryHouseholdSettingsRepository,
-    InMemoryIngredientRepository, InMemoryMealPlanRepository, InMemoryProductRepository,
-    InMemoryRecipeRepository, InMemoryStockRepository,
+    InMemoryIngredientRepository, InMemoryMealPlanRepository, InMemoryPreparedBatchRepository,
+    InMemoryProductRepository, InMemoryRecipeRepository, InMemoryStockRepository,
 };
 
 struct Harness {
@@ -37,6 +37,7 @@ fn harness() -> Harness {
     let meal_plans = InMemoryMealPlanRepository::default();
     let recipes = InMemoryRecipeRepository::new();
     let members = InMemoryHouseholdMemberRepository::new();
+    let batches = InMemoryPreparedBatchRepository::with_stock(stock.clone());
     let settings = InMemoryHouseholdSettingsRepository::new();
     let member_id = HouseholdMemberId::new();
     let now = OffsetDateTime::UNIX_EPOCH;
@@ -56,6 +57,7 @@ fn harness() -> Harness {
         Arc::new(ingredients.clone()),
         Arc::new(meal_plans.clone()),
         Arc::new(recipes.clone()),
+        Arc::new(batches),
         Arc::new(members),
         Arc::new(settings.clone()),
         Arc::new(FixedClock::new(datetime!(2026-08-24 09:00 UTC))),
@@ -347,8 +349,6 @@ async fn a_planned_recipe_we_cannot_load_leaves_demand_incomplete() {
         .await
         .unwrap();
 
-    // The recipe id points at nothing, so there is no ingredient to blame: the gap has to travel
-    // at the report level rather than on a row.
     assert_eq!(result.demand_gaps, vec![DemandGap::RecipeMissing]);
     assert!(result.products[0].demand_gaps.is_empty());
 }
@@ -567,7 +567,6 @@ async fn a_planned_recipe_ingredient_counts_demand_across_its_whole_product_pool
             .unwrap();
     }
 
-    // 400 g over 4 servings, two servings planned, so the pool owes 200 g.
     let curry = seed_recipe(&h, 4, vec![ingredient_line(rice, 400)]);
     plan_servings(&h, curry.id, 2).await;
 
@@ -599,7 +598,6 @@ async fn a_planned_recipe_ingredient_counts_demand_across_its_whole_product_pool
     assert_eq!(planned_demand, grams(200));
     assert_eq!(unallocated, grams(400));
 
-    // And the product rows carry the same 200 g between them rather than double-counting it.
     let per_product: Decimal = report
         .products
         .iter()
@@ -642,7 +640,6 @@ async fn an_ingredient_we_hold_no_stock_of_still_shows_its_demand() {
     let rice = crate::domain::IngredientId::new();
     let a = mapped("Tesco Basmati", rice);
     h.products.seed(a.clone());
-    // Deliberately no stock item: the product rows cannot express this, only the ingredient row can.
 
     let curry = seed_recipe(&h, 1, vec![ingredient_line(rice, 250)]);
     plan_servings(&h, curry.id, 1).await;
@@ -811,10 +808,8 @@ async fn a_pools_demand_includes_meals_planned_directly_against_its_products() {
             .unwrap();
     }
 
-    // 200 g wanted through the recipe's generic ingredient line...
     let curry = seed_recipe(&h, 1, vec![ingredient_line(milk, 200)]);
     plan_servings(&h, curry.id, 1).await;
-    // ...and 500 g planned straight onto one of the products.
     plan_measured(&h, a.id, 500).await;
 
     let report = h
@@ -841,7 +836,6 @@ async fn a_pools_demand_includes_meals_planned_directly_against_its_products() {
         );
     };
     assert_eq!(on_hand, grams(800));
-    // The pool owes both, not just the 200 g asked for by name.
     assert_eq!(planned_demand, grams(700));
     assert_eq!(unallocated, grams(100));
 }

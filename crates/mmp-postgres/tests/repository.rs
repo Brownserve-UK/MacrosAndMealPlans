@@ -2460,7 +2460,6 @@ async fn a_stale_recipe_update_is_rejected_and_keeps_components(pool: PgPool) {
     let outcome = repo.update(&updated, Revision::new(99)).await.unwrap();
     assert!(matches!(outcome, UpdateOutcome::RevisionMismatch { .. }));
 
-    // The rollback must leave the original single component untouched.
     let loaded = repo.get(original.id).await.unwrap().unwrap();
     assert_eq!(loaded.components.len(), 1);
     assert_eq!(
@@ -2989,9 +2988,6 @@ async fn two_draws_from_one_source_can_share_a_stock_item(pool: PgPool) {
         .await
         .unwrap();
 
-    // This is a recipe that both pins a product and asks for its ingredient: two lines, one source,
-    // and both land on the same bottle. Without the detail id the second insert is swallowed as a
-    // duplicate and we quietly under-deduct.
     let record = consumption_record(member_id, product_id);
     let line_a = Uuid::now_v7();
     let line_b = Uuid::now_v7();
@@ -3553,7 +3549,6 @@ async fn the_database_refuses_a_goal_that_contradicts_its_objective(pool: PgPool
     let joe = member("Joe");
     members.insert(&joe).await.unwrap();
 
-    // Losing towards a heavier target.
     let backwards = weight_goal(
         joe.id,
         WeightObjective::Lose,
@@ -3566,7 +3561,6 @@ async fn the_database_refuses_a_goal_that_contradicts_its_objective(pool: PgPool
         Err(CoreError::Repository(_))
     ));
 
-    // Gaining towards a lighter target.
     let also_backwards = weight_goal(
         joe.id,
         WeightObjective::Gain,
@@ -3579,7 +3573,6 @@ async fn the_database_refuses_a_goal_that_contradicts_its_objective(pool: PgPool
         Err(CoreError::Repository(_))
     ));
 
-    // Losing with no rate to lose at.
     let rateless = weight_goal(
         joe.id,
         WeightObjective::Lose,
@@ -3592,7 +3585,6 @@ async fn the_database_refuses_a_goal_that_contradicts_its_objective(pool: PgPool
         Err(CoreError::Repository(_))
     ));
 
-    // Maintaining at a rate.
     let busy_maintenance = weight_goal(
         joe.id,
         WeightObjective::Maintain,

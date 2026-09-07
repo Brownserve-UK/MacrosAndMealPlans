@@ -42,7 +42,7 @@ impl From<NutritionSummary> for NutritionSummaryDto {
 pub enum MealItemRefDto {
     Product { product_id: Uuid },
     Recipe { recipe_id: Uuid },
-    Dish { prepared_batch_id: Uuid },
+    Dish { dish_recipe_id: Uuid },
 }
 
 impl From<MealItemRef> for MealItemRefDto {
@@ -54,8 +54,8 @@ impl From<MealItemRef> for MealItemRefDto {
             MealItemRef::Recipe { recipe_id } => Self::Recipe {
                 recipe_id: recipe_id.as_uuid(),
             },
-            MealItemRef::Dish { prepared_batch_id } => Self::Dish {
-                prepared_batch_id: prepared_batch_id.as_uuid(),
+            MealItemRef::Dish { recipe_id } => Self::Dish {
+                dish_recipe_id: recipe_id.as_uuid(),
             },
         }
     }
@@ -66,9 +66,7 @@ impl From<MealItemRefDto> for MealItemRef {
         match value {
             MealItemRefDto::Product { product_id } => MealItemRef::product(product_id.into()),
             MealItemRefDto::Recipe { recipe_id } => MealItemRef::recipe(recipe_id.into()),
-            MealItemRefDto::Dish { prepared_batch_id } => {
-                MealItemRef::dish(prepared_batch_id.into())
-            }
+            MealItemRefDto::Dish { dish_recipe_id } => MealItemRef::dish(dish_recipe_id.into()),
         }
     }
 }
@@ -78,7 +76,7 @@ impl From<MealItemRefDto> for MealItemRef {
 pub enum ItemRefRequest {
     Product { product_id: Uuid },
     Recipe { recipe_id: Uuid },
-    Dish { prepared_batch_id: Uuid },
+    Dish { dish_recipe_id: Uuid },
 }
 
 impl From<ItemRefRequest> for MealItemRef {
@@ -86,9 +84,7 @@ impl From<ItemRefRequest> for MealItemRef {
         match value {
             ItemRefRequest::Product { product_id } => MealItemRef::product(product_id.into()),
             ItemRefRequest::Recipe { recipe_id } => MealItemRef::recipe(recipe_id.into()),
-            ItemRefRequest::Dish { prepared_batch_id } => {
-                MealItemRef::dish(prepared_batch_id.into())
-            }
+            ItemRefRequest::Dish { dish_recipe_id } => MealItemRef::dish(dish_recipe_id.into()),
         }
     }
 }

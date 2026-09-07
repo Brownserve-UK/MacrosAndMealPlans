@@ -64,7 +64,7 @@ function initialFoods(meal: PlannerMeal | null): FoodDraft[] {
     itemId: food.item_kind === 'product'
       ? food.product_id
       : food.item_kind === 'dish'
-        ? food.prepared_batch_id
+        ? food.dish_recipe_id
         : food.recipe_id,
     name: food.item_name,
     amount: food.amount,
@@ -132,13 +132,13 @@ export function MealEditorDialog({
   const [guestCount, setGuestCount] = useState(meal?.guest_groups.reduce((sum, group) => sum + group.count, 0) ?? 0);
   const [foods, setFoods] = useState<FoodDraft[]>(() => {
     const existing = initialFoods(meal);
-    if (!startWith || existing.some((food) => food.itemId === startWith.preparedBatchId)) {
+    if (!startWith || existing.some((food) => food.itemId === startWith.recipeId)) {
       return existing;
     }
     return [...existing, {
       componentId: crypto.randomUUID(),
       itemKind: 'dish',
-      itemId: startWith.preparedBatchId,
+      itemId: startWith.recipeId,
       name: startWith.name,
       amount: { kind: 'servings', value: 1 },
     }];
@@ -220,11 +220,11 @@ export function MealEditorDialog({
   }
 
   function addDish(next: Dish) {
-    if (foods.some((food) => food.itemKind === 'dish' && food.itemId === next.preparedBatchId)) return;
+    if (foods.some((food) => food.itemKind === 'dish' && food.itemId === next.recipeId)) return;
     setFoods((current) => [...current, {
       componentId: crypto.randomUUID(),
       itemKind: 'dish',
-      itemId: next.preparedBatchId,
+      itemId: next.recipeId,
       name: next.name,
       amount: { kind: 'servings', value: Math.min(Math.max(forecast, 1), next.servings) },
     }]);
@@ -266,7 +266,7 @@ export function MealEditorDialog({
       ...(food.itemKind === 'product'
         ? { item_kind: 'product' as const, product_id: food.itemId }
         : food.itemKind === 'dish'
-          ? { item_kind: 'dish' as const, prepared_batch_id: food.itemId }
+          ? { item_kind: 'dish' as const, dish_recipe_id: food.itemId }
           : { item_kind: 'recipe' as const, recipe_id: food.itemId }),
       amount: servingsFor(food),
     }));

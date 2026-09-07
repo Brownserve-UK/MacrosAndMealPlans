@@ -30,8 +30,12 @@ vi.mock('../../api/queries', () => ({
         { id: 'ck1', product_id: 'ck', level: exact(400, 'g'), storage_location: 'chilled', usability_deadline: { date: '2026-08-27' }, revision: 1 },
         { id: 'ck2', product_id: 'ck', level: exact(650, 'g'), storage_location: 'frozen', revision: 1 },
         { id: 'ri1', product_id: 'ri', level: { mode: 'not_tracked' }, storage_location: 'ambient', revision: 1 },
+        { id: 'cu1', prepared_batch_id: 'b1', prepared_recipe_id: 'curry', prepared_batch_name: 'Chicken Curry', level: exact(2, 'serving'), storage_location: 'chilled', usability_deadline: { date: '2026-09-10' }, revision: 1 },
+        { id: 'cu2', prepared_batch_id: 'b2', prepared_recipe_id: 'curry', prepared_batch_name: 'Chicken Curry', level: exact(1, 'serving'), storage_location: 'chilled', usability_deadline: { date: '2026-09-12' }, revision: 1 },
+        { id: 'cu3', prepared_batch_id: 'b2', prepared_recipe_id: 'curry', prepared_batch_name: 'Chicken Curry', level: exact(3, 'serving'), storage_location: 'frozen', revision: 1 },
+        { id: 'ch1', prepared_batch_id: 'b3', prepared_recipe_id: 'chilli', prepared_batch_name: 'Chilli', level: exact(4, 'serving'), storage_location: 'frozen', revision: 1 },
       ],
-      total: 7,
+      total: 11,
     },
   }),
   useStockAvailability: () => ({
@@ -198,5 +202,52 @@ describe('StockPage products view', () => {
   it('no longer claims recipe meals are uncounted', () => {
     renderPage();
     expect(screen.queryByText(/aren't counted against stock yet/)).toBeNull();
+  });
+});
+
+const preparedOrder = () =>
+  screen.getAllByTestId(/^stock-portion-/).map((node) => node.getAttribute('data-testid'));
+
+async function showPrepared() {
+  await userEvent.setup().click(screen.getByRole('tab', { name: 'Prepared' }));
+}
+
+describe('StockPage prepared view', () => {
+  it('pools two cooks of the same food in the same place into one row', async () => {
+    renderPage();
+    await showPrepared();
+    expect(screen.getAllByText('Chicken Curry')).toHaveLength(2);
+    const fridge = screen.getByTestId('stock-portion-curry:chilled');
+    expect(within(fridge).getByText('3 servings')).toBeInTheDocument();
+  });
+
+  it('takes the soonest date of the cooks it pooled', async () => {
+    renderPage();
+    await showPrepared();
+    const fridge = screen.getByTestId('stock-portion-curry:chilled');
+    expect(within(fridge).getByText(/^Fridge, use by Thu 10 Sept?$/)).toBeInTheDocument();
+  });
+
+  it('keeps a food split across places as one row per place', async () => {
+    renderPage();
+    await showPrepared();
+    const freezer = screen.getByTestId('stock-portion-curry:frozen');
+    expect(within(freezer).getByText('3 servings')).toBeInTheDocument();
+    expect(within(freezer).getByText('Freezer')).toBeInTheDocument();
+  });
+
+  it('puts the soonest date first', async () => {
+    renderPage();
+    await showPrepared();
+    await userEvent.setup().click(screen.getByRole('combobox', { name: 'Sort' }));
+    await userEvent.setup().click(within(screen.getByRole('listbox')).getByText('Use-by'));
+    expect(preparedOrder()[0]).toBe('stock-portion-curry:chilled');
+  });
+
+  it('never shows a cooked row as an unknown quantity', async () => {
+    renderPage();
+    await showPrepared();
+    expect(screen.queryByText('Not known')).toBeNull();
+    expect(preparedOrder()).toHaveLength(3);
   });
 });

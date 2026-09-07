@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use async_trait::async_trait;
 use mmp_core::Result;
 use mmp_core::domain::{
-    MealPlanComponentId, NewStockEvent, PreparedBatch, PreparedBatchId, StockItem, StockItemId,
-    StockOutcome,
+    MealPlanComponentId, NewStockEvent, PreparedBatch, PreparedBatchId, RecipeId, StockItem,
+    StockItemId, StockOutcome,
 };
 use mmp_core::ports::{PreparedBatchRepository, StockWrite};
 use sqlx::PgPool;
@@ -42,6 +42,14 @@ const FOR_COMPONENTS: &str = concat!(
     columns!(),
     " FROM prepared_batch WHERE meal_plan_component_id = ANY($1) \
      ORDER BY prepared_at ASC, id ASC"
+);
+const HELD_FOR_RECIPE: &str = concat!(
+    "SELECT ",
+    columns!(),
+    " FROM prepared_batch b WHERE b.recipe_id = $1 \
+     AND EXISTS (SELECT 1 FROM stock_item s \
+                 WHERE s.prepared_batch_id = b.id AND s.archived_at IS NULL) \
+     ORDER BY b.prepared_at ASC, b.id ASC"
 );
 const LIST_IN_RANGE: &str = concat!(
     "SELECT ",
@@ -126,6 +134,15 @@ impl PreparedBatchRepository for PgPreparedBatchRepository {
             .fetch_all(&self.pool)
             .await
             .map_err(|e| repository_error("listing prepared batches", e))?;
+        rows.into_iter().map(TryInto::try_into).collect()
+    }
+
+    async fn held_for_recipe(&self, recipe_id: RecipeId) -> Result<Vec<PreparedBatch>> {
+        let rows: Vec<PreparedBatchRow> = sqlx::query_as(HELD_FOR_RECIPE)
+            .bind(recipe_id.as_uuid())
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| repository_error("loading cooked food for a recipe", e))?;
         rows.into_iter().map(TryInto::try_into).collect()
     }
 

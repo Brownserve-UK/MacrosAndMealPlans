@@ -6,8 +6,8 @@ use time::{Date, OffsetDateTime};
 
 use super::{
     HouseholdMemberId, IngredientId, MealPlanEntryId, MealPlanScope, MealSlot, Patch,
-    PreparedBatchId, ProductId, Quantity, Revision, StockEffectId, StockEventId, StockItemId, Unit,
-    UserId,
+    PreparedBatchId, ProductId, Quantity, RecipeId, Revision, StockEffectId, StockEventId,
+    StockItemId, Unit, UserId,
 };
 use crate::error::{Result, ValidationErrors};
 
@@ -401,6 +401,7 @@ pub enum DemandSubject {
     Product { product_id: ProductId },
     Ingredient { ingredient_id: IngredientId },
     PreparedPortion { prepared_batch_id: PreparedBatchId },
+    CookedFood { recipe_id: RecipeId },
 }
 
 impl DemandSubject {
@@ -416,24 +417,41 @@ impl DemandSubject {
         DemandSubject::PreparedPortion { prepared_batch_id }
     }
 
+    pub const fn cooked_food(recipe_id: RecipeId) -> Self {
+        DemandSubject::CookedFood { recipe_id }
+    }
+
+    pub const fn cooked_recipe_id(&self) -> Option<RecipeId> {
+        match self {
+            DemandSubject::CookedFood { recipe_id } => Some(*recipe_id),
+            _ => None,
+        }
+    }
+
     pub const fn product_id(&self) -> Option<ProductId> {
         match self {
             DemandSubject::Product { product_id } => Some(*product_id),
-            DemandSubject::Ingredient { .. } | DemandSubject::PreparedPortion { .. } => None,
+            DemandSubject::Ingredient { .. }
+            | DemandSubject::PreparedPortion { .. }
+            | DemandSubject::CookedFood { .. } => None,
         }
     }
 
     pub const fn ingredient_id(&self) -> Option<IngredientId> {
         match self {
             DemandSubject::Ingredient { ingredient_id } => Some(*ingredient_id),
-            DemandSubject::Product { .. } | DemandSubject::PreparedPortion { .. } => None,
+            DemandSubject::Product { .. }
+            | DemandSubject::PreparedPortion { .. }
+            | DemandSubject::CookedFood { .. } => None,
         }
     }
 
     pub const fn prepared_batch_id(&self) -> Option<PreparedBatchId> {
         match self {
             DemandSubject::PreparedPortion { prepared_batch_id } => Some(*prepared_batch_id),
-            DemandSubject::Product { .. } | DemandSubject::Ingredient { .. } => None,
+            DemandSubject::Product { .. }
+            | DemandSubject::Ingredient { .. }
+            | DemandSubject::CookedFood { .. } => None,
         }
     }
 
@@ -499,6 +517,7 @@ impl fmt::Display for DemandGap {
 pub struct AvailabilityReport {
     pub products: Vec<ProductAvailability>,
     pub ingredients: Vec<IngredientAvailability>,
+    pub cooked_food: Vec<CookedFoodAvailability>,
     pub demand_gaps: Vec<DemandGap>,
     pub claims: Vec<DemandClaim>,
 }
@@ -507,6 +526,7 @@ pub struct AvailabilityReport {
 pub enum DeductionCandidates {
     Products(Vec<ProductId>),
     PreparedBatch(PreparedBatchId),
+    CookedFood(RecipeId),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -536,6 +556,13 @@ impl DeductionTarget {
             candidates: DeductionCandidates::PreparedBatch(prepared_batch_id),
         }
     }
+
+    pub fn cooked_food(recipe_id: RecipeId) -> Self {
+        Self {
+            subject: DemandSubject::cooked_food(recipe_id),
+            candidates: DeductionCandidates::CookedFood(recipe_id),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -563,6 +590,13 @@ impl IngredientAvailability {
     pub fn demand_incomplete(&self) -> bool {
         !self.demand_gaps.is_empty()
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct CookedFoodAvailability {
+    pub recipe_id: RecipeId,
+    pub name: String,
+    pub availability: Availability,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

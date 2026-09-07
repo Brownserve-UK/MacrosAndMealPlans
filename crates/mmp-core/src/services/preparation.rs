@@ -75,6 +75,19 @@ impl PreparationService {
             .collect())
     }
 
+    pub async fn recipes_for(
+        &self,
+        ids: &[PreparedBatchId],
+    ) -> Result<std::collections::HashMap<PreparedBatchId, RecipeId>> {
+        Ok(self
+            .batches
+            .get_many(ids)
+            .await?
+            .into_iter()
+            .filter_map(|batch| batch.recipe_id.map(|recipe_id| (batch.id, recipe_id)))
+            .collect())
+    }
+
     pub async fn for_component(
         &self,
         component_id: MealPlanComponentId,

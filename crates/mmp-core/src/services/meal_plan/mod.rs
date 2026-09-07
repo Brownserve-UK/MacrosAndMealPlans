@@ -142,11 +142,10 @@ impl MealPlanService {
                         );
                     }
                 }
-                MealItemRef::Dish { prepared_batch_id } => {
-                    self.batches
-                        .get(prepared_batch_id)
-                        .await?
-                        .ok_or_else(|| CoreError::not_found(DISH, prepared_batch_id))?;
+                MealItemRef::Dish { recipe_id } => {
+                    if self.batches.held_for_recipe(recipe_id).await?.is_empty() {
+                        return Err(CoreError::not_found(DISH, recipe_id));
+                    }
                     if !matches!(component.amount, ConsumedAmount::Servings(_)) {
                         errors.push(
                             format!("components.{index}.amount"),

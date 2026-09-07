@@ -370,7 +370,7 @@ function entryToPlannerMeal(entry: MealPlanEntry): PlannerMeal {
       ...(component.item_kind === 'recipe'
         ? { item_kind: 'recipe' as const, recipe_id: component.recipe_id }
         : component.item_kind === 'dish'
-          ? { item_kind: 'dish' as const, prepared_batch_id: component.prepared_batch_id }
+          ? { item_kind: 'dish' as const, dish_recipe_id: component.dish_recipe_id }
           : { item_kind: 'product' as const, product_id: component.product_id }),
       item_name: component.item_name,
       amount: component.amount,

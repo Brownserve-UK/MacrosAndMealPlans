@@ -206,7 +206,6 @@ function ComponentLineEditor({
                 ...requirement,
                 ingredientId: next?.id ?? null,
                 ingredient: next,
-                // A different ingredient invalidates any pinned product.
                 productId: next?.id === requirement.ingredientId ? requirement.productId : null,
                 product: next?.id === requirement.ingredientId ? requirement.product : null,
               },

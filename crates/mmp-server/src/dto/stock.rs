@@ -1,8 +1,8 @@
 use mmp_core::domain::{
-    Availability, AvailabilityReport, Confidence, DemandClaim, DemandGap, DemandSubject,
-    IngredientAvailability, MealPlanScope, MealSlot, NewStockItem, Patch, ProductAvailability,
-    Shortfall, SourceDate, SourceDateKind, StockEvent, StockItem, StockItemId, StockItemPatch,
-    StockLevel, StockOutcome, StorageLocation, TrackingMode, UsabilityDeadline,
+    Availability, AvailabilityReport, Confidence, CookedFoodAvailability, DemandClaim, DemandGap,
+    DemandSubject, IngredientAvailability, MealPlanScope, MealSlot, NewStockItem, Patch,
+    ProductAvailability, Shortfall, SourceDate, SourceDateKind, StockEvent, StockItem, StockItemId,
+    StockItemPatch, StockLevel, StockOutcome, StorageLocation, TrackingMode, UsabilityDeadline,
 };
 use mmp_core::services::StockOutcomeView;
 use serde::{Deserialize, Serialize};
@@ -189,6 +189,8 @@ pub struct StockItemDto {
     pub prepared_batch_id: Option<Uuid>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prepared_batch_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prepared_recipe_id: Option<Uuid>,
     pub tracking_mode: TrackingModeDto,
     pub level: StockLevelDto,
     pub storage_location: StorageLocationDto,
@@ -225,6 +227,7 @@ impl From<StockItem> for StockItemDto {
             product_id: value.product_id().map(|id| id.as_uuid()),
             prepared_batch_id: value.prepared_batch_id().map(|id| id.as_uuid()),
             prepared_batch_name: None,
+            prepared_recipe_id: None,
             tracking_mode: value.tracking_mode().into(),
             level: value.level.into(),
             storage_location: value.storage_location.into(),
@@ -379,6 +382,7 @@ pub enum DemandSubjectDto {
     Product { product_id: Uuid },
     Ingredient { ingredient_id: Uuid },
     PreparedPortion { prepared_batch_id: Uuid },
+    CookedFood { recipe_id: Uuid },
 }
 
 impl From<DemandSubject> for DemandSubjectDto {
@@ -392,6 +396,9 @@ impl From<DemandSubject> for DemandSubjectDto {
             },
             DemandSubject::PreparedPortion { prepared_batch_id } => Self::PreparedPortion {
                 prepared_batch_id: prepared_batch_id.as_uuid(),
+            },
+            DemandSubject::CookedFood { recipe_id } => Self::CookedFood {
+                recipe_id: recipe_id.as_uuid(),
             },
         }
     }
@@ -545,9 +552,27 @@ impl From<IngredientAvailability> for IngredientAvailabilityDto {
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct CookedFoodAvailabilityDto {
+    pub recipe_id: Uuid,
+    pub name: String,
+    pub availability: AvailabilityDto,
+}
+
+impl From<CookedFoodAvailability> for CookedFoodAvailabilityDto {
+    fn from(value: CookedFoodAvailability) -> Self {
+        Self {
+            recipe_id: value.recipe_id.as_uuid(),
+            name: value.name,
+            availability: value.availability.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct AvailabilityReportDto {
     pub products: Vec<ProductAvailabilityDto>,
     pub ingredients: Vec<IngredientAvailabilityDto>,
+    pub cooked_food: Vec<CookedFoodAvailabilityDto>,
     pub demand_gaps: Vec<DemandGapDto>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub claims: Vec<DemandClaimDto>,
@@ -558,6 +583,7 @@ impl From<AvailabilityReport> for AvailabilityReportDto {
         Self {
             products: value.products.into_iter().map(Into::into).collect(),
             ingredients: value.ingredients.into_iter().map(Into::into).collect(),
+            cooked_food: value.cooked_food.into_iter().map(Into::into).collect(),
             demand_gaps: value.demand_gaps.into_iter().map(Into::into).collect(),
             claims: value.claims.into_iter().map(Into::into).collect(),
         }
@@ -576,7 +602,6 @@ pub struct DemandClaimDto {
     pub scope: MealPlanScope,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub recipe_name: Option<String>,
-    /// The meal is past its time but nobody has said what happened.
     pub assumed: bool,
 }
 

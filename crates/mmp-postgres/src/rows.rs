@@ -737,14 +737,11 @@ pub fn amount_bindings(amount: &ConsumedAmount) -> (&'static str, Decimal, Optio
     }
 }
 
-pub fn item_bindings(
-    item: &MealItemRef,
-) -> (&'static str, Option<Uuid>, Option<Uuid>, Option<Uuid>) {
+pub fn item_bindings(item: &MealItemRef) -> (&'static str, Option<Uuid>, Option<Uuid>) {
     (
         item.kind_code(),
         item.product_id().map(|id| id.as_uuid()),
         item.recipe_id().map(|id| id.as_uuid()),
-        item.prepared_batch_id().map(|id| id.as_uuid()),
     )
 }
 
@@ -772,7 +769,6 @@ pub struct ConsumptionRecordRow {
     pub item_kind: String,
     pub product_id: Option<Uuid>,
     pub recipe_id: Option<Uuid>,
-    pub dish_batch_id: Option<Uuid>,
     pub recorded_by: Option<Uuid>,
     pub meal_plan_entry_id: Option<Uuid>,
     pub meal_plan_component_id: Option<Uuid>,
@@ -813,7 +809,6 @@ impl TryFrom<ConsumptionRecordRow> for ConsumptionRecord {
                 &row.item_kind,
                 row.product_id.map(ProductId::from),
                 row.recipe_id.map(RecipeId::from),
-                row.dish_batch_id.map(PreparedBatchId::from),
             )
             .map_err(|_| bad_value("item_kind", &row.item_kind))?,
             recorded_by: row.recorded_by.map(UserId::from),

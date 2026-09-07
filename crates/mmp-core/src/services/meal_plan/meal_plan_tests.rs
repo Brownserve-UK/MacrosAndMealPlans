@@ -2077,6 +2077,27 @@ async fn confirm_component_for(
         .unwrap()
 }
 
+async fn cook_standalone(
+    h: &Harness,
+    recipe_id: RecipeId,
+    servings: i64,
+    location: StorageLocation,
+) -> crate::domain::PreparedBatch {
+    let made = Decimal::new(servings, 0);
+    h.preparation
+        .record(crate::services::RecordPreparation {
+            recipe_id,
+            source: crate::domain::PreparationSource::Standalone,
+            servings_produced: made,
+            placements: vec![crate::domain::PortionPlacement::new(location, made)],
+            prepared_at: None,
+            actor: h.actor_id,
+        })
+        .await
+        .unwrap()
+        .into_value()
+}
+
 async fn cook(
     h: &Harness,
     entry_id: crate::domain::MealPlanEntryId,
@@ -2313,7 +2334,6 @@ async fn a_recipe_component_draws_each_of_its_lines_from_stock() {
     )
     .await;
 
-    // 400 g of rice yields 4 servings, so eating one serving takes a quarter of it.
     assert!(outcome.stock.is_empty());
     assert_eq!(h.stock_grams(item).await, dgrams(400));
 }
@@ -2334,6 +2354,7 @@ async fn a_confirmed_component_stops_counting_as_planned_stock_demand() {
         Arc::new(h.ingredients.clone()),
         Arc::new(h.plans.clone()),
         Arc::new(h.recipes.clone()),
+        Arc::new(h.batches.clone()),
         Arc::new(h.members.clone()),
         Arc::new(h.settings.clone()),
         Arc::new(FixedClock::new(datetime!(2026-08-24 09:00 UTC))),
@@ -2401,7 +2422,6 @@ async fn opting_out_frees_the_slot_for_a_personal_meal() {
     h.products.seed(food.clone());
     let household = household_dinner(&h, food.id, 900).await;
 
-    // The member cannot plan their own dinner while the household holds the slot.
     let clash = h
         .service
         .create(NewMealPlanEntry {
@@ -2432,7 +2452,6 @@ async fn opting_out_frees_the_slot_for_a_personal_meal() {
     assert!(after.entry.participant_for(h.member_id).is_none());
     assert!(after.entry.has_opted_out(h.member_id));
 
-    // Now the slot is free and the personal meal is accepted.
     h.service
         .create(NewMealPlanEntry {
             id: None,
@@ -2473,7 +2492,6 @@ async fn opting_out_of_a_future_meal_is_allowed() {
         .await
         .unwrap();
 
-    // mark_not_eaten would be refused this far out; opt-out is not gated by ensure_due.
     let after = h
         .service
         .opt_out(
@@ -2525,7 +2543,6 @@ async fn opting_out_leaves_the_other_portions_alone_and_a_manager_cannot_re_add(
         )))
     );
 
-    // A manager re-adding the opted-out member through set_participants is refused.
     let err = h
         .service
         .set_participants(
@@ -2622,7 +2639,6 @@ async fn slot_attendance_marks_self_catering_and_opted_out_members() {
     let food = product("Tart", 150);
     h.products.seed(food.clone());
 
-    // Morgan self-caters that dinner slot before the household meal is planned.
     h.service
         .create(NewMealPlanEntry {
             id: None,
@@ -2639,8 +2655,6 @@ async fn slot_attendance_marks_self_catering_and_opted_out_members() {
         .await
         .unwrap();
 
-    // Default participation would have roped Morgan in, but their slot is taken, so
-    // creating the household meal with everyone must be requested explicitly and excludes them.
     let household = h
         .service
         .create(NewMealPlanEntry {
@@ -2737,7 +2751,6 @@ async fn one_member_resolving_does_not_freeze_the_meal_for_a_manager() {
     let current = h.service.get(household.entry.id).await.unwrap();
     assert_eq!(current.status, MealPlanStatus::PartiallyResolved);
 
-    // The manager can still add a second component while one member has eaten.
     let updated = h
         .service
         .update(
@@ -3184,7 +3197,6 @@ async fn a_pooled_ingredient_draw_spans_two_products_in_use_by_order() {
     let sains = mapped_product("Sainsbury's Basmati", rice_id);
     h.products.seed(tesco.clone());
     h.products.seed(sains.clone());
-    // The Tesco bag goes off first, so it should be emptied before the other is touched.
     let older = dated_stock(&h, tesco.id, 60, date!(2026 - 08 - 26));
     let newer = dated_stock(&h, sains.id, 200, date!(2026 - 09 - 30));
 
@@ -3261,8 +3273,6 @@ async fn a_recipe_pinning_a_product_and_needing_its_ingredient_draws_both() {
     h.products.seed(tesco.clone());
     let item = h.seed_stock_grams(tesco.id, 500);
 
-    // Both lines can reach the same bag of rice. Without a per-line discriminator in the ledger the
-    // second draw would be swallowed as a duplicate and we would quietly under-deduct.
     let curry = seed_recipe(
         &h,
         "Curry",
@@ -3363,6 +3373,114 @@ async fn cooking_a_recipe_consumes_raw_stock_and_leaves_the_uneaten_servings_as_
 }
 
 #[tokio::test]
+async fn cooked_food_pools_across_cooks_and_the_oldest_is_eaten_first() {
+    let h = harness();
+    let rice_id = crate::domain::IngredientId::new();
+    let tesco = mapped_product("Tesco Basmati", rice_id);
+    h.products.seed(tesco.clone());
+    h.seed_stock_grams(tesco.id, 4000);
+
+    let curry = seed_recipe(&h, "Curry", 4, vec![ingredient_line(rice_id, 400)]).await;
+    let older = cook_standalone(&h, curry.id, 2, StorageLocation::Chilled).await;
+    let newer = cook_standalone(&h, curry.id, 3, StorageLocation::Frozen).await;
+
+    let entry = planned(
+        &h,
+        vec![NewMealPlanComponent {
+            id: None,
+            item: crate::domain::MealItemRef::dish(curry.id),
+            amount: ConsumedAmount::Servings(Decimal::new(3, 0)),
+        }],
+    )
+    .await;
+    let component = entry.components[0].component.clone();
+
+    confirm_component(
+        &h,
+        entry.entry.id,
+        component.id,
+        component.revision,
+        ConsumedAmount::Servings(Decimal::new(3, 0)),
+    )
+    .await;
+
+    assert_eq!(
+        h.stock_servings(h.portion_for_batch(older.id).await).await,
+        Decimal::ZERO,
+        "the older cook is emptied first"
+    );
+    assert_eq!(
+        h.stock_servings(h.portion_for_batch(newer.id).await).await,
+        Decimal::new(2, 0),
+        "the remaining serving comes out of the newer cook"
+    );
+}
+
+#[tokio::test]
+async fn cooked_food_availability_pools_every_cook_and_nets_off_planned_dishes() {
+    let h = harness();
+    let rice_id = crate::domain::IngredientId::new();
+    let tesco = mapped_product("Tesco Basmati", rice_id);
+    h.products.seed(tesco.clone());
+    h.seed_stock_grams(tesco.id, 4000);
+
+    let curry = seed_recipe(&h, "Curry", 4, vec![ingredient_line(rice_id, 400)]).await;
+    cook_standalone(&h, curry.id, 2, StorageLocation::Chilled).await;
+    cook_standalone(&h, curry.id, 3, StorageLocation::Frozen).await;
+
+    planned(
+        &h,
+        vec![NewMealPlanComponent {
+            id: None,
+            item: crate::domain::MealItemRef::dish(curry.id),
+            amount: ConsumedAmount::Servings(Decimal::new(3, 0)),
+        }],
+    )
+    .await;
+
+    let stock_service = crate::services::StockService::new(
+        Arc::new(h.stock.clone()),
+        Arc::new(h.products.clone()),
+        Arc::new(h.ingredients.clone()),
+        Arc::new(h.plans.clone()),
+        Arc::new(h.recipes.clone()),
+        Arc::new(h.batches.clone()),
+        Arc::new(h.members.clone()),
+        Arc::new(h.settings.clone()),
+        Arc::new(FixedClock::new(datetime!(2026-08-24 09:00 UTC))),
+    );
+
+    let report = stock_service
+        .availability_overview(date!(2026 - 08 - 25), date!(2026 - 08 - 25))
+        .await
+        .unwrap();
+
+    let cooked = report
+        .cooked_food
+        .iter()
+        .find(|row| row.recipe_id == curry.id)
+        .expect("cooked curry should appear once, however many times it was cooked");
+    assert_eq!(
+        report.cooked_food.len(),
+        1,
+        "the two cooks pool into one row"
+    );
+    match &cooked.availability {
+        crate::domain::Availability::Quantified {
+            on_hand,
+            planned_demand,
+            unallocated,
+            ..
+        } => {
+            assert_eq!(on_hand.amount, Decimal::new(5, 0));
+            assert_eq!(planned_demand.amount, Decimal::new(3, 0));
+            assert_eq!(unallocated.amount, Decimal::new(2, 0));
+        }
+        other => panic!("expected a quantified level, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn a_dish_can_be_planned_and_eaten_without_cooking_the_recipe_again() {
     let h = harness();
     let rice_id = crate::domain::IngredientId::new();
@@ -3394,7 +3512,7 @@ async fn a_dish_can_be_planned_and_eaten_without_cooking_the_recipe_again() {
         &h,
         vec![NewMealPlanComponent {
             id: None,
-            item: crate::domain::MealItemRef::dish(cooked.id),
+            item: crate::domain::MealItemRef::dish(curry.id),
             amount: ConsumedAmount::Servings(Decimal::ONE),
         }],
     )

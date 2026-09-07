@@ -213,10 +213,10 @@ const stockItemRoute = createRoute({
 
 const dishRoute = createRoute({
   getParentRoute: () => rootRoute,
-  path: '/stock/dishes/$batchId',
+  path: '/stock/dishes/$recipeId',
   component: function ViewDish() {
-    const { batchId } = dishRoute.useParams();
-    return <DishPage batchId={batchId} />;
+    const { recipeId } = dishRoute.useParams();
+    return <DishPage recipeId={recipeId} />;
   },
 });
 

@@ -14,9 +14,10 @@ use crate::domain::{
 use crate::ports::{Clock, FixedClock, MealPlanRepository};
 use crate::testing::{
     InMemoryHouseholdMemberRepository, InMemoryHouseholdSettingsRepository,
-    InMemoryIngredientRepository, InMemoryMealPlanRepository, InMemoryProductRepository,
-    InMemoryPurchaseRepository, InMemoryRecipeRepository, InMemoryShoppingCadenceRepository,
-    InMemoryShoppingOpportunityRepository, InMemoryStockRepository,
+    InMemoryIngredientRepository, InMemoryMealPlanRepository, InMemoryPreparedBatchRepository,
+    InMemoryProductRepository, InMemoryPurchaseRepository, InMemoryRecipeRepository,
+    InMemoryShoppingCadenceRepository, InMemoryShoppingOpportunityRepository,
+    InMemoryStockRepository,
 };
 use time::Weekday;
 
@@ -65,6 +66,7 @@ fn harness() -> Harness {
         Arc::new(ingredients.clone()),
         Arc::new(meal_plans.clone()),
         Arc::new(recipes),
+        Arc::new(InMemoryPreparedBatchRepository::with_stock(stock.clone())),
         Arc::new(members),
         Arc::new(settings.clone()),
         clock.clone(),

@@ -952,6 +952,31 @@ impl crate::ports::PreparedBatchRepository for InMemoryPreparedBatchRepository {
         Ok(found)
     }
 
+    async fn held_for_recipe(
+        &self,
+        recipe_id: crate::domain::RecipeId,
+    ) -> Result<Vec<PreparedBatch>> {
+        let live: Vec<PreparedBatchId> = self
+            .stock
+            .rows
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|item| item.archived_at.is_none())
+            .filter_map(|item| item.prepared_batch_id())
+            .collect();
+        let mut found: Vec<PreparedBatch> = self
+            .rows
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|batch| batch.recipe_id == Some(recipe_id) && live.contains(&batch.id))
+            .cloned()
+            .collect();
+        found.sort_by_key(|batch| batch.prepared_at);
+        Ok(found)
+    }
+
     async fn portions(&self, batch_id: PreparedBatchId) -> Result<Vec<StockItem>> {
         let mut found: Vec<StockItem> = self
             .stock
@@ -990,6 +1015,9 @@ impl crate::ports::PreparedBatchRepository for InMemoryPreparedBatchRepository {
         stock: &crate::ports::StockWrite,
     ) -> Result<Vec<StockOutcome>> {
         self.rows.lock().unwrap().push(batch.clone());
+        if let Some(recipe_id) = batch.recipe_id {
+            self.stock.note_cook(batch.id, recipe_id);
+        }
         for (portion, event) in portions {
             self.stock.insert_item(portion, event);
         }
@@ -1872,12 +1900,17 @@ fn demand_subject(subject: StockSubject) -> DemandSubject {
     }
 }
 
-fn candidate_matches(candidates: &DeductionCandidates, item: &StockItem) -> bool {
+fn candidate_matches(
+    candidates: &DeductionCandidates,
+    item: &StockItem,
+    recipe_of: impl Fn(&StockItem) -> Option<crate::domain::RecipeId>,
+) -> bool {
     match candidates {
         DeductionCandidates::Products(product_ids) => item
             .product_id()
             .is_some_and(|id| product_ids.contains(&id)),
         DeductionCandidates::PreparedBatch(batch_id) => item.prepared_batch_id() == Some(*batch_id),
+        DeductionCandidates::CookedFood(recipe_id) => recipe_of(item) == Some(*recipe_id),
     }
 }
 
@@ -1886,6 +1919,21 @@ pub struct InMemoryStockRepository {
     rows: Arc<Mutex<HashMap<StockItemId, StockItem>>>,
     events: Arc<Mutex<Vec<StockEvent>>>,
     effects: Arc<Mutex<Vec<StockEffect>>>,
+    batch_recipes: Arc<Mutex<HashMap<PreparedBatchId, crate::domain::RecipeId>>>,
+}
+
+impl InMemoryStockRepository {
+    pub fn note_cook(&self, batch_id: PreparedBatchId, recipe_id: crate::domain::RecipeId) {
+        self.batch_recipes
+            .lock()
+            .unwrap()
+            .insert(batch_id, recipe_id);
+    }
+
+    fn recipe_of(&self, item: &StockItem) -> Option<crate::domain::RecipeId> {
+        let batch_id = item.prepared_batch_id()?;
+        self.batch_recipes.lock().unwrap().get(&batch_id).copied()
+    }
 }
 
 impl InMemoryStockRepository {
@@ -2040,7 +2088,11 @@ impl InMemoryStockRepository {
             let items: Vec<StockItem> = {
                 let rows = self.rows.lock().unwrap();
                 rows.values()
-                    .filter(|item| candidate_matches(&deduction.target.candidates, item))
+                    .filter(|item| {
+                        candidate_matches(&deduction.target.candidates, item, |candidate| {
+                            self.recipe_of(candidate)
+                        })
+                    })
                     .cloned()
                     .collect()
             };
