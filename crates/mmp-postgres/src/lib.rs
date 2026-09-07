@@ -26,7 +26,8 @@ pub use prepared::PgPreparedBatchRepository;
 pub use product::PgProductRepository;
 pub use recipe::PgRecipeRepository;
 pub use shopping::{
-    PgPurchaseRepository, PgShoppingCadenceRepository, PgShoppingOpportunityRepository,
+    PgPurchaseRepository, PgShoppingCadenceRepository, PgShoppingListItemRepository,
+    PgShoppingOpportunityRepository,
 };
 pub use stock::PgStockRepository;
 pub use user::PgUserRepository;

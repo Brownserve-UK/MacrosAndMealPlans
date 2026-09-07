@@ -660,11 +660,17 @@ impl StockService {
             enabled: settings.assume_eaten_when_time_passes,
         };
 
+        let component_ids: Vec<crate::domain::MealPlanComponentId> = entries
+            .iter()
+            .flat_map(|entry| entry.components.iter())
+            .map(|component| component.id)
+            .collect();
+        let prepared = self.batches.for_components(&component_ids).await?;
+
         let mut demand = Demand::default();
         let mut product_cache: HashMap<ProductId, Option<crate::domain::Product>> = HashMap::new();
 
         for entry in &entries {
-            let household = entry.scope == crate::domain::MealPlanScope::Household;
             let assumed = crate::domain::Assumption::for_entry(
                 entry,
                 assumption_rules.now,
@@ -673,7 +679,9 @@ impl StockService {
             )
             .assumed;
             for component in &entry.components {
-                let Some(wanted) = unresolved_demand(entry, component, household) else {
+                let Some(wanted) =
+                    unresolved_demand(entry, component, prepared.contains_key(&component.id))
+                else {
                     continue;
                 };
 
@@ -871,23 +879,24 @@ fn add_quantity(totals: &mut HashMap<ProductId, Quantity>, key: ProductId, quant
 fn unresolved_demand(
     entry: &crate::domain::MealPlanEntry,
     component: &crate::domain::MealPlanComponent,
-    household: bool,
+    prepared: bool,
 ) -> Option<crate::domain::ConsumedAmount> {
     use crate::domain::ParticipantStatus;
 
-    let mut any = false;
-    let mut unresolved: Vec<crate::domain::ConsumedAmount> = Vec::new();
+    if prepared {
+        return None;
+    }
+
+    let mut settled: Vec<crate::domain::ConsumedAmount> = Vec::new();
 
     for allocation in entry
         .participants
         .iter()
         .flat_map(|participant| participant.allocations.iter())
         .filter(|allocation| allocation.component_id == component.id)
+        .filter(|allocation| allocation.status != ParticipantStatus::Planned)
     {
-        any = true;
-        if allocation.status == ParticipantStatus::Planned {
-            unresolved.push(allocation.allocated);
-        }
+        settled.push(allocation.allocated);
     }
 
     for group in &entry.guest_groups {
@@ -895,26 +904,17 @@ fn unresolved_demand(
             .allocations
             .iter()
             .filter(|allocation| allocation.component_id == component.id)
+            .filter(|allocation| allocation.status != ParticipantStatus::Planned)
         {
-            any = true;
-            if allocation.status == ParticipantStatus::Planned {
-                for _ in 0..group.count.max(0) {
-                    unresolved.push(allocation.allocated);
-                }
+            for _ in 0..group.count.max(0) {
+                settled.push(allocation.allocated);
             }
         }
     }
 
-    if !any {
-        return Some(component.amount);
-    }
-    if unresolved.is_empty() {
-        return None;
-    }
-    if !household {
-        return Some(component.amount);
-    }
-    Some(crate::domain::allocated_total(&component.amount, &unresolved).unwrap_or(component.amount))
+    let remaining =
+        crate::domain::forecast_remaining(&component.amount, &settled).unwrap_or(component.amount);
+    (remaining.value() > rust_decimal::Decimal::ZERO).then_some(remaining)
 }
 
 fn free_pool_stock(

@@ -14,8 +14,8 @@ use mmp_postgres::{
     PgHouseholdSettingsRepository, PgIngredientRepository, PgMealPlanRepository,
     PgNutritionTargetRepository, PgPreparedBatchRepository, PgProductRepository,
     PgPurchaseRepository, PgRecipeRepository, PgShoppingCadenceRepository,
-    PgShoppingOpportunityRepository, PgStockRepository, PgUserRepository, PgWeightGoalRepository,
-    PgWeightRecordRepository,
+    PgShoppingListItemRepository, PgShoppingOpportunityRepository, PgStockRepository,
+    PgUserRepository, PgWeightGoalRepository, PgWeightRecordRepository,
 };
 
 use crate::auth::DevBasicAuthProvider;
@@ -153,8 +153,10 @@ pub fn app_state(config: &Config, pool: &PgPool) -> AppState {
         Arc::new(PgShoppingCadenceRepository::new(pool.clone())),
         Arc::new(PgShoppingOpportunityRepository::new(pool.clone())),
         Arc::new(PgPurchaseRepository::new(pool.clone())),
+        Arc::new(PgShoppingListItemRepository::new(pool.clone())),
         Arc::new(PgIngredientRepository::new(pool.clone())),
         Arc::new(PgProductRepository::new(pool.clone())),
+        Arc::new(PgHouseholdSettingsRepository::new(pool.clone())),
         stock.clone(),
         Arc::new(SystemClock),
     );

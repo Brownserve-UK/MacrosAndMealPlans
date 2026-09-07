@@ -134,8 +134,10 @@ pub fn stub_state() -> AppState {
             Arc::new(NoopShoppingCadence),
             Arc::new(NoopShoppingOpportunities),
             Arc::new(NoopPurchases),
+            Arc::new(NoopShoppingListItems),
             Arc::new(NoopIngredients),
             Arc::new(NoopProducts),
+            Arc::new(NoopHouseholdSettings),
             stock,
             Arc::new(SystemClock),
         ),
@@ -264,6 +266,7 @@ impl mmp_core::ports::HouseholdSettingsRepository for NoopHouseholdSettings {
             missing_stock_interpretation: mmp_core::domain::MissingStockInterpretation::Unknown,
             default_all_members_participate: true,
             assume_eaten_when_time_passes: true,
+            section_order: mmp_core::domain::SectionOrder::default(),
             revision: mmp_core::domain::Revision::INITIAL,
             created_at: time::OffsetDateTime::UNIX_EPOCH,
             updated_at: time::OffsetDateTime::UNIX_EPOCH,
@@ -914,5 +917,44 @@ impl mmp_core::ports::PurchaseRepository for NoopPurchases {
         _: Option<&mmp_core::ports::NewStockFromPurchase>,
     ) -> mmp_core::Result<mmp_core::ports::UpdateOutcome> {
         Ok(mmp_core::ports::UpdateOutcome::NotFound)
+    }
+}
+
+struct NoopShoppingListItems;
+
+#[async_trait::async_trait]
+impl mmp_core::ports::ShoppingListItemRepository for NoopShoppingListItems {
+    async fn get(
+        &self,
+        _: mmp_core::domain::ShoppingListItemId,
+    ) -> mmp_core::Result<Option<mmp_core::domain::ShoppingListItem>> {
+        Ok(None)
+    }
+
+    async fn list(&self) -> mmp_core::Result<Vec<mmp_core::domain::ShoppingListItem>> {
+        Ok(Vec::new())
+    }
+
+    async fn insert(&self, _: &mmp_core::domain::ShoppingListItem) -> mmp_core::Result<()> {
+        Ok(())
+    }
+
+    async fn update(
+        &self,
+        _: &mmp_core::domain::ShoppingListItem,
+        _: mmp_core::domain::Revision,
+    ) -> mmp_core::Result<mmp_core::ports::UpdateOutcome> {
+        Ok(mmp_core::ports::UpdateOutcome::NotFound)
+    }
+
+    async fn delete(
+        &self,
+        _: mmp_core::domain::ShoppingListItemId,
+    ) -> mmp_core::Result<mmp_core::ports::UpdateOutcome> {
+        Ok(mmp_core::ports::UpdateOutcome::NotFound)
+    }
+
+    async fn delete_for_opportunity(&self, _: time::Date) -> mmp_core::Result<()> {
+        Ok(())
     }
 }

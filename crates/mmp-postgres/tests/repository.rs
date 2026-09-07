@@ -12,10 +12,11 @@ use mmp_core::domain::{
     NutritionTarget, NutritionTargetId, OpportunityException, ParticipantStatus, Product,
     ProductId, Provenance, Purchase, PurchaseId, PurchaseState, Quantity, Recipe, RecipeComponent,
     RecipeComponentId, RecipeId, RecipeInstruction, RecipeInstructionId, RecipePhoto,
-    RecipePhotoDerivatives, RecipeRequirement, RecipeVisibility, Revision, Role, ShoppingCadence,
-    ShoppingOpportunityId, StockEventKind, StockItem, StockItemId, StockLevel, StockSubject,
-    StorageLocation, Unit, User, UserId, WeightDisplay, WeightGoal, WeightGoalId, WeightObjective,
-    WeightRecord, WeightRecordId, WeightSource,
+    RecipePhotoDerivatives, RecipeRequirement, RecipeVisibility, Revision, Role, SectionOrder,
+    ShoppingCadence, ShoppingListItem, ShoppingListItemId, ShoppingOpportunityId, ShoppingSection,
+    StockEventKind, StockItem, StockItemId, StockLevel, StockSubject, StorageLocation, Unit, User,
+    UserId, WeightDisplay, WeightGoal, WeightGoalId, WeightObjective, WeightRecord, WeightRecordId,
+    WeightSource,
 };
 use mmp_core::domain::{DeductionTarget, StockEffectSource, StockEventSource};
 use mmp_core::ports::{
@@ -24,9 +25,9 @@ use mmp_core::ports::{
     IngredientSort, MealPlanComponentUpdate, MealPlanQuery, MealPlanRepository, MemberQuery,
     NewStockFromPurchase, NutritionTargetRepository, PageRequest, ProductQuery, ProductRepository,
     PurchaseRepository, RecipeQuery, RecipeRepository, ShoppingCadenceRepository,
-    ShoppingOpportunityRepository, SnapshotOp, SortDirection, StockDeduction, StockQuery,
-    StockRepository, StockWrite, UpdateOutcome, UserRepository, WeightGoalRepository,
-    WeightRecordRepository,
+    ShoppingListItemRepository, ShoppingOpportunityRepository, SnapshotOp, SortDirection,
+    StockDeduction, StockQuery, StockRepository, StockWrite, UpdateOutcome, UserRepository,
+    WeightGoalRepository, WeightRecordRepository,
 };
 
 fn no_stock() -> StockWrite {
@@ -36,8 +37,8 @@ use mmp_postgres::{
     PgAccessGrantRepository, PgConsumptionRecordRepository, PgHouseholdMemberRepository,
     PgHouseholdSettingsRepository, PgIngredientRepository, PgMealPlanRepository,
     PgNutritionTargetRepository, PgProductRepository, PgPurchaseRepository, PgRecipeRepository,
-    PgShoppingCadenceRepository, PgShoppingOpportunityRepository, PgStockRepository,
-    PgUserRepository, PgWeightGoalRepository, PgWeightRecordRepository,
+    PgShoppingCadenceRepository, PgShoppingListItemRepository, PgShoppingOpportunityRepository,
+    PgStockRepository, PgUserRepository, PgWeightGoalRepository, PgWeightRecordRepository,
 };
 use rust_decimal::Decimal;
 use sqlx::PgPool;
@@ -2243,6 +2244,37 @@ async fn household_settings_updates_report_revision_outcomes(pool: PgPool) {
     );
 }
 
+#[sqlx::test]
+async fn a_reordered_store_layout_is_kept(pool: PgPool) {
+    let repo = PgHouseholdSettingsRepository::new(pool);
+    let original = repo.get().await.unwrap();
+    assert_eq!(
+        original.section_order.sections()[0],
+        ShoppingSection::FreshProduce
+    );
+
+    let mut updated = original;
+    updated.section_order = SectionOrder::new([
+        ShoppingSection::Bakery,
+        ShoppingSection::FreshProduce,
+        ShoppingSection::MeatFish,
+        ShoppingSection::Dairy,
+        ShoppingSection::Frozen,
+        ShoppingSection::Ambient,
+        ShoppingSection::Drinks,
+        ShoppingSection::Household,
+        ShoppingSection::Other,
+    ])
+    .unwrap();
+    updated.revision = original.revision.next();
+    repo.update(&updated, original.revision).await.unwrap();
+
+    let stored = repo.get().await.unwrap();
+    assert_eq!(stored.section_order.sections()[0], ShoppingSection::Bakery);
+    assert_eq!(stored.section_order.rank(ShoppingSection::Bakery), 0);
+    assert_eq!(stored.section_order.rank(ShoppingSection::FreshProduce), 1);
+}
+
 async fn seed_recipe_dependencies(pool: &PgPool) -> (UserId, ProductId, ProductId) {
     let users = PgUserRepository::new(pool.clone());
     let owner = user("cook", vec![Role::Admin]);
@@ -3167,6 +3199,65 @@ async fn an_occurrence_can_only_carry_one_exception(pool: PgPool) {
 
     let in_range = repo.list_in_range(occurrence, occurrence).await.unwrap();
     assert_eq!(in_range.len(), 1);
+}
+
+#[sqlx::test]
+async fn a_hand_added_item_survives_until_its_shop_is_finished(pool: PgPool) {
+    let users = PgUserRepository::new(pool.clone());
+    let items = PgShoppingListItemRepository::new(pool.clone());
+
+    let actor = user("shopper", vec![Role::Admin]);
+    users.insert(&actor).await.unwrap();
+
+    let now = OffsetDateTime::now_utc();
+    let saturday = date!(2026 - 09 - 05);
+    let onion_salt = ShoppingListItem {
+        id: ShoppingListItemId::new(),
+        ingredient_id: None,
+        product_id: None,
+        name: "Onion Salt".to_owned(),
+        quantity: None,
+        section: Some(ShoppingSection::Ambient),
+        opportunity_date: Some(saturday),
+        created_by: actor.id,
+        revision: Revision::INITIAL,
+        created_at: now,
+        updated_at: now,
+    };
+    let kitchen_roll = ShoppingListItem {
+        id: ShoppingListItemId::new(),
+        name: "Kitchen roll".to_owned(),
+        opportunity_date: Some(date!(2026 - 09 - 12)),
+        ..onion_salt.clone()
+    };
+    items.insert(&onion_salt).await.unwrap();
+    items.insert(&kitchen_roll).await.unwrap();
+
+    let stored = items.list().await.unwrap();
+    assert_eq!(stored.len(), 2);
+
+    let mut renamed = onion_salt.clone();
+    renamed.name = "Onion salt, coarse".to_owned();
+    renamed.revision = onion_salt.revision.next();
+    assert_eq!(
+        items.update(&renamed, onion_salt.revision).await.unwrap(),
+        UpdateOutcome::Updated
+    );
+    assert!(matches!(
+        items.update(&renamed, onion_salt.revision).await.unwrap(),
+        UpdateOutcome::RevisionMismatch { .. }
+    ));
+
+    items.delete_for_opportunity(saturday).await.unwrap();
+    let left = items.list().await.unwrap();
+    assert_eq!(left.len(), 1);
+    assert_eq!(left[0].name, "Kitchen roll");
+
+    assert_eq!(
+        items.delete(kitchen_roll.id).await.unwrap(),
+        UpdateOutcome::Updated
+    );
+    assert!(items.list().await.unwrap().is_empty());
 }
 
 #[sqlx::test]

@@ -2,14 +2,22 @@ use rust_decimal::Decimal;
 use time::Date;
 
 use super::stock::{current_unit, fefo_key};
-use super::{Confidence, DemandClaim, DemandGap, Quantity, StockItem, StockLevel, apply_take};
+use super::{
+    Confidence, DemandClaim, DemandGap, DemandSubject, Quantity, StockItem, StockLevel, apply_take,
+};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UncoveredClaim {
+    pub claim: DemandClaim,
+    pub missing: Quantity,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Coverage {
     pub shortfall: Option<Quantity>,
     pub required_by: Option<Date>,
     pub use_by_at_least: Option<Date>,
-    pub uncovered: Vec<DemandClaim>,
+    pub uncovered: Vec<UncoveredClaim>,
     pub assumption_only: bool,
     pub gaps: Vec<DemandGap>,
     pub confidence: Confidence,
@@ -77,6 +85,7 @@ fn walk(live: &[&StockItem], claims: &[DemandClaim]) -> Coverage {
 
         let mut order: Vec<usize> = (0..levels.len())
             .filter(|&i| usable_on(levels[i].0, claim.planned_on))
+            .filter(|&i| eligible_for(levels[i].0, claim))
             .collect();
         order.sort_by_key(|&i| fefo_key(levels[i].0));
 
@@ -114,7 +123,8 @@ fn walk(live: &[&StockItem], claims: &[DemandClaim]) -> Coverage {
         }
 
         if remaining > Decimal::ZERO {
-            add_shortfall(&mut coverage, Quantity::new(remaining, claim.quantity.unit));
+            let missing = Quantity::new(remaining, claim.quantity.unit);
+            add_shortfall(&mut coverage, missing);
             coverage.required_by = Some(match coverage.required_by {
                 Some(existing) => existing.min(claim.planned_on),
                 None => claim.planned_on,
@@ -123,11 +133,21 @@ fn walk(live: &[&StockItem], claims: &[DemandClaim]) -> Coverage {
                 Some(existing) => existing.max(claim.planned_on),
                 None => claim.planned_on,
             });
-            coverage.uncovered.push(claim.clone());
+            coverage.uncovered.push(UncoveredClaim {
+                claim: claim.clone(),
+                missing,
+            });
         }
     }
 
     coverage
+}
+
+fn eligible_for(item: &StockItem, claim: &DemandClaim) -> bool {
+    match claim.subject {
+        DemandSubject::Product { product_id } => item.product_id() == Some(product_id),
+        _ => true,
+    }
 }
 
 fn usable_on(item: &StockItem, on: Date) -> bool {

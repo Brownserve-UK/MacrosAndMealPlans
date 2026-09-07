@@ -1,17 +1,18 @@
 use async_trait::async_trait;
 use mmp_core::Result;
 use mmp_core::domain::{
-    OpportunityException, Purchase, PurchaseId, Revision, ShoppingCadence, ShoppingOpportunityId,
+    OpportunityException, Purchase, PurchaseId, Revision, ShoppingCadence, ShoppingListItem,
+    ShoppingListItemId, ShoppingOpportunityId,
 };
 use mmp_core::ports::{
     NewStockFromPurchase, Paginated, PurchaseQuery, PurchaseRepository, ShoppingCadenceRepository,
-    ShoppingOpportunityRepository, SortDirection, UpdateOutcome,
+    ShoppingListItemRepository, ShoppingOpportunityRepository, SortDirection, UpdateOutcome,
 };
 use sqlx::PgPool;
 use time::Date;
 
 use crate::error::{map_db_error, repository_error};
-use crate::rows::{OpportunityExceptionRow, PurchaseRow, ShoppingCadenceRow};
+use crate::rows::{OpportunityExceptionRow, PurchaseRow, ShoppingCadenceRow, ShoppingListItemRow};
 use crate::stock::insert_stock_item;
 
 macro_rules! cadence_columns {
@@ -401,5 +402,136 @@ impl PurchaseRepository for PgPurchaseRepository {
             .await
             .map_err(|e| repository_error("committing a purchase update", e))?;
         Ok(UpdateOutcome::Updated)
+    }
+}
+
+macro_rules! list_item_columns {
+    () => {
+        "id, ingredient_id, product_id, name, quantity_value, quantity_unit, section, \
+         opportunity_date, created_by, revision, created_at, updated_at"
+    };
+}
+
+const GET_LIST_ITEM: &str = concat!(
+    "SELECT ",
+    list_item_columns!(),
+    " FROM shopping_list_item WHERE id = $1"
+);
+const LIST_LIST_ITEMS: &str = concat!(
+    "SELECT ",
+    list_item_columns!(),
+    " FROM shopping_list_item ORDER BY created_at ASC, id ASC"
+);
+const INSERT_LIST_ITEM: &str = "INSERT INTO shopping_list_item (id, ingredient_id, product_id, \
+     name, quantity_value, quantity_unit, section, opportunity_date, created_by, revision, \
+     created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)";
+const UPDATE_LIST_ITEM: &str = "UPDATE shopping_list_item SET name = $2, quantity_value = $3, \
+     quantity_unit = $4, section = $5, opportunity_date = $6, revision = $7, updated_at = $8 \
+     WHERE id = $1 AND revision = $9";
+
+pub struct PgShoppingListItemRepository {
+    pool: PgPool,
+}
+
+impl PgShoppingListItemRepository {
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+}
+
+#[async_trait]
+impl ShoppingListItemRepository for PgShoppingListItemRepository {
+    async fn get(&self, id: ShoppingListItemId) -> Result<Option<ShoppingListItem>> {
+        let row: Option<ShoppingListItemRow> = sqlx::query_as(GET_LIST_ITEM)
+            .bind(id.as_uuid())
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| repository_error("loading a shopping list item", e))?;
+        row.map(TryInto::try_into).transpose()
+    }
+
+    async fn list(&self) -> Result<Vec<ShoppingListItem>> {
+        let rows: Vec<ShoppingListItemRow> = sqlx::query_as(LIST_LIST_ITEMS)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| repository_error("listing shopping list items", e))?;
+        rows.into_iter().map(TryInto::try_into).collect()
+    }
+
+    async fn insert(&self, item: &ShoppingListItem) -> Result<()> {
+        sqlx::query(INSERT_LIST_ITEM)
+            .bind(item.id.as_uuid())
+            .bind(item.ingredient_id.map(|id| id.as_uuid()))
+            .bind(item.product_id.map(|id| id.as_uuid()))
+            .bind(&item.name)
+            .bind(item.quantity.map(|quantity| quantity.amount))
+            .bind(item.quantity.map(|quantity| quantity.unit.code()))
+            .bind(item.section.map(|section| section.code()))
+            .bind(item.opportunity_date)
+            .bind(item.created_by.as_uuid())
+            .bind(item.revision.get())
+            .bind(item.created_at)
+            .bind(item.updated_at)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| map_db_error(e, "saving a shopping list item"))?;
+        Ok(())
+    }
+
+    async fn update(&self, item: &ShoppingListItem, expected: Revision) -> Result<UpdateOutcome> {
+        let affected = sqlx::query(UPDATE_LIST_ITEM)
+            .bind(item.id.as_uuid())
+            .bind(&item.name)
+            .bind(item.quantity.map(|quantity| quantity.amount))
+            .bind(item.quantity.map(|quantity| quantity.unit.code()))
+            .bind(item.section.map(|section| section.code()))
+            .bind(item.opportunity_date)
+            .bind(item.revision.get())
+            .bind(item.updated_at)
+            .bind(expected.get())
+            .execute(&self.pool)
+            .await
+            .map_err(|e| map_db_error(e, "updating a shopping list item"))?
+            .rows_affected();
+
+        if affected == 1 {
+            return Ok(UpdateOutcome::Updated);
+        }
+
+        let current: Option<(i64,)> =
+            sqlx::query_as("SELECT revision FROM shopping_list_item WHERE id = $1")
+                .bind(item.id.as_uuid())
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(|e| repository_error("checking a shopping list item revision", e))?;
+        Ok(match current {
+            Some((actual,)) => UpdateOutcome::RevisionMismatch {
+                actual: Revision::new(actual),
+            },
+            None => UpdateOutcome::NotFound,
+        })
+    }
+
+    async fn delete(&self, id: ShoppingListItemId) -> Result<UpdateOutcome> {
+        let affected = sqlx::query("DELETE FROM shopping_list_item WHERE id = $1")
+            .bind(id.as_uuid())
+            .execute(&self.pool)
+            .await
+            .map_err(|e| repository_error("removing a shopping list item", e))?
+            .rows_affected();
+        Ok(if affected == 1 {
+            UpdateOutcome::Updated
+        } else {
+            UpdateOutcome::NotFound
+        })
+    }
+
+    async fn delete_for_opportunity(&self, date: Date) -> Result<()> {
+        sqlx::query("DELETE FROM shopping_list_item WHERE opportunity_date = $1")
+            .bind(date)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| repository_error("clearing shopping list items", e))?;
+        Ok(())
     }
 }

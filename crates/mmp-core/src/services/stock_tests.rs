@@ -26,6 +26,7 @@ struct Harness {
     recipes: InMemoryRecipeRepository,
     meal_plans: InMemoryMealPlanRepository,
     settings: InMemoryHouseholdSettingsRepository,
+    batches: InMemoryPreparedBatchRepository,
     member_id: HouseholdMemberId,
     actor_id: UserId,
 }
@@ -57,7 +58,7 @@ fn harness() -> Harness {
         Arc::new(ingredients.clone()),
         Arc::new(meal_plans.clone()),
         Arc::new(recipes.clone()),
-        Arc::new(batches),
+        Arc::new(batches.clone()),
         Arc::new(members),
         Arc::new(settings.clone()),
         Arc::new(FixedClock::new(datetime!(2026-08-24 09:00 UTC))),
@@ -70,6 +71,7 @@ fn harness() -> Harness {
         recipes,
         meal_plans,
         settings,
+        batches,
         member_id,
         actor_id: UserId::new(),
     }
@@ -1070,6 +1072,155 @@ async fn plan_household_shared(
         updated_at: now,
     };
     h.meal_plans.insert(&entry).await.unwrap();
+}
+
+async fn plan_household_forecast(
+    h: &Harness,
+    product_id: ProductId,
+    forecast_g: i64,
+    each_g: i64,
+    statuses: [crate::domain::ParticipantStatus; 2],
+    on: time::Date,
+) -> crate::domain::MealPlanComponentId {
+    let now = OffsetDateTime::UNIX_EPOCH;
+    let component = household_component(product_id, forecast_g);
+    let component_id = component.id;
+    let participants = statuses
+        .into_iter()
+        .map(|status| crate::domain::MealParticipant {
+            id: crate::domain::MealParticipantId::new(),
+            member_id: HouseholdMemberId::new(),
+            allocations: vec![crate::domain::MealParticipantAllocation {
+                id: crate::domain::MealParticipantAllocationId::new(),
+                component_id,
+                allocated: ConsumedAmount::Measure(grams(each_g)),
+                status,
+                consumption_record_id: None,
+                resolved_by: None,
+                resolved_at: None,
+            }],
+            revision: Revision::INITIAL,
+            created_at: now,
+            updated_at: now,
+        })
+        .collect();
+
+    let entry = MealPlanEntry {
+        id: crate::domain::MealPlanEntryId::new(),
+        scope: crate::domain::MealPlanScope::Household,
+        member_id: None,
+        planned_on: on,
+        planned_time: None,
+        slot: MealSlot::Dinner,
+        components: vec![component],
+        participants,
+        guest_groups: Vec::new(),
+        opted_out: Vec::new(),
+        created_by: h.actor_id,
+        updated_by: h.actor_id,
+        revision: Revision::INITIAL,
+        created_at: now,
+        updated_at: now,
+    };
+    h.meal_plans.insert(&entry).await.unwrap();
+    component_id
+}
+
+#[tokio::test]
+async fn cooking_for_more_than_the_diners_shops_for_the_whole_forecast() {
+    use crate::domain::ParticipantStatus;
+    let h = harness();
+    let p = product();
+    h.products.seed(p.clone());
+    h.service
+        .create(
+            new_item(
+                p.id,
+                StockLevel::Exact {
+                    quantity: grams(1000),
+                },
+            ),
+            h.actor_id,
+            Some(h.member_id),
+        )
+        .await
+        .unwrap();
+
+    plan_household_forecast(
+        &h,
+        p.id,
+        600,
+        200,
+        [ParticipantStatus::Planned, ParticipantStatus::Planned],
+        date!(2026 - 08 - 25),
+    )
+    .await;
+
+    let report = h
+        .service
+        .availability(&[p.id], date!(2026 - 08 - 24), date!(2026 - 08 - 31))
+        .await
+        .unwrap();
+
+    assert_eq!(planned_demand_for(&report, p.id), grams(600));
+}
+
+#[tokio::test]
+async fn a_component_already_cooked_asks_for_no_more_raw_ingredients() {
+    use crate::domain::ParticipantStatus;
+    let h = harness();
+    let p = product();
+    h.products.seed(p.clone());
+    h.service
+        .create(
+            new_item(
+                p.id,
+                StockLevel::Exact {
+                    quantity: grams(1000),
+                },
+            ),
+            h.actor_id,
+            Some(h.member_id),
+        )
+        .await
+        .unwrap();
+
+    let component_id = plan_household_forecast(
+        &h,
+        p.id,
+        600,
+        200,
+        [ParticipantStatus::Planned, ParticipantStatus::Planned],
+        date!(2026 - 08 - 25),
+    )
+    .await;
+
+    let now = OffsetDateTime::UNIX_EPOCH;
+    let batch = crate::domain::PreparedBatch {
+        id: crate::domain::PreparedBatchId::new(),
+        recipe_id: None,
+        source: crate::domain::PreparationSource::MealPlanComponent {
+            entry_id: crate::domain::MealPlanEntryId::new(),
+            component_id,
+        },
+        prepared_at: now,
+        servings_produced: Decimal::new(6, 0),
+        item_name: "Chicken breast".to_owned(),
+        nutrition: crate::domain::ConsumedNutrition::unknown(),
+        created_by: h.actor_id,
+        revision: Revision::INITIAL,
+        created_at: now,
+        updated_at: now,
+    };
+    h.batches.seed(batch);
+
+    let report = h
+        .service
+        .availability(&[p.id], date!(2026 - 08 - 24), date!(2026 - 08 - 31))
+        .await
+        .unwrap();
+
+    assert_eq!(planned_demand_for(&report, p.id), grams(0));
 }
 
 #[tokio::test]

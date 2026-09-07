@@ -1011,6 +1011,41 @@ CREATE INDEX purchase_state ON purchase (state);
 CREATE INDEX purchase_opportunity_date ON purchase (opportunity_date)
     WHERE opportunity_date IS NOT NULL;
 
+CREATE TABLE shopping_list_item (
+    id                UUID PRIMARY KEY,
+
+    ingredient_id     UUID REFERENCES ingredient (id) ON DELETE CASCADE,
+    product_id        UUID REFERENCES product (id) ON DELETE CASCADE,
+    name              TEXT NOT NULL,
+    quantity_value    NUMERIC(16, 4),
+    quantity_unit     unit_code,
+
+    section           shopping_section_code,
+    opportunity_date  DATE,
+
+    created_by        UUID NOT NULL REFERENCES app_user (id) ON DELETE RESTRICT,
+    revision          BIGINT NOT NULL DEFAULT 1,
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    CONSTRAINT shopping_list_item_name_not_blank
+        CHECK (btrim(name) <> ''),
+    CONSTRAINT shopping_list_item_quantity_complete
+        CHECK ((quantity_value IS NULL) = (quantity_unit IS NULL)),
+    CONSTRAINT shopping_list_item_quantity_positive
+        CHECK (quantity_value IS NULL OR quantity_value > 0)
+);
+
+CREATE INDEX shopping_list_item_opportunity_date ON shopping_list_item (opportunity_date)
+    WHERE opportunity_date IS NOT NULL;
+
+ALTER TABLE household_settings
+    ADD COLUMN shopping_section_order shopping_section_code[] NOT NULL
+        DEFAULT ARRAY['fresh_produce', 'meat_fish', 'dairy', 'bakery', 'frozen', 'ambient',
+                      'drinks', 'household', 'other']::shopping_section_code[],
+    ADD CONSTRAINT household_settings_section_order_complete
+        CHECK (cardinality(shopping_section_order) = 9);
+
 CREATE TABLE weight_record (
     id           UUID PRIMARY KEY,
     member_id    UUID NOT NULL REFERENCES household_member (id) ON DELETE CASCADE,

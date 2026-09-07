@@ -5,27 +5,31 @@ use time::{Date, Duration};
 
 use super::revision::commit_outcome;
 use crate::domain::{
-    Assignment, Availability, Certainty, DemandClaim, DemandSubject, ExceptionState, IngredientId,
-    NewPurchase, NewShoppingCadence, NewStockEvent, NewStockItem, OpportunityException, ProductId,
-    Purchase, PurchaseId, PurchasePatch, PurchaseState, Revision, ShoppingCadence,
-    ShoppingOpportunity, ShoppingOpportunityId, ShoppingRequirement, ShoppingSection,
-    StockEffectSource, StockEventKind, StockEventSource, StockItem, StockLevel, StockSubject,
-    StorageLocation, SuggestionReason, UserId, assign, cover, expand_opportunities,
+    Assignment, Availability, Certainty, DemandClaim, DemandGap, DemandSubject, ExceptionState,
+    IngredientId, NewPurchase, NewShoppingCadence, NewShoppingListItem, NewStockEvent,
+    NewStockItem, OpportunityException, ProductId, Purchase, PurchaseId, PurchasePatch,
+    PurchaseState, Quantity, Revision, ShoppingCadence, ShoppingListItem, ShoppingListItemId,
+    ShoppingListItemPatch, ShoppingOpportunity, ShoppingOpportunityId, ShoppingRequirement,
+    ShoppingSection, StockEffectSource, StockEventKind, StockEventSource, StockItem, StockLevel,
+    StockSubject, StorageLocation, SuggestionReason, UncoveredClaim, UserId, assign, cover,
+    expand_opportunities,
 };
 use crate::error::{CoreError, Result};
 use crate::ports::{
-    Clock, IngredientRepository, NewStockFromPurchase, Paginated, ProductRepository, PurchaseQuery,
-    PurchaseRepository, ShoppingCadenceRepository, ShoppingOpportunityRepository, UpdateOutcome,
+    Clock, HouseholdSettingsRepository, IngredientRepository, NewStockFromPurchase, Paginated,
+    ProductRepository, PurchaseQuery, PurchaseRepository, ShoppingCadenceRepository,
+    ShoppingListItemRepository, ShoppingOpportunityRepository, UpdateOutcome,
 };
 use crate::services::StockService;
 
 const CADENCE: &str = "shopping cadence";
 const OPPORTUNITY: &str = "shopping opportunity";
 const PURCHASE: &str = "purchase";
+const LIST_ITEM: &str = "shopping list item";
 
 const OPPORTUNITY_LOOKAHEAD_DAYS: i64 = 70;
 
-const UNPLANNED_QUERY_DAYS: i64 = 28;
+const PLANNING_WINDOW_DAYS: i64 = 30;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct FinishedShop {
@@ -38,6 +42,7 @@ pub struct ShoppingList {
     pub opportunities: Vec<ShoppingOpportunity>,
     pub focus: Option<Date>,
     pub requirements: Vec<ShoppingRequirement>,
+    pub manual: Vec<ShoppingListItem>,
     pub cadence_configured: bool,
 }
 
@@ -46,19 +51,24 @@ pub struct ShoppingService {
     cadence: Arc<dyn ShoppingCadenceRepository>,
     opportunities: Arc<dyn ShoppingOpportunityRepository>,
     purchases: Arc<dyn PurchaseRepository>,
+    list_items: Arc<dyn ShoppingListItemRepository>,
     ingredients: Arc<dyn IngredientRepository>,
     products: Arc<dyn ProductRepository>,
+    settings: Arc<dyn HouseholdSettingsRepository>,
     stock: StockService,
     clock: Arc<dyn Clock>,
 }
 
 impl ShoppingService {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         cadence: Arc<dyn ShoppingCadenceRepository>,
         opportunities: Arc<dyn ShoppingOpportunityRepository>,
         purchases: Arc<dyn PurchaseRepository>,
+        list_items: Arc<dyn ShoppingListItemRepository>,
         ingredients: Arc<dyn IngredientRepository>,
         products: Arc<dyn ProductRepository>,
+        settings: Arc<dyn HouseholdSettingsRepository>,
         stock: StockService,
         clock: Arc<dyn Clock>,
     ) -> Self {
@@ -66,10 +76,71 @@ impl ShoppingService {
             cadence,
             opportunities,
             purchases,
+            list_items,
             ingredients,
             products,
+            settings,
             stock,
             clock,
+        }
+    }
+
+    pub async fn list_items(&self) -> Result<Vec<ShoppingListItem>> {
+        self.list_items.list().await
+    }
+
+    pub async fn add_list_item(
+        &self,
+        input: NewShoppingListItem,
+        actor: UserId,
+    ) -> Result<ShoppingListItem> {
+        input.validate()?;
+        let now = self.clock.now();
+        let item = ShoppingListItem {
+            id: ShoppingListItemId::new(),
+            ingredient_id: input.ingredient_id,
+            product_id: input.product_id,
+            name: input.name.trim().to_owned(),
+            quantity: input.quantity,
+            section: input.section,
+            opportunity_date: input.opportunity_date,
+            created_by: actor,
+            revision: Revision::INITIAL,
+            created_at: now,
+            updated_at: now,
+        };
+        self.list_items.insert(&item).await?;
+        Ok(item)
+    }
+
+    pub async fn update_list_item(
+        &self,
+        id: ShoppingListItemId,
+        expected: Revision,
+        patch: ShoppingListItemPatch,
+    ) -> Result<ShoppingListItem> {
+        patch.validate()?;
+        let Some(mut item) = self.list_items.get(id).await? else {
+            return Err(CoreError::not_found(LIST_ITEM, id.to_string()));
+        };
+        if let Some(name) = patch.name {
+            item.name = name.trim().to_owned();
+        }
+        item.quantity = patch.quantity.apply(item.quantity);
+        item.section = patch.section.apply(item.section);
+        item.opportunity_date = patch.opportunity_date.apply(item.opportunity_date);
+        item.updated_at = self.clock.now();
+        item.revision = expected.next();
+
+        let outcome = self.list_items.update(&item, expected).await?;
+        commit_outcome(LIST_ITEM, id, expected, outcome)?;
+        Ok(item)
+    }
+
+    pub async fn remove_list_item(&self, id: ShoppingListItemId) -> Result<()> {
+        match self.list_items.delete(id).await? {
+            UpdateOutcome::Updated => Ok(()),
+            _ => Err(CoreError::not_found(LIST_ITEM, id.to_string())),
         }
     }
 
@@ -194,11 +265,7 @@ impl ShoppingService {
 
         let focus = focus.or_else(|| opportunities.first().map(|first| first.date));
 
-        let window_end = match opportunities.as_slice() {
-            [] => today + Duration::days(UNPLANNED_QUERY_DAYS),
-            [only] => only.date + Duration::days(14),
-            [_, second, ..] => second.date,
-        };
+        let window_end = today + Duration::days(PLANNING_WINDOW_DAYS);
 
         let snapshot = self.stock.snapshot(today, window_end).await?;
         let open_purchases: Vec<Purchase> = self
@@ -224,7 +291,7 @@ impl ShoppingService {
             let claims = claims_for_pool(&snapshot.report.claims, row.ingredient_id, &pool);
             let section = self.section_for_pool(row.ingredient_id, &pool).await?;
 
-            if let Some(requirement) = build(
+            requirements.extend(build(
                 DemandSubject::ingredient(row.ingredient_id),
                 row.name.clone(),
                 &row.availability,
@@ -234,9 +301,7 @@ impl ShoppingService {
                 &pool,
                 &opportunities,
                 &open_purchases,
-            ) {
-                requirements.push(requirement);
-            }
+            ));
         }
 
         let unpooled: Vec<ProductId> = snapshot
@@ -276,7 +341,7 @@ impl ShoppingService {
                 .and_then(|section| section.parse().ok())
                 .unwrap_or(ShoppingSection::Other);
 
-            if let Some(requirement) = build(
+            requirements.extend(build(
                 DemandSubject::product(row.product_id),
                 product.name.clone(),
                 &row.availability,
@@ -286,15 +351,14 @@ impl ShoppingService {
                 &pool,
                 &opportunities,
                 &open_purchases,
-            ) {
-                requirements.push(requirement);
-            }
+            ));
         }
 
+        let order = self.settings.get().await?.section_order;
         requirements.sort_by(|a, b| {
-            a.section
-                .order()
-                .cmp(&b.section.order())
+            order
+                .rank(a.section)
+                .cmp(&order.rank(b.section))
                 .then_with(|| a.name.cmp(&b.name))
         });
 
@@ -305,10 +369,24 @@ impl ShoppingService {
             });
         }
 
+        let mut manual = self.list_items.list().await?;
+        manual.retain(|item| match (item.opportunity_date, focus) {
+            (Some(on), Some(focus)) => on == focus,
+            (Some(_), None) => false,
+            (None, _) => true,
+        });
+        manual.sort_by(|a, b| {
+            order
+                .rank(a.section.unwrap_or(ShoppingSection::Other))
+                .cmp(&order.rank(b.section.unwrap_or(ShoppingSection::Other)))
+                .then_with(|| a.name.cmp(&b.name))
+        });
+
         Ok(ShoppingList {
             opportunities,
             focus,
             requirements,
+            manual,
             cadence_configured: cadence.is_some(),
         })
     }
@@ -450,6 +528,8 @@ impl ShoppingService {
             }
         }
 
+        self.list_items.delete_for_opportunity(date).await?;
+
         Ok(finished)
     }
 
@@ -533,6 +613,45 @@ fn claims_for_pool(
         .collect()
 }
 
+fn assignment_order(assignment: &Assignment) -> (u8, Option<Date>) {
+    match assignment {
+        Assignment::NeedsEarlierOpportunity => (0, None),
+        Assignment::Opportunity { date } => (1, Some(*date)),
+        Assignment::Unassigned => (2, None),
+    }
+}
+
+fn bucket_for_purchase(purchase: &Purchase, assignments: &[Assignment]) -> Option<usize> {
+    if let Some(date) = purchase.opportunity_date
+        && let Some(index) = assignments.iter().position(
+            |assignment| matches!(assignment, Assignment::Opportunity { date: on } if *on == date),
+        )
+    {
+        return Some(index);
+    }
+    (!assignments.is_empty()).then_some(0)
+}
+
+fn bucket_quantity(held: &[UncoveredClaim], gaps: &mut Vec<DemandGap>) -> Option<Quantity> {
+    let mut running: Option<Quantity> = None;
+    for uncovered in held {
+        match running {
+            None => running = Some(uncovered.missing),
+            Some(total) => match uncovered.missing.convert_to(total.unit) {
+                Ok(converted) => {
+                    running = Some(Quantity::new(total.amount + converted.amount, total.unit));
+                }
+                Err(_) => {
+                    if !gaps.contains(&DemandGap::IncompatibleUnits) {
+                        gaps.push(DemandGap::IncompatibleUnits);
+                    }
+                }
+            },
+        }
+    }
+    running
+}
+
 #[allow(clippy::too_many_arguments)]
 fn build(
     subject: DemandSubject,
@@ -544,13 +663,15 @@ fn build(
     pool: &[ProductId],
     opportunities: &[ShoppingOpportunity],
     open_purchases: &[Purchase],
-) -> Option<ShoppingRequirement> {
+) -> Vec<ShoppingRequirement> {
     if matches!(availability, Availability::AssumedAvailable) {
-        return None;
+        return Vec::new();
     }
 
     let coverage = cover(items, claims);
-    let shortfall = coverage.shortfall?;
+    if coverage.uncovered.is_empty() {
+        return Vec::new();
+    }
 
     let certainty = match availability {
         Availability::Unknown => Certainty::Suggested {
@@ -562,25 +683,54 @@ fn build(
         _ => Certainty::Definite,
     };
 
-    let purchases: Vec<Purchase> = open_purchases
+    let mut buckets: Vec<(Assignment, Vec<UncoveredClaim>)> = Vec::new();
+    for uncovered in coverage.uncovered {
+        let assignment = assign(Some(uncovered.claim.planned_on), opportunities);
+        match buckets
+            .iter_mut()
+            .find(|(existing, _)| *existing == assignment)
+        {
+            Some((_, held)) => held.push(uncovered),
+            None => buckets.push((assignment, vec![uncovered])),
+        }
+    }
+    buckets.sort_by_key(|(assignment, _)| assignment_order(assignment));
+
+    let assignments: Vec<Assignment> = buckets.iter().map(|(assignment, _)| *assignment).collect();
+    let matching: Vec<&Purchase> = open_purchases
         .iter()
         .filter(|purchase| purchase.matches(&subject, pool))
-        .cloned()
         .collect();
 
-    Some(ShoppingRequirement {
-        subject,
-        name,
-        quantity: Some(shortfall),
-        required_by: coverage.required_by,
-        use_by_at_least: coverage.use_by_at_least,
-        section,
-        certainty,
-        assignment: assign(coverage.required_by, opportunities),
-        claims: coverage.uncovered,
-        gaps: coverage.gaps,
-        purchases,
-    })
+    buckets
+        .into_iter()
+        .enumerate()
+        .map(|(index, (assignment, held))| {
+            let mut gaps = coverage.gaps.clone();
+            let quantity = bucket_quantity(&held, &mut gaps);
+            let required_by = held.iter().map(|held| held.claim.planned_on).min();
+            let use_by_at_least = held.iter().map(|held| held.claim.planned_on).max();
+            let purchases: Vec<Purchase> = matching
+                .iter()
+                .filter(|purchase| bucket_for_purchase(purchase, &assignments) == Some(index))
+                .map(|purchase| (*purchase).clone())
+                .collect();
+
+            ShoppingRequirement {
+                subject,
+                name: name.clone(),
+                quantity,
+                required_by,
+                use_by_at_least,
+                section,
+                certainty,
+                assignment,
+                claims: held.into_iter().map(|held| held.claim).collect(),
+                gaps,
+                purchases,
+            }
+        })
+        .collect()
 }
 
 #[cfg(test)]

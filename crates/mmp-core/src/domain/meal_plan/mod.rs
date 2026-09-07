@@ -582,7 +582,8 @@ pub use participation::{
 };
 pub use status::{
     allocated_total, derive_component_status, derive_entry_status, derive_guest_status,
-    derive_participant_status, effective_consumption, equal_split, preparation_for,
+    derive_participant_status, effective_consumption, equal_split, forecast_remaining,
+    preparation_for,
 };
 
 pub(crate) const MEAL_PLAN_ENTRY: &str = "meal plan entry";

@@ -64,6 +64,14 @@ pub fn allocated_total(
     Some(total)
 }
 
+pub fn forecast_remaining(
+    forecast: &ConsumedAmount,
+    settled: &[ConsumedAmount],
+) -> Option<ConsumedAmount> {
+    let total = allocated_total(forecast, settled)?;
+    amount_sub_floor(forecast, &total)
+}
+
 pub fn preparation_for(
     prepared: &ConsumedAmount,
     outcomes: &[AllocationOutcome],

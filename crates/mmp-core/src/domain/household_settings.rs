@@ -2,7 +2,8 @@ use super::str_enum::str_enum;
 
 use time::{OffsetDateTime, Time};
 
-use super::{MealSlot, Revision};
+use super::{MealSlot, Revision, ShoppingSection};
+use crate::error::{Result, ValidationErrors};
 
 str_enum!(
     MissingStockInterpretation,
@@ -55,12 +56,57 @@ pub struct HouseholdSettings {
     pub missing_stock_interpretation: MissingStockInterpretation,
     pub default_all_members_participate: bool,
     pub assume_eaten_when_time_passes: bool,
+    pub section_order: SectionOrder,
     pub revision: Revision,
     pub created_at: OffsetDateTime,
     pub updated_at: OffsetDateTime,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SectionOrder([ShoppingSection; ShoppingSection::ALL.len()]);
+
+impl Default for SectionOrder {
+    fn default() -> Self {
+        Self(ShoppingSection::ALL)
+    }
+}
+
+impl SectionOrder {
+    pub fn new(order: [ShoppingSection; ShoppingSection::ALL.len()]) -> Result<Self> {
+        let mut seen = order;
+        seen.sort_by_key(|section| section.code());
+        let mut all = ShoppingSection::ALL;
+        all.sort_by_key(|section| section.code());
+        if seen != all {
+            let mut errors = ValidationErrors::new();
+            errors.push("section_order", "List every aisle exactly once.");
+            return errors.into_result().map(|()| Self(order));
+        }
+        Ok(Self(order))
+    }
+
+    pub fn from_slice(order: &[ShoppingSection]) -> Result<Self> {
+        let Ok(exact) = <[ShoppingSection; ShoppingSection::ALL.len()]>::try_from(order) else {
+            let mut errors = ValidationErrors::new();
+            errors.push("section_order", "List every aisle exactly once.");
+            return errors.into_result().map(|()| Self::default());
+        };
+        Self::new(exact)
+    }
+
+    pub fn sections(&self) -> &[ShoppingSection] {
+        &self.0
+    }
+
+    pub fn rank(&self, section: ShoppingSection) -> usize {
+        self.0
+            .iter()
+            .position(|held| *held == section)
+            .unwrap_or(self.0.len())
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct HouseholdSettingsPatch {
     pub breakfast_time: Option<Time>,
     pub lunch_time: Option<Time>,
@@ -68,6 +114,7 @@ pub struct HouseholdSettingsPatch {
     pub missing_stock_interpretation: Option<MissingStockInterpretation>,
     pub default_all_members_participate: Option<bool>,
     pub assume_eaten_when_time_passes: Option<bool>,
+    pub section_order: Option<Vec<ShoppingSection>>,
 }
 
 impl HouseholdSettingsPatch {
@@ -78,6 +125,7 @@ impl HouseholdSettingsPatch {
             && self.missing_stock_interpretation.is_none()
             && self.default_all_members_participate.is_none()
             && self.assume_eaten_when_time_passes.is_none()
+            && self.section_order.is_none()
     }
 
     pub fn apply(self, mut times: MealTimes) -> MealTimes {

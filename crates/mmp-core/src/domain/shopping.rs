@@ -4,7 +4,7 @@ use time::{Date, OffsetDateTime, Time, Weekday};
 
 use super::{
     DemandClaim, DemandGap, DemandSubject, IngredientId, ProductId, PurchaseId, Quantity, Revision,
-    ShoppingOpportunityId, StockItemId, UserId,
+    ShoppingListItemId, ShoppingOpportunityId, StockItemId, UserId,
 };
 use crate::error::{Result, ValidationErrors};
 
@@ -430,6 +430,78 @@ impl NewPurchase {
             errors.push("product_id", "Say what was bought.");
         }
         if let Some(quantity) = self.quantity
+            && quantity.amount <= rust_decimal::Decimal::ZERO
+        {
+            errors.push("quantity", "Enter an amount above zero.");
+        }
+        errors.into_result()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShoppingListItem {
+    pub id: ShoppingListItemId,
+    pub ingredient_id: Option<IngredientId>,
+    pub product_id: Option<ProductId>,
+    pub name: String,
+    pub quantity: Option<Quantity>,
+    pub section: Option<ShoppingSection>,
+    pub opportunity_date: Option<Date>,
+    pub created_by: UserId,
+    pub revision: Revision,
+    pub created_at: OffsetDateTime,
+    pub updated_at: OffsetDateTime,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewShoppingListItem {
+    pub ingredient_id: Option<IngredientId>,
+    pub product_id: Option<ProductId>,
+    pub name: String,
+    pub quantity: Option<Quantity>,
+    pub section: Option<ShoppingSection>,
+    pub opportunity_date: Option<Date>,
+}
+
+impl NewShoppingListItem {
+    pub fn validate(&self) -> Result<()> {
+        let mut errors = ValidationErrors::new();
+        if self.name.trim().is_empty() {
+            errors.push("name", "Say what to buy.");
+        }
+        if let Some(quantity) = self.quantity
+            && quantity.amount <= rust_decimal::Decimal::ZERO
+        {
+            errors.push("quantity", "Enter an amount above zero.");
+        }
+        errors.into_result()
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ShoppingListItemPatch {
+    pub name: Option<String>,
+    pub quantity: super::Patch<Quantity>,
+    pub section: super::Patch<ShoppingSection>,
+    pub opportunity_date: super::Patch<Date>,
+}
+
+impl ShoppingListItemPatch {
+    pub fn is_empty(&self) -> bool {
+        self.name.is_none()
+            && self.quantity.is_unchanged()
+            && self.section.is_unchanged()
+            && self.opportunity_date.is_unchanged()
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        let mut errors = ValidationErrors::new();
+        if let Some(name) = &self.name
+            && name.trim().is_empty()
+        {
+            errors.push("name", "Say what to buy.");
+        }
+        if let super::Patch::Set(quantity) = self.quantity
             && quantity.amount <= rust_decimal::Decimal::ZERO
         {
             errors.push("quantity", "Enter an amount above zero.");

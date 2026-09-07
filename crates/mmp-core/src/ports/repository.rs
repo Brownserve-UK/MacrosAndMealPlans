@@ -11,9 +11,9 @@ use crate::domain::{
     MealPlanEntryId, MemberAccessGrant, NewStockEvent, NutritionTarget, NutritionTargetId,
     OpportunityException, PreparedBatch, PreparedBatchId, Product, ProductId, Purchase, PurchaseId,
     PurchaseState, Quantity, Recipe, RecipeId, RecipePhoto, RecipeSummary, Revision, Role,
-    ShoppingCadence, ShoppingOpportunityId, StockEffect, StockEffectSource, StockEvent, StockItem,
-    StockItemId, StockOutcome, User, UserId, WeightGoal, WeightGoalId, WeightRecord,
-    WeightRecordId,
+    ShoppingCadence, ShoppingListItem, ShoppingListItemId, ShoppingOpportunityId, StockEffect,
+    StockEffectSource, StockEvent, StockItem, StockItemId, StockOutcome, User, UserId, WeightGoal,
+    WeightGoalId, WeightRecord, WeightRecordId,
 };
 use crate::error::Result;
 
@@ -583,4 +583,19 @@ pub trait PurchaseRepository: Send + Sync + 'static {
 pub struct NewStockFromPurchase {
     pub item: StockItem,
     pub event: NewStockEvent,
+}
+
+#[async_trait]
+pub trait ShoppingListItemRepository: Send + Sync + 'static {
+    async fn get(&self, id: ShoppingListItemId) -> Result<Option<ShoppingListItem>>;
+
+    async fn list(&self) -> Result<Vec<ShoppingListItem>>;
+
+    async fn insert(&self, item: &ShoppingListItem) -> Result<()>;
+
+    async fn update(&self, item: &ShoppingListItem, expected: Revision) -> Result<UpdateOutcome>;
+
+    async fn delete(&self, id: ShoppingListItemId) -> Result<UpdateOutcome>;
+
+    async fn delete_for_opportunity(&self, date: Date) -> Result<()>;
 }

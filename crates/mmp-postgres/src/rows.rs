@@ -8,12 +8,13 @@ use mmp_core::domain::{
     MealTimes, MemberAccessGrant, MissingStockInterpretation, NutritionFacts, NutritionGoals,
     NutritionQuality, NutritionTarget, NutritionTargetId, OpportunityException, PreparationSource,
     PreparedBatch, PreparedBatchId, Product, ProductId, Provenance, Purchase, PurchaseId,
-    PurchaseState, Quantity, RecipeId, Revision, Role, ShoppingCadence, ShoppingOpportunityId,
-    ShoppingSection, SourceDate, SourceDateKind, StockEffect, StockEffectId, StockEffectSource,
-    StockEffectState, StockEvent, StockEventId, StockEventKind, StockEventSource, StockItem,
-    StockItemId, StockLevel, StockSubject, StorageLocation, TrackingMode, Unit, UsabilityDeadline,
-    User, UserId, WeightDisplay, WeightGoal, WeightGoalId, WeightObjective, WeightRecord,
-    WeightRecordId, WeightSource, week_day_from_number,
+    PurchaseState, Quantity, RecipeId, Revision, Role, SectionOrder, ShoppingCadence,
+    ShoppingListItem, ShoppingListItemId, ShoppingOpportunityId, ShoppingSection, SourceDate,
+    SourceDateKind, StockEffect, StockEffectId, StockEffectSource, StockEffectState, StockEvent,
+    StockEventId, StockEventKind, StockEventSource, StockItem, StockItemId, StockLevel,
+    StockSubject, StorageLocation, TrackingMode, Unit, UsabilityDeadline, User, UserId,
+    WeightDisplay, WeightGoal, WeightGoalId, WeightObjective, WeightRecord, WeightRecordId,
+    WeightSource, week_day_from_number,
 };
 use mmp_core::{CoreError, RepositoryError};
 use rust_decimal::Decimal;
@@ -426,9 +427,25 @@ pub struct HouseholdSettingsRow {
     pub missing_stock_interpretation: String,
     pub default_all_members_participate: bool,
     pub assume_eaten_when_time_passes: bool,
+    pub shopping_section_order: Vec<String>,
     pub revision: i64,
     pub created_at: OffsetDateTime,
     pub updated_at: OffsetDateTime,
+}
+
+fn section_order_from(codes: &[String]) -> Result<SectionOrder, CoreError> {
+    let mut sections = [ShoppingSection::Other; ShoppingSection::ALL.len()];
+    if codes.len() != sections.len() {
+        return Err(bad_value(
+            "shopping_section_order",
+            &codes.len().to_string(),
+        ));
+    }
+    for (slot, code) in sections.iter_mut().zip(codes) {
+        *slot = ShoppingSection::from_str(code)
+            .map_err(|_| bad_value("shopping_section_order", code))?;
+    }
+    SectionOrder::new(sections).map_err(|_| bad_value("shopping_section_order", &codes.join(",")))
 }
 
 impl TryFrom<HouseholdSettingsRow> for HouseholdSettings {
@@ -452,6 +469,7 @@ impl TryFrom<HouseholdSettingsRow> for HouseholdSettings {
             })?,
             default_all_members_participate: row.default_all_members_participate,
             assume_eaten_when_time_passes: row.assume_eaten_when_time_passes,
+            section_order: section_order_from(&row.shopping_section_order)?,
             revision: Revision::new(row.revision),
             created_at: row.created_at,
             updated_at: row.updated_at,
@@ -924,6 +942,55 @@ pub struct PurchaseRow {
     pub revision: i64,
     pub created_at: OffsetDateTime,
     pub updated_at: OffsetDateTime,
+}
+
+#[derive(sqlx::FromRow)]
+pub struct ShoppingListItemRow {
+    pub id: Uuid,
+    pub ingredient_id: Option<Uuid>,
+    pub product_id: Option<Uuid>,
+    pub name: String,
+    pub quantity_value: Option<Decimal>,
+    pub quantity_unit: Option<String>,
+    pub section: Option<String>,
+    pub opportunity_date: Option<Date>,
+    pub created_by: Uuid,
+    pub revision: i64,
+    pub created_at: OffsetDateTime,
+    pub updated_at: OffsetDateTime,
+}
+
+impl TryFrom<ShoppingListItemRow> for ShoppingListItem {
+    type Error = CoreError;
+
+    fn try_from(row: ShoppingListItemRow) -> Result<Self, Self::Error> {
+        let quantity = match (row.quantity_value, row.quantity_unit.as_deref()) {
+            (Some(amount), Some(unit)) => Some(Quantity::new(
+                amount,
+                Unit::from_str(unit).map_err(|_| bad_value("quantity_unit", unit))?,
+            )),
+            _ => None,
+        };
+        let section = match row.section.as_deref() {
+            Some(code) => {
+                Some(ShoppingSection::from_str(code).map_err(|_| bad_value("section", code))?)
+            }
+            None => None,
+        };
+        Ok(ShoppingListItem {
+            id: ShoppingListItemId::from(row.id),
+            ingredient_id: row.ingredient_id.map(IngredientId::from),
+            product_id: row.product_id.map(ProductId::from),
+            name: row.name,
+            quantity,
+            section,
+            opportunity_date: row.opportunity_date,
+            created_by: UserId::from(row.created_by),
+            revision: Revision::new(row.revision),
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+        })
+    }
 }
 
 impl TryFrom<PurchaseRow> for Purchase {

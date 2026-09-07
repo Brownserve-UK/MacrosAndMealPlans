@@ -15,8 +15,9 @@ use mmp_core::testing::{
     InMemoryIngredientRepository, InMemoryMealPlanRepository, InMemoryNutritionTargetRepository,
     InMemoryPreparedBatchRepository, InMemoryProductRepository, InMemoryPurchaseRepository,
     InMemoryRecipeRepository, InMemoryShoppingCadenceRepository,
-    InMemoryShoppingOpportunityRepository, InMemoryStockRepository, InMemoryUserRepository,
-    InMemoryWeightGoalRepository, InMemoryWeightRecordRepository,
+    InMemoryShoppingListItemRepository, InMemoryShoppingOpportunityRepository,
+    InMemoryStockRepository, InMemoryUserRepository, InMemoryWeightGoalRepository,
+    InMemoryWeightRecordRepository,
 };
 use mmp_server::auth::DevBasicAuthProvider;
 use mmp_server::{AppState, app};
@@ -107,8 +108,10 @@ fn app_with_web(dist: &std::path::Path) -> axum::Router {
             Arc::new(InMemoryShoppingCadenceRepository::new()),
             Arc::new(InMemoryShoppingOpportunityRepository::new()),
             Arc::new(InMemoryPurchaseRepository::new()),
+            Arc::new(InMemoryShoppingListItemRepository::new()),
             Arc::new(InMemoryIngredientRepository::new()),
             Arc::new(InMemoryProductRepository::new()),
+            Arc::new(InMemoryHouseholdSettingsRepository::new()),
             StockService::new(
                 Arc::new(InMemoryStockRepository::new()),
                 Arc::new(InMemoryProductRepository::new()),
@@ -297,8 +300,10 @@ async fn without_a_web_build_the_api_still_works() {
             Arc::new(InMemoryShoppingCadenceRepository::new()),
             Arc::new(InMemoryShoppingOpportunityRepository::new()),
             Arc::new(InMemoryPurchaseRepository::new()),
+            Arc::new(InMemoryShoppingListItemRepository::new()),
             Arc::new(InMemoryIngredientRepository::new()),
             Arc::new(InMemoryProductRepository::new()),
+            Arc::new(InMemoryHouseholdSettingsRepository::new()),
             StockService::new(
                 Arc::new(InMemoryStockRepository::new()),
                 Arc::new(InMemoryProductRepository::new()),

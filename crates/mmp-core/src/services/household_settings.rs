@@ -35,7 +35,10 @@ impl HouseholdSettingsService {
             return Ok(current);
         }
 
-        current.meal_times = patch.apply(current.meal_times);
+        if let Some(order) = &patch.section_order {
+            current.section_order = crate::domain::SectionOrder::from_slice(order)?;
+        }
+        current.meal_times = patch.clone().apply(current.meal_times);
         if let Some(interpretation) = patch.missing_stock_interpretation {
             current.missing_stock_interpretation = interpretation;
         }

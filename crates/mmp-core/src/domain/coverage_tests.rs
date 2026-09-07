@@ -4,8 +4,9 @@ use time::macros::date;
 
 use super::*;
 use crate::domain::{
-    DemandSubject, MealPlanEntryId, MealPlanScope, MealSlot, ProductId, Revision, SourceDate,
-    SourceDateKind, StockItemId, StockSubject, StorageLocation, Unit, UsabilityDeadline,
+    DemandSubject, IngredientId, MealPlanEntryId, MealPlanScope, MealSlot, ProductId, Revision,
+    SourceDate, SourceDateKind, StockItemId, StockSubject, StorageLocation, Unit,
+    UsabilityDeadline,
 };
 
 fn ml(value: i64) -> Quantity {
@@ -33,8 +34,17 @@ fn item(quantity: Quantity, deadline: Option<Date>) -> StockItem {
 }
 
 fn claim(quantity: Quantity, on: Date, assumed: bool) -> DemandClaim {
+    claim_for(
+        DemandSubject::ingredient(IngredientId::new()),
+        quantity,
+        on,
+        assumed,
+    )
+}
+
+fn claim_for(subject: DemandSubject, quantity: Quantity, on: Date, assumed: bool) -> DemandClaim {
     DemandClaim {
-        subject: DemandSubject::product(ProductId::new()),
+        subject,
         quantity,
         entry_id: MealPlanEntryId::new(),
         planned_on: on,
@@ -144,6 +154,35 @@ fn a_not_tracked_item_is_never_short() {
     let claims = [claim(ml(1000), date!(2026 - 09 - 04), false)];
 
     assert!(!cover(&[assumed], &claims).is_short());
+}
+
+#[test]
+fn a_meal_that_named_a_product_cannot_be_fed_by_a_different_one() {
+    let stock = [item(ml(1000), None)];
+    let claims = [claim_for(
+        DemandSubject::product(ProductId::new()),
+        ml(600),
+        date!(2026 - 09 - 04),
+        false,
+    )];
+
+    let coverage = cover(&stock, &claims);
+
+    assert_eq!(coverage.shortfall, Some(ml(600)));
+}
+
+#[test]
+fn a_meal_that_named_a_product_is_fed_by_that_product() {
+    let stock = [item(ml(1000), None)];
+    let named = stock[0].product_id().expect("the item is a product");
+    let claims = [claim_for(
+        DemandSubject::product(named),
+        ml(600),
+        date!(2026 - 09 - 04),
+        false,
+    )];
+
+    assert!(!cover(&stock, &claims).is_short());
 }
 
 #[test]

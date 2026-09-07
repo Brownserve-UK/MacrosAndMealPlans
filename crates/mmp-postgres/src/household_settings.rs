@@ -8,7 +8,8 @@ use crate::error::{map_db_error, repository_error};
 use crate::rows::HouseholdSettingsRow;
 
 const GET: &str = "SELECT breakfast_time, lunch_time, dinner_time, missing_stock_interpretation, \
-     default_all_members_participate, assume_eaten_when_time_passes, revision, created_at, \
+     default_all_members_participate, assume_eaten_when_time_passes, \
+     shopping_section_order::text[] AS shopping_section_order, revision, created_at, \
      updated_at FROM household_settings WHERE singleton";
 const CURRENT_REVISION: &str = "SELECT revision FROM household_settings WHERE singleton";
 
@@ -50,8 +51,9 @@ impl HouseholdSettingsRepository for PgHouseholdSettingsRepository {
                  missing_stock_interpretation = $4,
                  default_all_members_participate = $5,
                  assume_eaten_when_time_passes = $6,
-                 revision = $7, updated_at = $8
-             WHERE singleton AND revision = $9",
+                 shopping_section_order = $7::text[]::shopping_section_code[],
+                 revision = $8, updated_at = $9
+             WHERE singleton AND revision = $10",
         )
         .bind(times.breakfast)
         .bind(times.lunch)
@@ -59,6 +61,14 @@ impl HouseholdSettingsRepository for PgHouseholdSettingsRepository {
         .bind(settings.missing_stock_interpretation.code())
         .bind(settings.default_all_members_participate)
         .bind(settings.assume_eaten_when_time_passes)
+        .bind(
+            settings
+                .section_order
+                .sections()
+                .iter()
+                .map(|section| section.code())
+                .collect::<Vec<_>>(),
+        )
         .bind(settings.revision.get())
         .bind(settings.updated_at)
         .bind(expected.get())

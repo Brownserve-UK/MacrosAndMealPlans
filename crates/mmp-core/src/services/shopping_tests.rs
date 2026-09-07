@@ -8,16 +8,16 @@ use super::*;
 use crate::domain::{
     ConsumedAmount, HouseholdMember, HouseholdMemberId, Ingredient, IngredientId, MealItemRef,
     MealPlanComponent, MealPlanEntry, MealSlot, MissingStockInterpretation, NewStockItem, Product,
-    ProductId, Provenance, Quantity, Revision, StockLevel, StockSubject, StorageLocation, Unit,
-    UserId, WeightDisplay,
+    ProductId, Provenance, Quantity, Revision, SectionOrder, StockLevel, StockSubject,
+    StorageLocation, Unit, UserId, WeightDisplay,
 };
 use crate::ports::{Clock, FixedClock, MealPlanRepository};
 use crate::testing::{
     InMemoryHouseholdMemberRepository, InMemoryHouseholdSettingsRepository,
     InMemoryIngredientRepository, InMemoryMealPlanRepository, InMemoryPreparedBatchRepository,
     InMemoryProductRepository, InMemoryPurchaseRepository, InMemoryRecipeRepository,
-    InMemoryShoppingCadenceRepository, InMemoryShoppingOpportunityRepository,
-    InMemoryStockRepository,
+    InMemoryShoppingCadenceRepository, InMemoryShoppingListItemRepository,
+    InMemoryShoppingOpportunityRepository, InMemoryStockRepository,
 };
 use time::Weekday;
 
@@ -47,6 +47,7 @@ fn harness() -> Harness {
     let cadence = InMemoryShoppingCadenceRepository::new();
     let opportunities = InMemoryShoppingOpportunityRepository::new();
     let purchases = InMemoryPurchaseRepository::new();
+    let list_items = InMemoryShoppingListItemRepository::new();
     let member_id = HouseholdMemberId::new();
     let now = OffsetDateTime::UNIX_EPOCH;
     members.seed(HouseholdMember {
@@ -75,8 +76,10 @@ fn harness() -> Harness {
         Arc::new(cadence),
         Arc::new(opportunities),
         Arc::new(purchases.clone()),
+        Arc::new(list_items.clone()),
         Arc::new(ingredients.clone()),
         Arc::new(products.clone()),
+        Arc::new(settings.clone()),
         stock_service.clone(),
         clock,
     );
@@ -100,12 +103,16 @@ fn ml(value: i64) -> Quantity {
 }
 
 fn seed_ingredient(h: &Harness, id: IngredientId, name: &str) {
+    seed_ingredient_in(h, id, name, ShoppingSection::Dairy);
+}
+
+fn seed_ingredient_in(h: &Harness, id: IngredientId, name: &str, section: ShoppingSection) {
     let now = OffsetDateTime::UNIX_EPOCH;
     h.ingredients.seed(Ingredient {
         id,
         name: name.to_owned(),
         default_unit: Unit::Millilitre,
-        shopping_section: Some(ShoppingSection::Dairy),
+        shopping_section: Some(section),
         track_stock: None,
         provenance: Provenance::local(),
         revision: Revision::INITIAL,
@@ -352,6 +359,217 @@ async fn a_not_tracked_staple_never_asks_to_be_bought() {
     let list = h.shopping.requirements(None).await.unwrap();
 
     assert!(list.requirements.is_empty());
+}
+
+#[tokio::test]
+async fn the_list_walks_the_aisles_in_the_households_own_order() {
+    let h = harness();
+    weekly_saturdays(&h).await;
+
+    let milk = IngredientId::new();
+    seed_ingredient(&h, milk, "Whole Milk");
+    let bottle = mapped("Sample Whole Milk", milk);
+    h.products.seed(bottle.clone());
+    plan_product(&h, bottle.id, ml(400), date!(2026 - 09 - 08)).await;
+
+    let bread = IngredientId::new();
+    seed_ingredient_in(&h, bread, "Bread", ShoppingSection::Bakery);
+    let loaf = mapped("Sample Bread", bread);
+    h.products.seed(loaf.clone());
+    plan_product(&h, loaf.id, ml(400), date!(2026 - 09 - 08)).await;
+
+    let dairy_first = h.shopping.requirements(None).await.unwrap();
+    assert_eq!(dairy_first.requirements[0].name, "Whole Milk");
+    assert_eq!(dairy_first.requirements[1].name, "Bread");
+
+    h.settings.set_section_order(
+        SectionOrder::new([
+            ShoppingSection::Bakery,
+            ShoppingSection::FreshProduce,
+            ShoppingSection::MeatFish,
+            ShoppingSection::Dairy,
+            ShoppingSection::Frozen,
+            ShoppingSection::Ambient,
+            ShoppingSection::Drinks,
+            ShoppingSection::Household,
+            ShoppingSection::Other,
+        ])
+        .unwrap(),
+    );
+
+    let bakery_first = h.shopping.requirements(None).await.unwrap();
+    assert_eq!(bakery_first.requirements[0].name, "Bread");
+    assert_eq!(bakery_first.requirements[1].name, "Whole Milk");
+}
+
+#[tokio::test]
+async fn something_added_by_hand_survives_the_plan_changing() {
+    let h = harness();
+    weekly_saturdays(&h).await;
+
+    h.shopping
+        .add_list_item(
+            NewShoppingListItem {
+                ingredient_id: None,
+                product_id: None,
+                name: "Onion Salt".to_owned(),
+                quantity: None,
+                section: Some(ShoppingSection::Ambient),
+                opportunity_date: None,
+            },
+            h.actor_id,
+        )
+        .await
+        .unwrap();
+
+    let before = h.shopping.requirements(None).await.unwrap();
+    assert_eq!(before.manual.len(), 1);
+    assert_eq!(before.manual[0].name, "Onion Salt");
+
+    let milk = IngredientId::new();
+    seed_ingredient(&h, milk, "Whole Milk");
+    let a = mapped("Sample Whole Milk", milk);
+    h.products.seed(a.clone());
+    plan_product(&h, a.id, ml(400), date!(2026 - 09 - 08)).await;
+
+    let after = h.shopping.requirements(None).await.unwrap();
+    assert_eq!(after.manual.len(), 1);
+    assert_eq!(after.manual[0].name, "Onion Salt");
+    assert!(!after.requirements.is_empty());
+}
+
+#[tokio::test]
+async fn a_hand_added_item_is_never_derived_onto_the_list() {
+    let h = harness();
+    weekly_saturdays(&h).await;
+
+    h.shopping
+        .add_list_item(
+            NewShoppingListItem {
+                ingredient_id: None,
+                product_id: None,
+                name: "Tomato Ketchup".to_owned(),
+                quantity: Some(ml(500)),
+                section: Some(ShoppingSection::Ambient),
+                opportunity_date: None,
+            },
+            h.actor_id,
+        )
+        .await
+        .unwrap();
+
+    let list = h.shopping.requirements(None).await.unwrap();
+
+    assert!(list.requirements.is_empty());
+    assert_eq!(list.manual.len(), 1);
+    assert_eq!(list.manual[0].quantity, Some(ml(500)));
+}
+
+#[tokio::test]
+async fn finishing_a_shop_clears_the_things_you_added_to_it() {
+    let h = harness();
+    weekly_saturdays(&h).await;
+
+    h.shopping
+        .add_list_item(
+            NewShoppingListItem {
+                ingredient_id: None,
+                product_id: None,
+                name: "Onion Salt".to_owned(),
+                quantity: None,
+                section: None,
+                opportunity_date: Some(date!(2026 - 09 - 05)),
+            },
+            h.actor_id,
+        )
+        .await
+        .unwrap();
+    h.shopping
+        .add_list_item(
+            NewShoppingListItem {
+                ingredient_id: None,
+                product_id: None,
+                name: "Kitchen roll".to_owned(),
+                quantity: None,
+                section: None,
+                opportunity_date: Some(date!(2026 - 09 - 12)),
+            },
+            h.actor_id,
+        )
+        .await
+        .unwrap();
+
+    h.shopping
+        .finish_shop(date!(2026 - 09 - 05), h.actor_id)
+        .await
+        .unwrap();
+
+    let left = h.shopping.list_items().await.unwrap();
+    assert_eq!(left.len(), 1);
+    assert_eq!(left[0].name, "Kitchen roll");
+}
+
+#[tokio::test]
+async fn a_shop_only_buys_what_is_needed_before_the_next_one() {
+    let h = harness();
+    weekly_saturdays(&h).await;
+    let milk = IngredientId::new();
+    seed_ingredient(&h, milk, "Whole Milk");
+    let a = mapped("Sample Whole Milk", milk);
+    h.products.seed(a.clone());
+    plan_product(&h, a.id, ml(400), date!(2026 - 09 - 08)).await;
+    plan_product(&h, a.id, ml(400), date!(2026 - 09 - 15)).await;
+
+    let first = h
+        .shopping
+        .requirements(Some(date!(2026 - 09 - 05)))
+        .await
+        .unwrap();
+    assert_eq!(first.requirements.len(), 1);
+    assert_eq!(first.requirements[0].quantity, Some(ml(400)));
+    assert_eq!(
+        first.requirements[0].use_by_at_least,
+        Some(date!(2026 - 09 - 08))
+    );
+
+    let second = h
+        .shopping
+        .requirements(Some(date!(2026 - 09 - 12)))
+        .await
+        .unwrap();
+    assert_eq!(second.requirements.len(), 1);
+    assert_eq!(second.requirements[0].quantity, Some(ml(400)));
+    assert_eq!(
+        second.requirements[0].use_by_at_least,
+        Some(date!(2026 - 09 - 15))
+    );
+}
+
+#[tokio::test]
+async fn a_meal_we_can_half_cover_only_buys_the_rest_in_its_own_bucket() {
+    let h = harness();
+    weekly_saturdays(&h).await;
+    let milk = IngredientId::new();
+    seed_ingredient(&h, milk, "Whole Milk");
+    let a = mapped("Sample Whole Milk", milk);
+    h.products.seed(a.clone());
+    add_stock(&h, a.id, ml(300)).await;
+    plan_product(&h, a.id, ml(400), date!(2026 - 09 - 08)).await;
+    plan_product(&h, a.id, ml(400), date!(2026 - 09 - 15)).await;
+
+    let first = h
+        .shopping
+        .requirements(Some(date!(2026 - 09 - 05)))
+        .await
+        .unwrap();
+    assert_eq!(first.requirements[0].quantity, Some(ml(100)));
+
+    let second = h
+        .shopping
+        .requirements(Some(date!(2026 - 09 - 12)))
+        .await
+        .unwrap();
+    assert_eq!(second.requirements[0].quantity, Some(ml(400)));
 }
 
 #[tokio::test]

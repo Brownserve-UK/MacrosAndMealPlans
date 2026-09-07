@@ -20,8 +20,9 @@ use mmp_core::testing::{
     InMemoryIngredientRepository, InMemoryMealPlanRepository, InMemoryNutritionTargetRepository,
     InMemoryPreparedBatchRepository, InMemoryProductRepository, InMemoryPurchaseRepository,
     InMemoryRecipeRepository, InMemoryShoppingCadenceRepository,
-    InMemoryShoppingOpportunityRepository, InMemoryStockRepository, InMemoryUserRepository,
-    InMemoryWeightGoalRepository, InMemoryWeightRecordRepository,
+    InMemoryShoppingListItemRepository, InMemoryShoppingOpportunityRepository,
+    InMemoryStockRepository, InMemoryUserRepository, InMemoryWeightGoalRepository,
+    InMemoryWeightRecordRepository,
 };
 use mmp_server::AppState;
 use mmp_server::auth::DevBasicAuthProvider;
@@ -57,6 +58,7 @@ async fn app() -> Router {
     let cadence = InMemoryShoppingCadenceRepository::new();
     let opportunities = InMemoryShoppingOpportunityRepository::new();
     let purchases = InMemoryPurchaseRepository::new();
+    let list_items = InMemoryShoppingListItemRepository::new();
     let products_for_shopping = products.clone();
     let batches = Arc::new(InMemoryPreparedBatchRepository::with_stock(
         stock_repo.clone(),
@@ -128,8 +130,10 @@ async fn app() -> Router {
             Arc::new(cadence),
             Arc::new(opportunities),
             Arc::new(purchases),
+            Arc::new(list_items),
             ingredients,
             Arc::new(products_for_shopping),
+            Arc::new(settings_repo.clone()),
             stock,
             clock.clone(),
         ),

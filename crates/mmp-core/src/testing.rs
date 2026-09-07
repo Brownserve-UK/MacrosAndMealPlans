@@ -13,9 +13,10 @@ use crate::domain::{
     MemberAccessGrant, MissingStockInterpretation, NewStockEvent, NutritionTarget,
     NutritionTargetId, OpportunityException, PreparedBatch, PreparedBatchId, Product, ProductId,
     Purchase, PurchaseId, PurchaseState, Quantity, Recipe, RecipeId, RecipePhoto, RecipeSummary,
-    RecipeVisibility, Revision, Role, ShoppingCadence, ShoppingOpportunityId, StockEffect,
-    StockEffectSource, StockEvent, StockEventId, StockItem, StockItemId, StockOutcome,
-    StockSubject, Unit, User, UserId, WeightGoal, WeightGoalId, WeightRecord, WeightRecordId,
+    RecipeVisibility, Revision, Role, SectionOrder, ShoppingCadence, ShoppingListItem,
+    ShoppingListItemId, ShoppingOpportunityId, StockEffect, StockEffectSource, StockEvent,
+    StockEventId, StockItem, StockItemId, StockOutcome, StockSubject, Unit, User, UserId,
+    WeightGoal, WeightGoalId, WeightRecord, WeightRecordId,
 };
 use crate::error::{CoreError, Result};
 use crate::ports::{
@@ -24,9 +25,9 @@ use crate::ports::{
     IngredientSort, MealPlanComponentUpdate, MealPlanQuery, MealPlanRepository, MemberQuery,
     NewStockFromPurchase, NutritionTargetRepository, Paginated, ProductQuery, ProductRepository,
     PurchaseQuery, PurchaseRepository, RecipeQuery, RecipeRepository, ShoppingCadenceRepository,
-    ShoppingOpportunityRepository, SnapshotOp, SortDirection, StockQuery, StockRepository,
-    StockWrite, UpdateOutcome, UserQuery, UserRepository, WeightGoalRepository,
-    WeightRecordRepository,
+    ShoppingListItemRepository, ShoppingOpportunityRepository, SnapshotOp, SortDirection,
+    StockQuery, StockRepository, StockWrite, UpdateOutcome, UserQuery, UserRepository,
+    WeightGoalRepository, WeightRecordRepository,
 };
 
 // This _should_ reflect the indexes that a real database would enforce
@@ -883,6 +884,10 @@ impl InMemoryPreparedBatchRepository {
     pub fn count(&self) -> usize {
         self.rows.lock().unwrap().len()
     }
+
+    pub fn seed(&self, batch: PreparedBatch) {
+        self.rows.lock().unwrap().push(batch);
+    }
 }
 
 #[async_trait]
@@ -1700,6 +1705,7 @@ impl InMemoryHouseholdSettingsRepository {
                 missing_stock_interpretation: MissingStockInterpretation::Unknown,
                 default_all_members_participate: false,
                 assume_eaten_when_time_passes: false,
+                section_order: SectionOrder::default(),
                 revision: Revision::INITIAL,
                 created_at: time::OffsetDateTime::UNIX_EPOCH,
                 updated_at: time::OffsetDateTime::UNIX_EPOCH,
@@ -1723,6 +1729,10 @@ impl InMemoryHouseholdSettingsRepository {
 
     pub fn set_meal_times(&self, meal_times: MealTimes) {
         self.row.lock().unwrap().meal_times = meal_times;
+    }
+
+    pub fn set_section_order(&self, order: SectionOrder) {
+        self.row.lock().unwrap().section_order = order;
     }
 }
 
@@ -2490,5 +2500,75 @@ impl PurchaseRepository for InMemoryPurchaseRepository {
         }
         *existing = purchase.clone();
         Ok(UpdateOutcome::Updated)
+    }
+}
+
+#[derive(Clone, Default)]
+pub struct InMemoryShoppingListItemRepository {
+    rows: Arc<Mutex<Vec<ShoppingListItem>>>,
+}
+
+impl InMemoryShoppingListItemRepository {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn count(&self) -> usize {
+        self.rows.lock().unwrap().len()
+    }
+}
+
+#[async_trait]
+impl ShoppingListItemRepository for InMemoryShoppingListItemRepository {
+    async fn get(&self, id: ShoppingListItemId) -> Result<Option<ShoppingListItem>> {
+        Ok(self
+            .rows
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|row| row.id == id)
+            .cloned())
+    }
+
+    async fn list(&self) -> Result<Vec<ShoppingListItem>> {
+        Ok(self.rows.lock().unwrap().clone())
+    }
+
+    async fn insert(&self, item: &ShoppingListItem) -> Result<()> {
+        self.rows.lock().unwrap().push(item.clone());
+        Ok(())
+    }
+
+    async fn update(&self, item: &ShoppingListItem, expected: Revision) -> Result<UpdateOutcome> {
+        let mut rows = self.rows.lock().unwrap();
+        let Some(existing) = rows.iter_mut().find(|row| row.id == item.id) else {
+            return Ok(UpdateOutcome::NotFound);
+        };
+        if existing.revision != expected {
+            return Ok(UpdateOutcome::RevisionMismatch {
+                actual: existing.revision,
+            });
+        }
+        *existing = item.clone();
+        Ok(UpdateOutcome::Updated)
+    }
+
+    async fn delete(&self, id: ShoppingListItemId) -> Result<UpdateOutcome> {
+        let mut rows = self.rows.lock().unwrap();
+        let before = rows.len();
+        rows.retain(|row| row.id != id);
+        Ok(if rows.len() == before {
+            UpdateOutcome::NotFound
+        } else {
+            UpdateOutcome::Updated
+        })
+    }
+
+    async fn delete_for_opportunity(&self, date: Date) -> Result<()> {
+        self.rows
+            .lock()
+            .unwrap()
+            .retain(|row| row.opportunity_date != Some(date));
+        Ok(())
     }
 }

@@ -1,4 +1,6 @@
-use mmp_core::domain::{HouseholdSettings, HouseholdSettingsPatch, MissingStockInterpretation};
+use mmp_core::domain::{
+    HouseholdSettings, HouseholdSettingsPatch, MissingStockInterpretation, ShoppingSection,
+};
 use serde::{Deserialize, Serialize};
 use time::{OffsetDateTime, Time};
 use utoipa::ToSchema;
@@ -50,6 +52,7 @@ pub struct HouseholdSettingsDto {
     pub missing_stock_interpretation: MissingStockInterpretationDto,
     pub default_all_members_participate: bool,
     pub assume_eaten_when_time_passes: bool,
+    pub shopping_section_order: Vec<ShoppingSection>,
     pub revision: i64,
     #[serde(with = "time::serde::rfc3339")]
     #[schema(value_type = String, format = DateTime)]
@@ -70,6 +73,7 @@ impl From<HouseholdSettings> for HouseholdSettingsDto {
             missing_stock_interpretation: value.missing_stock_interpretation.into(),
             default_all_members_participate: value.default_all_members_participate,
             assume_eaten_when_time_passes: value.assume_eaten_when_time_passes,
+            shopping_section_order: value.section_order.sections().to_vec(),
             revision: value.revision.get(),
             created_at: value.created_at,
             updated_at: value.updated_at,
@@ -94,6 +98,8 @@ pub struct UpdateMealTimesRequest {
     pub default_all_members_participate: Option<bool>,
     #[serde(default)]
     pub assume_eaten_when_time_passes: Option<bool>,
+    #[serde(default)]
+    pub shopping_section_order: Option<Vec<ShoppingSection>>,
 }
 
 impl From<UpdateMealTimesRequest> for HouseholdSettingsPatch {
@@ -105,6 +111,7 @@ impl From<UpdateMealTimesRequest> for HouseholdSettingsPatch {
             missing_stock_interpretation: value.missing_stock_interpretation.map(Into::into),
             default_all_members_participate: value.default_all_members_participate,
             assume_eaten_when_time_passes: value.assume_eaten_when_time_passes,
+            section_order: value.shopping_section_order,
         }
     }
 }
