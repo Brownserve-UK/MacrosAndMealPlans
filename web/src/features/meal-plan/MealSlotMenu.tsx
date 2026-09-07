@@ -8,16 +8,25 @@ import type { MealSlot } from '../../api/client';
 export function MealSlotMenu({
   choices,
   onSelect,
+  label = 'Plan meal',
+  variant = 'contained',
 }: {
   choices: { value: MealSlot; label: string }[];
   onSelect: (slot: MealSlot) => void;
+  label?: string;
+  variant?: 'contained' | 'text';
 }) {
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
 
   return (
     <>
-      <Button variant="contained" startIcon={<AddIcon />} onClick={(event) => setAnchor(event.currentTarget)}>
-        Plan meal
+      <Button
+        variant={variant}
+        size={variant === 'text' ? 'small' : 'medium'}
+        startIcon={variant === 'contained' ? <AddIcon /> : undefined}
+        onClick={(event) => setAnchor(event.currentTarget)}
+      >
+        {label}
       </Button>
       <Menu anchorEl={anchor} open={Boolean(anchor)} onClose={() => setAnchor(null)}>
         {choices.map((choice) => (

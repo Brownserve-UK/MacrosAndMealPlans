@@ -25,6 +25,7 @@ import { ShopModePage } from '../features/shopping/ShopModePage';
 import { ShoppingPage } from '../features/shopping/ShoppingPage';
 import { ShoppingSettingsPage } from '../features/shopping/ShoppingSettingsPage';
 import { StockPage } from '../features/stock/StockPage';
+import { DishPage } from '../features/stock/DishPage';
 import { StockItemPage } from '../features/stock/StockItemPage';
 import { ProductStockPage } from '../features/stock/ProductStockPage';
 import { IngredientStockPage } from '../features/stock/IngredientStockPage';
@@ -210,6 +211,15 @@ const stockItemRoute = createRoute({
   },
 });
 
+const dishRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/stock/dishes/$batchId',
+  component: function ViewDish() {
+    const { batchId } = dishRoute.useParams();
+    return <DishPage batchId={batchId} />;
+  },
+});
+
 const productStockRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/stock/products/$productId',
@@ -321,6 +331,7 @@ const routeTree = rootRoute.addChildren([
   productStockRoute,
   ingredientStockRoute,
   stockItemRoute,
+  dishRoute,
   householdRoute,
   memberRoute,
   administrationRoute,

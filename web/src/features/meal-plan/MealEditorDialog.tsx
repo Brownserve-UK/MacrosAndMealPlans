@@ -31,6 +31,7 @@ import { FormDialog } from '../../components/FormDialog';
 import { displayUnit } from '../../components/UnitSelect';
 import { parseIsoDate } from './date';
 import { FoodSearch, type Dish, type FoodChoice } from './FoodSearch';
+import type { PlannableDish } from './UseItUp';
 
 type EditorMode = 'member' | 'household';
 
@@ -101,6 +102,7 @@ export function MealEditorDialog({
   slot,
   meal,
   mode,
+  startWith,
 }: {
   open: boolean;
   onClose: () => void;
@@ -108,6 +110,7 @@ export function MealEditorDialog({
   slot: MealSlot;
   meal: PlannerMeal | null;
   mode: EditorMode;
+  startWith?: PlannableDish | null;
 }) {
   const { principal } = useAuth();
   const household = mode === 'household';
@@ -127,7 +130,19 @@ export function MealEditorDialog({
         : [],
   );
   const [guestCount, setGuestCount] = useState(meal?.guest_groups.reduce((sum, group) => sum + group.count, 0) ?? 0);
-  const [foods, setFoods] = useState<FoodDraft[]>(() => initialFoods(meal));
+  const [foods, setFoods] = useState<FoodDraft[]>(() => {
+    const existing = initialFoods(meal);
+    if (!startWith || existing.some((food) => food.itemId === startWith.preparedBatchId)) {
+      return existing;
+    }
+    return [...existing, {
+      componentId: crypto.randomUUID(),
+      itemKind: 'dish',
+      itemId: startWith.preparedBatchId,
+      name: startWith.name,
+      amount: { kind: 'servings', value: 1 },
+    }];
+  });
   const [making, setMaking] = useState<number | null>(() => initialMaking(meal, household));
   const [error, setError] = useState<string | null>(null);
   const busy = create.isPending || update.isPending;
@@ -356,6 +371,27 @@ export function MealEditorDialog({
                             {UNITS.map((unit) => <MenuItem key={unit} value={unit}>{displayUnit(unit)}</MenuItem>)}
                           </TextField>
                         ) : null}
+                      </Stack>
+                    ) : food.itemKind === 'dish' ? (
+                      <Stack direction="row" spacing={0.5} sx={{ alignItems: 'center' }}>
+                        <IconButton
+                          size="small"
+                          aria-label={`Less ${food.name}`}
+                          disabled={food.amount.value <= 1}
+                          onClick={() => setFoodAmount(food.componentId, { kind: 'servings', value: food.amount.value - 1 })}
+                        >
+                          <RemoveIcon fontSize="small" />
+                        </IconButton>
+                        <Typography className="numeral" sx={{ minWidth: 46, textAlign: 'center' }}>
+                          {food.amount.value === 1 ? '1 serving' : `${food.amount.value} servings`}
+                        </Typography>
+                        <IconButton
+                          size="small"
+                          aria-label={`More ${food.name}`}
+                          onClick={() => setFoodAmount(food.componentId, { kind: 'servings', value: food.amount.value + 1 })}
+                        >
+                          <AddIcon fontSize="small" />
+                        </IconButton>
                       </Stack>
                     ) : null}
                     <IconButton aria-label={`Remove ${food.name}`} onClick={() => setFoods((current) => current.filter((candidate) => candidate.componentId !== food.componentId))}>

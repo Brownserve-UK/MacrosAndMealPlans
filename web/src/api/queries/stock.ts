@@ -1,4 +1,4 @@
-import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { client, ifMatch, unwrap } from '../client';
 import type { components } from '../schema';
 import { stockKeys } from '../keys';
@@ -39,6 +39,20 @@ export function useStockAvailability(productId?: string) {
           params: { query: { product_id: productId } },
         }),
       ),
+  });
+}
+
+export function useStockEventsFor(ids: string[]) {
+  return useQueries({
+    queries: ids.map((id) => ({
+      queryKey: stockKeys.events(id),
+      queryFn: async () =>
+        unwrap(await client.GET('/api/v1/stock/{id}/events', { params: { path: { id } } })),
+    })),
+    combine: (results) => ({
+      data: results.flatMap((result) => result.data ?? []),
+      isLoading: results.some((result) => result.isLoading),
+    }),
   });
 }
 

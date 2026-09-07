@@ -146,8 +146,8 @@ export function PreparedPortionCard({ group }: { group: StockGroup }) {
 
   return (
     <Link
-      to="/stock/$id"
-      params={{ id: first.id }}
+      to="/stock/dishes/$batchId"
+      params={{ batchId: group.id }}
       style={{ textDecoration: 'none', color: 'inherit' }}
     >
       <StockRow

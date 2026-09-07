@@ -17,7 +17,7 @@ import { ErrorState, Loading } from '../../components/States';
 import { addDays, defaultDayFor, parseIsoDate, startOfWeekIso, todayIso } from './date';
 import { MealRow, plannerMealRow, type MealAction } from './MealRow';
 import { PlannerLens } from './PlannerLens';
-import { UseItUp } from './UseItUp';
+import { UseItUp, type PlannableDish } from './UseItUp';
 import { CookDialog } from './CookDialog';
 import { CookedSection } from './CookedSection';
 import { CookSomethingDialog } from './CookSomethingDialog';
@@ -28,7 +28,12 @@ import { EmptySlot, SlotSection } from './SlotSection';
 import { labelForSlot, MAIN_SLOTS } from './slots';
 import { WeekNavigator } from './WeekNavigator';
 
-type EditSelection = { key: string; meal: PlannerMeal | null; slot: MealSlot };
+type EditSelection = {
+  key: string;
+  meal: PlannerMeal | null;
+  slot: MealSlot;
+  dish?: PlannableDish;
+};
 
 function fullDayLabel(date: string) {
   return parseIsoDate(date).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' });
@@ -146,7 +151,10 @@ export function HouseholdPlannerPage({ weekStart, day }: { weekStart: string; da
         />
       ) : null}
 
-      <UseItUp today={todayIso()} />
+      <UseItUp
+        today={todayIso()}
+        onPlan={(dish, slot) => setEditing({ key: crypto.randomUUID(), meal: null, slot, dish })}
+      />
 
       <Typography variant="h2" sx={{ mb: 2 }}>{fullDayLabel(activeDate)}</Typography>
       {week.isLoading ? <Loading label="Loading household planner" /> : null}
@@ -190,7 +198,7 @@ export function HouseholdPlannerPage({ weekStart, day }: { weekStart: string; da
         </Stack>
       ) : null}
 
-      {editing ? <MealEditorDialog key={editing.key} open mode="household" onClose={() => setEditing(null)} date={activeDate} slot={editing.slot} meal={editing.meal} /> : null}
+      {editing ? <MealEditorDialog key={editing.key} open mode="household" onClose={() => setEditing(null)} date={activeDate} slot={editing.slot} meal={editing.meal} startWith={editing.dish} /> : null}
       {outcome ? <MealOutcomeDialog meal={outcome} onClose={() => setOutcome(null)} /> : null}
       {cooking ? <CookDialog meal={cooking} onClose={() => setCooking(null)} /> : null}
       {cookingSomething ? <CookSomethingDialog onClose={() => setCookingSomething(false)} /> : null}

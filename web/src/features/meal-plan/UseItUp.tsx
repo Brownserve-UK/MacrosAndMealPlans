@@ -2,10 +2,15 @@ import Paper from '@mui/material/Paper';
 import Stack from '@mui/material/Stack';
 import Typography from '@mui/material/Typography';
 import { alpha } from '@mui/material/styles';
+import type { MealSlot } from '../../api/client';
 import { useStock } from '../../api/queries';
 import type { components } from '../../api/schema';
 import { IconTile } from '../../components/IconTile';
 import { addDays, parseIsoDate } from './date';
+import { MealSlotMenu } from './MealSlotMenu';
+import { MAIN_SLOTS } from './slots';
+
+export type PlannableDish = { preparedBatchId: string; name: string; servings: number };
 
 const HORIZON_DAYS = 4;
 
@@ -20,7 +25,13 @@ function servingsOf(level: components['schemas']['StockLevelDto']): number | nul
   return 'quantity' in level ? level.quantity.amount : null;
 }
 
-export function UseItUp({ today }: { today: string }) {
+export function UseItUp({
+  today,
+  onPlan,
+}: {
+  today: string;
+  onPlan?: (dish: PlannableDish, slot: MealSlot) => void;
+}) {
   const stock = useStock({ per_page: 200 });
   const horizon = addDays(today, HORIZON_DAYS);
 
@@ -32,6 +43,7 @@ export function UseItUp({ today }: { today: string }) {
     );
 
   if (pressing.length === 0) return null;
+  const soonest = pressing[0];
 
   return (
     <Paper
@@ -63,6 +75,24 @@ export function UseItUp({ today }: { today: string }) {
               .join(' · ')}
           </Typography>
         </Stack>
+
+        {onPlan && soonest?.prepared_batch_id ? (
+          <MealSlotMenu
+            choices={MAIN_SLOTS}
+            label="Plan it"
+            variant="text"
+            onSelect={(slot) =>
+              onPlan(
+                {
+                  preparedBatchId: soonest.prepared_batch_id!,
+                  name: soonest.prepared_batch_name ?? 'Cooked food',
+                  servings: servingsOf(soonest.level) ?? 1,
+                },
+                slot,
+              )
+            }
+          />
+        ) : null}
       </Stack>
     </Paper>
   );
