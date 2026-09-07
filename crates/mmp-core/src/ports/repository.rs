@@ -577,12 +577,21 @@ pub trait PurchaseRepository: Send + Sync + 'static {
         expected: Revision,
         stock: Option<&NewStockFromPurchase>,
     ) -> Result<UpdateOutcome>;
+
+    async fn finish(&self, finished: &[FinishedPurchase]) -> Result<UpdateOutcome>;
 }
 
 #[derive(Debug, Clone)]
 pub struct NewStockFromPurchase {
     pub item: StockItem,
     pub event: NewStockEvent,
+}
+
+#[derive(Debug, Clone)]
+pub struct FinishedPurchase {
+    pub purchase: Purchase,
+    pub expected: Revision,
+    pub stock: NewStockFromPurchase,
 }
 
 #[async_trait]

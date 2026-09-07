@@ -153,7 +153,7 @@ pub struct ProductDto {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub retailer: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub shopping_section: Option<String>,
+    pub shopping_section: Option<ShoppingSection>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub track_stock: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -216,7 +216,7 @@ pub struct CreateProductRequest {
     #[serde(default)]
     pub retailer: Option<String>,
     #[serde(default)]
-    pub shopping_section: Option<String>,
+    pub shopping_section: Option<ShoppingSection>,
     #[serde(default)]
     pub track_stock: Option<bool>,
     #[serde(default)]
@@ -262,8 +262,8 @@ pub struct UpdateProductRequest {
     #[schema(value_type = Option<String>)]
     pub retailer: Patch<String>,
     #[serde(default)]
-    #[schema(value_type = Option<String>)]
-    pub shopping_section: Patch<String>,
+    #[schema(value_type = Option<ShoppingSection>)]
+    pub shopping_section: Patch<ShoppingSection>,
     #[serde(default)]
     #[schema(value_type = Option<bool>)]
     pub track_stock: Patch<bool>,

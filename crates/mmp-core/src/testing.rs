@@ -20,7 +20,7 @@ use crate::domain::{
 };
 use crate::error::{CoreError, Result};
 use crate::ports::{
-    AccessGrantRepository, ConsumptionQuery, ConsumptionRecordRepository,
+    AccessGrantRepository, ConsumptionQuery, ConsumptionRecordRepository, FinishedPurchase,
     HouseholdMemberRepository, HouseholdSettingsRepository, IngredientQuery, IngredientRepository,
     IngredientSort, MealPlanComponentUpdate, MealPlanQuery, MealPlanRepository, MemberQuery,
     NewStockFromPurchase, NutritionTargetRepository, Paginated, ProductQuery, ProductRepository,
@@ -2499,6 +2499,27 @@ impl PurchaseRepository for InMemoryPurchaseRepository {
             self.stock.lock().unwrap().push(stock.item.clone());
         }
         *existing = purchase.clone();
+        Ok(UpdateOutcome::Updated)
+    }
+
+    async fn finish(&self, finished: &[FinishedPurchase]) -> Result<UpdateOutcome> {
+        let mut rows = self.rows.lock().unwrap();
+        for held in finished {
+            let Some(existing) = rows.iter().find(|row| row.id == held.purchase.id) else {
+                return Ok(UpdateOutcome::NotFound);
+            };
+            if existing.revision != held.expected {
+                return Ok(UpdateOutcome::RevisionMismatch {
+                    actual: existing.revision,
+                });
+            }
+        }
+        for held in finished {
+            if let Some(existing) = rows.iter_mut().find(|row| row.id == held.purchase.id) {
+                *existing = held.purchase.clone();
+            }
+            self.stock.lock().unwrap().push(held.stock.item.clone());
+        }
         Ok(UpdateOutcome::Updated)
     }
 }

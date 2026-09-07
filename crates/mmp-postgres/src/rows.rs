@@ -136,7 +136,14 @@ impl TryFrom<ProductRow> for Product {
             brand: row.brand,
             barcode: row.barcode,
             retailer: row.retailer,
-            shopping_section: row.shopping_section,
+            shopping_section: row
+                .shopping_section
+                .as_deref()
+                .map(|section| {
+                    ShoppingSection::from_str(section)
+                        .map_err(|_| bad_value("shopping_section", section))
+                })
+                .transpose()?,
             track_stock: row.track_stock,
             package_quantity,
             servings_per_pack: row.servings_per_pack,
@@ -931,6 +938,7 @@ pub struct PurchaseRow {
     pub id: Uuid,
     pub ingredient_id: Option<Uuid>,
     pub product_id: Option<Uuid>,
+    pub name: Option<String>,
     pub quantity_value: Option<Decimal>,
     pub quantity_unit: Option<String>,
     pub opportunity_date: Option<Date>,
@@ -1008,6 +1016,7 @@ impl TryFrom<PurchaseRow> for Purchase {
             id: PurchaseId::from(row.id),
             ingredient_id: row.ingredient_id.map(IngredientId::from),
             product_id: row.product_id.map(ProductId::from),
+            name: row.name,
             quantity,
             opportunity_date: row.opportunity_date,
             state: PurchaseState::from_str(&row.state)

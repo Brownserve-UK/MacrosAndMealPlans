@@ -383,6 +383,7 @@ pub struct Purchase {
     pub id: PurchaseId,
     pub ingredient_id: Option<IngredientId>,
     pub product_id: Option<ProductId>,
+    pub name: Option<String>,
     pub quantity: Option<Quantity>,
     pub opportunity_date: Option<Date>,
     pub state: PurchaseState,
@@ -418,6 +419,7 @@ impl Purchase {
 pub struct NewPurchase {
     pub ingredient_id: Option<IngredientId>,
     pub product_id: Option<ProductId>,
+    pub name: Option<String>,
     pub quantity: Option<Quantity>,
     pub opportunity_date: Option<Date>,
     pub note: Option<String>,
@@ -426,7 +428,11 @@ pub struct NewPurchase {
 impl NewPurchase {
     pub fn validate(&self) -> Result<()> {
         let mut errors = ValidationErrors::new();
-        if self.ingredient_id.is_none() && self.product_id.is_none() {
+        let named = self
+            .name
+            .as_ref()
+            .is_some_and(|name| !name.trim().is_empty());
+        if self.ingredient_id.is_none() && self.product_id.is_none() && !named {
             errors.push("product_id", "Say what was bought.");
         }
         if let Some(quantity) = self.quantity

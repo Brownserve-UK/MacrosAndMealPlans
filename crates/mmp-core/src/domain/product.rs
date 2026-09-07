@@ -1,7 +1,8 @@
 use time::OffsetDateTime;
 
 use super::{
-    IngredientId, NutritionFacts, Patch, ProductId, Provenance, Quantity, Revision, validate_name,
+    IngredientId, NutritionFacts, Patch, ProductId, Provenance, Quantity, Revision,
+    ShoppingSection, validate_name,
 };
 use crate::error::ValidationErrors;
 
@@ -17,7 +18,7 @@ pub struct Product {
     pub brand: Option<String>,
     pub barcode: Option<String>,
     pub retailer: Option<String>,
-    pub shopping_section: Option<String>,
+    pub shopping_section: Option<ShoppingSection>,
     pub track_stock: Option<bool>,
     pub package_quantity: Option<Quantity>,
     pub servings_per_pack: Option<i32>,
@@ -62,7 +63,7 @@ pub struct NewProduct {
     pub brand: Option<String>,
     pub barcode: Option<String>,
     pub retailer: Option<String>,
-    pub shopping_section: Option<String>,
+    pub shopping_section: Option<ShoppingSection>,
     pub track_stock: Option<bool>,
     pub package_quantity: Option<Quantity>,
     pub servings_per_pack: Option<i32>,
@@ -77,7 +78,7 @@ pub struct ProductPatch {
     pub brand: Patch<String>,
     pub barcode: Patch<String>,
     pub retailer: Patch<String>,
-    pub shopping_section: Patch<String>,
+    pub shopping_section: Patch<ShoppingSection>,
     pub track_stock: Patch<bool>,
     pub package_quantity: Patch<Quantity>,
     pub servings_per_pack: Patch<i32>,
@@ -138,9 +139,6 @@ impl NewProduct {
         if let Some(retailer) = &self.retailer {
             validate_short_text("retailer", retailer, &mut errors);
         }
-        if let Some(section) = &self.shopping_section {
-            validate_short_text("shopping_section", section, &mut errors);
-        }
         if let Some(barcode) = &self.barcode {
             validate_barcode(barcode, &mut errors);
         }
@@ -166,9 +164,6 @@ impl ProductPatch {
         }
         if let Patch::Set(retailer) = self.retailer.as_ref() {
             validate_short_text("retailer", retailer, &mut errors);
-        }
-        if let Patch::Set(section) = self.shopping_section.as_ref() {
-            validate_short_text("shopping_section", section, &mut errors);
         }
         if let Patch::Set(barcode) = self.barcode.as_ref() {
             validate_barcode(barcode, &mut errors);

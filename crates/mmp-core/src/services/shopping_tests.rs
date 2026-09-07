@@ -362,6 +362,96 @@ async fn a_not_tracked_staple_never_asks_to_be_bought() {
 }
 
 #[tokio::test]
+async fn finishing_puts_the_shopping_where_it_belongs() {
+    let h = harness();
+    weekly_saturdays(&h).await;
+
+    let peas = IngredientId::new();
+    seed_ingredient_in(&h, peas, "Peas", ShoppingSection::Frozen);
+    let bag = mapped("Sample Peas", peas);
+    h.products.seed(bag.clone());
+
+    let chicken = IngredientId::new();
+    seed_ingredient_in(&h, chicken, "Chicken breast", ShoppingSection::MeatFish);
+    let pack = mapped("Sample Chicken", chicken);
+    h.products.seed(pack.clone());
+
+    let flour = IngredientId::new();
+    seed_ingredient_in(&h, flour, "Plain flour", ShoppingSection::Ambient);
+    let sack = mapped("Sample Flour", flour);
+    h.products.seed(sack.clone());
+
+    for (ingredient_id, product_id) in [(peas, bag.id), (chicken, pack.id), (flour, sack.id)] {
+        h.shopping
+            .record_purchase(
+                NewPurchase {
+                    ingredient_id: Some(ingredient_id),
+                    product_id: Some(product_id),
+                    name: None,
+                    quantity: Some(ml(500)),
+                    opportunity_date: Some(date!(2026 - 09 - 05)),
+                    note: None,
+                },
+                h.actor_id,
+            )
+            .await
+            .unwrap();
+    }
+
+    h.shopping
+        .finish_shop(date!(2026 - 09 - 05), h.actor_id)
+        .await
+        .unwrap();
+
+    let stocked = h.purchases.created_stock();
+    let where_it_went = |product_id: ProductId| {
+        stocked
+            .iter()
+            .find(|item| item.product_id() == Some(product_id))
+            .expect("the purchase became stock")
+            .storage_location
+    };
+    assert_eq!(where_it_went(bag.id), StorageLocation::Frozen);
+    assert_eq!(where_it_went(pack.id), StorageLocation::Chilled);
+    assert_eq!(where_it_went(sack.id), StorageLocation::Ambient);
+}
+
+#[tokio::test]
+async fn something_grabbed_in_store_is_recorded_by_name_alone() {
+    let h = harness();
+    weekly_saturdays(&h).await;
+
+    let purchase = h
+        .shopping
+        .record_purchase(
+            NewPurchase {
+                ingredient_id: None,
+                product_id: None,
+                name: Some("Kiwi Fruit".to_owned()),
+                quantity: None,
+                opportunity_date: Some(date!(2026 - 09 - 05)),
+                note: None,
+            },
+            h.actor_id,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(purchase.name.as_deref(), Some("Kiwi Fruit"));
+    assert_eq!(purchase.state, PurchaseState::Pending);
+
+    let list = h.shopping.requirements(None).await.unwrap();
+    assert_eq!(list.unplanned.len(), 1);
+    assert_eq!(list.unplanned[0].name.as_deref(), Some("Kiwi Fruit"));
+
+    h.shopping
+        .finish_shop(date!(2026 - 09 - 05), h.actor_id)
+        .await
+        .unwrap();
+    assert_eq!(h.stock.count(), 0);
+}
+
+#[tokio::test]
 async fn the_list_walks_the_aisles_in_the_households_own_order() {
     let h = harness();
     weekly_saturdays(&h).await;
@@ -589,6 +679,7 @@ async fn buying_without_details_records_the_purchase_but_creates_no_stock() {
             NewPurchase {
                 ingredient_id: Some(milk),
                 product_id: None,
+                name: None,
                 quantity: None,
                 opportunity_date: Some(date!(2026 - 09 - 05)),
                 note: None,
@@ -623,6 +714,7 @@ async fn buying_with_full_details_still_makes_no_stock_until_the_shop_is_finishe
             NewPurchase {
                 ingredient_id: Some(milk),
                 product_id: Some(a.id),
+                name: None,
                 quantity: Some(ml(1000)),
                 opportunity_date: Some(date!(2026 - 09 - 05)),
                 note: None,
@@ -666,6 +758,7 @@ async fn changing_your_mind_mid_shop_is_allowed_at_every_step() {
             NewPurchase {
                 ingredient_id: Some(milk),
                 product_id: Some(a.id),
+                name: None,
                 quantity: Some(ml(1000)),
                 opportunity_date: Some(date!(2026 - 09 - 05)),
                 note: None,
@@ -728,6 +821,7 @@ async fn two_products_can_answer_one_requirement() {
                 NewPurchase {
                     ingredient_id: Some(milk),
                     product_id: Some(product.id),
+                    name: None,
                     quantity: Some(amount),
                     opportunity_date: Some(date!(2026 - 09 - 05)),
                     note: None,
@@ -764,6 +858,7 @@ async fn finishing_leaves_a_purchase_with_no_details_waiting() {
             NewPurchase {
                 ingredient_id: Some(milk),
                 product_id: None,
+                name: None,
                 quantity: None,
                 opportunity_date: Some(date!(2026 - 09 - 05)),
                 note: None,
@@ -800,6 +895,7 @@ async fn finishing_a_shop_twice_changes_nothing_and_locks_what_it_stocked() {
             NewPurchase {
                 ingredient_id: Some(milk),
                 product_id: Some(a.id),
+                name: None,
                 quantity: Some(ml(1000)),
                 opportunity_date: Some(date!(2026 - 09 - 05)),
                 note: None,

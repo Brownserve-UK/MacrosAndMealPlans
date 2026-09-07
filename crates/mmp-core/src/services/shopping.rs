@@ -16,9 +16,10 @@ use crate::domain::{
 };
 use crate::error::{CoreError, Result};
 use crate::ports::{
-    Clock, HouseholdSettingsRepository, IngredientRepository, NewStockFromPurchase, Paginated,
-    ProductRepository, PurchaseQuery, PurchaseRepository, ShoppingCadenceRepository,
-    ShoppingListItemRepository, ShoppingOpportunityRepository, UpdateOutcome,
+    Clock, FinishedPurchase, HouseholdSettingsRepository, IngredientRepository,
+    NewStockFromPurchase, Paginated, ProductRepository, PurchaseQuery, PurchaseRepository,
+    ShoppingCadenceRepository, ShoppingListItemRepository, ShoppingOpportunityRepository,
+    UpdateOutcome,
 };
 use crate::services::StockService;
 
@@ -43,6 +44,7 @@ pub struct ShoppingList {
     pub focus: Option<Date>,
     pub requirements: Vec<ShoppingRequirement>,
     pub manual: Vec<ShoppingListItem>,
+    pub unplanned: Vec<Purchase>,
     pub cadence_configured: bool,
 }
 
@@ -335,11 +337,7 @@ impl ShoppingService {
                 .filter(|claim| claim.subject == DemandSubject::product(row.product_id))
                 .cloned()
                 .collect();
-            let section = product
-                .shopping_section
-                .as_deref()
-                .and_then(|section| section.parse().ok())
-                .unwrap_or(ShoppingSection::Other);
+            let section = product.shopping_section.unwrap_or(ShoppingSection::Other);
 
             requirements.extend(build(
                 DemandSubject::product(row.product_id),
@@ -382,11 +380,23 @@ impl ShoppingService {
                 .then_with(|| a.name.cmp(&b.name))
         });
 
+        let claimed: Vec<PurchaseId> = requirements
+            .iter()
+            .flat_map(|requirement| requirement.purchases.iter())
+            .map(|purchase| purchase.id)
+            .collect();
+        let unplanned: Vec<Purchase> = open_purchases
+            .into_iter()
+            .filter(|purchase| purchase.state == PurchaseState::Pending)
+            .filter(|purchase| !claimed.contains(&purchase.id))
+            .collect();
+
         Ok(ShoppingList {
             opportunities,
             focus,
             requirements,
             manual,
+            unplanned,
             cadence_configured: cadence.is_some(),
         })
     }
@@ -402,11 +412,7 @@ impl ShoppingService {
             return Ok(section);
         }
         for product in self.products.get_many(pool).await? {
-            if let Some(section) = product
-                .shopping_section
-                .as_deref()
-                .and_then(|section| section.parse::<ShoppingSection>().ok())
-            {
+            if let Some(section) = product.shopping_section {
                 return Ok(section);
             }
         }
@@ -434,6 +440,10 @@ impl ShoppingService {
             id: PurchaseId::new(),
             ingredient_id: input.ingredient_id,
             product_id: input.product_id,
+            name: input
+                .name
+                .map(|name| name.trim().to_owned())
+                .filter(|name| !name.is_empty()),
             quantity: input.quantity,
             opportunity_date: input.opportunity_date,
             state: PurchaseState::Pending,
@@ -497,6 +507,7 @@ impl ShoppingService {
             .collect();
 
         let mut finished = FinishedShop::default();
+        let mut ready: Vec<FinishedPurchase> = Vec::new();
         for mut purchase in pending {
             let Some(stock) = self.stock_for(&purchase, actor).await? else {
                 finished.still_pending += 1;
@@ -507,21 +518,26 @@ impl ShoppingService {
             purchase.stock_item_id = Some(stock.item.id);
             purchase.updated_at = self.clock.now();
             purchase.revision = expected.next();
+            ready.push(FinishedPurchase {
+                purchase,
+                expected,
+                stock,
+            });
+        }
 
-            match self
-                .purchases
-                .update(&purchase, expected, Some(&stock))
-                .await?
-            {
-                UpdateOutcome::Updated => finished.stocked += 1,
+        if !ready.is_empty() {
+            match self.purchases.finish(&ready).await? {
+                UpdateOutcome::Updated => finished.stocked = ready.len(),
                 UpdateOutcome::NotFound => {
-                    return Err(CoreError::not_found(PURCHASE, purchase.id.to_string()));
+                    let id = ready[0].purchase.id;
+                    return Err(CoreError::not_found(PURCHASE, id.to_string()));
                 }
                 UpdateOutcome::RevisionMismatch { actual } => {
+                    let held = &ready[0];
                     return Err(CoreError::RevisionMismatch {
                         resource: PURCHASE,
-                        id: purchase.id.to_string(),
-                        expected,
+                        id: held.purchase.id.to_string(),
+                        expected: held.expected,
                         actual,
                     });
                 }
@@ -548,10 +564,22 @@ impl ShoppingService {
             return Err(CoreError::conflict("That product is archived."));
         }
 
+        let section = match product.shopping_section {
+            Some(section) => Some(section),
+            None => match product.mapped_ingredient_id {
+                Some(ingredient_id) => self
+                    .ingredients
+                    .get(ingredient_id)
+                    .await?
+                    .and_then(|ingredient| ingredient.shopping_section),
+                None => None,
+            },
+        };
+
         let input = NewStockItem {
             subject: StockSubject::product(product_id),
             level: StockLevel::Exact { quantity },
-            storage_location: StorageLocation::Ambient,
+            storage_location: storage_for(section),
             source_date: None,
             usability_deadline: None,
             note: purchase.note.clone(),
@@ -611,6 +639,16 @@ fn claims_for_pool(
         })
         .cloned()
         .collect()
+}
+
+fn storage_for(section: Option<ShoppingSection>) -> StorageLocation {
+    match section {
+        Some(ShoppingSection::Frozen) => StorageLocation::Frozen,
+        Some(
+            ShoppingSection::FreshProduce | ShoppingSection::MeatFish | ShoppingSection::Dairy,
+        ) => StorageLocation::Chilled,
+        _ => StorageLocation::Ambient,
+    }
 }
 
 fn assignment_order(assignment: &Assignment) -> (u8, Option<Date>) {

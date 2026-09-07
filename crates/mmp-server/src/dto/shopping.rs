@@ -1,6 +1,6 @@
 use mmp_core::domain::{
     Assignment, Certainty, DemandSubject, NewPurchase, NewShoppingCadence, OpportunityState,
-    Purchase, PurchasePatch, PurchaseState, ShoppingCadence, ShoppingOpportunity,
+    Purchase, PurchasePatch, PurchaseState, ShoppingCadence, ShoppingListItem, ShoppingOpportunity,
     ShoppingRequirement, ShoppingSection, SuggestionReason, week_day_from_number, week_day_number,
 };
 use mmp_core::services::{FinishedShop, ShoppingList};
@@ -259,7 +259,46 @@ pub struct ShoppingListDto {
     #[schema(value_type = Option<String>, format = Date)]
     pub focus: Option<Date>,
     pub requirements: Vec<ShoppingRequirementDto>,
+    pub manual: Vec<ShoppingListItemDto>,
+    pub unplanned: Vec<PurchaseDto>,
     pub cadence_configured: bool,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct ShoppingListItemDto {
+    pub id: Uuid,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ingredient_id: Option<Uuid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub product_id: Option<Uuid>,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quantity: Option<QuantityDto>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub section: Option<ShoppingSection>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "iso_date::option"
+    )]
+    #[schema(value_type = Option<String>, format = Date)]
+    pub opportunity_date: Option<Date>,
+    pub revision: i64,
+}
+
+impl From<ShoppingListItem> for ShoppingListItemDto {
+    fn from(value: ShoppingListItem) -> Self {
+        Self {
+            id: value.id.as_uuid(),
+            ingredient_id: value.ingredient_id.map(|id| id.as_uuid()),
+            product_id: value.product_id.map(|id| id.as_uuid()),
+            name: value.name,
+            quantity: value.quantity.map(Into::into),
+            section: value.section,
+            opportunity_date: value.opportunity_date,
+            revision: value.revision.get(),
+        }
+    }
 }
 
 impl From<ShoppingList> for ShoppingListDto {
@@ -268,6 +307,8 @@ impl From<ShoppingList> for ShoppingListDto {
             opportunities: value.opportunities.into_iter().map(Into::into).collect(),
             focus: value.focus,
             requirements: value.requirements.into_iter().map(Into::into).collect(),
+            manual: value.manual.into_iter().map(Into::into).collect(),
+            unplanned: value.unplanned.into_iter().map(Into::into).collect(),
             cadence_configured: value.cadence_configured,
         }
     }
@@ -299,6 +340,8 @@ pub struct PurchaseDto {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub product_id: Option<Uuid>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub quantity: Option<QuantityDto>,
     #[serde(
         default,
@@ -324,6 +367,7 @@ impl From<Purchase> for PurchaseDto {
             id: value.id.as_uuid(),
             ingredient_id: value.ingredient_id.map(|id| id.as_uuid()),
             product_id: value.product_id.map(|id| id.as_uuid()),
+            name: value.name,
             quantity: value.quantity.map(Into::into),
             opportunity_date: value.opportunity_date,
             state: value.state.into(),
@@ -363,6 +407,8 @@ pub struct CreatePurchaseRequest {
     #[serde(default)]
     pub product_id: Option<Uuid>,
     #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
     pub quantity: Option<QuantityDto>,
     #[serde(default, with = "iso_date::option")]
     #[schema(value_type = Option<String>, format = Date)]
@@ -376,6 +422,7 @@ impl From<CreatePurchaseRequest> for NewPurchase {
         Self {
             ingredient_id: value.ingredient_id.map(Into::into),
             product_id: value.product_id.map(Into::into),
+            name: value.name,
             quantity: value.quantity.map(Into::into),
             opportunity_date: value.opportunity_date,
             note: value.note,

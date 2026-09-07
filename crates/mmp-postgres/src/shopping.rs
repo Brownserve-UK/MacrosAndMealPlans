@@ -5,8 +5,9 @@ use mmp_core::domain::{
     ShoppingListItemId, ShoppingOpportunityId,
 };
 use mmp_core::ports::{
-    NewStockFromPurchase, Paginated, PurchaseQuery, PurchaseRepository, ShoppingCadenceRepository,
-    ShoppingListItemRepository, ShoppingOpportunityRepository, SortDirection, UpdateOutcome,
+    FinishedPurchase, NewStockFromPurchase, Paginated, PurchaseQuery, PurchaseRepository,
+    ShoppingCadenceRepository, ShoppingListItemRepository, ShoppingOpportunityRepository,
+    SortDirection, UpdateOutcome,
 };
 use sqlx::PgPool;
 use time::Date;
@@ -203,8 +204,8 @@ impl ShoppingOpportunityRepository for PgShoppingOpportunityRepository {
 
 macro_rules! purchase_columns {
     () => {
-        "id, ingredient_id, product_id, quantity_value, quantity_unit, opportunity_date, state, \
-         stock_item_id, purchased_at, actor_user_id, note, revision, created_at, updated_at"
+        "id, ingredient_id, product_id, name, quantity_value, quantity_unit, opportunity_date, \
+         state, stock_item_id, purchased_at, actor_user_id, note, revision, created_at, updated_at"
     };
 }
 
@@ -314,14 +315,15 @@ impl PurchaseRepository for PgPurchaseRepository {
 
         sqlx::query(
             "INSERT INTO purchase (
-                 id, ingredient_id, product_id, quantity_value, quantity_unit,
+                 id, ingredient_id, product_id, name, quantity_value, quantity_unit,
                  opportunity_date, state, stock_item_id, purchased_at, actor_user_id, note,
                  revision, created_at, updated_at
-             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)",
+             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)",
         )
         .bind(purchase.id.as_uuid())
         .bind(purchase.ingredient_id.map(|id| id.as_uuid()))
         .bind(purchase.product_id.map(|id| id.as_uuid()))
+        .bind(purchase.name.as_deref())
         .bind(purchase.quantity.map(|q| q.amount))
         .bind(purchase.quantity.map(|q| q.unit.code()))
         .bind(purchase.opportunity_date)
@@ -361,14 +363,15 @@ impl PurchaseRepository for PgPurchaseRepository {
 
         let affected = sqlx::query(
             "UPDATE purchase SET
-                 ingredient_id = $2, product_id = $3, quantity_value = $4, quantity_unit = $5,
-                 opportunity_date = $6, state = $7, stock_item_id = $8, note = $9,
-                 revision = $10, updated_at = $11
-             WHERE id = $1 AND revision = $12",
+                 ingredient_id = $2, product_id = $3, name = $4, quantity_value = $5,
+                 quantity_unit = $6, opportunity_date = $7, state = $8, stock_item_id = $9,
+                 note = $10, revision = $11, updated_at = $12
+             WHERE id = $1 AND revision = $13",
         )
         .bind(purchase.id.as_uuid())
         .bind(purchase.ingredient_id.map(|id| id.as_uuid()))
         .bind(purchase.product_id.map(|id| id.as_uuid()))
+        .bind(purchase.name.as_deref())
         .bind(purchase.quantity.map(|q| q.amount))
         .bind(purchase.quantity.map(|q| q.unit.code()))
         .bind(purchase.opportunity_date)
@@ -401,6 +404,54 @@ impl PurchaseRepository for PgPurchaseRepository {
         tx.commit()
             .await
             .map_err(|e| repository_error("committing a purchase update", e))?;
+        Ok(UpdateOutcome::Updated)
+    }
+
+    async fn finish(&self, finished: &[FinishedPurchase]) -> Result<UpdateOutcome> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| repository_error("starting a shop", e))?;
+
+        for held in finished {
+            let purchase = &held.purchase;
+            insert_stock_item(&mut tx, &held.stock.item, &held.stock.event).await?;
+
+            let affected = sqlx::query(
+                "UPDATE purchase SET state = $2, stock_item_id = $3, revision = $4, \
+                 updated_at = $5 WHERE id = $1 AND revision = $6",
+            )
+            .bind(purchase.id.as_uuid())
+            .bind(purchase.state.code())
+            .bind(purchase.stock_item_id.map(|id| id.as_uuid()))
+            .bind(purchase.revision.get())
+            .bind(purchase.updated_at)
+            .bind(held.expected.get())
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| map_db_error(e, "finishing a shop"))?
+            .rows_affected();
+
+            if affected != 1 {
+                let current: Option<(i64,)> =
+                    sqlx::query_as("SELECT revision FROM purchase WHERE id = $1")
+                        .bind(purchase.id.as_uuid())
+                        .fetch_optional(&mut *tx)
+                        .await
+                        .map_err(|e| repository_error("checking a purchase revision", e))?;
+                return Ok(match current {
+                    Some((actual,)) => UpdateOutcome::RevisionMismatch {
+                        actual: Revision::new(actual),
+                    },
+                    None => UpdateOutcome::NotFound,
+                });
+            }
+        }
+
+        tx.commit()
+            .await
+            .map_err(|e| repository_error("committing a finished shop", e))?;
         Ok(UpdateOutcome::Updated)
     }
 }

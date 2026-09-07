@@ -918,6 +918,13 @@ impl mmp_core::ports::PurchaseRepository for NoopPurchases {
     ) -> mmp_core::Result<mmp_core::ports::UpdateOutcome> {
         Ok(mmp_core::ports::UpdateOutcome::NotFound)
     }
+
+    async fn finish(
+        &self,
+        _: &[mmp_core::ports::FinishedPurchase],
+    ) -> mmp_core::Result<mmp_core::ports::UpdateOutcome> {
+        Ok(mmp_core::ports::UpdateOutcome::NotFound)
+    }
 }
 
 struct NoopShoppingListItems;

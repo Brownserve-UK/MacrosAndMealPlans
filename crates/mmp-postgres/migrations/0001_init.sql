@@ -1039,6 +1039,12 @@ CREATE TABLE shopping_list_item (
 CREATE INDEX shopping_list_item_opportunity_date ON shopping_list_item (opportunity_date)
     WHERE opportunity_date IS NOT NULL;
 
+ALTER TABLE purchase
+    ADD COLUMN name TEXT,
+    DROP CONSTRAINT purchase_has_a_subject,
+    ADD CONSTRAINT purchase_has_a_subject
+        CHECK (num_nonnulls(ingredient_id, product_id) >= 1 OR btrim(coalesce(name, '')) <> '');
+
 ALTER TABLE household_settings
     ADD COLUMN shopping_section_order shopping_section_code[] NOT NULL
         DEFAULT ARRAY['fresh_produce', 'meat_fish', 'dairy', 'bakery', 'frozen', 'ambient',

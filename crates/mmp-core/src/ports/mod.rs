@@ -3,7 +3,7 @@ mod repository;
 
 pub use clock::{Clock, FixedClock, SystemClock};
 pub use repository::{
-    AccessGrantRepository, ConsumptionQuery, ConsumptionRecordRepository,
+    AccessGrantRepository, ConsumptionQuery, ConsumptionRecordRepository, FinishedPurchase,
     HouseholdMemberRepository, HouseholdSettingsRepository, IngredientQuery, IngredientRepository,
     IngredientSort, MealPlanComponentUpdate, MealPlanQuery, MealPlanRepository, MemberQuery,
     NewStockFromPurchase, NutritionTargetRepository, PreparedBatchRepository, ProductQuery,
