@@ -70,6 +70,8 @@ specification or ADRs.
       in more than one place leaves the rest behind.
 - [ ] Remove the late pooled-stock sample-data workaround once the pooled scenario can be seeded
       before historical consumption.
+- [ ] Collapse the `dish_batch_id` add-then-drop churn in `0001_init.sql` before release, so the
+      shipped schema never creates a column it immediately removes.
 
 ## Shopping
 
@@ -78,7 +80,7 @@ specification or ADRs.
 - [ ] Make finishing a shop atomic across all its purchases.
 - [ ] Validate that a purchase product belongs to the requirement's ingredient pool, and remove the
       misleading product-name fallback for invalid API-created purchases.
-- [ ] Keep product-pinned demand on that product during the shopping coverage walk instead of
+- [x] Keep product-pinned demand on that product during the shopping coverage walk instead of
       drawing it from anywhere in the pool.
 - [ ] Avoid recomputing the full stock and meal-plan snapshot on every `requirements()` call.
 - [ ] Reassess `SuggestionReason::UnknownAvailability` if manual items and prediction do not give it
