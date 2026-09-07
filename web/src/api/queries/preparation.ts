@@ -12,15 +12,6 @@ export function useCooks(from: string, to: string) {
   });
 }
 
-export function useCook(id: string) {
-  return useQuery({
-    queryKey: [...preparationKeys.all(), id],
-    enabled: Boolean(id),
-    queryFn: async () =>
-      unwrap(await client.GET('/api/v1/preparations/{id}', { params: { path: { id } } })),
-  });
-}
-
 export function useMoveCookedFood() {
   const qc = useQueryClient();
   return useMutation({

@@ -454,10 +454,6 @@ impl DemandSubject {
             | DemandSubject::CookedFood { .. } => None,
         }
     }
-
-    pub const fn is_prepared_portion(&self) -> bool {
-        matches!(self, DemandSubject::PreparedPortion { .. })
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

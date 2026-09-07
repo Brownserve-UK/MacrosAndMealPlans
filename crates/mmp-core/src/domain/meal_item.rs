@@ -47,10 +47,6 @@ impl MealItemRef {
         matches!(self, MealItemRef::Recipe { .. })
     }
 
-    pub const fn is_dish(&self) -> bool {
-        matches!(self, MealItemRef::Dish { .. })
-    }
-
     pub fn from_parts(
         kind: &str,
         product_id: Option<ProductId>,

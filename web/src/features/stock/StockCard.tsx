@@ -165,7 +165,7 @@ const PLACE_LABEL: Record<StockItem['storage_location'], string> = {
   frozen: 'Freezer',
 };
 
-export function cookedSubtitle(row: CookedFoodRow): string {
+function cookedSubtitle(row: CookedFoodRow): string {
   const place = PLACE_LABEL[row.location];
   if (!row.useBy) return place;
   const when = new Date(`${row.useBy}T00:00:00`).toLocaleDateString('en-GB', {
