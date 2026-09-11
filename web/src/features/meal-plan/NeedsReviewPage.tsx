@@ -14,6 +14,7 @@ import {
   useMarkMealPlanEaten,
   useMarkMealPlanNotEaten,
   useNeedsReview,
+  useSetPreparedMealMapping,
   useSetProductMapping,
   useShoppingList,
 } from '../../api/queries';
@@ -100,14 +101,15 @@ export function NeedsReviewPage() {
   const markEaten = useMarkMealPlanEaten();
   const markNotEaten = useMarkMealPlanNotEaten();
   const setMapping = useSetProductMapping();
+  const setPreparedMealMapping = useSetPreparedMealMapping();
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<'personal' | 'household' | 'shopping' | 'ingredients'>(
     'personal',
   );
   const [replacing, setReplacing] = useState<MealPlanEntry | null>(null);
   const [householdReview, setHouseholdReview] = useState<string | null>(null);
-  const [creatingIngredient, setCreatingIngredient] = useState<string | null>(null);
-  const [linkingIngredient, setLinkingIngredient] = useState<string | null>(null);
+  const [creatingIngredient, setCreatingIngredient] = useState<{ id: string; kind: 'ingredient' | 'prepared_meal' } | null>(null);
+  const [linkingIngredient, setLinkingIngredient] = useState<{ id: string; kind: 'ingredient' | 'prepared_meal' } | null>(null);
   const [mappingProduct, setMappingProduct] = useState<Product | null>(null);
 
   const busy = markEaten.isPending || markNotEaten.isPending;
@@ -140,20 +142,28 @@ export function NeedsReviewPage() {
 
   const personal = review.data?.personal_meals ?? [];
   const household = review.data?.household_meals ?? [];
-  const ingredients = review.data?.ingredient_mappings ?? [];
+  const ingredients = review.data?.food_mappings ?? [];
   const canReviewHousehold = principal?.permissions.includes('household:write') ?? false;
   const canMapIngredients = principal?.permissions.includes('catalogue:write') ?? false;
   const canShop = principal?.permissions.includes('shopping:read') ?? false;
   const unreachable = unreachableMeals(shopping.data);
 
-  async function linkProduct(ingredientId: string) {
+  async function linkProduct(food: { id: string; kind: 'ingredient' | 'prepared_meal' }) {
     if (!mappingProduct) return;
     try {
-      await setMapping.mutateAsync({
-        id: mappingProduct.id,
-        revision: mappingProduct.revision,
-        ingredientId,
-      });
+      if (food.kind === 'ingredient') {
+        await setMapping.mutateAsync({
+          id: mappingProduct.id,
+          revision: mappingProduct.revision,
+          ingredientId: food.id,
+        });
+      } else {
+        await setPreparedMealMapping.mutateAsync({
+          id: mappingProduct.id,
+          revision: mappingProduct.revision,
+          preparedMealId: food.id,
+        });
+      }
       setLinkingIngredient(null);
       setMappingProduct(null);
       setError(null);
@@ -301,7 +311,7 @@ export function NeedsReviewPage() {
 
       {tab === 'ingredients' && ingredients.length === 0 ? (
         <Paper variant="outlined" sx={{ px: 3, py: 4 }}>
-          <Typography color="text.secondary">No ingredient mappings need review.</Typography>
+          <Typography color="text.secondary">No foods need a product mapping.</Typography>
         </Paper>
       ) : null}
 
@@ -317,14 +327,14 @@ export function NeedsReviewPage() {
                 >
                   <Typography sx={{ fontWeight: 600 }}>{ingredient.name}</Typography>
                   <Stack direction="row" spacing={1}>
-                    <Button size="small" onClick={() => setCreatingIngredient(ingredient.id)}>
+                    <Button size="small" onClick={() => setCreatingIngredient({ id: ingredient.id, kind: ingredient.kind })}>
                       Create product
                     </Button>
                     <Button
                       size="small"
                       variant="contained"
                       onClick={() => {
-                        setLinkingIngredient(ingredient.id);
+                        setLinkingIngredient({ id: ingredient.id, kind: ingredient.kind });
                         setMappingProduct(null);
                       }}
                     >
@@ -332,7 +342,7 @@ export function NeedsReviewPage() {
                     </Button>
                   </Stack>
                 </Stack>
-                {linkingIngredient === ingredient.id ? (
+                {linkingIngredient?.id === ingredient.id ? (
                   <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5}>
                     <Box sx={{ flexGrow: 1 }}>
                       <ProductPicker
@@ -343,8 +353,8 @@ export function NeedsReviewPage() {
                     </Box>
                     <Button
                       variant="contained"
-                      disabled={!mappingProduct || setMapping.isPending}
-                      onClick={() => void linkProduct(ingredient.id)}
+                      disabled={!mappingProduct || setMapping.isPending || setPreparedMealMapping.isPending}
+                      onClick={() => void linkProduct(linkingIngredient)}
                     >
                       Link
                     </Button>
@@ -376,7 +386,8 @@ export function NeedsReviewPage() {
         <NewProductDialog
           open
           onClose={() => setCreatingIngredient(null)}
-          mappedIngredientId={creatingIngredient}
+          mappedIngredientId={creatingIngredient.kind === 'ingredient' ? creatingIngredient.id : undefined}
+          mappedPreparedMealId={creatingIngredient.kind === 'prepared_meal' ? creatingIngredient.id : undefined}
         />
       ) : null}
     </Box>
@@ -406,7 +417,11 @@ function entryToPlannerMeal(entry: MealPlanEntry) {
         ? { item_kind: 'recipe' as const, recipe_id: component.recipe_id }
         : component.item_kind === 'dish'
           ? { item_kind: 'dish' as const, dish_recipe_id: component.dish_recipe_id }
-          : { item_kind: 'product' as const, product_id: component.product_id }),
+          : component.item_kind === 'ingredient'
+            ? { item_kind: 'ingredient' as const, ingredient_id: component.ingredient_id }
+            : component.item_kind === 'prepared_meal'
+              ? { item_kind: 'prepared_meal' as const, prepared_meal_id: component.prepared_meal_id }
+              : { item_kind: 'product' as const, product_id: component.product_id }),
       item_name: component.item_name,
       amount: component.amount,
       shortage: component.preparation.shortage,

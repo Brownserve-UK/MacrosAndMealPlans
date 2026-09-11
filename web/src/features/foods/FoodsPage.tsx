@@ -4,22 +4,26 @@ import Chip from '@mui/material/Chip';
 import MenuItem from '@mui/material/MenuItem';
 import Pagination from '@mui/material/Pagination';
 import Stack from '@mui/material/Stack';
+import Tab from '@mui/material/Tab';
+import Tabs from '@mui/material/Tabs';
 import TextField from '@mui/material/TextField';
 import { Link } from '@tanstack/react-router';
 import { useState } from 'react';
 import type { components } from '../../api/schema';
-import type { IngredientListParams } from '../../api/queries';
-import { useIngredients } from '../../api/queries';
+import type { IngredientListParams, PreparedMealListParams } from '../../api/queries';
+import { useIngredients, usePreparedMeals } from '../../api/queries';
 import { RecordListShell, RecordRow } from '../../components/RecordList';
 import { PageHeader } from '../../components/PageHeader';
 import { EmptyState, ErrorState, Loading } from '../../components/States';
 import { useDebounced } from '../../hooks/useDebounced';
-import { NewIngredientDialog } from './NewIngredientDialog';
+import { NewIngredientDialog } from '../ingredients/NewIngredientDialog';
+import { NewPreparedMealDialog } from '../prepared-meals/NewPreparedMealDialog';
 
-type Item = components['schemas']['IngredientListItemDto'];
+type IngredientItem = components['schemas']['IngredientListItemDto'];
+type PreparedMealItem = components['schemas']['PreparedMealListItemDto'];
 
+type Tab = 'ingredients' | 'prepared_meals';
 type Filter = 'all' | 'needs_products' | 'archived';
-
 type SortKey = 'name' | 'created' | 'product_count';
 
 type SortOption = {
@@ -37,13 +41,13 @@ const SORTS = [
 
 const PER_PAGE = 25;
 
-function describe(item: Item): string {
-  const count = item.mapped_product_count;
+function describe(count: number): string {
   if (count === 0) return 'No products';
   return count === 1 ? '1 product' : `${count} products`;
 }
 
-export function IngredientsPage() {
+export function FoodsPage() {
+  const [tab, setTab] = useState<Tab>('ingredients');
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<Filter>('all');
   const [sort, setSort] = useState<SortKey>('name');
@@ -52,7 +56,8 @@ export function IngredientsPage() {
 
   const debounced = useDebounced(search, 300);
   const chosen = SORTS.find((option) => option.value === sort) ?? SORTS[0];
-  const query = useIngredients({
+
+  const ingredientQuery = useIngredients({
     q: debounced || undefined,
     needs_products: filter === 'needs_products' || undefined,
     include_archived: filter === 'archived' || undefined,
@@ -60,20 +65,36 @@ export function IngredientsPage() {
     sort: chosen.sort,
     page,
     per_page: PER_PAGE,
-  });
+  } satisfies IngredientListParams);
 
-  const items = query.data?.items ?? [];
+  const preparedMealQuery = usePreparedMeals({
+    q: debounced || undefined,
+    needs_products: filter === 'needs_products' || undefined,
+    include_archived: filter === 'archived' || undefined,
+    sort_by: chosen.sort_by,
+    sort: chosen.sort,
+    page,
+    per_page: PER_PAGE,
+  } satisfies PreparedMealListParams);
+
+  const query = tab === 'ingredients' ? ingredientQuery : preparedMealQuery;
+  const items: (IngredientItem | PreparedMealItem)[] = query.data?.items ?? [];
   const total = query.data?.total ?? 0;
   const pageCount = Math.max(1, Math.ceil(total / PER_PAGE));
+
+  function changeTab(next: Tab) {
+    setTab(next);
+    setPage(1);
+  }
 
   return (
     <>
       <PageHeader
-        title="Ingredients"
-        subtitle="Generic foods that recipes ask for."
+        title="Foods"
+        subtitle="Generic foods that recipes ask for, and meals you plan without picking a brand."
         actions={
           <Button variant="contained" startIcon={<AddIcon />} onClick={() => setAddOpen(true)}>
-            Add ingredient
+            {tab === 'ingredients' ? 'Add ingredient' : 'Add prepared meal'}
           </Button>
         }
         search={{
@@ -82,9 +103,14 @@ export function IngredientsPage() {
             setSearch(next);
             setPage(1);
           },
-          placeholder: 'Search ingredients',
+          placeholder: tab === 'ingredients' ? 'Search ingredients' : 'Search prepared meals',
         }}
       />
+
+      <Tabs value={tab} onChange={(_, next: Tab) => changeTab(next)} sx={{ mb: 2.5 }}>
+        <Tab value="ingredients" label="Ingredients" />
+        <Tab value="prepared_meals" label="Prepared meals" />
+      </Tabs>
 
       <Stack
         direction="row"
@@ -132,18 +158,20 @@ export function IngredientsPage() {
       {query.isError ? (
         <ErrorState error={query.error} onRetry={() => query.refetch()} />
       ) : query.isLoading ? (
-        <Loading label="Finding ingredients" />
+        <Loading label={tab === 'ingredients' ? 'Finding ingredients' : 'Finding prepared meals'} />
       ) : items.length === 0 ? (
         <EmptyState
-          title={search ? 'Nothing matched' : 'No ingredients yet'}
+          title={search ? 'Nothing matched' : tab === 'ingredients' ? 'No ingredients yet' : 'No prepared meals yet'}
           description={
             search
               ? `Nothing matches "${search}".`
-              : 'Add the generic foods your recipes use, like whole milk or basmati rice.'
+              : tab === 'ingredients'
+                ? 'Add the generic foods your recipes use, like whole milk or basmati rice.'
+                : 'Add a generic convenience meal, like a frozen lasagne, so it can be planned without a brand.'
           }
           action={
             <Button variant="contained" startIcon={<AddIcon />} onClick={() => setAddOpen(true)}>
-              Add ingredient
+              {tab === 'ingredients' ? 'Add ingredient' : 'Add prepared meal'}
             </Button>
           }
         />
@@ -151,10 +179,14 @@ export function IngredientsPage() {
         <>
           <RecordListShell>
             {items.map((item) => (
-              <Link key={item.id} to="/ingredients/$id" params={{ id: item.id }}>
+              <Link
+                key={item.id}
+                to={tab === 'ingredients' ? '/ingredients/$id' : '/prepared-meals/$id'}
+                params={{ id: item.id }}
+              >
                 <RecordRow
                   name={item.name}
-                  detail={describe(item)}
+                  detail={describe(item.mapped_product_count)}
                   muted={Boolean(item.archived_at)}
                   trailing={
                     item.mapped_product_count === 0 ? (
@@ -183,7 +215,8 @@ export function IngredientsPage() {
         </>
       )}
 
-      <NewIngredientDialog open={addOpen} onClose={() => setAddOpen(false)} />
+      <NewIngredientDialog open={addOpen && tab === 'ingredients'} onClose={() => setAddOpen(false)} />
+      <NewPreparedMealDialog open={addOpen && tab === 'prepared_meals'} onClose={() => setAddOpen(false)} />
     </>
   );
 }

@@ -33,15 +33,17 @@ pub struct MealTemplateComponentDto {
     pub id: Uuid,
     #[serde(flatten)]
     pub item: MealItemRefDto,
+    pub item_name: String,
     pub amount: AmountDto,
     pub position: i32,
 }
 
-impl From<MealTemplateComponent> for MealTemplateComponentDto {
-    fn from(value: MealTemplateComponent) -> Self {
+impl MealTemplateComponentDto {
+    pub fn from_domain(value: MealTemplateComponent, item_name: String) -> Self {
         Self {
             id: value.id.as_uuid(),
             item: value.item.into(),
+            item_name,
             amount: value.amount.into(),
             position: value.position,
         }
@@ -70,12 +72,17 @@ pub struct MealTemplateDto {
     pub archived_at: Option<OffsetDateTime>,
 }
 
-impl From<MealTemplate> for MealTemplateDto {
-    fn from(value: MealTemplate) -> Self {
+impl MealTemplateDto {
+    pub fn from_domain(value: MealTemplate, names: &[String]) -> Self {
         Self {
             id: value.id.as_uuid(),
             name: value.name,
-            components: value.components.into_iter().map(Into::into).collect(),
+            components: value
+                .components
+                .into_iter()
+                .zip(names.iter().cloned())
+                .map(|(component, name)| MealTemplateComponentDto::from_domain(component, name))
+                .collect(),
             owner_id: value.owner_id.as_uuid(),
             revision: value.revision.get(),
             created_at: value.created_at,
@@ -129,11 +136,16 @@ pub struct MealTemplatePage {
     pub meta: PageMeta,
 }
 
-impl From<Paginated<MealTemplate>> for MealTemplatePage {
-    fn from(value: Paginated<MealTemplate>) -> Self {
+impl MealTemplatePage {
+    pub fn from_domain(value: Paginated<MealTemplate>, names: &[Vec<String>]) -> Self {
         let meta = PageMeta::of(&value);
         Self {
-            items: value.items.into_iter().map(Into::into).collect(),
+            items: value
+                .items
+                .into_iter()
+                .zip(names.iter())
+                .map(|(template, names)| MealTemplateDto::from_domain(template, names))
+                .collect(),
             meta,
         }
     }

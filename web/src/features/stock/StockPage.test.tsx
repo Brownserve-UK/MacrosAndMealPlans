@@ -92,7 +92,7 @@ async function showProducts() {
 describe('StockPage ingredients view', () => {
   it('opens on ingredients rather than products', () => {
     renderPage();
-    expect(screen.getByRole('tab', { name: 'Ingredients' })).toHaveAttribute(
+    expect(screen.getByRole('tab', { name: 'Foods' })).toHaveAttribute(
       'aria-selected',
       'true',
     );
@@ -209,7 +209,7 @@ const preparedOrder = () =>
   screen.getAllByTestId(/^stock-portion-/).map((node) => node.getAttribute('data-testid'));
 
 async function showPrepared() {
-  await userEvent.setup().click(screen.getByRole('tab', { name: 'Prepared' }));
+  await userEvent.setup().click(screen.getByRole('tab', { name: 'Cooked' }));
 }
 
 describe('StockPage prepared view', () => {

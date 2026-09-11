@@ -6,7 +6,7 @@ import Tab from '@mui/material/Tab';
 import Tabs from '@mui/material/Tabs';
 import TextField from '@mui/material/TextField';
 import { useMemo, useState } from 'react';
-import type { IngredientAvailability, ProductAvailability, StockItem } from '../../api/client';
+import type { IngredientAvailability, PreparedMealAvailability, ProductAvailability, StockItem } from '../../api/client';
 import { useProducts, useStock, useStockAvailability } from '../../api/queries';
 import { PageHeader } from '../../components/PageHeader';
 import { RecordListShell } from '../../components/RecordList';
@@ -108,6 +108,20 @@ export function StockPage() {
     return map;
   }, [availability.data]);
 
+  const preparedMealOfProduct = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const product of products.data?.items ?? []) {
+      if (product.mapped_prepared_meal_id) map.set(product.id, product.mapped_prepared_meal_id);
+    }
+    return map;
+  }, [products.data]);
+
+  const availabilityByPreparedMeal = useMemo(() => {
+    const map = new Map<string, PreparedMealAvailability>();
+    for (const row of availability.data?.prepared_meals ?? []) map.set(row.prepared_meal_id, row);
+    return map;
+  }, [availability.data]);
+
   const productGroups = useMemo<StockGroup[]>(() => {
     const byProduct = new Map<string, StockGroup>();
     for (const item of stock.data?.items ?? []) {
@@ -173,7 +187,7 @@ export function StockPage() {
     }));
   }, [stock.data]);
 
-  const ingredientGroups = useMemo<{ group: StockGroup; productCount: number }[]>(() => {
+  const ingredientGroups = useMemo<{ group: StockGroup; productCount: number; kind: 'ingredient' }[]>(() => {
     const byIngredient = new Map<string, { group: StockGroup; products: Set<string> }>();
     for (const item of stock.data?.items ?? []) {
       if (!item.product_id) continue;
@@ -198,8 +212,40 @@ export function StockPage() {
     return [...byIngredient.values()].map((entry) => ({
       group: entry.group,
       productCount: entry.products.size,
+      kind: 'ingredient' as const,
     }));
   }, [stock.data, ingredientOfProduct, availabilityByIngredient]);
+
+  const preparedMealGroups = useMemo<{ group: StockGroup; productCount: number; kind: 'prepared_meal' }[]>(() => {
+    const byPreparedMeal = new Map<string, { group: StockGroup; products: Set<string> }>();
+    for (const item of stock.data?.items ?? []) {
+      if (!item.product_id) continue;
+      const preparedMealId = preparedMealOfProduct.get(item.product_id);
+      if (!preparedMealId) continue;
+      let entry = byPreparedMeal.get(preparedMealId);
+      if (!entry) {
+        entry = {
+          group: {
+            id: preparedMealId,
+            name: availabilityByPreparedMeal.get(preparedMealId)?.name ?? 'Unknown prepared meal',
+            items: [],
+            availability: availabilityByPreparedMeal.get(preparedMealId)?.availability ?? null,
+          },
+          products: new Set(),
+        };
+        byPreparedMeal.set(preparedMealId, entry);
+      }
+      entry.group.items.push(item);
+      entry.products.add(item.product_id);
+    }
+    return [...byPreparedMeal.values()].map((entry) => ({
+      group: entry.group,
+      productCount: entry.products.size,
+      kind: 'prepared_meal' as const,
+    }));
+  }, [stock.data, preparedMealOfProduct, availabilityByPreparedMeal]);
+
+  const foodGroups = useMemo(() => [...ingredientGroups, ...preparedMealGroups], [ingredientGroups, preparedMealGroups]);
 
   const visibleProducts = useMemo(() => {
     const needle = debounced.trim().toLowerCase();
@@ -217,11 +263,11 @@ export function StockPage() {
     return sortCooked(filtered, sort);
   }, [preparedRows, debounced, sort]);
 
-  const visibleIngredients = useMemo(() => {
+  const visibleFoods = useMemo(() => {
     const needle = debounced.trim().toLowerCase();
     const filtered = needle
-      ? ingredientGroups.filter((entry) => entry.group.name.toLowerCase().includes(needle))
-      : ingredientGroups;
+      ? foodGroups.filter((entry) => entry.group.name.toLowerCase().includes(needle))
+      : foodGroups;
     const order = new Map(
       sortGroups(
         filtered.map((entry) => entry.group),
@@ -229,7 +275,7 @@ export function StockPage() {
       ).map((group, index) => [group.id, index]),
     );
     return [...filtered].sort((a, b) => (order.get(a.group.id) ?? 0) - (order.get(b.group.id) ?? 0));
-  }, [ingredientGroups, debounced, sort]);
+  }, [foodGroups, debounced, sort]);
 
   if (stock.isLoading) return <Loading label="Loading stock" />;
   if (stock.isError) return <ErrorState error={stock.error} onRetry={() => stock.refetch()} />;
@@ -237,7 +283,7 @@ export function StockPage() {
   const empty = productGroups.length === 0 && preparedRows.length === 0;
   const showing =
     view === 'ingredients'
-      ? visibleIngredients.length
+      ? visibleFoods.length
       : view === 'prepared'
         ? visiblePrepared.length
         : visibleProducts.length;
@@ -266,9 +312,9 @@ export function StockPage() {
             onChange={(_, next: View) => setView(next)}
             sx={{ mb: 2.5 }}
           >
-            <Tab value="ingredients" label="Ingredients" />
+            <Tab value="ingredients" label="Foods" />
             <Tab value="products" label="Products" />
-            <Tab value="prepared" label="Prepared" />
+            <Tab value="prepared" label="Cooked" />
           </Tabs>
 
           <Stack
@@ -310,18 +356,19 @@ export function StockPage() {
             />
           ) : (
             <EmptyState
-              title="Nothing mapped to an ingredient"
-              description="Map your products to ingredients, or switch to Products."
+              title="Nothing mapped to a food"
+              description="Map your products to a food, or switch to Products."
             />
           )
         )
       ) : view === 'ingredients' ? (
         <RecordListShell>
-          {visibleIngredients.map((entry) => (
+          {visibleFoods.map((entry) => (
             <IngredientCard
               key={entry.group.id}
               group={entry.group}
               productCount={entry.productCount}
+              kind={entry.kind}
             />
           ))}
         </RecordListShell>

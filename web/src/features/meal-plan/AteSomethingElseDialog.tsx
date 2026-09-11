@@ -54,6 +54,7 @@ export function AteSomethingElseDialog({
   const [failure, setFailure] = useState<string | null>(null);
 
   function add(choice: FoodChoice) {
+    if (choice.kind !== 'product' && choice.kind !== 'dish' && choice.kind !== 'recipe') return;
     const key = crypto.randomUUID();
     setPicked((current) => [
       ...current,
@@ -135,7 +136,7 @@ export function AteSomethingElseDialog({
             <Typography color="text.secondary">
               The planned food will be marked not eaten.
             </Typography>
-            <FoodSearch onPick={add} autoFocus />
+            <FoodSearch onPick={add} hideFoods hideSavedMeals autoFocus />
             {picked.map((entry) => (
               <Paper key={entry.key} variant="outlined" sx={{ px: 2, py: 1.5 }}>
                 <Stack direction="row" spacing={2} sx={{ alignItems: 'center', justifyContent: 'space-between' }}>

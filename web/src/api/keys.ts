@@ -21,6 +21,18 @@ export type ProductListParams = CatalogueListParams & {
   unmapped?: boolean;
 };
 
+export type PreparedMealListParams = CatalogueListParams & {
+  sort_by?: components['schemas']['IngredientSortDto'];
+  sort?: components['schemas']['SortDirectionDto'];
+};
+
+export type MealTemplateListParams = {
+  q?: string;
+  include_archived?: boolean;
+  page?: number;
+  per_page?: number;
+};
+
 export type RecipeListParams = {
   q?: string;
   include_archived?: boolean;
@@ -53,8 +65,12 @@ export type UserListParams = {
 
 const ingredients = ['ingredients'] as const;
 const ingredient = ['ingredient'] as const;
+const preparedMeals = ['preparedMeals'] as const;
+const preparedMeal = ['preparedMeal'] as const;
 const products = ['products'] as const;
 const product = ['product'] as const;
+const mealTemplates = ['mealTemplates'] as const;
+const mealTemplate = ['mealTemplate'] as const;
 const members = ['members'] as const;
 const member = ['member'] as const;
 const users = ['users'] as const;
@@ -83,10 +99,22 @@ export const catalogueKeys = {
   ingredient: () => ingredient,
   ingredientDetail: (id: string) => [...ingredient, id] as const,
   ingredientProducts: (id: string) => [...ingredient, id, 'products'] as const,
+  preparedMeals: () => preparedMeals,
+  preparedMealList: (params: PreparedMealListParams) => [...preparedMeals, params] as const,
+  preparedMeal: () => preparedMeal,
+  preparedMealDetail: (id: string) => [...preparedMeal, id] as const,
+  preparedMealProducts: (id: string) => [...preparedMeal, id, 'products'] as const,
   products: () => products,
   productList: (params: ProductListParams) => [...products, params] as const,
   product: () => product,
   productDetail: (id: string) => [...product, id] as const,
+};
+
+export const mealTemplateKeys = {
+  all: () => mealTemplates,
+  list: (params: MealTemplateListParams) => [...mealTemplates, params] as const,
+  detail: () => mealTemplate,
+  one: (id: string) => [...mealTemplate, id] as const,
 };
 
 export const householdKeys = {

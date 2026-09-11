@@ -2,11 +2,13 @@ import Chip from '@mui/material/Chip';
 import { alpha } from '@mui/material/styles';
 import type { Tone } from './IconTile';
 
-export type Kind = 'recipe' | 'food' | 'dish' | 'fridge' | 'freezer';
+export type Kind = 'recipe' | 'food' | 'product' | 'saved_meal' | 'dish' | 'fridge' | 'freezer';
 
 const KINDS: Record<Kind, { label: string; tone: Tone }> = {
   recipe: { label: 'Recipe', tone: 'primary' },
   food: { label: 'Food', tone: 'neutral' },
+  product: { label: 'Product', tone: 'neutral' },
+  saved_meal: { label: 'Saved meal', tone: 'secondary' },
   dish: { label: 'Cooked food', tone: 'secondary' },
   fridge: { label: 'Fridge', tone: 'neutral' },
   freezer: { label: 'Freezer', tone: 'neutral' },

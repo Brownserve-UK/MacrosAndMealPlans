@@ -9,12 +9,12 @@ import Stack from '@mui/material/Stack';
 import Typography from '@mui/material/Typography';
 import { Link } from '@tanstack/react-router';
 import { useState, type FormEvent } from 'react';
-import { ApiError, type Ingredient } from '../../api/client';
+import { ApiError, type PreparedMeal } from '../../api/client';
 import {
-  useIngredient,
-  useIngredientProducts,
-  useSetIngredientArchived,
-  useUpdateIngredient,
+  usePreparedMeal,
+  usePreparedMealProducts,
+  useSetPreparedMealArchived,
+  useUpdatePreparedMeal,
 } from '../../api/queries';
 import { BackLabel } from '../../components/BackLink';
 import { ConflictDialog } from '../../components/ConflictDialog';
@@ -23,11 +23,11 @@ import { RecordListShell, RecordRow } from '../../components/RecordList';
 import { PageHeader } from '../../components/PageHeader';
 import { RecordMenu } from '../../components/RecordMenu';
 import { ErrorState, Loading } from '../../components/States';
+import { IngredientFields, type IngredientDraft } from '../ingredients/IngredientFields';
 import { NewProductDialog } from '../products/NewProductDialog';
-import { IngredientFields, type IngredientDraft } from './IngredientFields';
 
-export function IngredientPage({ id }: { id: string }) {
-  return <EditIngredient id={id} />;
+export function PreparedMealPage({ id }: { id: string }) {
+  return <EditPreparedMeal id={id} />;
 }
 
 function Frame({
@@ -69,7 +69,7 @@ function Frame({
 }
 
 function ProductsPanel({ id, onAddProduct }: { id: string; onAddProduct: () => void }) {
-  const products = useIngredientProducts(id);
+  const products = usePreparedMealProducts(id);
   const items = products.data?.items ?? [];
 
   return (
@@ -112,9 +112,9 @@ function ProductsPanel({ id, onAddProduct }: { id: string; onAddProduct: () => v
   );
 }
 
-function EditIngredient({ id }: { id: string }) {
-  const query = useIngredient(id);
-  const archive = useSetIngredientArchived();
+function EditPreparedMeal({ id }: { id: string }) {
+  const query = usePreparedMeal(id);
+  const archive = useSetPreparedMealArchived();
   const [conflict, setConflict] = useState<ApiError | null>(null);
   const [saved, setSaved] = useState(false);
   const [addProductOpen, setAddProductOpen] = useState(false);
@@ -122,16 +122,16 @@ function EditIngredient({ id }: { id: string }) {
   if (query.isLoading) return <Loading label="Loading" />;
   if (query.isError) return <ErrorState error={query.error} onRetry={() => query.refetch()} />;
 
-  const ingredient = query.data;
-  if (!ingredient) return null;
+  const preparedMeal = query.data;
+  if (!preparedMeal) return null;
 
   async function onToggleArchive() {
-    if (!ingredient) return;
+    if (!preparedMeal) return;
     try {
       await archive.mutateAsync({
-        id: ingredient.id,
-        revision: ingredient.revision,
-        archived: !ingredient.archived_at,
+        id: preparedMeal.id,
+        revision: preparedMeal.revision,
+        archived: !preparedMeal.archived_at,
       });
     } catch (caught) {
       if (caught instanceof ApiError && caught.isConflict) setConflict(caught);
@@ -143,37 +143,35 @@ function EditIngredient({ id }: { id: string }) {
       <Frame
         title={
           <Stack direction="row" spacing={2} sx={{ alignItems: 'center' }}>
-            <InitialsAvatar name={ingredient.name} size={52} />
-            <span>{ingredient.name}</span>
+            <InitialsAvatar name={preparedMeal.name} size={52} />
+            <span>{preparedMeal.name}</span>
           </Stack>
         }
         actions={
           <RecordMenu
-            archived={Boolean(ingredient.archived_at)}
+            archived={Boolean(preparedMeal.archived_at)}
             onToggleArchive={onToggleArchive}
-            origin={ingredient.provenance.origin}
-            locallyEdited={ingredient.provenance.locally_modified}
-            updatedAt={ingredient.updated_at}
+            origin={preparedMeal.provenance.origin}
+            locallyEdited={preparedMeal.provenance.locally_modified}
+            updatedAt={preparedMeal.updated_at}
           />
         }
         banner={
-          ingredient.archived_at ? (
+          preparedMeal.archived_at ? (
             <Alert severity="info" sx={{ mb: 3 }}>
               Archived.
             </Alert>
           ) : null
         }
         form={
-          <EditIngredientForm
-            key={`${ingredient.id}:${ingredient.revision}`}
-            ingredient={ingredient}
+          <EditPreparedMealForm
+            key={`${preparedMeal.id}:${preparedMeal.revision}`}
+            preparedMeal={preparedMeal}
             onSaved={() => setSaved(true)}
             onConflict={setConflict}
           />
         }
-        aside={
-          <ProductsPanel id={ingredient.id} onAddProduct={() => setAddProductOpen(true)} />
-        }
+        aside={<ProductsPanel id={preparedMeal.id} onAddProduct={() => setAddProductOpen(true)} />}
       />
 
       <ConflictDialog
@@ -187,34 +185,34 @@ function EditIngredient({ id }: { id: string }) {
       <NewProductDialog
         open={addProductOpen}
         onClose={() => setAddProductOpen(false)}
-        mappedIngredientId={ingredient.id}
+        mappedPreparedMealId={preparedMeal.id}
       />
       <Snackbar open={saved} autoHideDuration={3000} onClose={() => setSaved(false)} message="Saved" />
     </>
   );
 }
 
-function EditIngredientForm({
-  ingredient,
+function EditPreparedMealForm({
+  preparedMeal,
   onSaved,
   onConflict,
 }: {
-  ingredient: Ingredient;
+  preparedMeal: PreparedMeal;
   onSaved: () => void;
   onConflict: (error: ApiError) => void;
 }) {
-  const update = useUpdateIngredient();
+  const update = useUpdatePreparedMeal();
   const [draft, setDraft] = useState<IngredientDraft>({
-    name: ingredient.name,
-    default_unit: ingredient.default_unit,
-    track_stock: ingredient.track_stock ?? true,
+    name: preparedMeal.name,
+    default_unit: preparedMeal.default_unit,
+    track_stock: preparedMeal.track_stock ?? true,
   });
   const [errors, setErrors] = useState<Record<string, string>>({});
 
   const dirty =
-    draft.name !== ingredient.name ||
-    draft.default_unit !== ingredient.default_unit ||
-    draft.track_stock !== (ingredient.track_stock ?? true);
+    draft.name !== preparedMeal.name ||
+    draft.default_unit !== preparedMeal.default_unit ||
+    draft.track_stock !== (preparedMeal.track_stock ?? true);
 
   async function onSubmit(event: FormEvent) {
     event.preventDefault();
@@ -224,8 +222,8 @@ function EditIngredientForm({
     }
     try {
       await update.mutateAsync({
-        id: ingredient.id,
-        revision: ingredient.revision,
+        id: preparedMeal.id,
+        revision: preparedMeal.revision,
         body: {
           name: draft.name.trim(),
           default_unit: draft.default_unit,

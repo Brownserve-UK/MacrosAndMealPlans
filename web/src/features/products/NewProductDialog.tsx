@@ -49,7 +49,7 @@ function validate(draft: ProductDraft): Record<string, string> {
   return errors;
 }
 
-function toBody(draft: ProductDraft, mappedIngredientId?: string) {
+function toBody(draft: ProductDraft, mappedIngredientId?: string, mappedPreparedMealId?: string) {
   return {
     name: draft.name.trim(),
     brand: draft.brand.trim() || null,
@@ -63,6 +63,7 @@ function toBody(draft: ProductDraft, mappedIngredientId?: string) {
     track_stock: draft.trackStock === 'default' ? null : draft.trackStock === 'yes',
     nutrition: draftToNutrition(draft.nutrition, packContextFrom(draft)),
     mapped_ingredient_id: mappedIngredientId ?? null,
+    mapped_prepared_meal_id: mappedPreparedMealId ?? null,
   };
 }
 
@@ -70,10 +71,12 @@ export function NewProductDialog({
   open,
   onClose,
   mappedIngredientId,
+  mappedPreparedMealId,
 }: {
   open: boolean;
   onClose: () => void;
   mappedIngredientId?: string;
+  mappedPreparedMealId?: string;
 }) {
   const navigate = useNavigate();
   const create = useCreateProduct();
@@ -96,7 +99,7 @@ export function NewProductDialog({
     if (Object.keys(found).length > 0) return;
 
     try {
-      const created = await create.mutateAsync(toBody(draft, mappedIngredientId));
+      const created = await create.mutateAsync(toBody(draft, mappedIngredientId, mappedPreparedMealId));
       handleClose();
       void navigate({ to: '/products/$id', params: { id: created.id } });
     } catch (caught) {

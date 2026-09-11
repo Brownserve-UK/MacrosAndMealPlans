@@ -8,10 +8,12 @@ import Stack from '@mui/material/Stack';
 import Typography from '@mui/material/Typography';
 import { Link } from '@tanstack/react-router';
 import { useState, type FormEvent } from 'react';
-import { ApiError, type Ingredient, type Product } from '../../api/client';
+import { ApiError, type Product } from '../../api/client';
 import {
   useIngredient,
+  usePreparedMeal,
   useProduct,
+  useSetPreparedMealMapping,
   useSetProductArchived,
   useSetProductMapping,
   useUpdateProduct,
@@ -28,7 +30,7 @@ import { NutritionPanel } from '../../components/NutritionPanel';
 import { PageHeader } from '../../components/PageHeader';
 import { RecordMenu } from '../../components/RecordMenu';
 import { ErrorState, Loading } from '../../components/States';
-import { IngredientPicker } from './IngredientPicker';
+import { FoodMappingPicker, type FoodMapping } from './FoodMappingPicker';
 import { packContextFrom, ProductFields, type ProductDraft } from './ProductFields';
 
 export function ProductPage({ id }: { id: string }) {
@@ -137,25 +139,48 @@ function Frame({
 function EditProduct({ id }: { id: string }) {
   const query = useProduct(id);
   const setMapping = useSetProductMapping();
+  const setPreparedMealMapping = useSetPreparedMealMapping();
   const archive = useSetProductArchived();
   const [conflict, setConflict] = useState<ApiError | null>(null);
   const [saved, setSaved] = useState(false);
 
   const product = query.data;
-  const mapped = useIngredient(product?.mapped_ingredient_id ?? '');
+  const mappedIngredient = useIngredient(product?.mapped_ingredient_id ?? '', {
+    enabled: Boolean(product?.mapped_ingredient_id),
+  });
+  const mappedPreparedMeal = usePreparedMeal(product?.mapped_prepared_meal_id ?? '', {
+    enabled: Boolean(product?.mapped_prepared_meal_id),
+  });
+  const mapped: FoodMapping | null = mappedIngredient.data
+    ? { kind: 'ingredient', ingredient: mappedIngredient.data }
+    : mappedPreparedMeal.data
+      ? { kind: 'prepared_meal', preparedMeal: mappedPreparedMeal.data }
+      : null;
 
   if (query.isLoading) return <Loading label="Loading" />;
   if (query.isError) return <ErrorState error={query.error} onRetry={() => query.refetch()} />;
   if (!product) return null;
 
-  async function onMappingChange(next: Ingredient | null) {
+  async function onMappingChange(next: FoodMapping | null) {
     if (!product) return;
     try {
-      await setMapping.mutateAsync({
-        id: product.id,
-        revision: product.revision,
-        ingredientId: next?.id ?? null,
-      });
+      if (next?.kind === 'ingredient') {
+        await setMapping.mutateAsync({
+          id: product.id,
+          revision: product.revision,
+          ingredientId: next.ingredient.id,
+        });
+      } else if (next?.kind === 'prepared_meal') {
+        await setPreparedMealMapping.mutateAsync({
+          id: product.id,
+          revision: product.revision,
+          preparedMealId: next.preparedMeal.id,
+        });
+      } else if (product.mapped_ingredient_id) {
+        await setMapping.mutateAsync({ id: product.id, revision: product.revision, ingredientId: null });
+      } else if (product.mapped_prepared_meal_id) {
+        await setPreparedMealMapping.mutateAsync({ id: product.id, revision: product.revision, preparedMealId: null });
+      }
     } catch (caught) {
       if (caught instanceof ApiError && caught.isConflict) setConflict(caught);
     }
@@ -218,12 +243,12 @@ function EditProduct({ id }: { id: string }) {
             </Paper>
             <Paper sx={{ p: 3 }}>
               <Typography variant="h3" sx={{ mb: 2 }}>
-                Ingredient
+                Stands in for
               </Typography>
-              <IngredientPicker
-                value={mapped.data ?? null}
+              <FoodMappingPicker
+                value={mapped}
                 onChange={onMappingChange}
-                disabled={setMapping.isPending}
+                disabled={setMapping.isPending || setPreparedMealMapping.isPending}
               />
             </Paper>
           </Stack>

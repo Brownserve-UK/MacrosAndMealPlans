@@ -3,7 +3,10 @@ import type { components, paths } from './schema';
 
 export type Problem = components['schemas']['Problem'];
 export type Ingredient = components['schemas']['IngredientDto'];
+export type PreparedMeal = components['schemas']['PreparedMealDto'];
 export type Product = components['schemas']['ProductDto'];
+export type MealTemplate = components['schemas']['MealTemplateDto'];
+export type MealTemplateComponent = components['schemas']['MealTemplateComponentDto'];
 export type Nutrition = components['schemas']['NutritionDto'];
 export type Unit = components['schemas']['Unit'];
 export type UnitInfo = components['schemas']['UnitDto'];
@@ -64,6 +67,7 @@ export type StorageLocation = components['schemas']['StorageLocationDto'];
 export type TrackingMode = components['schemas']['TrackingModeDto'];
 export type ProductAvailability = components['schemas']['ProductAvailabilityDto'];
 export type IngredientAvailability = components['schemas']['IngredientAvailabilityDto'];
+export type PreparedMealAvailability = components['schemas']['PreparedMealAvailabilityDto'];
 export type AvailabilityReport = components['schemas']['AvailabilityReportDto'];
 export type Availability = components['schemas']['AvailabilityDto'];
 export type DemandClaim = components['schemas']['DemandClaimDto'];

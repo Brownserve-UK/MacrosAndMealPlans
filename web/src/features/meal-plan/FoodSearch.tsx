@@ -4,8 +4,8 @@ import Stack from '@mui/material/Stack';
 import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
 import { useMemo, useState } from 'react';
-import type { Product, RecipeSummary } from '../../api/client';
-import { useProducts, useRecipes, useStock } from '../../api/queries';
+import type { Ingredient, MealTemplate, PreparedMeal, Product, RecipeSummary } from '../../api/client';
+import { useIngredients, useMealTemplates, usePreparedMeals, useProducts, useRecipes, useStock } from '../../api/queries';
 import { KindChip, type Kind } from '../../components/KindChip';
 import { useDebounced } from '../../hooks/useDebounced';
 import { parseIsoDate } from './date';
@@ -21,14 +21,17 @@ export type Dish = {
 export type FoodChoice =
   | { kind: 'product'; product: Product }
   | { kind: 'recipe'; recipe: RecipeSummary }
-  | { kind: 'dish'; dish: Dish };
+  | { kind: 'dish'; dish: Dish }
+  | { kind: 'ingredient'; ingredient: Ingredient }
+  | { kind: 'prepared_meal'; preparedMeal: PreparedMeal }
+  | { kind: 'saved_meal'; savedMeal: MealTemplate };
 
 type Option = {
   id: string;
   name: string;
   caption: string | null;
   chip: Kind;
-  group: 'In the kitchen' | 'Products' | 'Recipes';
+  group: 'In the kitchen' | 'Saved meals' | 'Foods' | 'Products' | 'Recipes';
   choice: FoodChoice;
 };
 
@@ -43,23 +46,44 @@ function dishCaption(dish: Dish): string {
   return `${amount}, by ${when}`;
 }
 
+function foodCount(template: MealTemplate): string {
+  const count = template.components.length;
+  return count === 1 ? '1 food' : `${count} foods`;
+}
+
 export function FoodSearch({
   onPick,
   excludeProductIds,
   excludeRecipeIds,
   excludeDishIds,
+  excludeIngredientIds,
+  excludePreparedMealIds,
+  hideSavedMeals,
+  hideFoods,
+  hideDishes,
   autoFocus,
 }: {
   onPick: (choice: FoodChoice) => void;
   excludeProductIds?: string[];
   excludeRecipeIds?: string[];
   excludeDishIds?: string[];
+  excludeIngredientIds?: string[];
+  excludePreparedMealIds?: string[];
+  hideSavedMeals?: boolean;
+  hideFoods?: boolean;
+  hideDishes?: boolean;
   autoFocus?: boolean;
 }) {
   const [input, setInput] = useState('');
   const debounced = useDebounced(input, 300);
   const products = useProducts({ q: debounced || undefined, per_page: 10 });
   const recipes = useRecipes({ q: debounced || undefined, per_page: 10 });
+  const ingredients = useIngredients({ q: debounced || undefined, per_page: 10 });
+  const preparedMeals = usePreparedMeals({ q: debounced || undefined, per_page: 10 });
+  const savedMeals = useMealTemplates({
+    q: debounced || undefined,
+    per_page: 10,
+  });
   const stock = useStock({ per_page: 200 });
 
   const dishes = useMemo<Dish[]>(() => {
@@ -91,9 +115,13 @@ export function FoodSearch({
     const skipProducts = new Set(excludeProductIds ?? []);
     const skipRecipes = new Set(excludeRecipeIds ?? []);
     const skipDishes = new Set(excludeDishIds ?? []);
+    const skipIngredients = new Set(excludeIngredientIds ?? []);
+    const skipPreparedMeals = new Set(excludePreparedMealIds ?? []);
     const needle = debounced.trim().toLowerCase();
 
-    const dishOptions: Option[] = dishes
+    const dishOptions: Option[] = hideDishes
+      ? []
+      : dishes
       .filter((dish) => !skipDishes.has(dish.recipeId))
       .filter((dish) => !needle || dish.name.toLowerCase().includes(needle))
       .map((dish) => ({
@@ -104,13 +132,47 @@ export function FoodSearch({
         group: 'In the kitchen' as const,
         choice: { kind: 'dish' as const, dish },
       }));
+    const savedMealOptions: Option[] = hideSavedMeals
+      ? []
+      : (savedMeals.data?.items ?? []).map((template) => ({
+          id: `saved-meal:${template.id}`,
+          name: template.name,
+          caption: foodCount(template),
+          chip: 'saved_meal' as const,
+          group: 'Saved meals' as const,
+          choice: { kind: 'saved_meal' as const, savedMeal: template },
+        }));
+    const ingredientOptions: Option[] = hideFoods
+      ? []
+      : (ingredients.data?.items ?? [])
+          .filter((ingredient) => !skipIngredients.has(ingredient.id))
+          .map((ingredient) => ({
+            id: `ingredient:${ingredient.id}`,
+            name: ingredient.name,
+            caption: null,
+            chip: 'food' as const,
+            group: 'Foods' as const,
+            choice: { kind: 'ingredient' as const, ingredient },
+          }));
+    const preparedMealOptions: Option[] = hideFoods
+      ? []
+      : (preparedMeals.data?.items ?? [])
+          .filter((preparedMeal) => !skipPreparedMeals.has(preparedMeal.id))
+          .map((preparedMeal) => ({
+            id: `prepared-meal:${preparedMeal.id}`,
+            name: preparedMeal.name,
+            caption: null,
+            chip: 'food' as const,
+            group: 'Foods' as const,
+            choice: { kind: 'prepared_meal' as const, preparedMeal },
+          }));
     const productOptions: Option[] = (products.data?.items ?? [])
       .filter((product) => !skipProducts.has(product.id))
       .map((product) => ({
         id: `product:${product.id}`,
         name: product.name,
-        caption: null,
-        chip: 'food' as const,
+        caption: product.brand ?? null,
+        chip: 'product' as const,
         group: 'Products' as const,
         choice: { kind: 'product' as const, product },
       }));
@@ -124,10 +186,34 @@ export function FoodSearch({
         group: 'Recipes' as const,
         choice: { kind: 'recipe' as const, recipe },
       }));
-    return [...dishOptions, ...productOptions, ...recipeOptions];
-  }, [dishes, products.data, recipes.data, debounced, excludeProductIds, excludeRecipeIds, excludeDishIds]);
+    return [
+      ...dishOptions,
+      ...savedMealOptions,
+      ...ingredientOptions,
+      ...preparedMealOptions,
+      ...productOptions,
+      ...recipeOptions,
+    ];
+  }, [
+    dishes,
+    savedMeals.data,
+    hideSavedMeals,
+    hideFoods,
+    hideDishes,
+    ingredients.data,
+    preparedMeals.data,
+    products.data,
+    recipes.data,
+    debounced,
+    excludeProductIds,
+    excludeRecipeIds,
+    excludeDishIds,
+    excludeIngredientIds,
+    excludePreparedMealIds,
+  ]);
 
-  const loading = products.isLoading || recipes.isLoading;
+  const loading =
+    products.isLoading || recipes.isLoading || ingredients.isLoading || preparedMeals.isLoading;
 
   return (
     <Autocomplete<Option>
@@ -145,7 +231,7 @@ export function FoodSearch({
       filterOptions={(all) => all}
       loading={loading}
       loadingText="Searching"
-      noOptionsText={input ? 'Nothing matched' : 'Type to search food and recipes'}
+      noOptionsText={input ? 'Nothing matched' : 'Type to search food, recipes and saved meals'}
       autoHighlight
       blurOnSelect
       clearOnBlur
@@ -168,7 +254,7 @@ export function FoodSearch({
         );
       }}
       renderInput={(params) => (
-        <TextField {...params} placeholder="Search food or recipes" autoFocus={autoFocus} />
+        <TextField {...params} placeholder="Search food, recipes and saved meals" autoFocus={autoFocus} />
       )}
     />
   );

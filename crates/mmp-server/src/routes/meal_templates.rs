@@ -1,6 +1,8 @@
 use axum::Json;
 use axum::extract::{Path, Query, State};
-use mmp_core::domain::{MealPlanEntryId, MealTemplateId};
+use mmp_core::domain::{
+    MealItemRef, MealPlanEntryId, MealTemplate, MealTemplateComponent, MealTemplateId, UserId,
+};
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
 use uuid::Uuid;
@@ -20,6 +22,50 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(get_one, update))
         .routes(routes!(delete))
         .routes(routes!(create_from_entry))
+}
+
+async fn resolve_names(
+    state: &AppState,
+    owner: UserId,
+    components: &[MealTemplateComponent],
+) -> Vec<String> {
+    let mut names = Vec::with_capacity(components.len());
+    for component in components {
+        let name = match component.item {
+            MealItemRef::Product { product_id } => state
+                .catalogue
+                .get_product(product_id)
+                .await
+                .map(|product| product.name)
+                .unwrap_or_else(|_| "Product".to_owned()),
+            MealItemRef::Recipe { recipe_id } => state
+                .recipes
+                .get_recipe(recipe_id, owner)
+                .await
+                .map(|recipe| recipe.name)
+                .unwrap_or_else(|_| "Recipe".to_owned()),
+            MealItemRef::Ingredient { ingredient_id } => state
+                .catalogue
+                .get_ingredient(ingredient_id)
+                .await
+                .map(|ingredient| ingredient.name)
+                .unwrap_or_else(|_| "Food".to_owned()),
+            MealItemRef::PreparedMeal { prepared_meal_id } => state
+                .catalogue
+                .get_prepared_meal(prepared_meal_id)
+                .await
+                .map(|prepared_meal| prepared_meal.name)
+                .unwrap_or_else(|_| "Food".to_owned()),
+            MealItemRef::Dish { .. } => "Cooked food".to_owned(),
+        };
+        names.push(name);
+    }
+    names
+}
+
+async fn to_dto(state: &AppState, owner: UserId, template: MealTemplate) -> MealTemplateDto {
+    let names = resolve_names(state, owner, &template.components).await;
+    MealTemplateDto::from_domain(template, &names)
 }
 
 #[utoipa::path(
@@ -43,7 +89,11 @@ async fn list(
         .meal_templates
         .list(&query.into_domain(principal.user_id))
         .await?;
-    Ok(Json(page.into()))
+    let mut names = Vec::with_capacity(page.items.len());
+    for template in &page.items {
+        names.push(resolve_names(&state, principal.user_id, &template.components).await);
+    }
+    Ok(Json(MealTemplatePage::from_domain(page, &names)))
 }
 
 #[utoipa::path(
@@ -67,7 +117,9 @@ async fn create(
         .meal_templates
         .create(body.into_domain(principal.user_id))
         .await?;
-    Ok(Created(created.revision, created.into()))
+    let revision = created.revision;
+    let dto = to_dto(&state, principal.user_id, created).await;
+    Ok(Created(revision, dto))
 }
 
 #[utoipa::path(
@@ -92,7 +144,9 @@ async fn get_one(
         .meal_templates
         .get(MealTemplateId::from(id), principal.user_id)
         .await?;
-    Ok(Tagged(template.revision, template.into()))
+    let revision = template.revision;
+    let dto = to_dto(&state, principal.user_id, template).await;
+    Ok(Tagged(revision, dto))
 }
 
 #[utoipa::path(
@@ -128,7 +182,9 @@ async fn update(
             body.into(),
         )
         .await?;
-    Ok(Tagged(updated.revision, updated.into()))
+    let updated_revision = updated.revision;
+    let dto = to_dto(&state, principal.user_id, updated).await;
+    Ok(Tagged(updated_revision, dto))
 }
 
 #[utoipa::path(
@@ -187,5 +243,7 @@ async fn create_from_entry(
             body.name,
         )
         .await?;
-    Ok(Created(created.revision, created.into()))
+    let revision = created.revision;
+    let dto = to_dto(&state, principal.user_id, created).await;
+    Ok(Created(revision, dto))
 }

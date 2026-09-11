@@ -1,4 +1,5 @@
 import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettingsOutlined';
+import BookmarkIcon from '@mui/icons-material/BookmarkBorderOutlined';
 import DarkModeIcon from '@mui/icons-material/DarkModeOutlined';
 import CalendarMonthIcon from '@mui/icons-material/CalendarMonthOutlined';
 import MonitorWeightIcon from '@mui/icons-material/MonitorWeightOutlined';
@@ -39,7 +40,8 @@ export const DRAWER_WIDTH = 236;
 const NAV = [
   { to: '/food-log', label: 'Food log', icon: <MenuBookIcon fontSize="small" />, needs: undefined },
   { to: '/planner', label: 'Planner', icon: <CalendarMonthIcon fontSize="small" />, needs: undefined },
-  { to: '/ingredients', label: 'Ingredients', icon: <RestaurantIcon fontSize="small" />, needs: 'catalogue:read' },
+  { to: '/saved-meals', label: 'Saved meals', icon: <BookmarkIcon fontSize="small" />, needs: undefined },
+  { to: '/foods', label: 'Foods', icon: <RestaurantIcon fontSize="small" />, needs: 'catalogue:read' },
   { to: '/products', label: 'Products', icon: <InventoryIcon fontSize="small" />, needs: 'catalogue:read' },
   { to: '/recipes', label: 'Recipes', icon: <RestaurantMenuIcon fontSize="small" />, needs: 'catalogue:read' },
   { to: '/stock', label: 'Stock', icon: <KitchenIcon fontSize="small" />, needs: 'stock:read' },

@@ -223,21 +223,41 @@ export function PreparedPortionCard({ row }: { row: CookedFoodRow }) {
   );
 }
 
-export function IngredientCard({ group, productCount }: { group: StockGroup; productCount: number }) {
+export function IngredientCard({
+  group,
+  productCount,
+  kind = 'ingredient',
+}: {
+  group: StockGroup;
+  productCount: number;
+  kind?: 'ingredient' | 'prepared_meal';
+}) {
   if (group.items.length === 0) return null;
 
-  return (
+  const row = (
+    <StockRow
+      testId={`stock-ingredient-${group.id}`}
+      name={group.name}
+      subtitle={productCount === 1 ? '1 product' : `${productCount} products`}
+      availability={group.availability}
+    />
+  );
+
+  return kind === 'ingredient' ? (
     <Link
       to="/stock/ingredients/$ingredientId"
       params={{ ingredientId: group.id }}
       style={{ textDecoration: 'none', color: 'inherit' }}
     >
-      <StockRow
-        testId={`stock-ingredient-${group.id}`}
-        name={group.name}
-        subtitle={productCount === 1 ? '1 product' : `${productCount} products`}
-        availability={group.availability}
-      />
+      {row}
+    </Link>
+  ) : (
+    <Link
+      to="/stock/prepared-meals/$preparedMealId"
+      params={{ preparedMealId: group.id }}
+      style={{ textDecoration: 'none', color: 'inherit' }}
+    >
+      {row}
     </Link>
   );
 }

@@ -16,7 +16,7 @@ import TextField from '@mui/material/TextField';
 import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 import { useMemo, useState } from 'react';
-import type { Amount, MealSlot, PlannerMeal, Product, RecipeSummary, Unit } from '../../api/client';
+import type { Amount, Ingredient, MealSlot, PlannerMeal, PreparedMeal, Product, RecipeSummary, Unit } from '../../api/client';
 import { ApiError } from '../../api/client';
 import {
   useCreateMealPlanEntry,
@@ -37,7 +37,7 @@ type EditorMode = 'member' | 'household';
 
 type FoodDraft = {
   componentId: string;
-  itemKind: 'product' | 'recipe' | 'dish';
+  itemKind: 'product' | 'recipe' | 'dish' | 'ingredient' | 'prepared_meal';
   itemId: string;
   name: string;
   amount: Amount;
@@ -57,15 +57,28 @@ function equalShare(amount: Amount, dinerCount: number): Amount {
   return { ...amount, value: amount.value / Math.max(dinerCount, 1) };
 }
 
+function itemIdOf(food: PlannerMeal['foods'][number]): string {
+  switch (food.item_kind) {
+    case 'product':
+      return food.product_id;
+    case 'dish':
+      return food.dish_recipe_id;
+    case 'recipe':
+      return food.recipe_id;
+    case 'ingredient':
+      return food.ingredient_id;
+    case 'prepared_meal':
+      return food.prepared_meal_id;
+    default:
+      return food satisfies never;
+  }
+}
+
 function initialFoods(meal: PlannerMeal | null): FoodDraft[] {
   return (meal?.foods ?? []).map((food) => ({
     componentId: food.id,
     itemKind: food.item_kind,
-    itemId: food.item_kind === 'product'
-      ? food.product_id
-      : food.item_kind === 'dish'
-        ? food.dish_recipe_id
-        : food.recipe_id,
+    itemId: itemIdOf(food),
     name: food.item_name,
     amount: food.amount,
   }));
@@ -230,10 +243,77 @@ export function MealEditorDialog({
     }]);
   }
 
+  function addIngredient(next: Ingredient) {
+    if (foods.some((food) => food.itemKind === 'ingredient' && food.itemId === next.id)) return;
+    setFoods((current) => [...current, {
+      componentId: crypto.randomUUID(),
+      itemKind: 'ingredient',
+      itemId: next.id,
+      name: next.name,
+      amount: { kind: 'measure', unit: next.default_unit, value: 100 },
+    }]);
+  }
+
+  function addPreparedMeal(next: PreparedMeal) {
+    if (foods.some((food) => food.itemKind === 'prepared_meal' && food.itemId === next.id)) return;
+    setFoods((current) => [...current, {
+      componentId: crypto.randomUUID(),
+      itemKind: 'prepared_meal',
+      itemId: next.id,
+      name: next.name,
+      amount: { kind: 'measure', unit: next.default_unit, value: 100 },
+    }]);
+  }
+
+  function addSavedMeal(template: FoodChoice & { kind: 'saved_meal' }) {
+    setFoods((current) => {
+      const additions: FoodDraft[] = [];
+      for (const component of template.savedMeal.components) {
+        let itemKind: FoodDraft['itemKind'];
+        let itemId: string;
+        switch (component.item_kind) {
+          case 'product':
+            itemKind = 'product';
+            itemId = component.product_id;
+            break;
+          case 'recipe':
+            itemKind = 'recipe';
+            itemId = component.recipe_id;
+            break;
+          case 'ingredient':
+            itemKind = 'ingredient';
+            itemId = component.ingredient_id;
+            break;
+          case 'prepared_meal':
+            itemKind = 'prepared_meal';
+            itemId = component.prepared_meal_id;
+            break;
+          default:
+            continue;
+        }
+        const already =
+          current.some((food) => food.itemKind === itemKind && food.itemId === itemId) ||
+          additions.some((food) => food.itemKind === itemKind && food.itemId === itemId);
+        if (already) continue;
+        additions.push({
+          componentId: crypto.randomUUID(),
+          itemKind,
+          itemId,
+          name: component.item_name,
+          amount: component.amount,
+        });
+      }
+      return [...current, ...additions];
+    });
+  }
+
   function addFood(choice: FoodChoice) {
     if (choice.kind === 'product') addProduct(choice.product);
     else if (choice.kind === 'dish') addDish(choice.dish);
-    else addRecipe(choice.recipe);
+    else if (choice.kind === 'recipe') addRecipe(choice.recipe);
+    else if (choice.kind === 'ingredient') addIngredient(choice.ingredient);
+    else if (choice.kind === 'prepared_meal') addPreparedMeal(choice.preparedMeal);
+    else addSavedMeal(choice);
   }
 
   function setFoodAmount(componentId: string, amount: Amount) {
@@ -251,7 +331,9 @@ export function MealEditorDialog({
       setError('Add at least one food.');
       return;
     }
-    if (foods.some((food) => food.itemKind === 'product' && (!Number.isFinite(food.amount.value) || food.amount.value <= 0))) {
+    if (foods.some((food) =>
+      food.itemKind !== 'recipe' && food.itemKind !== 'dish'
+      && (!Number.isFinite(food.amount.value) || food.amount.value <= 0))) {
       setError('Every food needs an amount greater than zero.');
       return;
     }
@@ -267,7 +349,11 @@ export function MealEditorDialog({
         ? { item_kind: 'product' as const, product_id: food.itemId }
         : food.itemKind === 'dish'
           ? { item_kind: 'dish' as const, dish_recipe_id: food.itemId }
-          : { item_kind: 'recipe' as const, recipe_id: food.itemId }),
+          : food.itemKind === 'ingredient'
+            ? { item_kind: 'ingredient' as const, ingredient_id: food.itemId }
+            : food.itemKind === 'prepared_meal'
+              ? { item_kind: 'prepared_meal' as const, prepared_meal_id: food.itemId }
+              : { item_kind: 'recipe' as const, recipe_id: food.itemId }),
       amount: servingsFor(food),
     }));
     const participants = household
@@ -342,6 +428,8 @@ export function MealEditorDialog({
                 excludeProductIds={foods.filter((food) => food.itemKind === 'product').map((food) => food.itemId)}
                 excludeRecipeIds={foods.filter((food) => food.itemKind === 'recipe').map((food) => food.itemId)}
                 excludeDishIds={dishIds()}
+                excludeIngredientIds={foods.filter((food) => food.itemKind === 'ingredient').map((food) => food.itemId)}
+                excludePreparedMealIds={foods.filter((food) => food.itemKind === 'prepared_meal').map((food) => food.itemId)}
               />
               {foods.map((food) => (
                 <Box key={food.componentId} sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2, p: 1.5 }}>
@@ -350,7 +438,7 @@ export function MealEditorDialog({
                       <Typography>{food.name}</Typography>
                       {food.itemKind === 'recipe' ? <RecipeKcal recipeId={food.itemId} /> : null}
                     </Box>
-                    {food.itemKind === 'product' ? (
+                    {food.itemKind === 'product' || food.itemKind === 'ingredient' || food.itemKind === 'prepared_meal' ? (
                       <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
                         <TextField
                           label="Amount"

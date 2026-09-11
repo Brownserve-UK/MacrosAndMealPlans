@@ -39,11 +39,18 @@ function amountToDraft(item: MealItem): AmountDraft {
     : { kind: amount.kind, value: String(amount.value), unit: 'g' };
 }
 
-type ItemRef = { product_id: string } | { recipe_id: string } | { dish_recipe_id: string };
+type ItemRef =
+  | { product_id: string }
+  | { recipe_id: string }
+  | { dish_recipe_id: string }
+  | { ingredient_id: string }
+  | { prepared_meal_id: string };
 
 function componentItem(component: MealPlanEntry['components'][number]): ItemRef {
   if (component.item_kind === 'recipe') return { recipe_id: component.recipe_id };
   if (component.item_kind === 'dish') return { dish_recipe_id: component.dish_recipe_id };
+  if (component.item_kind === 'ingredient') return { ingredient_id: component.ingredient_id };
+  if (component.item_kind === 'prepared_meal') return { prepared_meal_id: component.prepared_meal_id };
   return { product_id: component.product_id };
 }
 
@@ -65,8 +72,9 @@ export function EditFoodDialog({
   entry?: MealPlanEntry | null;
 }) {
   const isRecipe = item.item_kind === 'recipe';
+  const isGenericFood = item.item_kind === 'ingredient' || item.item_kind === 'prepared_meal';
   const productId = item.item_kind === 'product' ? item.product_id : '';
-  const product = useProduct(productId, { enabled: !isRecipe });
+  const product = useProduct(productId, { enabled: item.item_kind === 'product' });
   const updateConsumption = useUpdateConsumption();
   const deleteConsumption = useDeleteConsumption();
   const updateEntry = useUpdateMealPlanEntry();
@@ -172,15 +180,19 @@ export function EditFoodDialog({
     setFailure(null);
     const chosenProduct = draft.product ?? product.data ?? null;
     const found = validateAmount();
-    if (!isRecipe && !chosenProduct) found.item = 'Pick a product';
+    if (!isRecipe && !isGenericFood && !chosenProduct) found.item = 'Pick a product';
     setErrors(found);
     if (Object.keys(found).length > 0) return;
     const amount = isRecipe ? recipeAmount() : draftToAmount(draft.amount);
-    if (!amount || (!isRecipe && !chosenProduct)) return;
+    if (!amount || (!isRecipe && !isGenericFood && !chosenProduct)) return;
     const editedItem: ItemRef =
       isRecipe && item.item_kind === 'recipe'
         ? { recipe_id: item.recipe_id }
-        : { product_id: chosenProduct!.id };
+        : item.item_kind === 'ingredient'
+          ? { ingredient_id: item.ingredient_id }
+          : item.item_kind === 'prepared_meal'
+            ? { prepared_meal_id: item.prepared_meal_id }
+            : { product_id: chosenProduct!.id };
 
     try {
       const components = entry?.components.map((component) =>
@@ -318,6 +330,14 @@ export function EditFoodDialog({
                 error={Boolean(errors.amount)}
                 helperText={errors.amount}
                 slotProps={{ htmlInput: { min: 0, step: 0.5 } }}
+              />
+            ) : isGenericFood ? (
+              <AmountFields
+                product={null}
+                draft={draft.amount}
+                errors={errors}
+                onChange={(amount) => setDraft({ ...draft, amount })}
+                allowWithoutProduct
               />
             ) : (
               <>

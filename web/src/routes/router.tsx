@@ -14,7 +14,10 @@ import { NeedsReviewPage } from '../features/meal-plan/NeedsReviewPage';
 import { HouseholdPlannerPage } from '../features/meal-plan/HouseholdPlannerPage';
 import { defaultDayFor } from '../features/meal-plan/date';
 import { IngredientPage } from '../features/ingredients/IngredientPage';
-import { IngredientsPage } from '../features/ingredients/IngredientsPage';
+import { FoodsPage } from '../features/foods/FoodsPage';
+import { PreparedMealPage } from '../features/prepared-meals/PreparedMealPage';
+import { SavedMealsPage } from '../features/saved-meals/SavedMealsPage';
+import { SavedMealPage } from '../features/saved-meals/SavedMealPage';
 import { ProductPage } from '../features/products/ProductPage';
 import { ProductsPage } from '../features/products/ProductsPage';
 import { RecipePage } from '../features/recipes/RecipePage';
@@ -30,6 +33,7 @@ import { DishPage } from '../features/stock/DishPage';
 import { StockItemPage } from '../features/stock/StockItemPage';
 import { ProductStockPage } from '../features/stock/ProductStockPage';
 import { IngredientStockPage } from '../features/stock/IngredientStockPage';
+import { PreparedMealStockPage } from '../features/stock/PreparedMealStockPage';
 import { WeightPage } from '../features/weight/WeightPage';
 
 const rootRoute = createRootRoute({ component: AppShell });
@@ -137,10 +141,18 @@ const needsReviewRoute = createRoute({
   component: NeedsReviewPage,
 });
 
-const ingredientsRoute = createRoute({
+const foodsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/foods',
+  component: FoodsPage,
+});
+
+const ingredientsRedirectRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/ingredients',
-  component: IngredientsPage,
+  beforeLoad: () => {
+    throw redirect({ to: '/foods' });
+  },
 });
 
 const ingredientRoute = createRoute({
@@ -149,6 +161,30 @@ const ingredientRoute = createRoute({
   component: function EditIngredient() {
     const { id } = ingredientRoute.useParams();
     return <IngredientPage id={id} />;
+  },
+});
+
+const preparedMealRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/prepared-meals/$id',
+  component: function EditPreparedMeal() {
+    const { id } = preparedMealRoute.useParams();
+    return <PreparedMealPage id={id} />;
+  },
+});
+
+const savedMealsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/saved-meals',
+  component: SavedMealsPage,
+});
+
+const savedMealRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/saved-meals/$id',
+  component: function EditSavedMeal() {
+    const { id } = savedMealRoute.useParams();
+    return <SavedMealPage id={id} />;
   },
 });
 
@@ -239,6 +275,15 @@ const ingredientStockRoute = createRoute({
   },
 });
 
+const preparedMealStockRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/stock/prepared-meals/$preparedMealId',
+  component: function ViewPreparedMealStock() {
+    const { preparedMealId } = preparedMealStockRoute.useParams();
+    return <PreparedMealStockPage preparedMealId={preparedMealId} />;
+  },
+});
+
 const householdRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/household',
@@ -326,8 +371,12 @@ const routeTree = rootRoute.addChildren([
   householdPlannerWeekRoute,
   householdPlannerDayRoute,
   needsReviewRoute,
-  ingredientsRoute,
+  foodsRoute,
+  ingredientsRedirectRoute,
   ingredientRoute,
+  preparedMealRoute,
+  savedMealsRoute,
+  savedMealRoute,
   productsRoute,
   productRoute,
   recipesRoute,
@@ -337,6 +386,7 @@ const routeTree = rootRoute.addChildren([
   stockRoute,
   productStockRoute,
   ingredientStockRoute,
+  preparedMealStockRoute,
   stockItemRoute,
   dishRoute,
   householdRoute,

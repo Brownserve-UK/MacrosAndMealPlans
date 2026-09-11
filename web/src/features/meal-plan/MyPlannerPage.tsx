@@ -27,6 +27,7 @@ import { MealRow } from './MealRow';
 import { MealEditorDialog } from './MealEditorDialog';
 import { MealSlotMenu } from './MealSlotMenu';
 import { PlannerLens } from './PlannerLens';
+import { SaveForReuseDialog } from './SaveForReuseDialog';
 import { DayWeekNutrition } from './NutritionSummary';
 import { EmptySlot, SlotSection } from './SlotSection';
 import { SnackSection } from './SnackSection';
@@ -59,15 +60,18 @@ function OwnMealCard({
   onAddFood,
   onEdit,
   onDelete,
+  onSaveForReuse,
 }: {
   entry: MealPlanEntry;
   canPlan: boolean;
   onAddFood: () => void;
   onEdit: () => void;
   onDelete: () => void;
+  onSaveForReuse: () => void;
 }) {
   const kcal = entry.planned.nutrition.energy_kcal;
   const editable = canPlan && (entry.status === 'planned' || entry.status === 'assumed');
+  const canSave = entry.components.some((component) => component.item_kind !== 'dish');
   const tagLabel = entry.status === 'eaten'
     ? 'Eaten'
     : entry.status === 'not_eaten'
@@ -89,6 +93,7 @@ function OwnMealCard({
       extras={editable ? [
         { label: 'Edit meal', onClick: onEdit },
         { label: 'Delete meal', onClick: onDelete },
+        ...(canSave ? [{ label: 'Save for reuse', onClick: onSaveForReuse }] : []),
       ] : []}
       warning={entry.needs_attention ? 'Some items need attention' : null}
     />
@@ -159,6 +164,7 @@ export function MyPlannerPage({ weekStart, day }: { weekStart: string; day: stri
   const [editing, setEditing] = useState<EditSelection | null>(null);
   const [cookingSomething, setCookingSomething] = useState(false);
   const [deleting, setDeleting] = useState<MealPlanEntry | null>(null);
+  const [saving, setSaving] = useState<MealPlanEntry | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const activeDate = day >= weekStart && day <= addDays(weekStart, 6) ? day : weekStart;
@@ -283,6 +289,7 @@ export function MyPlannerPage({ weekStart, day }: { weekStart: string; day: stri
                   onAddFood={() => openEditor(ownEntry, ownEntry.slot)}
                   onEdit={() => openEditor(ownEntry, ownEntry.slot)}
                   onDelete={() => setDeleting(ownEntry)}
+                  onSaveForReuse={() => setSaving(ownEntry)}
                 />
               );
             } else if (heldEntry) {
@@ -351,6 +358,9 @@ export function MyPlannerPage({ weekStart, day }: { weekStart: string; day: stri
           <Button color="error" variant="contained" onClick={() => void deleteMeal()} disabled={remove.isPending}>Delete meal</Button>
         </DialogActions>
       </Dialog>
+      {saving ? (
+        <SaveForReuseDialog open onClose={() => setSaving(null)} entry={saving} />
+      ) : null}
     </Box>
   );
 }
@@ -371,7 +381,11 @@ function entryToPlannerMeal(entry: MealPlanEntry): PlannerMeal {
         ? { item_kind: 'recipe' as const, recipe_id: component.recipe_id }
         : component.item_kind === 'dish'
           ? { item_kind: 'dish' as const, dish_recipe_id: component.dish_recipe_id }
-          : { item_kind: 'product' as const, product_id: component.product_id }),
+          : component.item_kind === 'ingredient'
+            ? { item_kind: 'ingredient' as const, ingredient_id: component.ingredient_id }
+            : component.item_kind === 'prepared_meal'
+              ? { item_kind: 'prepared_meal' as const, prepared_meal_id: component.prepared_meal_id }
+              : { item_kind: 'product' as const, product_id: component.product_id }),
       item_name: component.item_name,
       amount: component.amount,
       shortage: component.preparation.shortage,

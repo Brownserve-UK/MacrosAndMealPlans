@@ -68,6 +68,7 @@ vi.mock('../../api/queries', () => ({
   useMarkMealPlanEaten: () => ({ mutateAsync: mocks.markEaten, isPending: false }),
   useMarkMealPlanNotEaten: () => ({ mutateAsync: mocks.markNotEaten, isPending: false }),
   useSetProductMapping: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  useSetPreparedMealMapping: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useReviewMealOutcomes: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useProducts: () => ({ data: { items: [] }, isLoading: false }),
   useRecipes: () => ({ data: { items: [] }, isLoading: false }),

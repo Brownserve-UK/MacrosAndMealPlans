@@ -4,6 +4,7 @@ export * from './catalogue';
 export * from './household';
 export * from './consumption';
 export * from './mealPlan';
+export * from './mealTemplates';
 export * from './nutritionTargets';
 export * from './weight';
 export * from './recipes';

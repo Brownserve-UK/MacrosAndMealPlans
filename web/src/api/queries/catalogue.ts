@@ -1,9 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { client, ifMatch, unwrap } from '../client';
-import type { Ingredient, Product } from '../client';
+import type { Ingredient, PreparedMeal, Product } from '../client';
 import type { components } from '../schema';
 import { catalogueKeys, mealPlanKeys } from '../keys';
-import type { IngredientListParams, ProductListParams } from '../keys';
+import type { IngredientListParams, PreparedMealListParams, ProductListParams } from '../keys';
 
 export function useIngredients(params: IngredientListParams) {
   return useQuery({
@@ -78,6 +78,84 @@ export function useSetIngredientArchived() {
     onSuccess: (updated: Ingredient) => {
       qc.setQueryData(catalogueKeys.ingredientDetail(updated.id), updated);
       void qc.invalidateQueries({ queryKey: catalogueKeys.ingredients() });
+    },
+  });
+}
+
+export function usePreparedMeals(params: PreparedMealListParams) {
+  return useQuery({
+    queryKey: catalogueKeys.preparedMealList(params),
+    queryFn: async () =>
+      unwrap(await client.GET('/api/v1/prepared-meals', { params: { query: params } })),
+  });
+}
+
+export function usePreparedMeal(id: string, options?: { enabled?: boolean }) {
+  return useQuery({
+    queryKey: catalogueKeys.preparedMealDetail(id),
+    enabled: options?.enabled ?? true,
+    queryFn: async () =>
+      unwrap(await client.GET('/api/v1/prepared-meals/{id}', { params: { path: { id } } })),
+  });
+}
+
+export function usePreparedMealProducts(id: string, options?: { enabled?: boolean }) {
+  return useQuery({
+    queryKey: catalogueKeys.preparedMealProducts(id),
+    enabled: options?.enabled ?? true,
+    queryFn: async () =>
+      unwrap(
+        await client.GET('/api/v1/prepared-meals/{id}/products', { params: { path: { id } } }),
+      ),
+  });
+}
+
+export function useCreatePreparedMeal() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (body: components['schemas']['CreatePreparedMealRequest']) =>
+      unwrap(await client.POST('/api/v1/prepared-meals', { body })),
+    onSuccess: () => qc.invalidateQueries({ queryKey: catalogueKeys.preparedMeals() }),
+  });
+}
+
+export function useUpdatePreparedMeal() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: {
+      id: string;
+      revision: number;
+      body: components['schemas']['UpdatePreparedMealRequest'];
+    }) =>
+      unwrap(
+        await client.PATCH('/api/v1/prepared-meals/{id}', {
+          params: { path: { id: input.id }, header: ifMatch(input.revision) },
+          body: input.body,
+        }),
+      ),
+    onSuccess: (updated: PreparedMeal) => {
+      qc.setQueryData(catalogueKeys.preparedMealDetail(updated.id), updated);
+      void qc.invalidateQueries({ queryKey: catalogueKeys.preparedMeals() });
+    },
+  });
+}
+
+export function useSetPreparedMealArchived() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: { id: string; revision: number; archived: boolean }) => {
+      const path = input.archived
+        ? ('/api/v1/prepared-meals/{id}/archive' as const)
+        : ('/api/v1/prepared-meals/{id}/unarchive' as const);
+      return unwrap(
+        await client.POST(path, {
+          params: { path: { id: input.id }, header: ifMatch(input.revision) },
+        }),
+      );
+    },
+    onSuccess: (updated: PreparedMeal) => {
+      qc.setQueryData(catalogueKeys.preparedMealDetail(updated.id), updated);
+      void qc.invalidateQueries({ queryKey: catalogueKeys.preparedMeals() });
     },
   });
 }
@@ -170,6 +248,29 @@ export function useSetProductMapping() {
       qc.setQueryData(catalogueKeys.productDetail(updated.id), updated);
       void qc.invalidateQueries({ queryKey: catalogueKeys.products() });
       void qc.invalidateQueries({ queryKey: catalogueKeys.ingredient() });
+      void qc.invalidateQueries({ queryKey: mealPlanKeys.needsReview() });
+    },
+  });
+}
+
+export function useSetPreparedMealMapping() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: { id: string; revision: number; preparedMealId: string | null }) => {
+      const params = { path: { id: input.id }, header: ifMatch(input.revision) };
+      return input.preparedMealId === null
+        ? unwrap(await client.DELETE('/api/v1/products/{id}/prepared-meal', { params }))
+        : unwrap(
+            await client.PUT('/api/v1/products/{id}/prepared-meal', {
+              params,
+              body: { prepared_meal_id: input.preparedMealId },
+            }),
+          );
+    },
+    onSuccess: (updated: Product) => {
+      qc.setQueryData(catalogueKeys.productDetail(updated.id), updated);
+      void qc.invalidateQueries({ queryKey: catalogueKeys.products() });
+      void qc.invalidateQueries({ queryKey: catalogueKeys.preparedMeal() });
       void qc.invalidateQueries({ queryKey: mealPlanKeys.needsReview() });
     },
   });

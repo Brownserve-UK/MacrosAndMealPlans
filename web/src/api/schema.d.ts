@@ -2237,6 +2237,7 @@ export interface components {
             amount: components["schemas"]["AmountDto"];
             /** Format: uuid */
             id: string;
+            item_name: string;
             /** Format: int32 */
             position: number;
         };
