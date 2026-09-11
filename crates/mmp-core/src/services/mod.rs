@@ -4,6 +4,7 @@ mod fulfilment;
 mod household;
 mod household_settings;
 mod meal_plan;
+mod meal_template;
 mod nutrition_target;
 mod preparation;
 mod recipe;
@@ -22,6 +23,7 @@ pub use meal_plan::{
     MealItem, MealItemSource, MealParticipantView, MealPlanComponentView, MealPlanDay,
     MealPlanEntryView, MealPlanService, MealPlanWeek, MealSlotView, NeedsReview, NutritionSummary,
 };
+pub use meal_template::MealTemplateService;
 pub use nutrition_target::NutritionTargetService;
 pub use preparation::{MoveCookedFood, PreparationService, RecordPreparation};
 pub use recipe::{

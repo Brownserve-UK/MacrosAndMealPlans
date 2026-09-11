@@ -5,13 +5,14 @@ pub use clock::{Clock, FixedClock, SystemClock};
 pub use repository::{
     AccessGrantRepository, ConsumptionQuery, ConsumptionRecordRepository, FinishedPurchase,
     HouseholdMemberRepository, HouseholdSettingsRepository, IngredientQuery, IngredientRepository,
-    IngredientSort, MealPlanComponentUpdate, MealPlanQuery, MealPlanRepository, MemberQuery,
-    NewStockFromPurchase, NutritionTargetRepository, PreparedBatchRepository, PreparedMealQuery,
-    PreparedMealRepository, PreparedMealSort, ProductQuery, ProductRepository, PurchaseQuery,
-    PurchaseRepository, RecipeQuery, RecipeRepository, ShoppingCadenceRepository,
-    ShoppingListItemRepository, ShoppingOpportunityRepository, ShoppingTripRepository, SnapshotOp,
-    SortDirection, StockDeduction, StockQuery, StockRelease, StockRepository, StockWrite,
-    UpdateOutcome, UserQuery, UserRepository, WeightGoalRepository, WeightRecordRepository,
+    IngredientSort, MealPlanComponentUpdate, MealPlanQuery, MealPlanRepository, MealTemplateQuery,
+    MealTemplateRepository, MemberQuery, NewStockFromPurchase, NutritionTargetRepository,
+    PreparedBatchRepository, PreparedMealQuery, PreparedMealRepository, PreparedMealSort,
+    ProductQuery, ProductRepository, PurchaseQuery, PurchaseRepository, RecipeQuery,
+    RecipeRepository, ShoppingCadenceRepository, ShoppingListItemRepository,
+    ShoppingOpportunityRepository, ShoppingTripRepository, SnapshotOp, SortDirection,
+    StockDeduction, StockQuery, StockRelease, StockRepository, StockWrite, UpdateOutcome,
+    UserQuery, UserRepository, WeightGoalRepository, WeightRecordRepository,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

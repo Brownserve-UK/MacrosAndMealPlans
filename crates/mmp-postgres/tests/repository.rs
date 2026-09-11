@@ -8,27 +8,29 @@ use mmp_core::domain::{
     MealGuestGroupId, MealItemRef, MealParticipant, MealParticipantAllocation,
     MealParticipantAllocationId, MealParticipantId, MealPlanComponent, MealPlanComponentId,
     MealPlanComponentSnapshot, MealPlanEntry, MealPlanEntryId, MealPlanScope, MealPlanStatus,
-    MealSlot, MemberAccessGrant, NewStockEvent, NutritionFacts, NutritionGoals, NutritionQuality,
-    NutritionTarget, NutritionTargetId, OpportunityException, ParticipantStatus, Product,
-    ProductId, Provenance, Purchase, PurchaseId, PurchaseState, Quantity, Recipe, RecipeComponent,
-    RecipeComponentId, RecipeId, RecipeInstruction, RecipeInstructionId, RecipePhoto,
-    RecipePhotoDerivatives, RecipeRequirement, RecipeVisibility, Revision, Role, SectionOrder,
-    ShoppingCadence, ShoppingListItem, ShoppingListItemId, ShoppingOpportunityId, ShoppingSection,
-    ShoppingTrip, ShoppingTripId, ShoppingTripRow, ShoppingTripRowId, StockEventKind, StockItem,
-    StockItemId, StockLevel, StockSubject, StorageLocation, TripState, Unit, User, UserId,
-    WeightDisplay, WeightGoal, WeightGoalId, WeightObjective, WeightRecord, WeightRecordId,
-    WeightSource,
+    MealSlot, MealTemplate, MealTemplateComponent, MealTemplateComponentId, MealTemplateId,
+    MemberAccessGrant, NewStockEvent, NutritionFacts, NutritionGoals, NutritionQuality,
+    NutritionTarget, NutritionTargetId, OpportunityException, ParticipantStatus, PreparedMeal,
+    PreparedMealId, Product, ProductId, Provenance, Purchase, PurchaseId, PurchaseState, Quantity,
+    Recipe, RecipeComponent, RecipeComponentId, RecipeId, RecipeInstruction, RecipeInstructionId,
+    RecipePhoto, RecipePhotoDerivatives, RecipeRequirement, RecipeVisibility, Revision, Role,
+    SectionOrder, ShoppingCadence, ShoppingListItem, ShoppingListItemId, ShoppingOpportunityId,
+    ShoppingSection, ShoppingTrip, ShoppingTripId, ShoppingTripRow, ShoppingTripRowId,
+    StockEventKind, StockItem, StockItemId, StockLevel, StockSubject, StorageLocation, TripState,
+    Unit, User, UserId, WeightDisplay, WeightGoal, WeightGoalId, WeightObjective, WeightRecord,
+    WeightRecordId, WeightSource,
 };
 use mmp_core::domain::{DeductionTarget, StockEffectSource, StockEventSource};
 use mmp_core::ports::{
     AccessGrantRepository, ConsumptionQuery, ConsumptionRecordRepository,
     HouseholdMemberRepository, HouseholdSettingsRepository, IngredientQuery, IngredientRepository,
-    IngredientSort, MealPlanComponentUpdate, MealPlanQuery, MealPlanRepository, MemberQuery,
-    NewStockFromPurchase, NutritionTargetRepository, PageRequest, ProductQuery, ProductRepository,
-    PurchaseRepository, RecipeQuery, RecipeRepository, ShoppingCadenceRepository,
-    ShoppingListItemRepository, ShoppingOpportunityRepository, ShoppingTripRepository, SnapshotOp,
-    SortDirection, StockDeduction, StockQuery, StockRepository, StockWrite, UpdateOutcome,
-    UserRepository, WeightGoalRepository, WeightRecordRepository,
+    IngredientSort, MealPlanComponentUpdate, MealPlanQuery, MealPlanRepository, MealTemplateQuery,
+    MealTemplateRepository, MemberQuery, NewStockFromPurchase, NutritionTargetRepository,
+    PageRequest, PreparedMealRepository, ProductQuery, ProductRepository, PurchaseRepository,
+    RecipeQuery, RecipeRepository, ShoppingCadenceRepository, ShoppingListItemRepository,
+    ShoppingOpportunityRepository, ShoppingTripRepository, SnapshotOp, SortDirection,
+    StockDeduction, StockQuery, StockRepository, StockWrite, UpdateOutcome, UserRepository,
+    WeightGoalRepository, WeightRecordRepository,
 };
 
 fn no_stock() -> StockWrite {
@@ -37,10 +39,10 @@ fn no_stock() -> StockWrite {
 use mmp_postgres::{
     PgAccessGrantRepository, PgConsumptionRecordRepository, PgHouseholdMemberRepository,
     PgHouseholdSettingsRepository, PgIngredientRepository, PgMealPlanRepository,
-    PgNutritionTargetRepository, PgProductRepository, PgPurchaseRepository, PgRecipeRepository,
-    PgShoppingCadenceRepository, PgShoppingListItemRepository, PgShoppingOpportunityRepository,
-    PgShoppingTripRepository, PgStockRepository, PgUserRepository, PgWeightGoalRepository,
-    PgWeightRecordRepository,
+    PgMealTemplateRepository, PgNutritionTargetRepository, PgPreparedMealRepository,
+    PgProductRepository, PgPurchaseRepository, PgRecipeRepository, PgShoppingCadenceRepository,
+    PgShoppingListItemRepository, PgShoppingOpportunityRepository, PgShoppingTripRepository,
+    PgStockRepository, PgUserRepository, PgWeightGoalRepository, PgWeightRecordRepository,
 };
 use rust_decimal::Decimal;
 use sqlx::PgPool;
@@ -3810,4 +3812,297 @@ async fn a_member_carries_their_weight_display_preference(pool: PgPool) {
         members.get(joe.id).await.unwrap().unwrap().weight_display,
         WeightDisplay::StonesPounds
     );
+}
+
+fn prepared_meal(name: &str) -> PreparedMeal {
+    let now = OffsetDateTime::now_utc();
+    PreparedMeal {
+        id: PreparedMealId::new(),
+        name: name.to_owned(),
+        default_unit: Unit::Item,
+        shopping_section: None,
+        track_stock: None,
+        provenance: Provenance::local(),
+        revision: Revision::INITIAL,
+        created_at: now,
+        updated_at: now,
+        archived_at: None,
+    }
+}
+
+#[sqlx::test]
+async fn round_trips_a_prepared_meal(pool: PgPool) {
+    let repo = PgPreparedMealRepository::new(pool);
+    let mut original = prepared_meal("Frozen Lasagne");
+    original.default_unit = Unit::Item;
+
+    repo.insert(&original).await.unwrap();
+    let loaded = repo.get(original.id).await.unwrap().expect("should exist");
+
+    assert_eq!(loaded.name, "Frozen Lasagne");
+    assert_eq!(loaded.default_unit, Unit::Item);
+    assert_eq!(loaded.revision, Revision::INITIAL);
+}
+
+#[sqlx::test]
+async fn a_duplicate_prepared_meal_name_is_reported_as_a_duplicate(pool: PgPool) {
+    let repo = PgPreparedMealRepository::new(pool);
+    repo.insert(&prepared_meal("Frozen Lasagne")).await.unwrap();
+
+    let err = repo
+        .insert(&prepared_meal("frozen lasagne"))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, CoreError::Duplicate { field: "name", .. }),
+        "the unique index must surface as a Duplicate, got {err:?}"
+    );
+}
+
+#[sqlx::test]
+async fn archiving_a_prepared_meal_is_persisted(pool: PgPool) {
+    let repo = PgPreparedMealRepository::new(pool);
+    let mut original = prepared_meal("Frozen Lasagne");
+    repo.insert(&original).await.unwrap();
+
+    original.archived_at = Some(OffsetDateTime::now_utc());
+    original.revision = original.revision.next();
+    let outcome = repo.update(&original, Revision::INITIAL).await.unwrap();
+    assert_eq!(outcome, UpdateOutcome::Updated);
+
+    let loaded = repo.get(original.id).await.unwrap().unwrap();
+    assert!(loaded.is_archived());
+}
+
+#[sqlx::test]
+async fn a_product_cannot_map_to_both_an_ingredient_and_a_prepared_meal(pool: PgPool) {
+    let ingredients = PgIngredientRepository::new(pool.clone());
+    let oats = ingredient("Rolled Oats");
+    ingredients.insert(&oats).await.unwrap();
+
+    let prepared_meals = PgPreparedMealRepository::new(pool.clone());
+    let lasagne = prepared_meal("Frozen Lasagne");
+    prepared_meals.insert(&lasagne).await.unwrap();
+
+    let products = PgProductRepository::new(pool);
+    let mut row = product("Confused Product");
+    row.mapped_ingredient_id = Some(oats.id);
+    row.mapped_prepared_meal_id = Some(lasagne.id);
+
+    assert!(products.insert(&row).await.is_err());
+}
+
+fn meal_template(owner: UserId, components: Vec<MealTemplateComponent>) -> MealTemplate {
+    let now = OffsetDateTime::now_utc();
+    MealTemplate {
+        id: MealTemplateId::new(),
+        owner_id: owner,
+        name: "Fish fingers, chips and peas".to_owned(),
+        components,
+        revision: Revision::INITIAL,
+        created_at: now,
+        updated_at: now,
+        archived_at: None,
+    }
+}
+
+fn template_component(item: MealItemRef, position: i32) -> MealTemplateComponent {
+    MealTemplateComponent {
+        id: MealTemplateComponentId::new(),
+        item,
+        amount: ConsumedAmount::Measure(Quantity::new(Decimal::new(100, 0), Unit::Gram)),
+        position,
+    }
+}
+
+async fn seed_meal_template_dependencies(
+    pool: &PgPool,
+) -> (UserId, ProductId, IngredientId, PreparedMealId, RecipeId) {
+    let users = PgUserRepository::new(pool.clone());
+    let owner = user("saver", vec![Role::Admin]);
+    users.insert(&owner).await.unwrap();
+
+    let products = PgProductRepository::new(pool.clone());
+    let fish_fingers = product("Birds Eye Fish Fingers");
+    products.insert(&fish_fingers).await.unwrap();
+
+    let ingredients = PgIngredientRepository::new(pool.clone());
+    let peas = ingredient("Peas");
+    ingredients.insert(&peas).await.unwrap();
+
+    let prepared_meals = PgPreparedMealRepository::new(pool.clone());
+    let lasagne = prepared_meal("Frozen Lasagne");
+    prepared_meals.insert(&lasagne).await.unwrap();
+
+    let recipes = PgRecipeRepository::new(pool.clone());
+    let mut pie = recipe(owner.id, vec![recipe_component(fish_fingers.id, 0)]);
+    pie.name = "Fish pie".to_owned();
+    recipes.insert(&pie).await.unwrap();
+
+    (owner.id, fish_fingers.id, peas.id, lasagne.id, pie.id)
+}
+
+#[sqlx::test]
+async fn round_trips_a_meal_template_with_every_eligible_component_kind(pool: PgPool) {
+    let (owner, product_id, ingredient_id, prepared_meal_id, recipe_id) =
+        seed_meal_template_dependencies(&pool).await;
+    let repo = PgMealTemplateRepository::new(pool);
+
+    let mut original = meal_template(
+        owner,
+        vec![
+            template_component(MealItemRef::product(product_id), 0),
+            template_component(MealItemRef::ingredient(ingredient_id), 1),
+            template_component(MealItemRef::prepared_meal(prepared_meal_id), 2),
+            MealTemplateComponent {
+                amount: ConsumedAmount::Servings(Decimal::ONE),
+                ..template_component(MealItemRef::recipe(recipe_id), 3)
+            },
+        ],
+    );
+    original.name = "Fish fingers, chips, peas and a lasagne".to_owned();
+    repo.insert(&original).await.unwrap();
+
+    let loaded = repo.get(original.id).await.unwrap().unwrap();
+    assert_eq!(loaded.owner_id, owner);
+    assert_eq!(loaded.name, original.name);
+    assert_eq!(loaded.components.len(), 4);
+    assert_eq!(loaded.components[0].item, MealItemRef::product(product_id));
+    assert_eq!(
+        loaded.components[1].item,
+        MealItemRef::ingredient(ingredient_id)
+    );
+    assert_eq!(
+        loaded.components[2].item,
+        MealItemRef::prepared_meal(prepared_meal_id)
+    );
+    assert_eq!(loaded.components[3].item, MealItemRef::recipe(recipe_id));
+    assert_eq!(
+        loaded.components[3].amount,
+        ConsumedAmount::Servings(Decimal::ONE)
+    );
+}
+
+#[sqlx::test]
+async fn the_database_rejects_a_dish_component_in_a_saved_meal(pool: PgPool) {
+    let (owner, _product_id, _ingredient_id, _prepared_meal_id, recipe_id) =
+        seed_meal_template_dependencies(&pool).await;
+    let repo = PgMealTemplateRepository::new(pool);
+
+    let mut with_dish = meal_template(
+        owner,
+        vec![MealTemplateComponent {
+            amount: ConsumedAmount::Servings(Decimal::ONE),
+            ..template_component(MealItemRef::dish(recipe_id), 0)
+        }],
+    );
+    with_dish.name = "Cooked curry cannot be saved".to_owned();
+
+    assert!(repo.insert(&with_dish).await.is_err());
+}
+
+#[sqlx::test]
+async fn lists_meal_templates_scoped_to_owner_and_excludes_archived(pool: PgPool) {
+    let (owner, product_id, _ingredient_id, _prepared_meal_id, _recipe_id) =
+        seed_meal_template_dependencies(&pool).await;
+    let stranger = user("stranger-saver", vec![Role::Admin]);
+    PgUserRepository::new(pool.clone())
+        .insert(&stranger)
+        .await
+        .unwrap();
+    let repo = PgMealTemplateRepository::new(pool);
+
+    repo.insert(&meal_template(
+        owner,
+        vec![template_component(MealItemRef::product(product_id), 0)],
+    ))
+    .await
+    .unwrap();
+    let mut archived = meal_template(
+        owner,
+        vec![template_component(MealItemRef::product(product_id), 0)],
+    );
+    archived.archived_at = Some(OffsetDateTime::now_utc());
+    repo.insert(&archived).await.unwrap();
+    repo.insert(&meal_template(
+        stranger.id,
+        vec![template_component(MealItemRef::product(product_id), 0)],
+    ))
+    .await
+    .unwrap();
+
+    let query = MealTemplateQuery {
+        owner_id: owner,
+        search: None,
+        include_archived: false,
+        page: PageRequest::default(),
+        sort: SortDirection::Ascending,
+    };
+    let page = repo.list(&query).await.unwrap();
+    assert_eq!(
+        page.total, 1,
+        "only the owner's non-archived saved meal should list"
+    );
+
+    let with_archived = MealTemplateQuery {
+        include_archived: true,
+        ..query
+    };
+    let page = repo.list(&with_archived).await.unwrap();
+    assert_eq!(
+        page.total, 2,
+        "including archived shows both of the owner's saved meals"
+    );
+}
+
+#[sqlx::test]
+async fn a_stale_meal_template_update_is_rejected_and_keeps_components(pool: PgPool) {
+    let (owner, product_id, ingredient_id, _prepared_meal_id, _recipe_id) =
+        seed_meal_template_dependencies(&pool).await;
+    let repo = PgMealTemplateRepository::new(pool);
+    let original = meal_template(
+        owner,
+        vec![template_component(MealItemRef::product(product_id), 0)],
+    );
+    repo.insert(&original).await.unwrap();
+
+    let mut updated = original.clone();
+    updated.components = vec![template_component(
+        MealItemRef::ingredient(ingredient_id),
+        0,
+    )];
+    updated.revision = updated.revision.next();
+
+    let outcome = repo.update(&updated, Revision::new(99)).await.unwrap();
+    assert!(matches!(outcome, UpdateOutcome::RevisionMismatch { .. }));
+
+    let loaded = repo.get(original.id).await.unwrap().unwrap();
+    assert_eq!(loaded.components.len(), 1);
+    assert_eq!(loaded.components[0].item, MealItemRef::product(product_id));
+}
+
+#[sqlx::test]
+async fn deleting_a_meal_template_removes_it(pool: PgPool) {
+    let (owner, product_id, _ingredient_id, _prepared_meal_id, _recipe_id) =
+        seed_meal_template_dependencies(&pool).await;
+    let repo = PgMealTemplateRepository::new(pool);
+    let original = meal_template(
+        owner,
+        vec![template_component(MealItemRef::product(product_id), 0)],
+    );
+    repo.insert(&original).await.unwrap();
+
+    let outcome = repo.delete(original.id, original.revision).await.unwrap();
+    assert_eq!(outcome, UpdateOutcome::Updated);
+    assert!(repo.get(original.id).await.unwrap().is_none());
+}
+
+#[sqlx::test]
+async fn deleting_a_missing_meal_template_reports_not_found(pool: PgPool) {
+    let repo = PgMealTemplateRepository::new(pool);
+    let outcome = repo
+        .delete(MealTemplateId::new(), Revision::INITIAL)
+        .await
+        .unwrap();
+    assert_eq!(outcome, UpdateOutcome::NotFound);
 }

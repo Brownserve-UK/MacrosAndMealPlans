@@ -420,6 +420,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/meal-templates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listMealTemplates"];
+        put?: never;
+        post: operations["createMealTemplate"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/meal-templates/from-entry/{entry_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["createMealTemplateFromEntry"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/meal-templates/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getMealTemplate"];
+        put?: never;
+        post?: never;
+        delete: operations["deleteMealTemplate"];
+        options?: never;
+        head?: never;
+        patch: operations["updateMealTemplate"];
+        trace?: never;
+    };
     "/api/v1/members": {
         parameters: {
             query?: never;
@@ -708,6 +756,86 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/prepared-meals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listPreparedMeals"];
+        put?: never;
+        post: operations["createPreparedMeal"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/prepared-meals/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getPreparedMeal"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch: operations["updatePreparedMeal"];
+        trace?: never;
+    };
+    "/api/v1/prepared-meals/{id}/archive": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["archivePreparedMeal"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/prepared-meals/{id}/products": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listPreparedMealProducts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/prepared-meals/{id}/unarchive": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["unarchivePreparedMeal"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/products": {
         parameters: {
             query?: never;
@@ -783,6 +911,22 @@ export interface paths {
         put?: never;
         post?: never;
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/products/{id}/prepared-meal": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["setProductPreparedMeal"];
+        post?: never;
+        delete: operations["clearProductPreparedMeal"];
         options?: never;
         head?: never;
         patch?: never;
@@ -1426,6 +1570,7 @@ export interface components {
             cooked_food: components["schemas"]["CookedFoodAvailabilityDto"][];
             demand_gaps: components["schemas"]["DemandGapDto"][];
             ingredients: components["schemas"]["IngredientAvailabilityDto"][];
+            prepared_meals?: components["schemas"]["PreparedMealAvailabilityDto"][];
             products: components["schemas"]["ProductAvailabilityDto"][];
         };
         /** @enum {string} */
@@ -1547,6 +1692,15 @@ export interface components {
             planned_time?: string | null;
             slot: components["schemas"]["MealSlot"];
         };
+        CreateMealTemplateFromEntryRequest: {
+            /** @example Fish fingers, chips and peas */
+            name: string;
+        };
+        CreateMealTemplateRequest: {
+            components: components["schemas"]["MealTemplateComponentRequest"][];
+            /** @example Fish fingers, chips and peas */
+            name: string;
+        };
         CreateMemberRequest: {
             /** @example Joe */
             display_name: string;
@@ -1568,6 +1722,15 @@ export interface components {
             date: string;
             note?: string | null;
         };
+        CreatePreparedMealRequest: {
+            default_unit: components["schemas"]["Unit"];
+            /** Format: uuid */
+            id?: string | null;
+            /** @example Frozen lasagne */
+            name: string;
+            shopping_section?: null | components["schemas"]["ShoppingSection"];
+            track_stock?: boolean | null;
+        };
         CreateProductRequest: {
             barcode?: string | null;
             brand?: string | null;
@@ -1575,6 +1738,8 @@ export interface components {
             id?: string | null;
             /** Format: uuid */
             mapped_ingredient_id?: string | null;
+            /** Format: uuid */
+            mapped_prepared_meal_id?: string | null;
             /** @example Tesco Whole Milk 1L */
             name: string;
             nutrition?: components["schemas"]["NutritionDto"];
@@ -1592,6 +1757,8 @@ export interface components {
             note?: string | null;
             /** Format: date */
             opportunity_date?: string | null;
+            /** Format: uuid */
+            prepared_meal_id?: string | null;
             /** Format: uuid */
             product_id?: string | null;
             quantity?: null | components["schemas"]["QuantityDto"];
@@ -1625,6 +1792,8 @@ export interface components {
             name: string;
             /** Format: date */
             opportunity_date?: string | null;
+            /** Format: uuid */
+            prepared_meal_id?: string | null;
             /** Format: uuid */
             product_id?: string | null;
             quantity?: null | components["schemas"]["QuantityDto"];
@@ -1690,7 +1859,7 @@ export interface components {
             subject: components["schemas"]["DemandSubjectDto"];
         };
         /** @enum {string} */
-        DemandGapDto: "unresolved_recipe_line" | "ingredient_has_no_products" | "recipe_missing" | "product_missing" | "amount_unresolvable" | "incompatible_units";
+        DemandGapDto: "unresolved_recipe_line" | "food_has_no_products" | "recipe_missing" | "product_missing" | "amount_unresolvable" | "incompatible_units";
         DemandSubjectDto: {
             /** @enum {string} */
             kind: "product";
@@ -1701,6 +1870,11 @@ export interface components {
             ingredient_id: string;
             /** @enum {string} */
             kind: "ingredient";
+        } | {
+            /** @enum {string} */
+            kind: "prepared_meal";
+            /** Format: uuid */
+            prepared_meal_id: string;
         } | {
             /** @enum {string} */
             kind: "prepared_portion";
@@ -1721,6 +1895,14 @@ export interface components {
         FinishShopResponse: {
             still_pending: number;
             stocked: number;
+        };
+        /** @enum {string} */
+        FoodMappingKindDto: "ingredient" | "prepared_meal";
+        FoodMappingReviewDto: {
+            /** Format: uuid */
+            id: string;
+            kind: components["schemas"]["FoodMappingKindDto"];
+            name: string;
         };
         GoalProjectionDto: {
             /** @enum {string} */
@@ -1815,11 +1997,6 @@ export interface components {
              */
             mapped_product_count: number;
         };
-        IngredientMappingReviewDto: {
-            /** Format: uuid */
-            id: string;
-            name: string;
-        };
         IngredientPage: components["schemas"]["PageMeta"] & {
             items: components["schemas"]["IngredientListItemDto"][];
         };
@@ -1834,6 +2011,12 @@ export interface components {
         } | {
             /** Format: uuid */
             dish_recipe_id: string;
+        } | {
+            /** Format: uuid */
+            ingredient_id: string;
+        } | {
+            /** Format: uuid */
+            prepared_meal_id: string;
         };
         LinkAccountRequest: {
             /** Format: uuid */
@@ -1903,6 +2086,16 @@ export interface components {
             dish_recipe_id: string;
             /** @enum {string} */
             item_kind: "dish";
+        } | {
+            /** Format: uuid */
+            ingredient_id: string;
+            /** @enum {string} */
+            item_kind: "ingredient";
+        } | {
+            /** @enum {string} */
+            item_kind: "prepared_meal";
+            /** Format: uuid */
+            prepared_meal_id: string;
         };
         MealItemSourceDto: {
             /** Format: uuid */
@@ -2040,6 +2233,36 @@ export interface components {
             nutrition: components["schemas"]["NutritionSummaryDto"];
             slot: components["schemas"]["MealSlot"];
         };
+        MealTemplateComponentDto: components["schemas"]["MealItemRefDto"] & {
+            amount: components["schemas"]["AmountDto"];
+            /** Format: uuid */
+            id: string;
+            /** Format: int32 */
+            position: number;
+        };
+        MealTemplateComponentRequest: components["schemas"]["ItemRefRequest"] & {
+            amount: components["schemas"]["AmountDto"];
+        };
+        MealTemplateDto: {
+            /** Format: date-time */
+            archived_at?: string | null;
+            components: components["schemas"]["MealTemplateComponentDto"][];
+            /** Format: date-time */
+            created_at: string;
+            /** Format: uuid */
+            id: string;
+            /** @example Fish fingers, chips and peas */
+            name: string;
+            /** Format: uuid */
+            owner_id: string;
+            /** Format: int64 */
+            revision: number;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        MealTemplatePage: components["schemas"]["PageMeta"] & {
+            items: components["schemas"]["MealTemplateDto"][];
+        };
         MealTimesDto: {
             /** @example 08:00 */
             breakfast: string;
@@ -2091,8 +2314,8 @@ export interface components {
             to: string;
         };
         NeedsReviewDto: {
+            food_mappings: components["schemas"]["FoodMappingReviewDto"][];
             household_meals: components["schemas"]["MealPlanEntryDto"][];
-            ingredient_mappings: components["schemas"]["IngredientMappingReviewDto"][];
             personal_meals: components["schemas"]["MealPlanEntryDto"][];
         };
         NutritionDto: {
@@ -2277,6 +2500,44 @@ export interface components {
             /** Format: double */
             servings_produced: number;
         };
+        PreparedMealAvailabilityDto: {
+            availability: components["schemas"]["AvailabilityDto"];
+            demand_gaps: components["schemas"]["DemandGapDto"][];
+            name: string;
+            /** Format: uuid */
+            prepared_meal_id: string;
+        };
+        PreparedMealDto: {
+            /** Format: date-time */
+            archived_at?: string | null;
+            /** Format: date-time */
+            created_at: string;
+            default_unit: components["schemas"]["Unit"];
+            /** Format: uuid */
+            id: string;
+            /** @example Frozen lasagne */
+            name: string;
+            provenance: components["schemas"]["ProvenanceDto"];
+            /**
+             * Format: int64
+             * @example 1
+             */
+            revision: number;
+            shopping_section?: null | components["schemas"]["ShoppingSection"];
+            track_stock?: boolean | null;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        PreparedMealListItemDto: components["schemas"]["PreparedMealDto"] & {
+            /**
+             * Format: int64
+             * @example 2
+             */
+            mapped_product_count: number;
+        };
+        PreparedMealPage: components["schemas"]["PageMeta"] & {
+            items: components["schemas"]["PreparedMealListItemDto"][];
+        };
         PrincipalDto: {
             /** Format: uuid */
             member_id?: string | null;
@@ -2322,6 +2583,8 @@ export interface components {
             id: string;
             /** Format: uuid */
             mapped_ingredient_id?: string | null;
+            /** Format: uuid */
+            mapped_prepared_meal_id?: string | null;
             /** @example Tesco Whole Milk 1L */
             name: string;
             nutrition: components["schemas"]["NutritionDto"];
@@ -2375,6 +2638,8 @@ export interface components {
             note?: string | null;
             /** Format: date */
             opportunity_date?: string | null;
+            /** Format: uuid */
+            prepared_meal_id?: string | null;
             /** Format: uuid */
             product_id?: string | null;
             /** Format: date-time */
@@ -2609,6 +2874,10 @@ export interface components {
             guest_count?: number;
             participants: components["schemas"]["MealParticipantRequest"][];
         };
+        SetPreparedMealMappingRequest: {
+            /** Format: uuid */
+            prepared_meal_id: string;
+        };
         SetRolesRequest: {
             roles: components["schemas"]["Role"][];
         };
@@ -2687,6 +2956,8 @@ export interface components {
             /** Format: date */
             opportunity_date?: string | null;
             /** Format: uuid */
+            prepared_meal_id?: string | null;
+            /** Format: uuid */
             product_id?: string | null;
             quantity?: null | components["schemas"]["QuantityDto"];
             /** Format: int64 */
@@ -2747,6 +3018,8 @@ export interface components {
             /** Format: uuid */
             ingredient_id?: string | null;
             name: string;
+            /** Format: uuid */
+            prepared_meal_id?: string | null;
             /** Format: uuid */
             product_id?: string | null;
             quantity?: null | components["schemas"]["QuantityDto"];
@@ -2863,7 +3136,7 @@ export interface components {
         /** @enum {string} */
         StorageLocationDto: "ambient" | "chilled" | "frozen";
         /** @enum {string} */
-        SuggestionReasonDto: "unknown_availability" | "assumption_only";
+        SuggestionReasonDto: "unknown_availability" | "assumption_only" | "no_product_yet";
         /** @enum {string} */
         TargetDirectionDto: "at_least" | "at_most" | "around";
         /** @enum {string} */
@@ -2907,6 +3180,10 @@ export interface components {
             planned_time?: string | null;
             slot?: null | components["schemas"]["MealSlot"];
         };
+        UpdateMealTemplateRequest: {
+            components?: components["schemas"]["MealTemplateComponentRequest"][] | null;
+            name?: string | null;
+        };
         UpdateMealTimesRequest: {
             assume_eaten_when_time_passes?: boolean | null;
             /** @example 08:00 */
@@ -2944,6 +3221,12 @@ export interface components {
             saturated_fat_g?: number | null;
             /** Format: double */
             sugar_g?: number | null;
+        };
+        UpdatePreparedMealRequest: {
+            default_unit?: null | components["schemas"]["Unit"];
+            name?: string | null;
+            shopping_section?: null | components["schemas"]["ShoppingSection"];
+            track_stock?: boolean | null;
         };
         UpdateProductRequest: {
             barcode?: string | null;
@@ -4232,6 +4515,233 @@ export interface operations {
             };
         };
     };
+    listMealTemplates: {
+        parameters: {
+            query?: {
+                q?: string;
+                include_archived?: boolean;
+                page?: number;
+                per_page?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of the signed-in user's saved meals */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MealTemplatePage"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    createMealTemplate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateMealTemplateRequest"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MealTemplateDto"];
+                };
+            };
+            /** @description Validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    createMealTemplateFromEntry: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Meal plan entry id */
+                entry_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateMealTemplateFromEntryRequest"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MealTemplateDto"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Nothing in the meal can be saved */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    getMealTemplate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Saved meal id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The saved meal */
+            200: {
+                headers: {
+                    /** @description The revision to send back as If-Match */
+                    ETag?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MealTemplateDto"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    deleteMealTemplate: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The revision you loaded */
+                "If-Match": string;
+            };
+            path: {
+                /** @description Saved meal id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Someone else changed it first */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    updateMealTemplate: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The revision you loaded */
+                "If-Match": string;
+            };
+            path: {
+                /** @description Saved meal id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateMealTemplateRequest"];
+            };
+        };
+        responses: {
+            /** @description Updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MealTemplateDto"];
+                };
+            };
+            /** @description Someone else changed it first */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description If-Match is required */
+            428: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     listMembers: {
         parameters: {
             query?: {
@@ -5250,6 +5760,243 @@ export interface operations {
             };
         };
     };
+    listPreparedMeals: {
+        parameters: {
+            query?: {
+                q?: string;
+                origin?: components["schemas"]["CatalogueOrigin"];
+                needs_products?: boolean;
+                include_archived?: boolean;
+                page?: number;
+                per_page?: number;
+                sort_by?: components["schemas"]["IngredientSortDto"];
+                sort?: components["schemas"]["SortDirectionDto"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of prepared meals */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PreparedMealPage"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    createPreparedMeal: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreatePreparedMealRequest"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PreparedMealDto"];
+                };
+            };
+            /** @description The name is already taken */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    getPreparedMeal: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Prepared meal id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The prepared meal */
+            200: {
+                headers: {
+                    /** @description The revision to send back as If-Match */
+                    ETag?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PreparedMealDto"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    updatePreparedMeal: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The revision you loaded */
+                "If-Match": string;
+            };
+            path: {
+                /** @description Prepared meal id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdatePreparedMealRequest"];
+            };
+        };
+        responses: {
+            /** @description Updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PreparedMealDto"];
+                };
+            };
+            /** @description Someone else changed it first */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description If-Match is required */
+            428: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    archivePreparedMeal: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The revision you loaded */
+                "If-Match": string;
+            };
+            path: {
+                /** @description Prepared meal id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Archived */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PreparedMealDto"];
+                };
+            };
+        };
+    };
+    listPreparedMealProducts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Prepared meal id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Products that fulfil this prepared meal */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProductPage"];
+                };
+            };
+        };
+    };
+    unarchivePreparedMeal: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The revision you loaded */
+                "If-Match": string;
+            };
+            path: {
+                /** @description Prepared meal id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Restored */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PreparedMealDto"];
+                };
+            };
+        };
+    };
     listProducts: {
         parameters: {
             query?: {
@@ -5258,6 +6005,7 @@ export interface operations {
                 barcode?: string;
                 retailer?: string;
                 mapped_ingredient_id?: string;
+                mapped_prepared_meal_id?: string;
                 unmapped?: boolean;
                 include_archived?: boolean;
                 page?: number;
@@ -5546,6 +6294,80 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    setProductPreparedMeal: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The revision you loaded */
+                "If-Match": string;
+            };
+            path: {
+                /** @description Product id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetPreparedMealMappingRequest"];
+            };
+        };
+        responses: {
+            /** @description Mapping set */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProductDto"];
+                };
+            };
+            /** @description The prepared meal does not exist */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The prepared meal is archived, or a food mapping already exists */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    clearProductPreparedMeal: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The revision you loaded */
+                "If-Match": string;
+            };
+            path: {
+                /** @description Product id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Mapping cleared */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProductDto"];
                 };
             };
         };

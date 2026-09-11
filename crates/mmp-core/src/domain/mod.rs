@@ -7,6 +7,7 @@ mod ids;
 mod ingredient;
 mod meal_item;
 mod meal_plan;
+mod meal_template;
 mod nutrition;
 mod nutrition_target;
 mod patch;
@@ -39,10 +40,10 @@ pub use household_settings::{
 pub use ids::{ConsumptionRecordId, HouseholdMemberId, IngredientId, ProductId, Revision, UserId};
 pub use ids::{
     MealGuestAllocationId, MealGuestGroupId, MealParticipantAllocationId, MealParticipantId,
-    MealPlanComponentId, MealPlanEntryId, NutritionTargetId, PreparedBatchId, PreparedMealId,
-    PurchaseId, RecipeComponentId, RecipeId, RecipeInstructionId, ShoppingListItemId,
-    ShoppingOpportunityId, ShoppingTripId, ShoppingTripRowId, StockEffectId, StockEventId,
-    StockItemId, WeightGoalId, WeightRecordId,
+    MealPlanComponentId, MealPlanEntryId, MealTemplateComponentId, MealTemplateId,
+    NutritionTargetId, PreparedBatchId, PreparedMealId, PurchaseId, RecipeComponentId, RecipeId,
+    RecipeInstructionId, ShoppingListItemId, ShoppingOpportunityId, ShoppingTripId,
+    ShoppingTripRowId, StockEffectId, StockEventId, StockItemId, WeightGoalId, WeightRecordId,
 };
 pub use ingredient::{
     Ingredient, IngredientPatch, IngredientSummary, MAX_NAME_LEN, NewIngredient, validate_name,
@@ -69,6 +70,11 @@ pub use meal_plan::{
     validate_components, validate_guest_groups, validate_participants,
 };
 pub(crate) use meal_plan::{MEAL_PLAN_COMPONENT, MEAL_PLAN_ENTRY};
+pub use meal_template::{
+    MAX_NAME_LEN as MEAL_TEMPLATE_MAX_NAME_LEN, MealTemplate, MealTemplateComponent,
+    MealTemplatePatch, NewMealTemplate, NewMealTemplateComponent,
+    make_components as make_template_components, validate_template_components,
+};
 pub use nutrition::NutritionFacts;
 pub use nutrition_target::{
     NUTRIENT_KEYS, NewNutritionTarget, NutritionGoals, NutritionGoalsPatch, NutritionTarget,

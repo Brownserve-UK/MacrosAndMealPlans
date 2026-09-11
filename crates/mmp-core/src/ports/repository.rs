@@ -8,13 +8,13 @@ use crate::domain::{
     AccessScope, CatalogueOrigin, ConsumptionRecord, ConsumptionRecordId, DeductionTarget,
     HouseholdMember, HouseholdMemberId, HouseholdSettings, Ingredient, IngredientId,
     MealParticipant, MealPlanComponentId, MealPlanComponentSnapshot, MealPlanEntry,
-    MealPlanEntryId, MemberAccessGrant, NewStockEvent, NutritionTarget, NutritionTargetId,
-    OpportunityException, PreparedBatch, PreparedBatchId, PreparedMeal, PreparedMealId, Product,
-    ProductId, Purchase, PurchaseId, PurchaseState, Quantity, Recipe, RecipeId, RecipePhoto,
-    RecipeSummary, Revision, Role, ShoppingCadence, ShoppingListItem, ShoppingListItemId,
-    ShoppingOpportunityId, ShoppingTrip, StockEffect, StockEffectSource, StockEvent, StockItem,
-    StockItemId, StockOutcome, User, UserId, WeightGoal, WeightGoalId, WeightRecord,
-    WeightRecordId,
+    MealPlanEntryId, MealTemplate, MealTemplateId, MemberAccessGrant, NewStockEvent,
+    NutritionTarget, NutritionTargetId, OpportunityException, PreparedBatch, PreparedBatchId,
+    PreparedMeal, PreparedMealId, Product, ProductId, Purchase, PurchaseId, PurchaseState,
+    Quantity, Recipe, RecipeId, RecipePhoto, RecipeSummary, Revision, Role, ShoppingCadence,
+    ShoppingListItem, ShoppingListItemId, ShoppingOpportunityId, ShoppingTrip, StockEffect,
+    StockEffectSource, StockEvent, StockItem, StockItemId, StockOutcome, User, UserId, WeightGoal,
+    WeightGoalId, WeightRecord, WeightRecordId,
 };
 use crate::error::Result;
 
@@ -129,6 +129,15 @@ pub struct StockQuery {
 
 #[derive(Debug, Clone)]
 pub struct RecipeQuery {
+    pub owner_id: UserId,
+    pub search: Option<String>,
+    pub include_archived: bool,
+    pub page: PageRequest,
+    pub sort: SortDirection,
+}
+
+#[derive(Debug, Clone)]
+pub struct MealTemplateQuery {
     pub owner_id: UserId,
     pub search: Option<String>,
     pub include_archived: bool,
@@ -473,6 +482,19 @@ pub trait RecipeRepository: Send + Sync + 'static {
         expected: Revision,
         photo: Option<&RecipePhoto>,
     ) -> Result<UpdateOutcome>;
+}
+
+#[async_trait]
+pub trait MealTemplateRepository: Send + Sync + 'static {
+    async fn get(&self, id: MealTemplateId) -> Result<Option<MealTemplate>>;
+
+    async fn list(&self, query: &MealTemplateQuery) -> Result<Paginated<MealTemplate>>;
+
+    async fn insert(&self, template: &MealTemplate) -> Result<()>;
+
+    async fn update(&self, template: &MealTemplate, expected: Revision) -> Result<UpdateOutcome>;
+
+    async fn delete(&self, id: MealTemplateId, expected: Revision) -> Result<UpdateOutcome>;
 }
 
 #[async_trait]

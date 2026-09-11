@@ -22,6 +22,7 @@ pub fn build(state: AppState) -> (Router, utoipa::openapi::OpenApi) {
         .merge(routes::users::router())
         .merge(routes::consumption::router())
         .merge(routes::meal_plan::router())
+        .merge(routes::meal_templates::router())
         .merge(routes::nutrition_target::router())
         .merge(routes::recipes::router())
         .merge(routes::review::router())
@@ -127,6 +128,11 @@ pub fn stub_state() -> AppState {
             Arc::new(NoopPreparedBatches),
             preparation.clone(),
             stock.clone(),
+            Arc::new(SystemClock),
+        ),
+        mmp_core::services::MealTemplateService::new(
+            Arc::new(NoopMealTemplates),
+            Arc::new(NoopMealPlans),
             Arc::new(SystemClock),
         ),
         mmp_core::services::NutritionTargetService::new(targets, Arc::new(SystemClock)),
@@ -260,6 +266,39 @@ impl mmp_core::ports::RecipeRepository for NoopRecipes {
     }
 }
 
+#[async_trait::async_trait]
+impl mmp_core::ports::MealTemplateRepository for NoopMealTemplates {
+    async fn get(
+        &self,
+        _: mmp_core::domain::MealTemplateId,
+    ) -> mmp_core::Result<Option<mmp_core::domain::MealTemplate>> {
+        Ok(None)
+    }
+    async fn list(
+        &self,
+        q: &mmp_core::ports::MealTemplateQuery,
+    ) -> mmp_core::Result<mmp_core::ports::Paginated<mmp_core::domain::MealTemplate>> {
+        Ok(mmp_core::ports::Paginated::new(vec![], 0, q.page))
+    }
+    async fn insert(&self, _: &mmp_core::domain::MealTemplate) -> mmp_core::Result<()> {
+        Ok(())
+    }
+    async fn update(
+        &self,
+        _: &mmp_core::domain::MealTemplate,
+        _: mmp_core::domain::Revision,
+    ) -> mmp_core::Result<mmp_core::ports::UpdateOutcome> {
+        Ok(mmp_core::ports::UpdateOutcome::NotFound)
+    }
+    async fn delete(
+        &self,
+        _: mmp_core::domain::MealTemplateId,
+        _: mmp_core::domain::Revision,
+    ) -> mmp_core::Result<mmp_core::ports::UpdateOutcome> {
+        Ok(mmp_core::ports::UpdateOutcome::NotFound)
+    }
+}
+
 struct NoopIngredients;
 struct NoopPreparedMeals;
 struct NoopHouseholdSettings;
@@ -296,6 +335,7 @@ struct NoopUsers;
 struct NoopGrants;
 struct NoopConsumptionRecords;
 struct NoopMealPlans;
+struct NoopMealTemplates;
 struct NoopNutritionTargets;
 struct NoopWeightRecords;
 struct NoopWeightGoals;

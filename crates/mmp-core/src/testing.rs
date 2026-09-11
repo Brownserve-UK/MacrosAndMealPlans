@@ -9,26 +9,27 @@ use time::Date;
 use crate::domain::{
     AccessScope, ConsumptionRecord, ConsumptionRecordId, DeductionCandidates, DemandSubject,
     HouseholdMember, HouseholdMemberId, HouseholdSettings, Ingredient, IngredientId,
-    MealParticipant, MealPlanComponentId, MealPlanEntry, MealPlanEntryId, MealTimes,
-    MemberAccessGrant, MissingStockInterpretation, NewStockEvent, NutritionTarget,
-    NutritionTargetId, OpportunityException, PreparedBatch, PreparedBatchId, PreparedMeal,
-    PreparedMealId, Product, ProductId, Purchase, PurchaseId, PurchaseState, Quantity, Recipe,
-    RecipeId, RecipePhoto, RecipeSummary, RecipeVisibility, Revision, Role, SectionOrder,
-    ShoppingCadence, ShoppingListItem, ShoppingListItemId, ShoppingOpportunityId, ShoppingTrip,
-    StockEffect, StockEffectSource, StockEvent, StockEventId, StockItem, StockItemId, StockOutcome,
-    StockSubject, Unit, User, UserId, WeightGoal, WeightGoalId, WeightRecord, WeightRecordId,
+    MealParticipant, MealPlanComponentId, MealPlanEntry, MealPlanEntryId, MealTemplate,
+    MealTemplateId, MealTimes, MemberAccessGrant, MissingStockInterpretation, NewStockEvent,
+    NutritionTarget, NutritionTargetId, OpportunityException, PreparedBatch, PreparedBatchId,
+    PreparedMeal, PreparedMealId, Product, ProductId, Purchase, PurchaseId, PurchaseState,
+    Quantity, Recipe, RecipeId, RecipePhoto, RecipeSummary, RecipeVisibility, Revision, Role,
+    SectionOrder, ShoppingCadence, ShoppingListItem, ShoppingListItemId, ShoppingOpportunityId,
+    ShoppingTrip, StockEffect, StockEffectSource, StockEvent, StockEventId, StockItem, StockItemId,
+    StockOutcome, StockSubject, Unit, User, UserId, WeightGoal, WeightGoalId, WeightRecord,
+    WeightRecordId,
 };
 use crate::error::{CoreError, Result};
 use crate::ports::{
     AccessGrantRepository, ConsumptionQuery, ConsumptionRecordRepository, FinishedPurchase,
     HouseholdMemberRepository, HouseholdSettingsRepository, IngredientQuery, IngredientRepository,
-    IngredientSort, MealPlanComponentUpdate, MealPlanQuery, MealPlanRepository, MemberQuery,
-    NewStockFromPurchase, NutritionTargetRepository, Paginated, PreparedMealQuery,
-    PreparedMealRepository, PreparedMealSort, ProductQuery, ProductRepository, PurchaseQuery,
-    PurchaseRepository, RecipeQuery, RecipeRepository, ShoppingCadenceRepository,
-    ShoppingListItemRepository, ShoppingOpportunityRepository, ShoppingTripRepository, SnapshotOp,
-    SortDirection, StockQuery, StockRepository, StockWrite, UpdateOutcome, UserQuery,
-    UserRepository, WeightGoalRepository, WeightRecordRepository,
+    IngredientSort, MealPlanComponentUpdate, MealPlanQuery, MealPlanRepository, MealTemplateQuery,
+    MealTemplateRepository, MemberQuery, NewStockFromPurchase, NutritionTargetRepository,
+    Paginated, PreparedMealQuery, PreparedMealRepository, PreparedMealSort, ProductQuery,
+    ProductRepository, PurchaseQuery, PurchaseRepository, RecipeQuery, RecipeRepository,
+    ShoppingCadenceRepository, ShoppingListItemRepository, ShoppingOpportunityRepository,
+    ShoppingTripRepository, SnapshotOp, SortDirection, StockQuery, StockRepository, StockWrite,
+    UpdateOutcome, UserQuery, UserRepository, WeightGoalRepository, WeightRecordRepository,
 };
 
 // This _should_ reflect the indexes that a real database would enforce
@@ -2845,5 +2846,89 @@ impl ShoppingListItemRepository for InMemoryShoppingListItemRepository {
             .unwrap()
             .retain(|row| row.opportunity_date != Some(date));
         Ok(())
+    }
+}
+
+#[derive(Default, Clone)]
+pub struct InMemoryMealTemplateRepository {
+    rows: Arc<Mutex<HashMap<MealTemplateId, MealTemplate>>>,
+}
+
+impl InMemoryMealTemplateRepository {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn seed(&self, template: MealTemplate) {
+        self.rows.lock().unwrap().insert(template.id, template);
+    }
+
+    pub fn count(&self) -> usize {
+        self.rows.lock().unwrap().len()
+    }
+}
+
+#[async_trait]
+impl MealTemplateRepository for InMemoryMealTemplateRepository {
+    async fn get(&self, id: MealTemplateId) -> Result<Option<MealTemplate>> {
+        Ok(self.rows.lock().unwrap().get(&id).cloned())
+    }
+
+    async fn list(&self, query: &MealTemplateQuery) -> Result<Paginated<MealTemplate>> {
+        let rows = self.rows.lock().unwrap();
+        let items: Vec<MealTemplate> = rows
+            .values()
+            .filter(|template| template.owner_id == query.owner_id)
+            .filter(|template| query.include_archived || !template.is_archived())
+            .filter(|template| {
+                query
+                    .search
+                    .as_deref()
+                    .is_none_or(|needle| matches(&template.name, needle))
+            })
+            .cloned()
+            .collect();
+        drop(rows);
+        Ok(paginate(items, query.page, query.sort, |t| t.name.clone()))
+    }
+
+    async fn insert(&self, template: &MealTemplate) -> Result<()> {
+        self.rows
+            .lock()
+            .unwrap()
+            .insert(template.id, template.clone());
+        Ok(())
+    }
+
+    async fn update(&self, template: &MealTemplate, expected: Revision) -> Result<UpdateOutcome> {
+        let mut rows = self.rows.lock().unwrap();
+        match rows.get(&template.id) {
+            None => Ok(UpdateOutcome::NotFound),
+            Some(existing) if existing.revision != expected => {
+                Ok(UpdateOutcome::RevisionMismatch {
+                    actual: existing.revision,
+                })
+            }
+            Some(_) => {
+                rows.insert(template.id, template.clone());
+                Ok(UpdateOutcome::Updated)
+            }
+        }
+    }
+
+    async fn delete(&self, id: MealTemplateId, expected: Revision) -> Result<UpdateOutcome> {
+        let mut rows = self.rows.lock().unwrap();
+        match rows.get(&id) {
+            None => Ok(UpdateOutcome::NotFound),
+            Some(existing) if existing.revision != expected => {
+                Ok(UpdateOutcome::RevisionMismatch {
+                    actual: existing.revision,
+                })
+            }
+            Some(_) => {
+                rows.remove(&id);
+                Ok(UpdateOutcome::Updated)
+            }
+        }
     }
 }

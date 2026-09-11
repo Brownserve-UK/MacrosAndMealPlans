@@ -98,6 +98,8 @@ entity_id!(PurchaseId, "purchase");
 entity_id!(ShoppingListItemId, "shopping_list_item");
 entity_id!(ShoppingTripId, "shopping_trip");
 entity_id!(ShoppingTripRowId, "shopping_trip_row");
+entity_id!(MealTemplateId, "meal_template");
+entity_id!(MealTemplateComponentId, "meal_template_component");
 
 // This should give a stable UUID for a seeded resource
 // so a seeded item remains identifiable

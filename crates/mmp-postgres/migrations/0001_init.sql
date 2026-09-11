@@ -1357,3 +1357,124 @@ ALTER TABLE product
 
 CREATE INDEX product_mapped_prepared_meal ON product (mapped_prepared_meal_id)
     WHERE mapped_prepared_meal_id IS NOT NULL;
+
+ALTER TABLE meal_plan_component
+    ADD COLUMN ingredient_id UUID REFERENCES ingredient (id) ON DELETE RESTRICT,
+    ADD COLUMN prepared_meal_id UUID REFERENCES prepared_meal (id) ON DELETE RESTRICT;
+
+ALTER TABLE meal_plan_component
+    DROP CONSTRAINT meal_plan_component_item_kind_valid,
+    DROP CONSTRAINT meal_plan_component_item_ref_exclusive;
+
+ALTER TABLE meal_plan_component
+    ADD CONSTRAINT meal_plan_component_item_kind_valid
+        CHECK (item_kind IN ('product', 'recipe', 'dish', 'ingredient', 'prepared_meal')),
+    ADD CONSTRAINT meal_plan_component_item_ref_exclusive
+        CHECK (
+            num_nonnulls(product_id, recipe_id, ingredient_id, prepared_meal_id) = 1
+            AND (item_kind = 'product')            = (product_id IS NOT NULL)
+            AND (item_kind IN ('recipe', 'dish'))  = (recipe_id IS NOT NULL)
+            AND (item_kind = 'ingredient')         = (ingredient_id IS NOT NULL)
+            AND (item_kind = 'prepared_meal')      = (prepared_meal_id IS NOT NULL)
+        );
+
+CREATE INDEX meal_plan_component_ingredient ON meal_plan_component (ingredient_id)
+    WHERE ingredient_id IS NOT NULL;
+CREATE INDEX meal_plan_component_prepared_meal ON meal_plan_component (prepared_meal_id)
+    WHERE prepared_meal_id IS NOT NULL;
+
+ALTER TABLE consumption_record
+    ADD COLUMN ingredient_id UUID REFERENCES ingredient (id) ON DELETE RESTRICT,
+    ADD COLUMN prepared_meal_id UUID REFERENCES prepared_meal (id) ON DELETE RESTRICT;
+
+ALTER TABLE consumption_record
+    DROP CONSTRAINT consumption_record_item_kind_valid,
+    DROP CONSTRAINT consumption_record_item_ref_exclusive;
+
+ALTER TABLE consumption_record
+    ADD CONSTRAINT consumption_record_item_kind_valid
+        CHECK (item_kind IN ('product', 'recipe', 'dish', 'ingredient', 'prepared_meal')),
+    ADD CONSTRAINT consumption_record_item_ref_exclusive
+        CHECK (
+            num_nonnulls(product_id, recipe_id, ingredient_id, prepared_meal_id) = 1
+            AND (item_kind = 'product')            = (product_id IS NOT NULL)
+            AND (item_kind IN ('recipe', 'dish'))  = (recipe_id IS NOT NULL)
+            AND (item_kind = 'ingredient')         = (ingredient_id IS NOT NULL)
+            AND (item_kind = 'prepared_meal')      = (prepared_meal_id IS NOT NULL)
+        );
+
+CREATE INDEX consumption_record_ingredient ON consumption_record (ingredient_id)
+    WHERE ingredient_id IS NOT NULL;
+CREATE INDEX consumption_record_prepared_meal ON consumption_record (prepared_meal_id)
+    WHERE prepared_meal_id IS NOT NULL;
+
+ALTER TABLE purchase
+    ADD COLUMN prepared_meal_id UUID REFERENCES prepared_meal (id) ON DELETE RESTRICT,
+    DROP CONSTRAINT purchase_has_a_subject,
+    ADD CONSTRAINT purchase_has_a_subject
+        CHECK (
+            num_nonnulls(ingredient_id, prepared_meal_id, product_id) >= 1
+            OR btrim(coalesce(name, '')) <> ''
+        );
+
+ALTER TABLE shopping_list_item
+    ADD COLUMN prepared_meal_id UUID REFERENCES prepared_meal (id) ON DELETE CASCADE;
+
+ALTER TABLE shopping_trip_row
+    ADD COLUMN prepared_meal_id UUID REFERENCES prepared_meal (id) ON DELETE CASCADE;
+
+CREATE TABLE meal_template (
+    id            UUID PRIMARY KEY,
+    owner_id      UUID NOT NULL REFERENCES app_user (id) ON DELETE CASCADE,
+    name          TEXT NOT NULL,
+
+    revision      BIGINT NOT NULL DEFAULT 1,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    archived_at   TIMESTAMPTZ,
+
+    CONSTRAINT meal_template_name_not_blank
+        CHECK (btrim(name) <> '')
+);
+
+CREATE INDEX meal_template_owner ON meal_template (owner_id)
+    WHERE archived_at IS NULL;
+CREATE INDEX meal_template_owner_name_trgm ON meal_template USING GIN (name gin_trgm_ops);
+
+CREATE TABLE meal_template_component (
+    id                UUID PRIMARY KEY,
+    template_id       UUID NOT NULL REFERENCES meal_template (id) ON DELETE CASCADE,
+    position          INTEGER NOT NULL,
+
+    item_kind         TEXT NOT NULL,
+    product_id        UUID REFERENCES product (id) ON DELETE RESTRICT,
+    recipe_id         UUID REFERENCES recipe (id) ON DELETE RESTRICT,
+    ingredient_id     UUID REFERENCES ingredient (id) ON DELETE RESTRICT,
+    prepared_meal_id  UUID REFERENCES prepared_meal (id) ON DELETE RESTRICT,
+
+    amount_kind       TEXT NOT NULL,
+    amount_value      NUMERIC(16, 4) NOT NULL,
+    amount_unit       unit_code,
+
+    CONSTRAINT meal_template_component_position_non_negative
+        CHECK (position >= 0),
+    CONSTRAINT meal_template_component_item_kind_valid
+        CHECK (item_kind IN ('product', 'recipe', 'ingredient', 'prepared_meal')),
+    CONSTRAINT meal_template_component_item_ref_exclusive
+        CHECK (
+            num_nonnulls(product_id, recipe_id, ingredient_id, prepared_meal_id) = 1
+            AND (item_kind = 'product')       = (product_id IS NOT NULL)
+            AND (item_kind = 'recipe')        = (recipe_id IS NOT NULL)
+            AND (item_kind = 'ingredient')    = (ingredient_id IS NOT NULL)
+            AND (item_kind = 'prepared_meal') = (prepared_meal_id IS NOT NULL)
+        ),
+    CONSTRAINT meal_template_component_amount_kind_valid
+        CHECK (amount_kind IN ('measure', 'servings', 'packs')),
+    CONSTRAINT meal_template_component_amount_value_positive
+        CHECK (amount_value > 0),
+    CONSTRAINT meal_template_component_amount_unit_present
+        CHECK ((amount_kind = 'measure') = (amount_unit IS NOT NULL)),
+    UNIQUE (template_id, position)
+);
+
+CREATE INDEX meal_template_component_template ON meal_template_component (template_id, position);

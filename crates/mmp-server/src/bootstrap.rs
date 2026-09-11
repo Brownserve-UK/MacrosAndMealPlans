@@ -5,17 +5,18 @@ use mmp_core::domain::{NewHouseholdMember, NewUser, Role};
 use mmp_core::ports::SystemClock;
 use mmp_core::services::{
     CatalogueService, ConsumptionService, HouseholdService, HouseholdSettingsService,
-    MealPlanService, NutritionTargetService, PreparationService, RecipeService, SeedIngredient,
-    SeedReport, ShoppingService, StockService, WeightService,
+    MealPlanService, MealTemplateService, NutritionTargetService, PreparationService,
+    RecipeService, SeedIngredient, SeedReport, ShoppingService, StockService, WeightService,
 };
 use mmp_postgres::PgPool;
 use mmp_postgres::{
     PgAccessGrantRepository, PgConsumptionRecordRepository, PgHouseholdMemberRepository,
     PgHouseholdSettingsRepository, PgIngredientRepository, PgMealPlanRepository,
-    PgNutritionTargetRepository, PgPreparedBatchRepository, PgPreparedMealRepository,
-    PgProductRepository, PgPurchaseRepository, PgRecipeRepository, PgShoppingCadenceRepository,
-    PgShoppingListItemRepository, PgShoppingOpportunityRepository, PgShoppingTripRepository,
-    PgStockRepository, PgUserRepository, PgWeightGoalRepository, PgWeightRecordRepository,
+    PgMealTemplateRepository, PgNutritionTargetRepository, PgPreparedBatchRepository,
+    PgPreparedMealRepository, PgProductRepository, PgPurchaseRepository, PgRecipeRepository,
+    PgShoppingCadenceRepository, PgShoppingListItemRepository, PgShoppingOpportunityRepository,
+    PgShoppingTripRepository, PgStockRepository, PgUserRepository, PgWeightGoalRepository,
+    PgWeightRecordRepository,
 };
 
 use crate::auth::DevBasicAuthProvider;
@@ -156,6 +157,11 @@ pub fn app_state(config: &Config, pool: &PgPool) -> AppState {
         stock.clone(),
         Arc::new(SystemClock),
     );
+    let meal_templates = MealTemplateService::new(
+        Arc::new(PgMealTemplateRepository::new(pool.clone())),
+        Arc::new(PgMealPlanRepository::new(pool.clone())),
+        Arc::new(SystemClock),
+    );
     let nutrition_targets = NutritionTargetService::new(targets, Arc::new(SystemClock));
     let shopping = ShoppingService::new(
         Arc::new(PgShoppingCadenceRepository::new(pool.clone())),
@@ -188,6 +194,7 @@ pub fn app_state(config: &Config, pool: &PgPool) -> AppState {
         household_settings,
         consumption,
         meal_plan,
+        meal_templates,
         nutrition_targets,
         recipes,
         stock,

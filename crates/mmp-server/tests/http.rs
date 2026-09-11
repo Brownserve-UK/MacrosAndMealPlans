@@ -11,15 +11,16 @@ use image::{DynamicImage, ImageFormat, RgbImage};
 use mmp_core::ports::FixedClock;
 use mmp_core::services::{
     CatalogueService, ConsumptionService, HouseholdService, HouseholdSettingsService,
-    MealPlanService, NutritionTargetService, PreparationService, RecipeService, ShoppingService,
-    StockService, WeightService,
+    MealPlanService, MealTemplateService, NutritionTargetService, PreparationService,
+    RecipeService, ShoppingService, StockService, WeightService,
 };
 use mmp_core::testing::{
     InMemoryAccessGrantRepository, InMemoryConsumptionRecordRepository,
     InMemoryHouseholdMemberRepository, InMemoryHouseholdSettingsRepository,
-    InMemoryIngredientRepository, InMemoryMealPlanRepository, InMemoryNutritionTargetRepository,
-    InMemoryPreparedBatchRepository, InMemoryPreparedMealRepository, InMemoryProductRepository,
-    InMemoryPurchaseRepository, InMemoryRecipeRepository, InMemoryShoppingCadenceRepository,
+    InMemoryIngredientRepository, InMemoryMealPlanRepository, InMemoryMealTemplateRepository,
+    InMemoryNutritionTargetRepository, InMemoryPreparedBatchRepository,
+    InMemoryPreparedMealRepository, InMemoryProductRepository, InMemoryPurchaseRepository,
+    InMemoryRecipeRepository, InMemoryShoppingCadenceRepository,
     InMemoryShoppingListItemRepository, InMemoryShoppingOpportunityRepository,
     InMemoryShoppingTripRepository, InMemoryStockRepository, InMemoryUserRepository,
     InMemoryWeightGoalRepository, InMemoryWeightRecordRepository,
@@ -99,6 +100,11 @@ async fn app() -> Router {
         prepared_meals.clone(),
         clock.clone(),
     );
+    let meal_templates = MealTemplateService::new(
+        Arc::new(InMemoryMealTemplateRepository::new()),
+        Arc::new(meal_plans.clone()),
+        clock.clone(),
+    );
     let state = AppState::new(
         CatalogueService::new(
             ingredients.clone(),
@@ -132,6 +138,7 @@ async fn app() -> Router {
             stock.clone(),
             clock.clone(),
         ),
+        meal_templates,
         NutritionTargetService::new(Arc::new(targets), clock.clone()),
         recipes,
         stock.clone(),
@@ -3576,4 +3583,132 @@ async fn something_put_on_the_list_by_hand_comes_back_on_it() {
 
     let (_, listed, _) = send(&app, Call::new("GET", "/api/v1/shopping/items")).await;
     assert!(listed.as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn creates_a_saved_meal_and_lists_it_back() {
+    let app = app().await;
+    let fish_fingers = create_ingredient(&app, "Fish fingers").await;
+
+    let (status, created, headers) = send(
+        &app,
+        Call::new("POST", "/api/v1/meal-templates").body(json!({
+            "name": "Fish fingers, chips and peas",
+            "components": [{
+                "ingredient_id": fish_fingers["id"],
+                "amount": measured_amount(100.0)
+            }]
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    assert_eq!(created["name"], "Fish fingers, chips and peas");
+    assert_eq!(created["components"].as_array().unwrap().len(), 1);
+    assert_eq!(etag(&headers), "1");
+
+    let (status, page, _) = send(&app, Call::new("GET", "/api/v1/meal-templates")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(page["items"].as_array().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn a_saved_meal_is_not_visible_to_another_user() {
+    let app = app().await;
+    let fish_fingers = create_ingredient(&app, "Fish fingers").await;
+    let (_, created, _) = send(
+        &app,
+        Call::new("POST", "/api/v1/meal-templates").body(json!({
+            "name": "Fish fingers, chips and peas",
+            "components": [{
+                "ingredient_id": fish_fingers["id"],
+                "amount": measured_amount(100.0)
+            }]
+        })),
+    )
+    .await;
+    let id = created["id"].as_str().unwrap();
+
+    create_user(&app, "housemate", &["basic_user"]).await;
+    let (status, body, _) = send(
+        &app,
+        Call::new("GET", format!("/api/v1/meal-templates/{id}")).signed_in_as("housemate"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+
+    let (status, page, _) = send(
+        &app,
+        Call::new("GET", "/api/v1/meal-templates").signed_in_as("housemate"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        page["items"].as_array().unwrap().is_empty(),
+        "a saved meal is private to its creator"
+    );
+}
+
+#[tokio::test]
+async fn deleting_a_saved_meal_removes_it() {
+    let app = app().await;
+    let fish_fingers = create_ingredient(&app, "Fish fingers").await;
+    let (_, created, _) = send(
+        &app,
+        Call::new("POST", "/api/v1/meal-templates").body(json!({
+            "name": "Fish fingers, chips and peas",
+            "components": [{
+                "ingredient_id": fish_fingers["id"],
+                "amount": measured_amount(100.0)
+            }]
+        })),
+    )
+    .await;
+    let id = created["id"].as_str().unwrap();
+
+    let (status, _, _) = send(
+        &app,
+        Call::new("DELETE", format!("/api/v1/meal-templates/{id}"))
+            .if_match(created["revision"].as_i64().unwrap()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let (status, body, _) = send(
+        &app,
+        Call::new("GET", format!("/api/v1/meal-templates/{id}")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+}
+
+#[tokio::test]
+async fn saving_a_meal_from_an_entry_creates_a_saved_meal() {
+    let app = app().await;
+    let product = create_milk_product(&app).await;
+    let entry = send(
+        &app,
+        Call::new("POST", "/api/v1/meal-plan-entries").body(json!({
+            "planned_on": "2026-08-25",
+            "slot": "breakfast",
+            "components": [{"product_id": product["id"], "amount": measured_amount(100.0)}]
+        })),
+    )
+    .await
+    .1;
+
+    let (status, created, _) = send(
+        &app,
+        Call::new(
+            "POST",
+            format!(
+                "/api/v1/meal-templates/from-entry/{}",
+                entry["id"].as_str().unwrap()
+            ),
+        )
+        .body(json!({"name": "Milk on its own"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    assert_eq!(created["name"], "Milk on its own");
+    assert_eq!(created["components"].as_array().unwrap().len(), 1);
 }

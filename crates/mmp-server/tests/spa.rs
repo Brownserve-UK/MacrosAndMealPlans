@@ -6,15 +6,16 @@ use http_body_util::BodyExt;
 use mmp_core::ports::SystemClock;
 use mmp_core::services::{
     CatalogueService, ConsumptionService, HouseholdService, HouseholdSettingsService,
-    MealPlanService, NutritionTargetService, PreparationService, RecipeService, ShoppingService,
-    StockService, WeightService,
+    MealPlanService, MealTemplateService, NutritionTargetService, PreparationService,
+    RecipeService, ShoppingService, StockService, WeightService,
 };
 use mmp_core::testing::{
     InMemoryAccessGrantRepository, InMemoryConsumptionRecordRepository,
     InMemoryHouseholdMemberRepository, InMemoryHouseholdSettingsRepository,
-    InMemoryIngredientRepository, InMemoryMealPlanRepository, InMemoryNutritionTargetRepository,
-    InMemoryPreparedBatchRepository, InMemoryPreparedMealRepository, InMemoryProductRepository,
-    InMemoryPurchaseRepository, InMemoryRecipeRepository, InMemoryShoppingCadenceRepository,
+    InMemoryIngredientRepository, InMemoryMealPlanRepository, InMemoryMealTemplateRepository,
+    InMemoryNutritionTargetRepository, InMemoryPreparedBatchRepository,
+    InMemoryPreparedMealRepository, InMemoryProductRepository, InMemoryPurchaseRepository,
+    InMemoryRecipeRepository, InMemoryShoppingCadenceRepository,
     InMemoryShoppingListItemRepository, InMemoryShoppingOpportunityRepository,
     InMemoryShoppingTripRepository, InMemoryStockRepository, InMemoryUserRepository,
     InMemoryWeightGoalRepository, InMemoryWeightRecordRepository,
@@ -66,6 +67,11 @@ fn app_with_web(dist: &std::path::Path) -> axum::Router {
         Arc::new(InMemoryHouseholdSettingsRepository::new()),
         Arc::new(SystemClock),
     );
+    let meal_templates = MealTemplateService::new(
+        Arc::new(InMemoryMealTemplateRepository::new()),
+        Arc::new(InMemoryMealPlanRepository::default()),
+        Arc::new(SystemClock),
+    );
     let state = AppState::new(
         CatalogueService::new(
             ingredients.clone(),
@@ -109,6 +115,7 @@ fn app_with_web(dist: &std::path::Path) -> axum::Router {
             stock_service.clone(),
             Arc::new(SystemClock),
         ),
+        meal_templates,
         NutritionTargetService::new(Arc::new(targets), Arc::new(SystemClock)),
         recipes,
         stock_service.clone(),
@@ -259,6 +266,11 @@ async fn without_a_web_build_the_api_still_works() {
         Arc::new(InMemoryHouseholdSettingsRepository::new()),
         Arc::new(SystemClock),
     );
+    let meal_templates = MealTemplateService::new(
+        Arc::new(InMemoryMealTemplateRepository::new()),
+        Arc::new(InMemoryMealPlanRepository::default()),
+        Arc::new(SystemClock),
+    );
     let state = AppState::new(
         CatalogueService::new(
             ingredients.clone(),
@@ -302,6 +314,7 @@ async fn without_a_web_build_the_api_still_works() {
             stock_service.clone(),
             Arc::new(SystemClock),
         ),
+        meal_templates,
         NutritionTargetService::new(Arc::new(targets), Arc::new(SystemClock)),
         recipes,
         stock_service.clone(),
