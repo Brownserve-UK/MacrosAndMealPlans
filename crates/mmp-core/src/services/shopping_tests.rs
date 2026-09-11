@@ -197,6 +197,41 @@ async fn plan_product(h: &Harness, product_id: ProductId, quantity: Quantity, on
     h.meal_plans.insert(&entry).await.unwrap();
 }
 
+async fn plan_ingredient(
+    h: &Harness,
+    ingredient_id: IngredientId,
+    quantity: Quantity,
+    on: time::Date,
+) {
+    let now = OffsetDateTime::UNIX_EPOCH;
+    let entry = MealPlanEntry {
+        id: crate::domain::MealPlanEntryId::new(),
+        scope: crate::domain::MealPlanScope::Member,
+        member_id: Some(h.member_id),
+        planned_on: on,
+        planned_time: None,
+        slot: MealSlot::Breakfast,
+        components: vec![MealPlanComponent {
+            id: crate::domain::MealPlanComponentId::new(),
+            item: MealItemRef::ingredient(ingredient_id),
+            amount: ConsumedAmount::Measure(quantity),
+            position: 0,
+            snapshot: None,
+            revision: Revision::INITIAL,
+            display_order: uuid::Uuid::nil(),
+        }],
+        participants: Vec::new(),
+        guest_groups: Vec::new(),
+        opted_out: Vec::new(),
+        created_by: h.actor_id,
+        updated_by: h.actor_id,
+        revision: Revision::INITIAL,
+        created_at: now,
+        updated_at: now,
+    };
+    h.meal_plans.insert(&entry).await.unwrap();
+}
+
 async fn weekly_saturdays(h: &Harness) {
     h.shopping
         .set_cadence(NewShoppingCadence {
@@ -334,6 +369,32 @@ async fn a_tracked_ingredient_is_a_definite_buy_not_a_suggestion() {
 
     assert_eq!(list.requirements.len(), 1);
     assert_eq!(list.requirements[0].certainty, Certainty::Definite);
+}
+
+#[tokio::test]
+async fn a_food_with_no_mapped_product_is_reported_not_dropped() {
+    let h = harness();
+    weekly_saturdays(&h).await;
+    let lasagne = IngredientId::new();
+    seed_ingredient(&h, lasagne, "Frozen lasagne");
+    h.ingredients.set_track_stock(lasagne, Some(true));
+    plan_ingredient(&h, lasagne, ml(400), date!(2026 - 09 - 02)).await;
+
+    let list = h.shopping.requirements(None).await.unwrap();
+
+    assert_eq!(list.requirements.len(), 1);
+    assert_eq!(
+        list.requirements[0].certainty,
+        Certainty::Suggested {
+            reason: SuggestionReason::NoProductYet
+        }
+    );
+    assert!(
+        list.requirements[0]
+            .gaps
+            .contains(&DemandGap::FoodHasNoProducts)
+    );
+    assert!(!list.requirements[0].claims.is_empty());
 }
 
 #[tokio::test]

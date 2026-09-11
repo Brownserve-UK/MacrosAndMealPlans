@@ -125,21 +125,6 @@ pub fn app_state(config: &Config, pool: &PgPool) -> AppState {
         Arc::new(SystemClock),
     );
     let targets = Arc::new(PgNutritionTargetRepository::new(pool.clone()));
-    let meal_plan = MealPlanService::new(
-        Arc::new(PgMealPlanRepository::new(pool.clone())),
-        products,
-        ingredients,
-        prepared_meals.clone(),
-        recipes_repo.clone(),
-        consumption_records,
-        targets.clone(),
-        Arc::new(PgHouseholdMemberRepository::new(pool.clone())),
-        Arc::new(PgHouseholdSettingsRepository::new(pool.clone())),
-        batches,
-        preparation.clone(),
-        Arc::new(SystemClock),
-    );
-    let nutrition_targets = NutritionTargetService::new(targets, Arc::new(SystemClock));
     let household_settings = HouseholdSettingsService::new(
         Arc::new(PgHouseholdSettingsRepository::new(pool.clone())),
         Arc::new(SystemClock),
@@ -150,12 +135,28 @@ pub fn app_state(config: &Config, pool: &PgPool) -> AppState {
         Arc::new(PgIngredientRepository::new(pool.clone())),
         prepared_meals.clone(),
         Arc::new(PgMealPlanRepository::new(pool.clone())),
-        recipes_repo,
+        recipes_repo.clone(),
         Arc::new(PgPreparedBatchRepository::new(pool.clone())),
         Arc::new(PgHouseholdMemberRepository::new(pool.clone())),
         Arc::new(PgHouseholdSettingsRepository::new(pool.clone())),
         Arc::new(SystemClock),
     );
+    let meal_plan = MealPlanService::new(
+        Arc::new(PgMealPlanRepository::new(pool.clone())),
+        products,
+        ingredients,
+        prepared_meals.clone(),
+        recipes_repo,
+        consumption_records,
+        targets.clone(),
+        Arc::new(PgHouseholdMemberRepository::new(pool.clone())),
+        Arc::new(PgHouseholdSettingsRepository::new(pool.clone())),
+        batches,
+        preparation.clone(),
+        stock.clone(),
+        Arc::new(SystemClock),
+    );
+    let nutrition_targets = NutritionTargetService::new(targets, Arc::new(SystemClock));
     let shopping = ShoppingService::new(
         Arc::new(PgShoppingCadenceRepository::new(pool.clone())),
         Arc::new(PgShoppingOpportunityRepository::new(pool.clone())),
@@ -163,7 +164,7 @@ pub fn app_state(config: &Config, pool: &PgPool) -> AppState {
         Arc::new(PgShoppingListItemRepository::new(pool.clone())),
         Arc::new(PgShoppingTripRepository::new(pool.clone())),
         Arc::new(PgIngredientRepository::new(pool.clone())),
-        prepared_meals,
+        prepared_meals.clone(),
         Arc::new(PgProductRepository::new(pool.clone())),
         Arc::new(PgHouseholdSettingsRepository::new(pool.clone())),
         stock.clone(),
@@ -178,6 +179,7 @@ pub fn app_state(config: &Config, pool: &PgPool) -> AppState {
         Arc::new(PgRecipeRepository::new(pool.clone())),
         Arc::new(PgProductRepository::new(pool.clone())),
         Arc::new(PgIngredientRepository::new(pool.clone())),
+        prepared_meals,
         Arc::new(SystemClock),
     );
     AppState::new(

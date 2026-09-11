@@ -42,6 +42,7 @@ pub struct MealPlanService {
     settings: Arc<dyn HouseholdSettingsRepository>,
     batches: Arc<dyn PreparedBatchRepository>,
     preparation: PreparationService,
+    stock: crate::services::StockService,
     clock: Arc<dyn Clock>,
 }
 
@@ -59,6 +60,7 @@ impl MealPlanService {
         settings: Arc<dyn HouseholdSettingsRepository>,
         batches: Arc<dyn PreparedBatchRepository>,
         preparation: PreparationService,
+        stock: crate::services::StockService,
         clock: Arc<dyn Clock>,
     ) -> Self {
         Self {
@@ -73,6 +75,7 @@ impl MealPlanService {
             settings,
             batches,
             preparation,
+            stock,
             clock,
         }
     }

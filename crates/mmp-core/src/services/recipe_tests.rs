@@ -14,7 +14,8 @@ use crate::domain::{
 use crate::ports::{FixedClock, PageRequest, RecipeQuery, SortDirection};
 use crate::services::{NutritionGapReason, RecipeService, ResolveRequirement};
 use crate::testing::{
-    InMemoryIngredientRepository, InMemoryProductRepository, InMemoryRecipeRepository,
+    InMemoryIngredientRepository, InMemoryPreparedMealRepository, InMemoryProductRepository,
+    InMemoryRecipeRepository,
 };
 
 struct Harness {
@@ -22,6 +23,7 @@ struct Harness {
     products: InMemoryProductRepository,
     ingredients: InMemoryIngredientRepository,
     recipes: InMemoryRecipeRepository,
+    prepared_meals: InMemoryPreparedMealRepository,
 }
 
 fn harness() -> Harness {
@@ -32,10 +34,12 @@ fn harness_at(now: OffsetDateTime) -> Harness {
     let products = InMemoryProductRepository::new();
     let ingredients = InMemoryIngredientRepository::new();
     let recipes = InMemoryRecipeRepository::new();
+    let prepared_meals = InMemoryPreparedMealRepository::new();
     let service = RecipeService::new(
         Arc::new(recipes.clone()),
         Arc::new(products.clone()),
         Arc::new(ingredients.clone()),
+        Arc::new(prepared_meals.clone()),
         Arc::new(FixedClock::new(now)),
     );
     Harness {
@@ -43,6 +47,7 @@ fn harness_at(now: OffsetDateTime) -> Harness {
         products,
         ingredients,
         recipes,
+        prepared_meals,
     }
 }
 
@@ -218,12 +223,13 @@ async fn lists_unmapped_ingredients_used_by_visible_recipes() {
 
     let result = h
         .service
-        .ingredients_needing_products(viewer, false)
+        .foods_needing_products(viewer, false)
         .await
         .unwrap();
 
     assert_eq!(
         result
+            .ingredients
             .iter()
             .map(|ingredient| ingredient.id)
             .collect::<Vec<_>>(),
@@ -262,11 +268,44 @@ async fn excludes_mapped_ingredients_and_private_recipes_from_review() {
 
     let result = h
         .service
-        .ingredients_needing_products(viewer, false)
+        .foods_needing_products(viewer, false)
         .await
         .unwrap();
 
-    assert!(result.is_empty());
+    assert!(result.ingredients.is_empty());
+}
+
+#[tokio::test]
+async fn lists_prepared_meals_with_no_mapped_product() {
+    let h = harness();
+    let unmapped = crate::domain::PreparedMeal {
+        id: crate::domain::PreparedMealId::new(),
+        name: "Frozen lasagne".to_owned(),
+        default_unit: Unit::Item,
+        shopping_section: None,
+        track_stock: None,
+        provenance: Provenance::local(),
+        revision: Revision::INITIAL,
+        created_at: datetime!(2026-08-22 09:00 UTC),
+        updated_at: datetime!(2026-08-22 09:00 UTC),
+        archived_at: None,
+    };
+    h.prepared_meals.seed(unmapped.clone());
+
+    let result = h
+        .service
+        .foods_needing_products(UserId::new(), false)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        result
+            .prepared_meals
+            .iter()
+            .map(|prepared_meal| prepared_meal.id)
+            .collect::<Vec<_>>(),
+        vec![unmapped.id]
+    );
 }
 
 #[tokio::test]

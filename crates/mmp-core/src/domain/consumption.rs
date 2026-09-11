@@ -167,6 +167,30 @@ pub fn generic_food_nutrition(
     }
 }
 
+pub fn nutrition_from_draws(draws: &[(&Product, Quantity)]) -> ConsumedNutrition {
+    if draws.is_empty() {
+        return ConsumedNutrition::unknown();
+    }
+    let resolved: Vec<NutritionFacts> = draws
+        .iter()
+        .map(|(product, quantity)| nutrition_for(product, &ConsumedAmount::Measure(*quantity)))
+        .filter(|consumed| consumed.quality != NutritionQuality::Unknown)
+        .map(|consumed| consumed.facts)
+        .collect();
+    if resolved.is_empty() {
+        return ConsumedNutrition::unknown();
+    }
+    let facts = sum_nutrition(&resolved);
+    ConsumedNutrition {
+        quality: if draws.len() > resolved.len() {
+            NutritionQuality::Partial
+        } else {
+            NutritionQuality::Known
+        },
+        facts,
+    }
+}
+
 pub fn sum_nutrition<'a>(facts: impl IntoIterator<Item = &'a NutritionFacts>) -> NutritionFacts {
     let mut total = NutritionFacts::default();
     for f in facts {

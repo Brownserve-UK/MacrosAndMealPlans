@@ -80,6 +80,7 @@ async fn app() -> Router {
         recipes_repo.clone(),
         Arc::new(products.clone()),
         ingredients.clone(),
+        prepared_meals.clone(),
         clock.clone(),
     );
     let preparation2 = PreparationService::new(
@@ -128,6 +129,7 @@ async fn app() -> Router {
             Arc::new(settings_repo.clone()),
             batches.clone(),
             preparation,
+            stock.clone(),
             clock.clone(),
         ),
         NutritionTargetService::new(Arc::new(targets), clock.clone()),
@@ -2017,7 +2019,7 @@ async fn needs_review_only_shows_the_household_section_with_household_write() {
     assert_eq!(status, StatusCode::OK, "{body}");
     assert!(body["personal_meals"].is_array());
     assert_eq!(body["household_meals"], json!([]));
-    assert!(body["ingredient_mappings"].is_array());
+    assert!(body["food_mappings"].is_array());
 
     let (status, body, _) = send(&app, Call::new("GET", "/api/v1/needs-review")).await;
     assert_eq!(status, StatusCode::OK, "{body}");

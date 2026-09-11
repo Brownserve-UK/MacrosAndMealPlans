@@ -87,6 +87,12 @@ impl MealPlanService {
                 .await?,
             releases: Vec::new(),
         };
+        let confirmed = if already_drawn {
+            actual.nutrition.clone()
+        } else {
+            self.confirmed_nutrition(&catalogue, component_item, &input.amount, &actual.nutrition)
+                .await?
+        };
         let now = self.clock.now();
         let record = ConsumptionRecord::create(
             NewConsumptionRecord {
@@ -101,8 +107,8 @@ impl MealPlanService {
                 consumed_on: input.consumed_on,
                 consumed_at: input.consumed_at,
             },
-            actual.nutrition.facts,
-            actual.nutrition.quality,
+            confirmed.facts,
+            confirmed.quality,
             now,
         );
 
@@ -886,6 +892,64 @@ impl MealPlanService {
                 )])
             }
         }
+    }
+
+    async fn confirmed_nutrition(
+        &self,
+        catalogue: &ItemCatalogue,
+        item: MealItemRef,
+        amount: &ConsumedAmount,
+        estimate: &crate::domain::ConsumedNutrition,
+    ) -> Result<crate::domain::ConsumedNutrition> {
+        let ConsumedAmount::Measure(want) = *amount else {
+            return Ok(estimate.clone());
+        };
+        let (candidates, target) = match item {
+            MealItemRef::Ingredient { ingredient_id } => {
+                let Some(card) = catalogue.ingredients.get(&ingredient_id) else {
+                    return Ok(estimate.clone());
+                };
+                (
+                    &card.candidates,
+                    crate::domain::DeductionTarget::pool(
+                        ingredient_id,
+                        card.candidates.iter().map(|p| p.id).collect(),
+                    ),
+                )
+            }
+            MealItemRef::PreparedMeal { prepared_meal_id } => {
+                let Some(card) = catalogue.prepared_meals.get(&prepared_meal_id) else {
+                    return Ok(estimate.clone());
+                };
+                (
+                    &card.candidates,
+                    crate::domain::DeductionTarget::prepared_meal_pool(
+                        prepared_meal_id,
+                        card.candidates.iter().map(|p| p.id).collect(),
+                    ),
+                )
+            }
+            _ => return Ok(estimate.clone()),
+        };
+
+        let draws = self.stock.preview_pool_draw(&target, want).await?;
+        if draws.is_empty() {
+            return Ok(estimate.clone());
+        }
+        let resolved: Vec<(&crate::domain::Product, Quantity)> = draws
+            .into_iter()
+            .filter_map(|(product_id, quantity)| {
+                candidates
+                    .iter()
+                    .find(|product| product.id == product_id)
+                    .map(|product| (product, quantity))
+            })
+            .collect();
+        let confirmed = crate::domain::nutrition_from_draws(&resolved);
+        if confirmed.quality == crate::domain::NutritionQuality::Unknown {
+            return Ok(estimate.clone());
+        }
+        Ok(confirmed)
     }
 
     async fn cooked_batch(

@@ -301,6 +301,7 @@ pub enum Certainty {
 pub enum SuggestionReason {
     UnknownAvailability,
     AssumptionOnly,
+    NoProductYet,
 }
 
 impl SuggestionReason {
@@ -308,6 +309,7 @@ impl SuggestionReason {
         match self {
             SuggestionReason::UnknownAvailability => "unknown_availability",
             SuggestionReason::AssumptionOnly => "assumption_only",
+            SuggestionReason::NoProductYet => "no_product_yet",
         }
     }
 }

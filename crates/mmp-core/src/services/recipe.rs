@@ -3,16 +3,17 @@ use std::sync::Arc;
 
 use super::revision::{commit_outcome, require_revision};
 use crate::domain::{
-    ConsumedAmount, ConsumedNutrition, IngredientId, NewRecipe, NewRecipeComponent,
-    NewRecipeInstruction, NutritionQuality, ProductId, Recipe, RecipeComponent, RecipeComponentId,
-    RecipeId, RecipeInstruction, RecipeInstructionId, RecipePatch, RecipePhoto,
+    ConsumedAmount, ConsumedNutrition, Ingredient, IngredientId, NewRecipe, NewRecipeComponent,
+    NewRecipeInstruction, NutritionQuality, PreparedMeal, ProductId, Recipe, RecipeComponent,
+    RecipeComponentId, RecipeId, RecipeInstruction, RecipeInstructionId, RecipePatch, RecipePhoto,
     RecipePhotoDerivatives, RecipeRequirement, RecipeSummary, RecipeVisibility, Revision, UserId,
     normalise_countries, normalise_optional_text, normalise_tags, normalise_unique,
     recipe_nutrition_detailed,
 };
 use crate::error::{CoreError, Result, ValidationErrors};
 use crate::ports::{
-    Clock, IngredientRepository, Paginated, ProductRepository, RecipeQuery, RecipeRepository,
+    Clock, IngredientRepository, Paginated, PreparedMealQuery, PreparedMealRepository,
+    ProductRepository, RecipeQuery, RecipeRepository,
 };
 
 use super::fulfilment::RecipeFulfilments;
@@ -23,6 +24,12 @@ const RECIPE: &str = "recipe";
 pub enum ResolveRequirement {
     Ingredient { ingredient_id: IngredientId },
     Product { product_id: ProductId },
+}
+
+#[derive(Debug, Default)]
+pub struct FoodsNeedingProducts {
+    pub ingredients: Vec<Ingredient>,
+    pub prepared_meals: Vec<PreparedMeal>,
 }
 
 #[derive(Debug, Default)]
@@ -57,6 +64,7 @@ pub struct RecipeService {
     recipes: Arc<dyn RecipeRepository>,
     products: Arc<dyn ProductRepository>,
     ingredients: Arc<dyn IngredientRepository>,
+    prepared_meals: Arc<dyn PreparedMealRepository>,
     clock: Arc<dyn Clock>,
 }
 
@@ -65,12 +73,14 @@ impl RecipeService {
         recipes: Arc<dyn RecipeRepository>,
         products: Arc<dyn ProductRepository>,
         ingredients: Arc<dyn IngredientRepository>,
+        prepared_meals: Arc<dyn PreparedMealRepository>,
         clock: Arc<dyn Clock>,
     ) -> Self {
         Self {
             recipes,
             products,
             ingredients,
+            prepared_meals,
             clock,
         }
     }
@@ -124,17 +134,17 @@ impl RecipeService {
         self.recipes.list(query).await
     }
 
-    pub async fn ingredients_needing_products(
+    pub async fn foods_needing_products(
         &self,
         viewer_id: UserId,
         include_all_private: bool,
-    ) -> Result<Vec<crate::domain::Ingredient>> {
+    ) -> Result<FoodsNeedingProducts> {
         let ids = self
             .recipes
             .referenced_ingredient_ids(viewer_id, include_all_private)
             .await?;
         let counts = self.products.count_by_ingredient(&ids).await?;
-        let mut ingredients: Vec<_> = self
+        let mut ingredients: Vec<Ingredient> = self
             .ingredients
             .get_many(&ids)
             .await?
@@ -143,7 +153,22 @@ impl RecipeService {
             .filter(|ingredient| counts.get(&ingredient.id).copied().unwrap_or(0) == 0)
             .collect();
         ingredients.sort_by_cached_key(|ingredient| ingredient.name.to_lowercase());
-        Ok(ingredients)
+
+        let mut prepared_meals: Vec<PreparedMeal> = self
+            .prepared_meals
+            .list(&PreparedMealQuery {
+                needs_products: Some(true),
+                page: crate::ports::PageRequest::new(1, crate::ports::PageRequest::MAX_PER_PAGE),
+                ..Default::default()
+            })
+            .await?
+            .items;
+        prepared_meals.sort_by_cached_key(|prepared_meal| prepared_meal.name.to_lowercase());
+
+        Ok(FoodsNeedingProducts {
+            ingredients,
+            prepared_meals,
+        })
     }
 
     pub async fn names_for(&self, recipe: &Recipe) -> Result<RecipeNames> {

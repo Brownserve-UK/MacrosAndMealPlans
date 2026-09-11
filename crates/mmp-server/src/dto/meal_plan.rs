@@ -303,13 +303,21 @@ impl From<MealPlanComponentView> for MealPlanComponentDto {
 pub struct NeedsReviewDto {
     pub personal_meals: Vec<MealPlanEntryDto>,
     pub household_meals: Vec<MealPlanEntryDto>,
-    pub ingredient_mappings: Vec<IngredientMappingReviewDto>,
+    pub food_mappings: Vec<FoodMappingReviewDto>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum FoodMappingKindDto {
+    Ingredient,
+    PreparedMeal,
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
-pub struct IngredientMappingReviewDto {
+pub struct FoodMappingReviewDto {
     pub id: Uuid,
     pub name: String,
+    pub kind: FoodMappingKindDto,
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]

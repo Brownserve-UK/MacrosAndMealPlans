@@ -258,6 +258,38 @@ impl StockService {
         self.report(product_ids, false, from, to).await
     }
 
+    pub async fn preview_pool_draw(
+        &self,
+        target: &crate::domain::DeductionTarget,
+        want: Quantity,
+    ) -> Result<Vec<(ProductId, Quantity)>> {
+        let DeductionCandidates::Products(product_ids) = &target.candidates else {
+            return Ok(Vec::new());
+        };
+        if product_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let items = self.stock.list_for_products(product_ids).await?;
+        let live: Vec<StockItem> = items
+            .into_iter()
+            .filter(|item| !item.is_archived())
+            .collect();
+        let DeductionPlan::Planned { takes, .. } = plan_deduction(&live, want) else {
+            return Ok(Vec::new());
+        };
+        let mut by_product: HashMap<ProductId, Quantity> = HashMap::new();
+        for take in takes {
+            let Some(item) = live.iter().find(|item| item.id == take.stock_item_id) else {
+                continue;
+            };
+            let Some(product_id) = item.product_id() else {
+                continue;
+            };
+            add_quantity(&mut by_product, product_id, take.requested);
+        }
+        Ok(by_product.into_iter().collect())
+    }
+
     pub(crate) async fn snapshot(&self, from: Date, to: Date) -> Result<StockSnapshot> {
         let demand = self.planned_demand(from, to).await?;
 

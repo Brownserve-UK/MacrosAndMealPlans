@@ -5,7 +5,7 @@ use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
 
 use crate::auth::Principal;
-use crate::dto::{IngredientMappingReviewDto, NeedsReviewDto};
+use crate::dto::{FoodMappingKindDto, FoodMappingReviewDto, NeedsReviewDto};
 use crate::error::ApiResult;
 use crate::state::AppState;
 
@@ -33,11 +33,30 @@ async fn needs_review(
         .meal_plan
         .needs_review(member, include_household)
         .await?;
-    let ingredients = if principal.has(Permission::CatalogueWrite) {
-        state
+    let food_mappings = if principal.has(Permission::CatalogueWrite) {
+        let foods = state
             .recipes
-            .ingredients_needing_products(principal.user_id, principal.roles.contains(&Role::Admin))
-            .await?
+            .foods_needing_products(principal.user_id, principal.roles.contains(&Role::Admin))
+            .await?;
+        foods
+            .ingredients
+            .into_iter()
+            .map(|ingredient| FoodMappingReviewDto {
+                id: ingredient.id.as_uuid(),
+                name: ingredient.name,
+                kind: FoodMappingKindDto::Ingredient,
+            })
+            .chain(
+                foods
+                    .prepared_meals
+                    .into_iter()
+                    .map(|prepared_meal| FoodMappingReviewDto {
+                        id: prepared_meal.id.as_uuid(),
+                        name: prepared_meal.name,
+                        kind: FoodMappingKindDto::PreparedMeal,
+                    }),
+            )
+            .collect()
     } else {
         Vec::new()
     };
@@ -45,12 +64,6 @@ async fn needs_review(
     Ok(Json(NeedsReviewDto {
         personal_meals: meal_review.personal.into_iter().map(Into::into).collect(),
         household_meals: meal_review.household.into_iter().map(Into::into).collect(),
-        ingredient_mappings: ingredients
-            .into_iter()
-            .map(|ingredient| IngredientMappingReviewDto {
-                id: ingredient.id.as_uuid(),
-                name: ingredient.name,
-            })
-            .collect(),
+        food_mappings,
     }))
 }

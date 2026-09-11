@@ -151,6 +151,7 @@ impl From<ShoppingOpportunity> for ShoppingOpportunityDto {
 pub enum SuggestionReasonDto {
     UnknownAvailability,
     AssumptionOnly,
+    NoProductYet,
 }
 
 impl From<SuggestionReason> for SuggestionReasonDto {
@@ -158,6 +159,7 @@ impl From<SuggestionReason> for SuggestionReasonDto {
         match value {
             SuggestionReason::UnknownAvailability => Self::UnknownAvailability,
             SuggestionReason::AssumptionOnly => Self::AssumptionOnly,
+            SuggestionReason::NoProductYet => Self::NoProductYet,
         }
     }
 }

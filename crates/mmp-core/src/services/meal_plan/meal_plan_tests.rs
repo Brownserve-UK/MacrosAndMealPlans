@@ -166,6 +166,18 @@ fn harness() -> Harness {
         clock.clone(),
     );
     let preparation_for_tests = preparation.clone();
+    let stock_service = crate::services::StockService::new(
+        Arc::new(stock.clone()),
+        Arc::new(products.clone()),
+        Arc::new(ingredients.clone()),
+        Arc::new(prepared_meals.clone()),
+        Arc::new(plans.clone()),
+        Arc::new(recipes.clone()),
+        Arc::new(batches.clone()),
+        Arc::new(members.clone()),
+        Arc::new(settings.clone()),
+        clock.clone(),
+    );
     let service = MealPlanService::new(
         Arc::new(plans.clone()),
         Arc::new(products.clone()),
@@ -178,6 +190,7 @@ fn harness() -> Harness {
         Arc::new(settings.clone()),
         Arc::new(batches.clone()),
         preparation,
+        stock_service,
         clock.clone(),
     );
     let consumption = ConsumptionService::new(
@@ -3689,4 +3702,63 @@ async fn a_plain_product_component_still_draws_its_stock_on_first_confirmation()
         0,
         "a product is not cooked, so nothing should be prepared"
     );
+}
+
+#[tokio::test]
+async fn eating_a_generic_food_records_the_product_actually_drawn_not_the_average() {
+    let h = harness();
+    let lasagne_id = crate::domain::IngredientId::new();
+    h.ingredients.seed(crate::domain::Ingredient {
+        id: lasagne_id,
+        name: "Frozen lasagne".to_owned(),
+        default_unit: Unit::Item,
+        shopping_section: None,
+        track_stock: None,
+        provenance: Provenance::local(),
+        revision: Revision::INITIAL,
+        created_at: OffsetDateTime::UNIX_EPOCH,
+        updated_at: OffsetDateTime::UNIX_EPOCH,
+        archived_at: None,
+    });
+    let mut cheap = product("Value Lasagne", 100);
+    cheap.mapped_ingredient_id = Some(lasagne_id);
+    let mut posh = product("Finest Lasagne", 400);
+    posh.mapped_ingredient_id = Some(lasagne_id);
+    h.products.seed(cheap.clone());
+    h.products.seed(posh.clone());
+    h.seed_stock_grams(posh.id, 500);
+
+    let entry = planned(
+        &h,
+        vec![NewMealPlanComponent {
+            id: None,
+            item: MealItemRef::ingredient(lasagne_id),
+            amount: ConsumedAmount::Measure(Quantity::new(Decimal::new(100, 0), Unit::Gram)),
+        }],
+    )
+    .await;
+    let component = entry.components[0].component.clone();
+
+    confirm_component(
+        &h,
+        entry.entry.id,
+        component.id,
+        component.revision,
+        component.amount,
+    )
+    .await;
+
+    assert_eq!(h.records.count(), 1);
+    let record = h
+        .records
+        .list_for_meal_plan_entry(entry.entry.id)
+        .await
+        .unwrap()
+        .remove(0);
+    assert_eq!(
+        record.nutrition.energy_kcal,
+        Some(Decimal::new(400, 0)),
+        "the record should reflect the posh lasagne actually in stock, not the mean of both"
+    );
+    assert_eq!(record.quality, crate::domain::NutritionQuality::Known);
 }

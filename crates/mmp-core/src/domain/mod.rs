@@ -25,7 +25,7 @@ pub use access::{AccessScope, Permission, Role, UnknownAccessScope, UnknownRole}
 pub use consumption::{
     AmountError, ConsumedAmount, ConsumedNutrition, ConsumptionRecord, ConsumptionRecordPatch,
     NewConsumptionRecord, NutritionQuality, UnknownNutritionQuality, generic_food_nutrition,
-    mean_nutrition, nutrition_for, recipe_nutrition_for, sum_nutrition,
+    mean_nutrition, nutrition_for, nutrition_from_draws, recipe_nutrition_for, sum_nutrition,
 };
 pub use coverage::{Coverage, UncoveredClaim, cover};
 pub use household::{

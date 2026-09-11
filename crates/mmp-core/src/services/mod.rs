@@ -25,8 +25,8 @@ pub use meal_plan::{
 pub use nutrition_target::NutritionTargetService;
 pub use preparation::{MoveCookedFood, PreparationService, RecordPreparation};
 pub use recipe::{
-    NutritionGapReason, RecipeNames, RecipeNutrition, RecipeNutritionGap, RecipeService,
-    ResolveRequirement,
+    FoodsNeedingProducts, NutritionGapReason, RecipeNames, RecipeNutrition, RecipeNutritionGap,
+    RecipeService, ResolveRequirement,
 };
 pub use seed::{SeedIngredient, SeedReport};
 pub use shopping::{FinishedShop, ShopCount, ShoppingList, ShoppingService};

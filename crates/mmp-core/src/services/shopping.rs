@@ -373,6 +373,7 @@ impl ShoppingService {
                 &pool,
                 &opportunities,
                 &open_purchases,
+                &row.demand_gaps,
             ));
         }
 
@@ -402,6 +403,7 @@ impl ShoppingService {
                 &pool,
                 &opportunities,
                 &open_purchases,
+                &row.demand_gaps,
             ));
         }
 
@@ -452,6 +454,7 @@ impl ShoppingService {
                 &pool,
                 &opportunities,
                 &open_purchases,
+                &row.demand_gaps,
             ));
         }
 
@@ -939,6 +942,7 @@ fn build(
     pool: &[ProductId],
     opportunities: &[ShoppingOpportunity],
     open_purchases: &[Purchase],
+    row_gaps: &[DemandGap],
 ) -> Vec<ShoppingRequirement> {
     if matches!(availability, Availability::AssumedAvailable) {
         return Vec::new();
@@ -950,6 +954,9 @@ fn build(
     }
 
     let certainty = match availability {
+        _ if row_gaps.contains(&DemandGap::FoodHasNoProducts) => Certainty::Suggested {
+            reason: SuggestionReason::NoProductYet,
+        },
         Availability::Unknown => Certainty::Suggested {
             reason: SuggestionReason::UnknownAvailability,
         },
@@ -983,6 +990,11 @@ fn build(
         .enumerate()
         .map(|(index, (assignment, held))| {
             let mut gaps = coverage.gaps.clone();
+            for gap in row_gaps {
+                if !gaps.contains(gap) {
+                    gaps.push(*gap);
+                }
+            }
             let quantity = bucket_quantity(&held, &mut gaps);
             let required_by = held.iter().map(|held| held.claim.planned_on).min();
             let use_by_at_least = held.iter().map(|held| held.claim.planned_on).max();
