@@ -6,7 +6,8 @@ use mmp_core::ports::SystemClock;
 use mmp_core::services::{
     CatalogueService, ConsumptionService, HouseholdService, HouseholdSettingsService,
     MealPlanService, MealTemplateService, NutritionTargetService, PreparationService,
-    RecipeService, SeedIngredient, SeedReport, ShoppingService, StockService, WeightService,
+    RecipeService, SeedIngredient, SeedPreparedMeal, SeedReport, ShoppingService, StockService,
+    WeightService,
 };
 use mmp_postgres::PgPool;
 use mmp_postgres::{
@@ -24,6 +25,7 @@ use crate::config::Config;
 use crate::state::AppState;
 
 const SEED_INGREDIENTS: &str = include_str!("../seed/ingredients.json");
+const SEED_PREPARED_MEALS: &str = include_str!("../seed/prepared_meals.json");
 
 pub fn init_tracing() {
     use tracing_subscriber::{EnvFilter, fmt};
@@ -252,12 +254,26 @@ pub fn seed_ingredients() -> anyhow::Result<Vec<SeedIngredient>> {
     serde_json::from_str(SEED_INGREDIENTS).context("parsing the bundled ingredient seed data")
 }
 
+pub fn seed_prepared_meals() -> anyhow::Result<Vec<SeedPreparedMeal>> {
+    serde_json::from_str(SEED_PREPARED_MEALS).context("parsing the bundled prepared meal seed data")
+}
+
 pub async fn apply_seed(catalogue: &CatalogueService) -> anyhow::Result<SeedReport> {
     let seeds = seed_ingredients()?;
-    catalogue
+    let mut report = catalogue
         .apply_seed_ingredients(&seeds)
         .await
-        .context("applying the ingredient seed catalogue")
+        .context("applying the ingredient seed catalogue")?;
+    let prepared_meal_seeds = seed_prepared_meals()?;
+    let prepared_meal_report = catalogue
+        .apply_seed_prepared_meals(&prepared_meal_seeds)
+        .await
+        .context("applying the prepared meal seed catalogue")?;
+    report.created += prepared_meal_report.created;
+    report.updated += prepared_meal_report.updated;
+    report.preserved += prepared_meal_report.preserved;
+    report.conflicted += prepared_meal_report.conflicted;
+    Ok(report)
 }
 
 #[cfg(test)]

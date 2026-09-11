@@ -1188,5 +1188,19 @@
     "default_unit": "g",
     "shopping_section": "fresh_produce",
     "track_stock": true
+  },
+  {
+    "seed_key": "fish-fingers",
+    "name": "Fish Fingers",
+    "default_unit": "item",
+    "shopping_section": "frozen",
+    "track_stock": true
+  },
+  {
+    "seed_key": "chips",
+    "name": "Chips",
+    "default_unit": "g",
+    "shopping_section": "frozen",
+    "track_stock": true
   }
 ]

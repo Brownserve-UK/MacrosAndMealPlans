@@ -520,6 +520,25 @@ impl CatalogueService {
         )
     }
 
+    pub(crate) async fn find_prepared_meal_by_seed_key(
+        &self,
+        seed_key: &str,
+    ) -> Result<Option<PreparedMeal>> {
+        self.prepared_meals.find_by_seed_key(seed_key).await
+    }
+
+    pub(crate) async fn insert_prepared_meal(&self, prepared_meal: &PreparedMeal) -> Result<()> {
+        self.prepared_meals.insert(prepared_meal).await
+    }
+
+    pub(crate) async fn commit_seeded_prepared_meal(
+        &self,
+        prepared_meal: &PreparedMeal,
+        expected: Revision,
+    ) -> Result<()> {
+        self.commit_prepared_meal(prepared_meal, expected).await
+    }
+
     async fn commit_prepared_meal(
         &self,
         prepared_meal: &PreparedMeal,

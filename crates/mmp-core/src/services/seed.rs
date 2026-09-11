@@ -1,11 +1,23 @@
 use crate::domain::{
-    Ingredient, IngredientId, Provenance, Revision, ShoppingSection, Unit, validate_name,
+    Ingredient, IngredientId, PreparedMeal, PreparedMealId, Provenance, Revision, ShoppingSection,
+    Unit, validate_name,
 };
 use crate::error::{Result, ValidationErrors};
 use crate::services::CatalogueService;
 
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct SeedIngredient {
+    pub seed_key: String,
+    pub name: String,
+    pub default_unit: Unit,
+    #[serde(default)]
+    pub shopping_section: Option<ShoppingSection>,
+    #[serde(default)]
+    pub track_stock: Option<bool>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct SeedPreparedMeal {
     pub seed_key: String,
     pub name: String,
     pub default_unit: Unit,
@@ -88,5 +100,68 @@ impl CatalogueService {
         existing.revision = expected.next();
         existing.updated_at = self.now();
         self.commit_seeded_ingredient(&existing, expected).await
+    }
+
+    pub async fn apply_seed_prepared_meals(
+        &self,
+        seeds: &[SeedPreparedMeal],
+    ) -> Result<SeedReport> {
+        let mut report = SeedReport::default();
+
+        for seed in seeds {
+            let mut errors = ValidationErrors::new();
+            validate_name("name", &seed.name, &mut errors);
+            if seed.seed_key.trim().is_empty() {
+                errors.push("seed_key", "Required");
+            }
+            errors.into_result()?;
+
+            match self.find_prepared_meal_by_seed_key(&seed.seed_key).await? {
+                None => match self.create_seeded_prepared_meal(seed).await {
+                    Ok(()) => report.created += 1,
+                    Err(crate::CoreError::Duplicate { .. }) => report.conflicted += 1,
+                    Err(other) => return Err(other),
+                },
+                Some(existing) if existing.provenance.accepts_seed_refresh() => {
+                    self.refresh_seeded_prepared_meal(existing, seed).await?;
+                    report.updated += 1;
+                }
+                Some(_) => report.preserved += 1,
+            }
+        }
+
+        Ok(report)
+    }
+
+    async fn create_seeded_prepared_meal(&self, seed: &SeedPreparedMeal) -> Result<()> {
+        let now = self.now();
+        let prepared_meal = PreparedMeal {
+            id: PreparedMealId::seeded(&seed.seed_key),
+            name: seed.name.trim().to_owned(),
+            default_unit: seed.default_unit,
+            shopping_section: seed.shopping_section,
+            track_stock: seed.track_stock,
+            provenance: Provenance::seeded(&seed.seed_key),
+            revision: Revision::INITIAL,
+            created_at: now,
+            updated_at: now,
+            archived_at: None,
+        };
+        self.insert_prepared_meal(&prepared_meal).await
+    }
+
+    async fn refresh_seeded_prepared_meal(
+        &self,
+        mut existing: PreparedMeal,
+        seed: &SeedPreparedMeal,
+    ) -> Result<()> {
+        let expected = existing.revision;
+        existing.name = seed.name.trim().to_owned();
+        existing.default_unit = seed.default_unit;
+        existing.shopping_section = seed.shopping_section;
+        existing.track_stock = seed.track_stock;
+        existing.revision = expected.next();
+        existing.updated_at = self.now();
+        self.commit_seeded_prepared_meal(&existing, expected).await
     }
 }

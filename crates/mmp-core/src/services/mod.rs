@@ -30,7 +30,7 @@ pub use recipe::{
     FoodsNeedingProducts, NutritionGapReason, RecipeNames, RecipeNutrition, RecipeNutritionGap,
     RecipeService, ResolveRequirement,
 };
-pub use seed::{SeedIngredient, SeedReport};
+pub use seed::{SeedIngredient, SeedPreparedMeal, SeedReport};
 pub use shopping::{FinishedShop, ShopCount, ShoppingList, ShoppingService};
 pub use stock::StockService;
 pub use stock_effects::{StockAffected, StockOutcomeView};

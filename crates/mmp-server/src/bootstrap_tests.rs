@@ -52,3 +52,28 @@ fn seed_entries_carry_no_nutrition() {
         );
     }
 }
+
+#[test]
+fn the_bundled_prepared_meal_seed_data_parses() {
+    let seeds = seed_prepared_meals().expect("seed data should parse");
+    assert!(!seeds.is_empty(), "expected at least one prepared meal");
+}
+
+#[test]
+fn prepared_meal_seed_keys_are_unique_and_disjoint_from_ingredients() {
+    let ingredient_seeds = seed_ingredients().unwrap();
+    let prepared_meal_seeds = seed_prepared_meals().unwrap();
+    let mut keys: Vec<&str> = ingredient_seeds
+        .iter()
+        .map(|s| s.seed_key.as_str())
+        .chain(prepared_meal_seeds.iter().map(|s| s.seed_key.as_str()))
+        .collect();
+    keys.sort_unstable();
+    let before = keys.len();
+    keys.dedup();
+    assert_eq!(
+        before,
+        keys.len(),
+        "a prepared meal seed key must not collide with an ingredient's"
+    );
+}

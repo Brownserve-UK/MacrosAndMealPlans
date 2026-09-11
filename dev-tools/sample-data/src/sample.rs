@@ -7,18 +7,17 @@ use mmp_core::CoreError;
 use mmp_core::domain::{
     AccessScope, ActualMealPlanComponent, Assumption, ConfirmMealPlanComponent,
     ConfirmMealPlanEntry, ConsumedAmount, ConsumptionRecordId, HouseholdMember, HouseholdMemberId,
-    IngredientId, MealCategory, MealItemRef, MealPlanEntryId, MealPlanScope, MealPlanStatus,
-    MealSlot, NewConsumptionRecord, NewHouseholdMember, NewMealGuestAllocation, NewMealGuestGroup,
-    NewMealParticipant, NewMealParticipantAllocation, NewMealPlanComponent, NewMealPlanEntry,
-    NewNutritionTarget, NewProduct, NewPurchase, NewRecipe, NewRecipeComponent,
-    NewRecipeInstruction, NewShoppingCadence, NewShoppingListItem, NewStockItem, NewUser,
-    NewWeightGoal,
-    NewWeightRecord, NutritionFacts, NutritionGoals, OutcomeActor, Patch, ProductId, Provenance,
-    HouseholdSettingsPatch, Quantity, RecipeId, RecipePatch, RecipeRequirement, Role, SectionOrder,
-    ShoppingSection, SourceDate,
-    SourceDateKind, StockLevel, StorageLocation, Unit, UsabilityDeadline, User, UserId,
-    WeightObjective, WeightSource,
-StockSubject,
+    HouseholdSettingsPatch, IngredientId, MealCategory, MealItemRef, MealPlanEntryId,
+    MealPlanScope, MealPlanStatus, MealSlot, MealTemplateId, NewConsumptionRecord,
+    NewHouseholdMember, NewMealGuestAllocation, NewMealGuestGroup, NewMealParticipant,
+    NewMealParticipantAllocation, NewMealPlanComponent, NewMealPlanEntry, NewMealTemplate,
+    NewMealTemplateComponent, NewNutritionTarget, NewProduct, NewPurchase, NewRecipe,
+    NewRecipeComponent, NewRecipeInstruction, NewShoppingCadence, NewShoppingListItem,
+    NewStockItem, NewUser, NewWeightGoal, NewWeightRecord, NutritionFacts, NutritionGoals,
+    OutcomeActor, Patch, PreparedMealId, ProductId, Provenance, Quantity, RecipeId, RecipePatch,
+    RecipeRequirement, Role, SectionOrder, ShoppingSection, SourceDate, SourceDateKind, StockLevel,
+    StockSubject, StorageLocation, Unit, UsabilityDeadline, User, UserId, WeightObjective,
+    WeightSource,
 };
 use mmp_server::state::AppState;
 use rust_decimal::Decimal;
@@ -140,6 +139,7 @@ pub async fn load(
 
     loader.load_accounts().await?;
     loader.load_products().await?;
+    loader.load_prepared_meal_products().await?;
     loader.load_recipes().await?;
     loader.load_targets().await?;
     loader.load_weight().await?;
@@ -295,6 +295,38 @@ impl Loader<'_> {
                     package_quantity: spec.package_quantity,
                     servings_per_pack: spec.servings_per_pack,
                     mapped_ingredient_id: spec.ingredient_key.map(IngredientId::seeded),
+                    mapped_prepared_meal_id: None,
+                    nutrition: spec.nutrition,
+                    provenance: Provenance::local(),
+                })
+                .await?;
+            self.report.products_created += 1;
+        }
+        Ok(())
+    }
+
+    async fn load_prepared_meal_products(&mut self) -> anyhow::Result<()> {
+        for spec in prepared_meal_product_specs() {
+            let id = product_id(spec.key);
+            match self.state.catalogue.get_product(id).await {
+                Ok(_) => continue,
+                Err(CoreError::NotFound { .. }) => {}
+                Err(error) => return Err(error.into()),
+            }
+            self.state
+                .catalogue
+                .create_product(NewProduct {
+                    id: Some(id),
+                    name: spec.name.to_owned(),
+                    brand: Some(spec.brand.to_owned()),
+                    barcode: None,
+                    retailer: Some("Sample Supermarket".to_owned()),
+                    shopping_section: Some(spec.section),
+                    track_stock: None,
+                    package_quantity: Some(spec.package_quantity),
+                    servings_per_pack: spec.servings_per_pack,
+                    mapped_ingredient_id: None,
+                    mapped_prepared_meal_id: Some(PreparedMealId::seeded(spec.prepared_meal_key)),
                     nutrition: spec.nutrition,
                     provenance: Provenance::local(),
                 })
@@ -657,7 +689,231 @@ impl Loader<'_> {
         self.load_pooled_ingredient_demand().await?;
         self.load_batch_cook().await?;
         self.load_shopping().await?;
+        self.load_generic_food_showcase().await?;
         self.load_planning_horizon().await
+    }
+
+    async fn load_generic_food_showcase(&mut self) -> anyhow::Result<()> {
+        let garlic = self
+            .state
+            .catalogue
+            .get_ingredient(IngredientId::seeded("garlic"))
+            .await?;
+        if garlic.track_stock != Some(false) {
+            self.state
+                .catalogue
+                .update_ingredient(
+                    garlic.id,
+                    garlic.revision,
+                    mmp_core::domain::IngredientPatch {
+                        track_stock: Patch::Set(false),
+                        ..Default::default()
+                    },
+                )
+                .await?;
+        }
+
+        let fish_finger_dinner = self.week_start + Duration::days(20);
+        self.ensure_components_meal(
+            fish_finger_dinner,
+            "fish-finger-dinner",
+            MealSlot::Dinner,
+            Time::from_hms(18, 30, 0).unwrap(),
+            vec![
+                (
+                    MealItemRef::ingredient(IngredientId::seeded("fish-fingers")),
+                    ConsumedAmount::Measure(quantity(4, Unit::Item)),
+                ),
+                (
+                    MealItemRef::ingredient(IngredientId::seeded("chips")),
+                    ConsumedAmount::Measure(quantity(100, Unit::Gram)),
+                ),
+                (
+                    MealItemRef::ingredient(IngredientId::seeded("peas")),
+                    ConsumedAmount::Measure(quantity(70, Unit::Gram)),
+                ),
+            ],
+        )
+        .await?;
+
+        let saved_meal_dinner = self.week_start + Duration::days(21);
+        self.ensure_components_meal(
+            saved_meal_dinner,
+            "saved-meal-dinner",
+            MealSlot::Dinner,
+            Time::from_hms(18, 30, 0).unwrap(),
+            vec![
+                (
+                    MealItemRef::ingredient(IngredientId::seeded("fish-fingers")),
+                    ConsumedAmount::Measure(quantity(4, Unit::Item)),
+                ),
+                (
+                    MealItemRef::ingredient(IngredientId::seeded("chips")),
+                    ConsumedAmount::Measure(quantity(100, Unit::Gram)),
+                ),
+            ],
+        )
+        .await?;
+
+        let lasagne_dinner = self.week_start + Duration::days(22);
+        self.ensure_components_meal(
+            lasagne_dinner,
+            "lasagne-dinner",
+            MealSlot::Dinner,
+            Time::from_hms(18, 30, 0).unwrap(),
+            vec![
+                (
+                    MealItemRef::prepared_meal(PreparedMealId::seeded("frozen-lasagne")),
+                    ConsumedAmount::Measure(quantity(1, Unit::Item)),
+                ),
+                (
+                    MealItemRef::ingredient(IngredientId::seeded("kale")),
+                    ConsumedAmount::Measure(quantity(80, Unit::Gram)),
+                ),
+            ],
+        )
+        .await?;
+
+        let lasagne_product = product_id("frozen-lasagne-tesco");
+        let already_stocked = self
+            .state
+            .stock
+            .list(&mmp_core::ports::StockQuery {
+                product_id: Some(lasagne_product),
+                ..Default::default()
+            })
+            .await?
+            .total
+            > 0;
+        if !already_stocked {
+            self.state
+                .stock
+                .create(
+                    NewStockItem {
+                        subject: StockSubject::product(lasagne_product),
+                        level: StockLevel::Exact {
+                            quantity: quantity(2, Unit::Item),
+                        },
+                        storage_location: StorageLocation::Frozen,
+                        source_date: None,
+                        usability_deadline: None,
+                        note: Some("already in the freezer".to_owned()),
+                    },
+                    self.actor.id,
+                    Some(self.member.id),
+                )
+                .await?;
+            self.report.stock_items_created += 1;
+        }
+
+        self.ensure_saved_meal(
+            "fish-fingers-chips-and-peas",
+            UserId::from_uuid(sample_uuid("user", "basic-user")),
+            "Fish fingers, chips and peas",
+            vec![
+                (
+                    MealItemRef::ingredient(IngredientId::seeded("fish-fingers")),
+                    ConsumedAmount::Measure(quantity(4, Unit::Item)),
+                ),
+                (
+                    MealItemRef::ingredient(IngredientId::seeded("chips")),
+                    ConsumedAmount::Measure(quantity(100, Unit::Gram)),
+                ),
+                (
+                    MealItemRef::ingredient(IngredientId::seeded("peas")),
+                    ConsumedAmount::Measure(quantity(70, Unit::Gram)),
+                ),
+            ],
+        )
+        .await?;
+
+        self.ensure_saved_meal(
+            "manager-lasagne-and-kale",
+            UserId::from_uuid(sample_uuid("user", "manager")),
+            "Lasagne and kale",
+            vec![
+                (
+                    MealItemRef::prepared_meal(PreparedMealId::seeded("frozen-lasagne")),
+                    ConsumedAmount::Measure(quantity(1, Unit::Item)),
+                ),
+                (
+                    MealItemRef::ingredient(IngredientId::seeded("kale")),
+                    ConsumedAmount::Measure(quantity(80, Unit::Gram)),
+                ),
+            ],
+        )
+        .await?;
+
+        Ok(())
+    }
+
+    async fn ensure_components_meal(
+        &mut self,
+        date: Date,
+        key: &str,
+        slot: MealSlot,
+        planned_time: Time,
+        components: Vec<(MealItemRef, ConsumedAmount)>,
+    ) -> anyhow::Result<()> {
+        let id = snack_id(date, key);
+        if !matches!(
+            self.state.meal_plan.get(id).await,
+            Err(CoreError::NotFound { .. })
+        ) {
+            return Ok(());
+        }
+        self.report.meals_created += 1;
+        self.state
+            .meal_plan
+            .create_backdated(NewMealPlanEntry {
+                id: Some(id),
+                scope: MealPlanScope::Member,
+                member_id: Some(self.member.id),
+                planned_on: date,
+                planned_time: Some(planned_time),
+                slot,
+                components: components
+                    .into_iter()
+                    .map(|(item, amount)| NewMealPlanComponent {
+                        id: None,
+                        item,
+                        amount,
+                    })
+                    .collect(),
+                participants: None,
+                guest_groups: Vec::new(),
+                actor_id: self.actor.id,
+            })
+            .await?;
+        Ok(())
+    }
+
+    async fn ensure_saved_meal(
+        &mut self,
+        key: &str,
+        owner_id: UserId,
+        name: &str,
+        components: Vec<(MealItemRef, ConsumedAmount)>,
+    ) -> anyhow::Result<()> {
+        let id = meal_template_id(key);
+        match self.state.meal_templates.get(id, owner_id).await {
+            Ok(_) => return Ok(()),
+            Err(CoreError::NotFound { .. }) => {}
+            Err(error) => return Err(error.into()),
+        }
+        self.state
+            .meal_templates
+            .create(NewMealTemplate {
+                id: Some(id),
+                owner_id,
+                name: name.to_owned(),
+                components: components
+                    .into_iter()
+                    .map(|(item, amount)| NewMealTemplateComponent { item, amount })
+                    .collect(),
+            })
+            .await?;
+        Ok(())
     }
 
     async fn load_planning_horizon(&mut self) -> anyhow::Result<()> {
@@ -732,7 +988,10 @@ impl Loader<'_> {
             .stock
             .list(&mmp_core::ports::StockQuery {
                 include_archived: false,
-                page: mmp_core::ports::PageRequest::new(1, mmp_core::ports::PageRequest::MAX_PER_PAGE),
+                page: mmp_core::ports::PageRequest::new(
+                    1,
+                    mmp_core::ports::PageRequest::MAX_PER_PAGE,
+                ),
                 ..Default::default()
             })
             .await?
@@ -1080,6 +1339,7 @@ impl Loader<'_> {
                 .record_purchase(
                     NewPurchase {
                         ingredient_id: Some(IngredientId::seeded("chicken-breast")),
+                        prepared_meal_id: None,
                         product_id: Some(product_id("chicken-breast")),
                         name: None,
                         quantity: Some(quantity(600, Unit::Gram)),
@@ -1094,6 +1354,7 @@ impl Loader<'_> {
                 .record_purchase(
                     NewPurchase {
                         ingredient_id: Some(IngredientId::seeded("broccoli")),
+                        prepared_meal_id: None,
                         product_id: None,
                         name: None,
                         quantity: None,
@@ -1108,6 +1369,7 @@ impl Loader<'_> {
                 .record_purchase(
                     NewPurchase {
                         ingredient_id: Some(IngredientId::seeded("potato")),
+                        prepared_meal_id: None,
                         product_id: None,
                         name: None,
                         quantity: None,
@@ -1159,6 +1421,7 @@ impl Loader<'_> {
                     .add_list_item(
                         NewShoppingListItem {
                             ingredient_id: None,
+                            prepared_meal_id: None,
                             product_id: product_key.map(product_id),
                             name: name.to_owned(),
                             quantity: None,
@@ -1733,7 +1996,7 @@ impl Loader<'_> {
                         planned_on: date,
                         planned_time: slot_time(slot),
                         slot,
-                                components: components_for(slot),
+                        components: components_for(slot),
                         participants: None,
                         guest_groups: Vec::new(),
                         actor_id: self.actor.id,
@@ -2166,6 +2429,66 @@ fn product_specs() -> Vec<ProductSpec> {
             servings_per_pack: Some(1),
             nutrition: NutritionFacts::default(),
         },
+        ProductSpec {
+            key: "fish-fingers",
+            name: "Sample Fish Fingers",
+            brand: Some("Sample Frozen"),
+            ingredient_key: Some("fish-fingers"),
+            section: ShoppingSection::Frozen,
+            package_quantity: Some(quantity(10, Unit::Item)),
+            servings_per_pack: Some(5),
+            nutrition: nutrition(1, Unit::Item, [65, 4, 5, 0, 3, 1, 0, 1, 5]),
+        },
+        ProductSpec {
+            key: "fish-fingers-posh",
+            name: "Sample Salmon Fish Fingers",
+            brand: Some("Sample Fresh"),
+            ingredient_key: Some("fish-fingers"),
+            section: ShoppingSection::Frozen,
+            package_quantity: Some(quantity(8, Unit::Item)),
+            servings_per_pack: Some(4),
+            nutrition: nutrition(1, Unit::Item, [80, 5, 4, 0, 5, 1, 0, 1, 8]),
+        },
+        ProductSpec {
+            key: "chips",
+            name: "Sample Oven Chips",
+            brand: Some("Sample Frozen"),
+            ingredient_key: Some("chips"),
+            section: ShoppingSection::Frozen,
+            package_quantity: Some(quantity(1000, Unit::Gram)),
+            servings_per_pack: Some(6),
+            nutrition: nutrition(100, Unit::Gram, [136, 2, 22, 1, 4, 1, 2, 0, 0]),
+        },
+        ProductSpec {
+            key: "chips-thin-cut",
+            name: "Sample Thin Cut Fries",
+            brand: Some("Sample Basics"),
+            ingredient_key: Some("chips"),
+            section: ShoppingSection::Frozen,
+            package_quantity: Some(quantity(750, Unit::Gram)),
+            servings_per_pack: Some(5),
+            nutrition: nutrition(100, Unit::Gram, [155, 2, 24, 1, 6, 1, 2, 1, 0]),
+        },
+        ProductSpec {
+            key: "peas",
+            name: "Sample Garden Peas",
+            brand: Some("Sample Frozen"),
+            ingredient_key: Some("peas"),
+            section: ShoppingSection::Frozen,
+            package_quantity: Some(quantity(900, Unit::Gram)),
+            servings_per_pack: Some(9),
+            nutrition: nutrition(100, Unit::Gram, [79, 5, 10, 4, 1, 0, 5, 0, 0]),
+        },
+        ProductSpec {
+            key: "peas-petit-pois",
+            name: "Sample Petit Pois",
+            brand: Some("Sample Fresh"),
+            ingredient_key: Some("peas"),
+            section: ShoppingSection::Frozen,
+            package_quantity: Some(quantity(600, Unit::Gram)),
+            servings_per_pack: Some(6),
+            nutrition: nutrition(100, Unit::Gram, [66, 5, 8, 3, 1, 0, 5, 0, 0]),
+        },
     ]
 }
 
@@ -2228,6 +2551,10 @@ fn recipe_id(key: &str) -> RecipeId {
     RecipeId::from_uuid(sample_uuid("recipe", key))
 }
 
+fn meal_template_id(key: &str) -> MealTemplateId {
+    MealTemplateId::from_uuid(sample_uuid("meal-template", key))
+}
+
 enum RecipeLineSpec {
     Ingredient(&'static str),
     Product(&'static str),
@@ -2248,6 +2575,42 @@ impl RecipeLineSpec {
             },
         }
     }
+}
+
+struct PreparedMealProductSpec {
+    key: &'static str,
+    name: &'static str,
+    brand: &'static str,
+    prepared_meal_key: &'static str,
+    section: ShoppingSection,
+    package_quantity: Quantity,
+    servings_per_pack: Option<i32>,
+    nutrition: NutritionFacts,
+}
+
+fn prepared_meal_product_specs() -> Vec<PreparedMealProductSpec> {
+    vec![
+        PreparedMealProductSpec {
+            key: "frozen-lasagne-tesco",
+            name: "Sample Frozen Lasagne",
+            brand: "Sample Tesco",
+            prepared_meal_key: "frozen-lasagne",
+            section: ShoppingSection::Frozen,
+            package_quantity: quantity(400, Unit::Gram),
+            servings_per_pack: Some(2),
+            nutrition: nutrition(100, Unit::Gram, [140, 7, 12, 3, 7, 3, 1, 1, 20]),
+        },
+        PreparedMealProductSpec {
+            key: "frozen-lasagne-sainsburys",
+            name: "Sample Beef Lasagne",
+            brand: "Sample Sainsbury's",
+            prepared_meal_key: "frozen-lasagne",
+            section: ShoppingSection::Frozen,
+            package_quantity: quantity(500, Unit::Gram),
+            servings_per_pack: Some(2),
+            nutrition: nutrition(100, Unit::Gram, [180, 9, 14, 4, 10, 4, 1, 1, 25]),
+        },
+    ]
 }
 
 struct RecipeSpec {
