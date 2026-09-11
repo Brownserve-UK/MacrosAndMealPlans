@@ -11,6 +11,7 @@ mod nutrition;
 mod nutrition_target;
 mod patch;
 mod prepared;
+mod prepared_meal;
 mod product;
 mod provenance;
 mod quantity;
@@ -23,8 +24,8 @@ mod weight;
 pub use access::{AccessScope, Permission, Role, UnknownAccessScope, UnknownRole};
 pub use consumption::{
     AmountError, ConsumedAmount, ConsumedNutrition, ConsumptionRecord, ConsumptionRecordPatch,
-    NewConsumptionRecord, NutritionQuality, UnknownNutritionQuality, mean_nutrition, nutrition_for,
-    recipe_nutrition_for, sum_nutrition,
+    NewConsumptionRecord, NutritionQuality, UnknownNutritionQuality, generic_food_nutrition,
+    mean_nutrition, nutrition_for, recipe_nutrition_for, sum_nutrition,
 };
 pub use coverage::{Coverage, UncoveredClaim, cover};
 pub use household::{
@@ -38,10 +39,10 @@ pub use household_settings::{
 pub use ids::{ConsumptionRecordId, HouseholdMemberId, IngredientId, ProductId, Revision, UserId};
 pub use ids::{
     MealGuestAllocationId, MealGuestGroupId, MealParticipantAllocationId, MealParticipantId,
-    MealPlanComponentId, MealPlanEntryId, NutritionTargetId, PreparedBatchId, PurchaseId,
-    RecipeComponentId, RecipeId, RecipeInstructionId, ShoppingListItemId, ShoppingOpportunityId,
-    ShoppingTripId, ShoppingTripRowId, StockEffectId, StockEventId, StockItemId, WeightGoalId,
-    WeightRecordId,
+    MealPlanComponentId, MealPlanEntryId, NutritionTargetId, PreparedBatchId, PreparedMealId,
+    PurchaseId, RecipeComponentId, RecipeId, RecipeInstructionId, ShoppingListItemId,
+    ShoppingOpportunityId, ShoppingTripId, ShoppingTripRowId, StockEffectId, StockEventId,
+    StockItemId, WeightGoalId, WeightRecordId,
 };
 pub use ingredient::{
     Ingredient, IngredientPatch, IngredientSummary, MAX_NAME_LEN, NewIngredient, validate_name,
@@ -78,6 +79,7 @@ pub use prepared::{
     CHILLED_LEFTOVER_DAYS, FROZEN_LEFTOVER_DAYS, NewPreparedBatch, PortionPlacement,
     PreparationSource, PreparedBatch, cooked_deadline, validate_placements,
 };
+pub use prepared_meal::{NewPreparedMeal, PreparedMeal, PreparedMealPatch, PreparedMealSummary};
 pub use product::{
     MAX_BARCODE_LEN, MAX_SHORT_TEXT_LEN, MIN_BARCODE_LEN, NewProduct, Product, ProductPatch,
 };
@@ -104,12 +106,12 @@ pub use stock::{
     AppliedDelta, Availability, AvailabilityReport, Confidence, CookedFoodAvailability,
     DeductionCandidates, DeductionPlan, DeductionTarget, DemandClaim, DemandGap, DemandSubject,
     IngredientAvailability, MissingStock, NewStockEffect, NewStockEvent, NewStockItem, PlannedTake,
-    ProductAvailability, ReleasePlan, Shortfall, SourceDate, SourceDateKind, StockEffect,
-    StockEffectSource, StockEffectState, StockEvent, StockEventKind, StockEventSource, StockItem,
-    StockItemPatch, StockLevel, StockOutcome, StockSubject, StorageLocation, TrackingMode,
-    UnknownSourceDateKind, UnknownStockEffectSource, UnknownStockEffectState,
-    UnknownStockEventKind, UnknownStorageLocation, UnknownTrackingMode, UsabilityDeadline,
-    apply_take, plan_deduction, plan_release,
+    PreparedMealAvailability, ProductAvailability, ReleasePlan, Shortfall, SourceDate,
+    SourceDateKind, StockEffect, StockEffectSource, StockEffectState, StockEvent, StockEventKind,
+    StockEventSource, StockItem, StockItemPatch, StockLevel, StockOutcome, StockSubject,
+    StorageLocation, TrackingMode, UnknownSourceDateKind, UnknownStockEffectSource,
+    UnknownStockEffectState, UnknownStockEventKind, UnknownStorageLocation, UnknownTrackingMode,
+    UsabilityDeadline, apply_take, plan_deduction, plan_release,
 };
 pub use weight::{
     GoalAmounts, GoalProjection, NewWeightGoal, NewWeightRecord, UnknownWeightDisplay,

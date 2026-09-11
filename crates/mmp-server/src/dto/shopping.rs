@@ -316,6 +316,8 @@ pub struct ShoppingTripRowDto {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ingredient_id: Option<Uuid>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub prepared_meal_id: Option<Uuid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub product_id: Option<Uuid>,
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -329,6 +331,7 @@ impl From<ShoppingTripRow> for ShoppingTripRowDto {
         Self {
             id: value.id.as_uuid(),
             ingredient_id: value.ingredient_id.map(|id| id.as_uuid()),
+            prepared_meal_id: value.prepared_meal_id.map(|id| id.as_uuid()),
             product_id: value.product_id.map(|id| id.as_uuid()),
             name: value.name,
             quantity: value.quantity.map(Into::into),
@@ -377,6 +380,8 @@ pub struct CreateShoppingListItemRequest {
     #[serde(default)]
     pub ingredient_id: Option<Uuid>,
     #[serde(default)]
+    pub prepared_meal_id: Option<Uuid>,
+    #[serde(default)]
     pub product_id: Option<Uuid>,
     #[schema(example = "Onion Salt")]
     pub name: String,
@@ -393,6 +398,7 @@ impl From<CreateShoppingListItemRequest> for NewShoppingListItem {
     fn from(value: CreateShoppingListItemRequest) -> Self {
         Self {
             ingredient_id: value.ingredient_id.map(Into::into),
+            prepared_meal_id: value.prepared_meal_id.map(Into::into),
             product_id: value.product_id.map(Into::into),
             name: value.name,
             quantity: value.quantity.map(Into::into),
@@ -434,6 +440,8 @@ pub struct ShoppingListItemDto {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ingredient_id: Option<Uuid>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub prepared_meal_id: Option<Uuid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub product_id: Option<Uuid>,
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -455,6 +463,7 @@ impl From<ShoppingListItem> for ShoppingListItemDto {
         Self {
             id: value.id.as_uuid(),
             ingredient_id: value.ingredient_id.map(|id| id.as_uuid()),
+            prepared_meal_id: value.prepared_meal_id.map(|id| id.as_uuid()),
             product_id: value.product_id.map(|id| id.as_uuid()),
             name: value.name,
             quantity: value.quantity.map(Into::into),
@@ -504,6 +513,8 @@ pub struct PurchaseDto {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ingredient_id: Option<Uuid>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub prepared_meal_id: Option<Uuid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub product_id: Option<Uuid>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
@@ -532,6 +543,7 @@ impl From<Purchase> for PurchaseDto {
         Self {
             id: value.id.as_uuid(),
             ingredient_id: value.ingredient_id.map(|id| id.as_uuid()),
+            prepared_meal_id: value.prepared_meal_id.map(|id| id.as_uuid()),
             product_id: value.product_id.map(|id| id.as_uuid()),
             name: value.name,
             quantity: value.quantity.map(Into::into),
@@ -571,6 +583,8 @@ pub struct CreatePurchaseRequest {
     #[serde(default)]
     pub ingredient_id: Option<Uuid>,
     #[serde(default)]
+    pub prepared_meal_id: Option<Uuid>,
+    #[serde(default)]
     pub product_id: Option<Uuid>,
     #[serde(default)]
     pub name: Option<String>,
@@ -587,6 +601,7 @@ impl From<CreatePurchaseRequest> for NewPurchase {
     fn from(value: CreatePurchaseRequest) -> Self {
         Self {
             ingredient_id: value.ingredient_id.map(Into::into),
+            prepared_meal_id: value.prepared_meal_id.map(Into::into),
             product_id: value.product_id.map(Into::into),
             name: value.name,
             quantity: value.quantity.map(Into::into),

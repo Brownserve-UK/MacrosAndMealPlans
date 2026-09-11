@@ -7,20 +7,20 @@ use super::revision::commit_outcome;
 use crate::domain::{
     Assignment, Availability, Certainty, DemandClaim, DemandGap, DemandSubject, ExceptionState,
     IngredientId, NewPurchase, NewShoppingCadence, NewShoppingListItem, NewStockEvent,
-    NewStockItem, OpportunityException, ProductId, Purchase, PurchaseId, PurchasePatch,
-    PurchaseState, Quantity, Revision, ShoppingCadence, ShoppingListItem, ShoppingListItemId,
-    ShoppingListItemPatch, ShoppingOpportunity, ShoppingOpportunityId, ShoppingRequirement,
-    ShoppingSection, ShoppingTrip, ShoppingTripId, ShoppingTripRow, ShoppingTripRowId,
-    StockEffectSource, StockEventKind, StockEventSource, StockItem, StockLevel, StockSubject,
-    StorageLocation, SuggestionReason, TripState, UncoveredClaim, UserId, assign, cover,
-    expand_opportunities,
+    NewStockItem, OpportunityException, PreparedMealId, ProductId, Purchase, PurchaseId,
+    PurchasePatch, PurchaseState, Quantity, Revision, ShoppingCadence, ShoppingListItem,
+    ShoppingListItemId, ShoppingListItemPatch, ShoppingOpportunity, ShoppingOpportunityId,
+    ShoppingRequirement, ShoppingSection, ShoppingTrip, ShoppingTripId, ShoppingTripRow,
+    ShoppingTripRowId, StockEffectSource, StockEventKind, StockEventSource, StockItem, StockLevel,
+    StockSubject, StorageLocation, SuggestionReason, TripState, UncoveredClaim, UserId, assign,
+    cover, expand_opportunities,
 };
 use crate::error::{CoreError, Result};
 use crate::ports::{
     Clock, FinishedPurchase, HouseholdSettingsRepository, IngredientRepository,
-    NewStockFromPurchase, Paginated, ProductRepository, PurchaseQuery, PurchaseRepository,
-    ShoppingCadenceRepository, ShoppingListItemRepository, ShoppingOpportunityRepository,
-    ShoppingTripRepository, UpdateOutcome,
+    NewStockFromPurchase, Paginated, PreparedMealRepository, ProductRepository, PurchaseQuery,
+    PurchaseRepository, ShoppingCadenceRepository, ShoppingListItemRepository,
+    ShoppingOpportunityRepository, ShoppingTripRepository, UpdateOutcome,
 };
 use crate::services::StockService;
 
@@ -65,6 +65,7 @@ pub struct ShoppingService {
     list_items: Arc<dyn ShoppingListItemRepository>,
     trips: Arc<dyn ShoppingTripRepository>,
     ingredients: Arc<dyn IngredientRepository>,
+    prepared_meals: Arc<dyn PreparedMealRepository>,
     products: Arc<dyn ProductRepository>,
     settings: Arc<dyn HouseholdSettingsRepository>,
     stock: StockService,
@@ -80,6 +81,7 @@ impl ShoppingService {
         list_items: Arc<dyn ShoppingListItemRepository>,
         trips: Arc<dyn ShoppingTripRepository>,
         ingredients: Arc<dyn IngredientRepository>,
+        prepared_meals: Arc<dyn PreparedMealRepository>,
         products: Arc<dyn ProductRepository>,
         settings: Arc<dyn HouseholdSettingsRepository>,
         stock: StockService,
@@ -92,6 +94,7 @@ impl ShoppingService {
             list_items,
             trips,
             ingredients,
+            prepared_meals,
             products,
             settings,
             stock,
@@ -115,6 +118,7 @@ impl ShoppingService {
             .map(|requirement| ShoppingTripRow {
                 id: ShoppingTripRowId::new(),
                 ingredient_id: requirement.subject.ingredient_id(),
+                prepared_meal_id: requirement.subject.prepared_meal_id(),
                 product_id: requirement.subject.product_id(),
                 name: requirement.name.clone(),
                 quantity: requirement.quantity,
@@ -124,6 +128,7 @@ impl ShoppingService {
         rows.extend(list.manual.iter().map(|item| ShoppingTripRow {
             id: ShoppingTripRowId::new(),
             ingredient_id: item.ingredient_id,
+            prepared_meal_id: item.prepared_meal_id,
             product_id: item.product_id,
             name: item.name.clone(),
             quantity: item.quantity,
@@ -161,6 +166,7 @@ impl ShoppingService {
         let item = ShoppingListItem {
             id: ShoppingListItemId::new(),
             ingredient_id: input.ingredient_id,
+            prepared_meal_id: input.prepared_meal_id,
             product_id: input.product_id,
             name: input.name.trim().to_owned(),
             quantity: input.quantity,
@@ -350,11 +356,44 @@ impl ShoppingService {
                 .cloned()
                 .unwrap_or_default();
             let items = items_for(&snapshot.items, &pool);
-            let claims = claims_for_pool(&snapshot.report.claims, row.ingredient_id, &pool);
+            let claims = claims_for_pool(
+                &snapshot.report.claims,
+                DemandSubject::ingredient(row.ingredient_id),
+                &pool,
+            );
             let section = self.section_for_pool(row.ingredient_id, &pool).await?;
 
             requirements.extend(build(
                 DemandSubject::ingredient(row.ingredient_id),
+                row.name.clone(),
+                &row.availability,
+                &items,
+                &claims,
+                section,
+                &pool,
+                &opportunities,
+                &open_purchases,
+            ));
+        }
+
+        for row in &snapshot.report.prepared_meals {
+            let pool = snapshot
+                .prepared_meal_pools
+                .get(&row.prepared_meal_id)
+                .cloned()
+                .unwrap_or_default();
+            let items = items_for(&snapshot.items, &pool);
+            let claims = claims_for_pool(
+                &snapshot.report.claims,
+                DemandSubject::prepared_meal(row.prepared_meal_id),
+                &pool,
+            );
+            let section = self
+                .section_for_prepared_meal_pool(row.prepared_meal_id, &pool)
+                .await?;
+
+            requirements.extend(build(
+                DemandSubject::prepared_meal(row.prepared_meal_id),
                 row.name.clone(),
                 &row.availability,
                 &items,
@@ -376,6 +415,10 @@ impl ShoppingService {
                     .pools
                     .values()
                     .any(|pool| pool.contains(product_id))
+                    && !snapshot
+                        .prepared_meal_pools
+                        .values()
+                        .any(|pool| pool.contains(product_id))
             })
             .collect();
         let products = self.products.get_many(&unpooled).await?;
@@ -520,6 +563,24 @@ impl ShoppingService {
         Ok(ShoppingSection::Other)
     }
 
+    async fn section_for_prepared_meal_pool(
+        &self,
+        prepared_meal_id: PreparedMealId,
+        pool: &[ProductId],
+    ) -> Result<ShoppingSection> {
+        if let Some(prepared_meal) = self.prepared_meals.get(prepared_meal_id).await?
+            && let Some(section) = prepared_meal.shopping_section
+        {
+            return Ok(section);
+        }
+        for product in self.products.get_many(pool).await? {
+            if let Some(section) = product.shopping_section {
+                return Ok(section);
+            }
+        }
+        Ok(ShoppingSection::Other)
+    }
+
     pub async fn purchases(&self, query: &PurchaseQuery) -> Result<Paginated<Purchase>> {
         self.purchases.list(query).await
     }
@@ -601,6 +662,7 @@ impl ShoppingService {
         let purchase = Purchase {
             id: PurchaseId::new(),
             ingredient_id: input.ingredient_id,
+            prepared_meal_id: input.prepared_meal_id,
             product_id: input.product_id,
             name: input
                 .name
@@ -801,13 +863,15 @@ fn items_for(items: &[StockItem], pool: &[ProductId]) -> Vec<StockItem> {
 
 fn claims_for_pool(
     claims: &[DemandClaim],
-    ingredient_id: IngredientId,
+    subject: DemandSubject,
     pool: &[ProductId],
 ) -> Vec<DemandClaim> {
     claims
         .iter()
         .filter(|claim| match claim.subject {
-            DemandSubject::Ingredient { ingredient_id: id } => id == ingredient_id,
+            DemandSubject::Ingredient { .. } | DemandSubject::PreparedMeal { .. } => {
+                claim.subject == subject
+            }
             DemandSubject::Product { product_id } => pool.contains(&product_id),
             DemandSubject::PreparedPortion { .. } | DemandSubject::CookedFood { .. } => false,
         })

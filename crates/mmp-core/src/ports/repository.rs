@@ -9,11 +9,12 @@ use crate::domain::{
     HouseholdMember, HouseholdMemberId, HouseholdSettings, Ingredient, IngredientId,
     MealParticipant, MealPlanComponentId, MealPlanComponentSnapshot, MealPlanEntry,
     MealPlanEntryId, MemberAccessGrant, NewStockEvent, NutritionTarget, NutritionTargetId,
-    OpportunityException, PreparedBatch, PreparedBatchId, Product, ProductId, Purchase, PurchaseId,
-    PurchaseState, Quantity, Recipe, RecipeId, RecipePhoto, RecipeSummary, Revision, Role,
-    ShoppingCadence, ShoppingListItem, ShoppingListItemId, ShoppingOpportunityId, ShoppingTrip,
-    StockEffect, StockEffectSource, StockEvent, StockItem, StockItemId, StockOutcome, User, UserId,
-    WeightGoal, WeightGoalId, WeightRecord, WeightRecordId,
+    OpportunityException, PreparedBatch, PreparedBatchId, PreparedMeal, PreparedMealId, Product,
+    ProductId, Purchase, PurchaseId, PurchaseState, Quantity, Recipe, RecipeId, RecipePhoto,
+    RecipeSummary, Revision, Role, ShoppingCadence, ShoppingListItem, ShoppingListItemId,
+    ShoppingOpportunityId, ShoppingTrip, StockEffect, StockEffectSource, StockEvent, StockItem,
+    StockItemId, StockOutcome, User, UserId, WeightGoal, WeightGoalId, WeightRecord,
+    WeightRecordId,
 };
 use crate::error::Result;
 
@@ -57,9 +58,29 @@ pub struct ProductQuery {
     pub barcode: Option<String>,
     pub retailer: Option<String>,
     pub mapped_ingredient_id: Option<IngredientId>,
+    pub mapped_prepared_meal_id: Option<PreparedMealId>,
     pub unmapped: Option<bool>,
     pub include_archived: bool,
     pub page: PageRequest,
+    pub sort: SortDirection,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PreparedMealSort {
+    #[default]
+    Name,
+    Created,
+    ProductCount,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct PreparedMealQuery {
+    pub search: Option<String>,
+    pub origin: Option<CatalogueOrigin>,
+    pub needs_products: Option<bool>,
+    pub include_archived: bool,
+    pub page: PageRequest,
+    pub sort_by: PreparedMealSort,
     pub sort: SortDirection,
 }
 
@@ -222,9 +243,48 @@ pub trait ProductRepository: Send + Sync + 'static {
         ingredient_ids: &[IngredientId],
     ) -> Result<HashMap<IngredientId, Vec<Product>>>;
 
+    async fn count_by_prepared_meal(
+        &self,
+        prepared_meal_ids: &[PreparedMealId],
+    ) -> Result<HashMap<PreparedMealId, i64>>;
+
+    async fn list_by_prepared_meal(
+        &self,
+        prepared_meal_ids: &[PreparedMealId],
+    ) -> Result<HashMap<PreparedMealId, Vec<Product>>>;
+
     async fn insert(&self, product: &Product) -> Result<()>;
 
     async fn update(&self, product: &Product, expected: Revision) -> Result<UpdateOutcome>;
+}
+
+#[async_trait]
+pub trait PreparedMealRepository: Send + Sync + 'static {
+    async fn get(&self, id: PreparedMealId) -> Result<Option<PreparedMeal>>;
+
+    async fn get_many(&self, ids: &[PreparedMealId]) -> Result<Vec<PreparedMeal>> {
+        let mut prepared_meals = Vec::with_capacity(ids.len());
+        for id in ids {
+            if let Some(prepared_meal) = self.get(*id).await? {
+                prepared_meals.push(prepared_meal);
+            }
+        }
+        Ok(prepared_meals)
+    }
+
+    async fn find_by_name(&self, name: &str) -> Result<Option<PreparedMeal>>;
+
+    async fn find_by_seed_key(&self, seed_key: &str) -> Result<Option<PreparedMeal>>;
+
+    async fn list(&self, query: &PreparedMealQuery) -> Result<Paginated<PreparedMeal>>;
+
+    async fn insert(&self, prepared_meal: &PreparedMeal) -> Result<()>;
+
+    async fn update(
+        &self,
+        prepared_meal: &PreparedMeal,
+        expected: Revision,
+    ) -> Result<UpdateOutcome>;
 }
 
 #[derive(Debug, Clone)]

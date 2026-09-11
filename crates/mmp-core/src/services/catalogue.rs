@@ -5,20 +5,24 @@ use time::OffsetDateTime;
 use super::revision::{commit_outcome, require_revision};
 use crate::domain::{
     CatalogueOrigin, ConsumedAmount, ConsumedNutrition, Ingredient, IngredientId, IngredientPatch,
-    IngredientSummary, NewIngredient, NewProduct, Product, ProductId, ProductPatch, Provenance,
-    Revision, nutrition_for,
+    IngredientSummary, NewIngredient, NewPreparedMeal, NewProduct, PreparedMeal, PreparedMealId,
+    PreparedMealPatch, PreparedMealSummary, Product, ProductId, ProductPatch, Provenance, Revision,
+    nutrition_for,
 };
 use crate::error::{CoreError, Result, ValidationErrors};
 use crate::ports::{
-    Clock, IngredientQuery, IngredientRepository, Paginated, ProductQuery, ProductRepository,
+    Clock, IngredientQuery, IngredientRepository, Paginated, PreparedMealQuery,
+    PreparedMealRepository, ProductQuery, ProductRepository,
 };
 
 const INGREDIENT: &str = "ingredient";
+const PREPARED_MEAL: &str = "prepared_meal";
 const PRODUCT: &str = "product";
 
 #[derive(Clone)]
 pub struct CatalogueService {
     ingredients: Arc<dyn IngredientRepository>,
+    prepared_meals: Arc<dyn PreparedMealRepository>,
     products: Arc<dyn ProductRepository>,
     clock: Arc<dyn Clock>,
 }
@@ -26,11 +30,13 @@ pub struct CatalogueService {
 impl CatalogueService {
     pub fn new(
         ingredients: Arc<dyn IngredientRepository>,
+        prepared_meals: Arc<dyn PreparedMealRepository>,
         products: Arc<dyn ProductRepository>,
         clock: Arc<dyn Clock>,
     ) -> Self {
         Self {
             ingredients,
+            prepared_meals,
             products,
             clock,
         }
@@ -161,6 +167,131 @@ impl CatalogueService {
         Ok(current)
     }
 
+    pub async fn create_prepared_meal(&self, input: NewPreparedMeal) -> Result<PreparedMeal> {
+        input.validate()?;
+        let name = input.name.trim().to_owned();
+        self.ensure_prepared_meal_name_free(&name, None).await?;
+
+        let now = self.clock.now();
+        let prepared_meal = PreparedMeal {
+            id: input.id.unwrap_or_default(),
+            name,
+            default_unit: input.default_unit,
+            shopping_section: input.shopping_section,
+            track_stock: input.track_stock,
+            provenance: input.provenance,
+            revision: Revision::INITIAL,
+            created_at: now,
+            updated_at: now,
+            archived_at: None,
+        };
+
+        self.prepared_meals.insert(&prepared_meal).await?;
+        Ok(prepared_meal)
+    }
+
+    pub async fn get_prepared_meal(&self, id: PreparedMealId) -> Result<PreparedMeal> {
+        self.prepared_meals
+            .get(id)
+            .await?
+            .ok_or_else(|| CoreError::not_found(PREPARED_MEAL, id))
+    }
+
+    pub async fn list_prepared_meals(
+        &self,
+        query: &PreparedMealQuery,
+    ) -> Result<Paginated<PreparedMealSummary>> {
+        let page = self.prepared_meals.list(query).await?;
+        let ids: Vec<PreparedMealId> = page.items.iter().map(|i| i.id).collect();
+        let counts = self.products.count_by_prepared_meal(&ids).await?;
+
+        let items = page
+            .items
+            .into_iter()
+            .map(|prepared_meal| PreparedMealSummary {
+                mapped_product_count: counts.get(&prepared_meal.id).copied().unwrap_or(0),
+                prepared_meal,
+            })
+            .collect();
+
+        Ok(Paginated {
+            items,
+            total: page.total,
+            page: page.page,
+            per_page: page.per_page,
+        })
+    }
+
+    pub async fn count_products_for_prepared_meal(&self, id: PreparedMealId) -> Result<i64> {
+        Ok(self
+            .products
+            .count_by_prepared_meal(&[id])
+            .await?
+            .get(&id)
+            .copied()
+            .unwrap_or(0))
+    }
+
+    pub async fn update_prepared_meal(
+        &self,
+        id: PreparedMealId,
+        expected: Revision,
+        patch: PreparedMealPatch,
+    ) -> Result<PreparedMeal> {
+        patch.validate()?;
+        let mut current = self.get_prepared_meal(id).await?;
+        require_revision(PREPARED_MEAL, id, expected, current.revision)?;
+
+        if patch.is_empty() {
+            return Ok(current);
+        }
+
+        if let Some(name) = patch.name {
+            let name = name.trim().to_owned();
+            if !name.eq_ignore_ascii_case(&current.name) {
+                self.ensure_prepared_meal_name_free(&name, Some(id)).await?;
+            }
+            current.name = name;
+        }
+        if let Some(unit) = patch.default_unit {
+            current.default_unit = unit;
+        }
+        current.shopping_section = patch.shopping_section.apply(current.shopping_section);
+        current.track_stock = patch.track_stock.apply(current.track_stock);
+
+        self.stamp_update(
+            &mut current.provenance,
+            &mut current.revision,
+            &mut current.updated_at,
+        );
+        self.commit_prepared_meal(&current, expected).await?;
+        Ok(current)
+    }
+
+    pub async fn set_prepared_meal_archived(
+        &self,
+        id: PreparedMealId,
+        expected: Revision,
+        archived: bool,
+    ) -> Result<PreparedMeal> {
+        let mut current = self.get_prepared_meal(id).await?;
+        require_revision(PREPARED_MEAL, id, expected, current.revision)?;
+
+        if current.is_archived() == archived {
+            return Ok(current);
+        }
+
+        let now = self.clock.now();
+        current.archived_at = archived.then_some(now);
+        self.stamp_update(
+            &mut current.provenance,
+            &mut current.revision,
+            &mut current.updated_at,
+        );
+        self.commit_prepared_meal(&current, expected).await?;
+        Ok(current)
+    }
+
     pub async fn create_product(&self, input: NewProduct) -> Result<Product> {
         input.validate()?;
         let name = input.name.trim().to_owned();
@@ -171,6 +302,9 @@ impl CatalogueService {
         }
         if let Some(ingredient_id) = input.mapped_ingredient_id {
             self.ensure_mappable_ingredient(ingredient_id).await?;
+        }
+        if let Some(prepared_meal_id) = input.mapped_prepared_meal_id {
+            self.ensure_mappable_prepared_meal(prepared_meal_id).await?;
         }
 
         let now = self.clock.now();
@@ -185,6 +319,7 @@ impl CatalogueService {
             package_quantity: input.package_quantity,
             servings_per_pack: input.servings_per_pack,
             mapped_ingredient_id: input.mapped_ingredient_id,
+            mapped_prepared_meal_id: input.mapped_prepared_meal_id,
             nutrition: input.nutrition,
             provenance: input.provenance,
             revision: Revision::INITIAL,
@@ -315,6 +450,35 @@ impl CatalogueService {
         }
 
         current.mapped_ingredient_id = ingredient_id;
+        current.validate_invariants()?;
+        self.stamp_update(
+            &mut current.provenance,
+            &mut current.revision,
+            &mut current.updated_at,
+        );
+        self.commit_product(&current, expected).await?;
+        Ok(current)
+    }
+
+    pub async fn set_product_prepared_meal_mapping(
+        &self,
+        id: ProductId,
+        expected: Revision,
+        prepared_meal_id: Option<PreparedMealId>,
+    ) -> Result<Product> {
+        let mut current = self.get_product(id).await?;
+        require_revision(PRODUCT, id, expected, current.revision)?;
+
+        if let Some(prepared_meal_id) = prepared_meal_id {
+            self.ensure_mappable_prepared_meal(prepared_meal_id).await?;
+        }
+
+        if current.mapped_prepared_meal_id == prepared_meal_id {
+            return Ok(current);
+        }
+
+        current.mapped_prepared_meal_id = prepared_meal_id;
+        current.validate_invariants()?;
         self.stamp_update(
             &mut current.provenance,
             &mut current.revision,
@@ -353,6 +517,19 @@ impl CatalogueService {
             ingredient.id,
             expected,
             self.ingredients.update(ingredient, expected).await?,
+        )
+    }
+
+    async fn commit_prepared_meal(
+        &self,
+        prepared_meal: &PreparedMeal,
+        expected: Revision,
+    ) -> Result<()> {
+        commit_outcome(
+            PREPARED_MEAL,
+            prepared_meal.id,
+            expected,
+            self.prepared_meals.update(prepared_meal, expected).await?,
         )
     }
 
@@ -400,11 +577,34 @@ impl CatalogueService {
         Ok(())
     }
 
+    async fn ensure_prepared_meal_name_free(
+        &self,
+        name: &str,
+        allow: Option<PreparedMealId>,
+    ) -> Result<()> {
+        if let Some(existing) = self.prepared_meals.find_by_name(name).await?
+            && Some(existing.id) != allow
+        {
+            return Err(CoreError::duplicate(PREPARED_MEAL, "name", name));
+        }
+        Ok(())
+    }
+
     async fn ensure_mappable_ingredient(&self, id: IngredientId) -> Result<()> {
         let ingredient = self.get_ingredient(id).await?;
         if ingredient.is_archived() {
             let mut errors = ValidationErrors::new();
             errors.push("mapped_ingredient_id", "That ingredient is archived");
+            return errors.into_result();
+        }
+        Ok(())
+    }
+
+    async fn ensure_mappable_prepared_meal(&self, id: PreparedMealId) -> Result<()> {
+        let prepared_meal = self.get_prepared_meal(id).await?;
+        if prepared_meal.is_archived() {
+            let mut errors = ValidationErrors::new();
+            errors.push("mapped_prepared_meal_id", "That prepared meal is archived");
             return errors.into_result();
         }
         Ok(())

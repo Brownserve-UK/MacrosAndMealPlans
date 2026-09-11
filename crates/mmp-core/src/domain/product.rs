@@ -1,7 +1,7 @@
 use time::OffsetDateTime;
 
 use super::{
-    IngredientId, NutritionFacts, Patch, ProductId, Provenance, Quantity, Revision,
+    IngredientId, NutritionFacts, Patch, PreparedMealId, ProductId, Provenance, Quantity, Revision,
     ShoppingSection, validate_name,
 };
 use crate::error::ValidationErrors;
@@ -23,6 +23,7 @@ pub struct Product {
     pub package_quantity: Option<Quantity>,
     pub servings_per_pack: Option<i32>,
     pub mapped_ingredient_id: Option<IngredientId>,
+    pub mapped_prepared_meal_id: Option<PreparedMealId>,
     pub nutrition: NutritionFacts,
     pub provenance: Provenance,
     pub revision: Revision,
@@ -52,6 +53,13 @@ impl Product {
             errors.push("servings_per_pack", "Needs a pack size to divide up");
         }
 
+        if self.mapped_ingredient_id.is_some() && self.mapped_prepared_meal_id.is_some() {
+            errors.push(
+                "mapped_prepared_meal_id",
+                "Stands in for either a food or a prepared meal, not both",
+            );
+        }
+
         errors.into_result()
     }
 }
@@ -68,6 +76,7 @@ pub struct NewProduct {
     pub package_quantity: Option<Quantity>,
     pub servings_per_pack: Option<i32>,
     pub mapped_ingredient_id: Option<IngredientId>,
+    pub mapped_prepared_meal_id: Option<PreparedMealId>,
     pub nutrition: NutritionFacts,
     pub provenance: Provenance,
 }

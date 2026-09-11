@@ -15,9 +15,10 @@ use crate::ports::{Clock, FixedClock, MealPlanRepository};
 use crate::testing::{
     InMemoryHouseholdMemberRepository, InMemoryHouseholdSettingsRepository,
     InMemoryIngredientRepository, InMemoryMealPlanRepository, InMemoryPreparedBatchRepository,
-    InMemoryProductRepository, InMemoryPurchaseRepository, InMemoryRecipeRepository,
-    InMemoryShoppingCadenceRepository, InMemoryShoppingListItemRepository,
-    InMemoryShoppingOpportunityRepository, InMemoryShoppingTripRepository, InMemoryStockRepository,
+    InMemoryPreparedMealRepository, InMemoryProductRepository, InMemoryPurchaseRepository,
+    InMemoryRecipeRepository, InMemoryShoppingCadenceRepository,
+    InMemoryShoppingListItemRepository, InMemoryShoppingOpportunityRepository,
+    InMemoryShoppingTripRepository, InMemoryStockRepository,
 };
 use time::Weekday;
 
@@ -65,6 +66,7 @@ fn harness() -> Harness {
         Arc::new(stock.clone()),
         Arc::new(products.clone()),
         Arc::new(ingredients.clone()),
+        Arc::new(InMemoryPreparedMealRepository::new()),
         Arc::new(meal_plans.clone()),
         Arc::new(recipes),
         Arc::new(InMemoryPreparedBatchRepository::with_stock(stock.clone())),
@@ -79,6 +81,7 @@ fn harness() -> Harness {
         Arc::new(list_items.clone()),
         Arc::new(InMemoryShoppingTripRepository::new()),
         Arc::new(ingredients.clone()),
+        Arc::new(InMemoryPreparedMealRepository::new()),
         Arc::new(products.clone()),
         Arc::new(settings.clone()),
         stock_service.clone(),
@@ -136,6 +139,7 @@ fn mapped(name: &str, ingredient_id: IngredientId) -> Product {
         package_quantity: Some(ml(1000)),
         servings_per_pack: None,
         mapped_ingredient_id: Some(ingredient_id),
+        mapped_prepared_meal_id: None,
         nutrition: Default::default(),
         provenance: Provenance::local(),
         revision: Revision::INITIAL,
@@ -480,6 +484,7 @@ async fn finishing_puts_the_shopping_where_it_belongs() {
             .record_purchase(
                 NewPurchase {
                     ingredient_id: Some(ingredient_id),
+                    prepared_meal_id: None,
                     product_id: Some(product_id),
                     name: None,
                     quantity: Some(ml(500)),
@@ -520,6 +525,7 @@ async fn something_grabbed_in_store_is_recorded_by_name_alone() {
         .record_purchase(
             NewPurchase {
                 ingredient_id: None,
+                prepared_meal_id: None,
                 product_id: None,
                 name: Some("Kiwi Fruit".to_owned()),
                 quantity: None,
@@ -595,6 +601,7 @@ async fn something_added_by_hand_survives_the_plan_changing() {
         .add_list_item(
             NewShoppingListItem {
                 ingredient_id: None,
+                prepared_meal_id: None,
                 product_id: None,
                 name: "Onion Salt".to_owned(),
                 quantity: None,
@@ -631,6 +638,7 @@ async fn a_hand_added_item_is_never_derived_onto_the_list() {
         .add_list_item(
             NewShoppingListItem {
                 ingredient_id: None,
+                prepared_meal_id: None,
                 product_id: None,
                 name: "Tomato Ketchup".to_owned(),
                 quantity: Some(ml(500)),
@@ -658,6 +666,7 @@ async fn finishing_a_shop_clears_the_things_you_added_to_it() {
         .add_list_item(
             NewShoppingListItem {
                 ingredient_id: None,
+                prepared_meal_id: None,
                 product_id: None,
                 name: "Onion Salt".to_owned(),
                 quantity: None,
@@ -672,6 +681,7 @@ async fn finishing_a_shop_clears_the_things_you_added_to_it() {
         .add_list_item(
             NewShoppingListItem {
                 ingredient_id: None,
+                prepared_meal_id: None,
                 product_id: None,
                 name: "Kitchen roll".to_owned(),
                 quantity: None,
@@ -772,6 +782,7 @@ async fn buying_without_details_records_the_purchase_but_creates_no_stock() {
         .record_purchase(
             NewPurchase {
                 ingredient_id: Some(milk),
+                prepared_meal_id: None,
                 product_id: None,
                 name: None,
                 quantity: None,
@@ -807,6 +818,7 @@ async fn buying_with_full_details_still_makes_no_stock_until_the_shop_is_finishe
         .record_purchase(
             NewPurchase {
                 ingredient_id: Some(milk),
+                prepared_meal_id: None,
                 product_id: Some(a.id),
                 name: None,
                 quantity: Some(ml(1000)),
@@ -851,6 +863,7 @@ async fn changing_your_mind_mid_shop_is_allowed_at_every_step() {
         .record_purchase(
             NewPurchase {
                 ingredient_id: Some(milk),
+                prepared_meal_id: None,
                 product_id: Some(a.id),
                 name: None,
                 quantity: Some(ml(1000)),
@@ -914,6 +927,7 @@ async fn two_products_can_answer_one_requirement() {
             .record_purchase(
                 NewPurchase {
                     ingredient_id: Some(milk),
+                    prepared_meal_id: None,
                     product_id: Some(product.id),
                     name: None,
                     quantity: Some(amount),
@@ -951,6 +965,7 @@ async fn finishing_leaves_a_purchase_with_no_details_waiting() {
         .record_purchase(
             NewPurchase {
                 ingredient_id: Some(milk),
+                prepared_meal_id: None,
                 product_id: None,
                 name: None,
                 quantity: None,
@@ -988,6 +1003,7 @@ async fn finishing_a_shop_twice_changes_nothing_and_locks_what_it_stocked() {
         .record_purchase(
             NewPurchase {
                 ingredient_id: Some(milk),
+                prepared_meal_id: None,
                 product_id: Some(a.id),
                 name: None,
                 quantity: Some(ml(1000)),

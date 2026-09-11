@@ -10,23 +10,28 @@ use crate::domain::{
     Availability, AvailabilityReport, Confidence, ConsumedAmount, CookedFoodAvailability,
     DeductionCandidates, DeductionPlan, DemandClaim, DemandGap, DemandSubject, HouseholdMemberId,
     IngredientAvailability, IngredientId, MealItemRef, MissingStock, NewStockEvent, NewStockItem,
-    ProductAvailability, ProductId, Quantity, Recipe, RecipeId, RecipeRequirement, Revision,
-    StockEvent, StockEventKind, StockItem, StockItemId, StockItemPatch, StockLevel, Unit, UserId,
-    apply_take, plan_deduction,
+    PreparedMealAvailability, PreparedMealId, ProductAvailability, ProductId, Quantity, Recipe,
+    RecipeId, RecipeRequirement, Revision, StockEvent, StockEventKind, StockItem, StockItemId,
+    StockItemPatch, StockLevel, Unit, UserId, apply_take, plan_deduction,
 };
 use crate::error::{CoreError, Result};
 use crate::ports::{
     Clock, HouseholdMemberRepository, HouseholdSettingsRepository, IngredientRepository,
     MealPlanQuery, MealPlanRepository, MemberQuery, PageRequest, Paginated,
-    PreparedBatchRepository, ProductRepository, RecipeRepository, StockQuery, StockRepository,
+    PreparedBatchRepository, PreparedMealRepository, ProductRepository, RecipeRepository,
+    StockQuery, StockRepository,
 };
 
 const STOCK_ITEM: &str = "stock item";
+
+type ProductTrackingByMapping =
+    HashMap<ProductId, (Option<bool>, Option<IngredientId>, Option<PreparedMealId>)>;
 
 #[derive(Clone)]
 pub(crate) struct StockSnapshot {
     pub report: AvailabilityReport,
     pub pools: HashMap<IngredientId, Vec<ProductId>>,
+    pub prepared_meal_pools: HashMap<PreparedMealId, Vec<ProductId>>,
     pub items: Vec<StockItem>,
 }
 
@@ -35,6 +40,7 @@ pub struct StockService {
     stock: Arc<dyn StockRepository>,
     products: Arc<dyn ProductRepository>,
     ingredients: Arc<dyn IngredientRepository>,
+    prepared_meals: Arc<dyn PreparedMealRepository>,
     meal_plans: Arc<dyn MealPlanRepository>,
     recipes: Arc<dyn RecipeRepository>,
     batches: Arc<dyn PreparedBatchRepository>,
@@ -49,6 +55,7 @@ impl StockService {
         stock: Arc<dyn StockRepository>,
         products: Arc<dyn ProductRepository>,
         ingredients: Arc<dyn IngredientRepository>,
+        prepared_meals: Arc<dyn PreparedMealRepository>,
         meal_plans: Arc<dyn MealPlanRepository>,
         recipes: Arc<dyn RecipeRepository>,
         batches: Arc<dyn PreparedBatchRepository>,
@@ -60,6 +67,7 @@ impl StockService {
             stock,
             products,
             ingredients,
+            prepared_meals,
             meal_plans,
             recipes,
             batches,
@@ -316,6 +324,18 @@ impl StockService {
             .collect();
         sort_dedup(&mut ingredient_ids, IngredientId::as_uuid);
 
+        let mut prepared_meal_ids: Vec<PreparedMealId> = demand
+            .prepared_meals()
+            .filter(|id| {
+                all_ingredients
+                    || demand
+                        .prepared_meal_pool(id)
+                        .iter()
+                        .any(|product_id| product_ids.contains(product_id))
+            })
+            .collect();
+        sort_dedup(&mut prepared_meal_ids, PreparedMealId::as_uuid);
+
         let claims: Vec<DemandClaim> = demand
             .claims
             .iter()
@@ -323,6 +343,9 @@ impl StockService {
                 DemandSubject::Product { product_id } => product_ids.contains(&product_id),
                 DemandSubject::Ingredient { ingredient_id } => {
                     ingredient_ids.contains(&ingredient_id)
+                }
+                DemandSubject::PreparedMeal { prepared_meal_id } => {
+                    prepared_meal_ids.contains(&prepared_meal_id)
                 }
                 DemandSubject::PreparedPortion { .. } => false,
                 DemandSubject::CookedFood { .. } => all_ingredients,
@@ -333,6 +356,9 @@ impl StockService {
         let mut wanted: Vec<ProductId> = product_ids.to_vec();
         for ingredient_id in &ingredient_ids {
             wanted.extend(demand.pool(ingredient_id).iter().copied());
+        }
+        for prepared_meal_id in &prepared_meal_ids {
+            wanted.extend(demand.prepared_meal_pool(prepared_meal_id).iter().copied());
         }
         sort_dedup(&mut wanted, ProductId::as_uuid);
 
@@ -349,12 +375,16 @@ impl StockService {
         }
 
         let catalogue = self.products.get_many(&wanted).await?;
-        let product_tracking: HashMap<ProductId, (Option<bool>, Option<IngredientId>)> = catalogue
+        let product_tracking: ProductTrackingByMapping = catalogue
             .iter()
             .map(|product| {
                 (
                     product.id,
-                    (product.track_stock, product.mapped_ingredient_id),
+                    (
+                        product.track_stock,
+                        product.mapped_ingredient_id,
+                        product.mapped_prepared_meal_id,
+                    ),
                 )
             })
             .collect();
@@ -371,6 +401,25 @@ impl StockService {
         let names: HashMap<IngredientId, String> = catalogue_ingredients
             .into_iter()
             .map(|ingredient| (ingredient.id, ingredient.name))
+            .collect();
+
+        let mut tracked_prepared_meal_ids = prepared_meal_ids.clone();
+        tracked_prepared_meal_ids
+            .extend(catalogue.iter().filter_map(|p| p.mapped_prepared_meal_id));
+        sort_dedup(&mut tracked_prepared_meal_ids, PreparedMealId::as_uuid);
+
+        let catalogue_prepared_meals = self
+            .prepared_meals
+            .get_many(&tracked_prepared_meal_ids)
+            .await?;
+        let prepared_meal_tracking: HashMap<PreparedMealId, Option<bool>> =
+            catalogue_prepared_meals
+                .iter()
+                .map(|prepared_meal| (prepared_meal.id, prepared_meal.track_stock))
+                .collect();
+        let prepared_meal_names: HashMap<PreparedMealId, String> = catalogue_prepared_meals
+            .into_iter()
+            .map(|prepared_meal| (prepared_meal.id, prepared_meal.name))
             .collect();
 
         let mut apportioned: HashMap<ProductId, Quantity> = HashMap::new();
@@ -438,6 +487,80 @@ impl StockService {
             });
         }
 
+        let mut prepared_meals = Vec::with_capacity(prepared_meal_ids.len());
+        for prepared_meal_id in prepared_meal_ids {
+            let subject = DemandSubject::prepared_meal(prepared_meal_id);
+            let pool: Vec<&StockItem> = demand
+                .prepared_meal_pool(&prepared_meal_id)
+                .iter()
+                .filter_map(|product_id| by_product.get(product_id))
+                .flat_map(|items| items.iter().copied())
+                .collect();
+            let want = demand.quantity(&subject);
+
+            let free = free_pool_stock(
+                &demand,
+                demand.prepared_meal_pool(&prepared_meal_id),
+                &by_product,
+            );
+            if let Some(want) = want
+                && let DeductionPlan::Planned { takes, .. } = plan_deduction(&free, want)
+            {
+                for take in takes {
+                    let Some(item) = pool.iter().find(|item| item.id == take.stock_item_id) else {
+                        continue;
+                    };
+                    let Some(product_id) = item.product_id() else {
+                        continue;
+                    };
+                    add_quantity(&mut apportioned, product_id, take.requested);
+                }
+            }
+
+            let mut gaps = demand.gaps(&subject);
+            let mut pool_want = want;
+            for product_id in demand.prepared_meal_pool(&prepared_meal_id) {
+                let Some(direct) = demand.quantity(&DemandSubject::product(*product_id)) else {
+                    continue;
+                };
+                match pool_want {
+                    None => pool_want = Some(direct),
+                    Some(running) => match direct.convert_to(running.unit) {
+                        Ok(converted) => {
+                            pool_want = Some(Quantity::new(
+                                running.amount + converted.amount,
+                                running.unit,
+                            ));
+                        }
+                        Err(_) => gaps.push(DemandGap::IncompatibleUnits),
+                    },
+                }
+            }
+            gaps.sort_unstable();
+            gaps.dedup();
+
+            prepared_meals.push(PreparedMealAvailability {
+                prepared_meal_id,
+                name: prepared_meal_names
+                    .get(&prepared_meal_id)
+                    .cloned()
+                    .unwrap_or_default(),
+                availability: resolve_availability(
+                    &pool,
+                    pool_want,
+                    MissingStock::resolve(
+                        None,
+                        prepared_meal_tracking
+                            .get(&prepared_meal_id)
+                            .copied()
+                            .flatten(),
+                        interpretation,
+                    ),
+                ),
+                demand_gaps: gaps,
+            });
+        }
+
         let mut products = Vec::with_capacity(product_ids.len());
         for &product_id in product_ids {
             let subject = DemandSubject::product(product_id);
@@ -461,13 +584,18 @@ impl StockService {
             }
             gaps.sort_unstable();
             gaps.dedup();
-            let (own, mapped) = product_tracking
+            let (own, mapped_ingredient, mapped_prepared_meal) = product_tracking
                 .get(&product_id)
                 .copied()
-                .unwrap_or((None, None));
-            let inherited = mapped
+                .unwrap_or((None, None, None));
+            let inherited = mapped_ingredient
                 .and_then(|id| ingredient_tracking.get(&id).copied())
-                .flatten();
+                .flatten()
+                .or_else(|| {
+                    mapped_prepared_meal
+                        .and_then(|id| prepared_meal_tracking.get(&id).copied())
+                        .flatten()
+                });
             products.push(ProductAvailability {
                 product_id,
                 availability: resolve_availability(
@@ -487,6 +615,16 @@ impl StockService {
             );
         }
 
+        let mut prepared_meal_pools: HashMap<PreparedMealId, Vec<ProductId>> = HashMap::new();
+        for prepared_meal in &prepared_meals {
+            prepared_meal_pools.insert(
+                prepared_meal.prepared_meal_id,
+                demand
+                    .prepared_meal_pool(&prepared_meal.prepared_meal_id)
+                    .to_vec(),
+            );
+        }
+
         let cooked_food = if all_ingredients {
             self.cooked_availability(&demand).await?
         } else {
@@ -497,11 +635,13 @@ impl StockService {
             report: AvailabilityReport {
                 products,
                 ingredients,
+                prepared_meals,
                 cooked_food,
                 demand_gaps: demand.loose_gaps(),
                 claims,
             },
             pools,
+            prepared_meal_pools,
             items,
         })
     }
@@ -596,6 +736,29 @@ impl StockService {
         for (ingredient_id, products) in self.products.list_by_ingredient(&ingredient_ids).await? {
             demand.ensure_pool(
                 ingredient_id,
+                products.into_iter().map(|product| product.id).collect(),
+            );
+        }
+
+        let mut prepared_meal_ids: Vec<PreparedMealId> = self
+            .products
+            .get_many(product_ids)
+            .await?
+            .into_iter()
+            .filter_map(|product| product.mapped_prepared_meal_id)
+            .collect();
+        sort_dedup(&mut prepared_meal_ids, PreparedMealId::as_uuid);
+        if prepared_meal_ids.is_empty() {
+            return Ok(());
+        }
+
+        for (prepared_meal_id, products) in self
+            .products
+            .list_by_prepared_meal(&prepared_meal_ids)
+            .await?
+        {
+            demand.ensure_prepared_meal_pool(
+                prepared_meal_id,
                 products.into_iter().map(|product| product.id).collect(),
             );
         }
@@ -745,6 +908,50 @@ impl StockService {
                         demand.add(subject, quantity);
                         demand.note_claim(entry, subject, quantity, None, assumed);
                     }
+                    MealItemRef::Ingredient { ingredient_id } => {
+                        let subject = DemandSubject::ingredient(ingredient_id);
+                        let ConsumedAmount::Measure(quantity) = wanted else {
+                            demand.note_gap(subject, DemandGap::AmountUnresolvable);
+                            continue;
+                        };
+                        let pool = self
+                            .products
+                            .list_by_ingredient(&[ingredient_id])
+                            .await?
+                            .remove(&ingredient_id)
+                            .unwrap_or_default();
+                        demand.ensure_pool(
+                            ingredient_id,
+                            pool.iter().map(|product| product.id).collect(),
+                        );
+                        if pool.is_empty() {
+                            demand.note_gap(subject, DemandGap::FoodHasNoProducts);
+                        }
+                        demand.add(subject, quantity);
+                        demand.note_claim(entry, subject, quantity, None, assumed);
+                    }
+                    MealItemRef::PreparedMeal { prepared_meal_id } => {
+                        let subject = DemandSubject::prepared_meal(prepared_meal_id);
+                        let ConsumedAmount::Measure(quantity) = wanted else {
+                            demand.note_gap(subject, DemandGap::AmountUnresolvable);
+                            continue;
+                        };
+                        let pool = self
+                            .products
+                            .list_by_prepared_meal(&[prepared_meal_id])
+                            .await?
+                            .remove(&prepared_meal_id)
+                            .unwrap_or_default();
+                        demand.ensure_prepared_meal_pool(
+                            prepared_meal_id,
+                            pool.iter().map(|product| product.id).collect(),
+                        );
+                        if pool.is_empty() {
+                            demand.note_gap(subject, DemandGap::FoodHasNoProducts);
+                        }
+                        demand.add(subject, quantity);
+                        demand.note_claim(entry, subject, quantity, None, assumed);
+                    }
                 }
             }
         }
@@ -759,6 +966,7 @@ struct Demand {
     subject_gaps: HashMap<DemandSubject, BTreeSet<DemandGap>>,
     loose: BTreeSet<DemandGap>,
     pools: HashMap<IngredientId, Vec<ProductId>>,
+    prepared_meal_pools: HashMap<PreparedMealId, Vec<ProductId>>,
     claims: Vec<DemandClaim>,
 }
 
@@ -795,6 +1003,11 @@ impl Demand {
         if let Some(ingredient_id) = subject.ingredient_id() {
             self.pools.entry(ingredient_id).or_default();
         }
+        if let Some(prepared_meal_id) = subject.prepared_meal_id() {
+            self.prepared_meal_pools
+                .entry(prepared_meal_id)
+                .or_default();
+        }
         self.subject_gaps.entry(subject).or_default().insert(gap);
     }
 
@@ -830,6 +1043,26 @@ impl Demand {
             .unwrap_or(&[])
     }
 
+    fn ensure_prepared_meal_pool(
+        &mut self,
+        prepared_meal_id: PreparedMealId,
+        product_ids: Vec<ProductId>,
+    ) {
+        let pool = self
+            .prepared_meal_pools
+            .entry(prepared_meal_id)
+            .or_default();
+        pool.extend(product_ids);
+        sort_dedup(pool, ProductId::as_uuid);
+    }
+
+    fn prepared_meal_pool(&self, prepared_meal_id: &PreparedMealId) -> &[ProductId] {
+        self.prepared_meal_pools
+            .get(prepared_meal_id)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    }
+
     fn note_claim(
         &mut self,
         entry: &crate::domain::MealPlanEntry,
@@ -852,6 +1085,10 @@ impl Demand {
 
     fn ingredients(&self) -> impl Iterator<Item = IngredientId> + '_ {
         self.pools.keys().copied()
+    }
+
+    fn prepared_meals(&self) -> impl Iterator<Item = PreparedMealId> + '_ {
+        self.prepared_meal_pools.keys().copied()
     }
 }
 

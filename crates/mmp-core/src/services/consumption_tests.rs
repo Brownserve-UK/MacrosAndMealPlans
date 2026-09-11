@@ -9,8 +9,8 @@ use crate::domain::{StockItem, StockItemId, StockLevel, StorageLocation};
 use crate::ports::{FixedClock, StockRepository};
 use crate::testing::{
     InMemoryConsumptionRecordRepository, InMemoryIngredientRepository,
-    InMemoryPreparedBatchRepository, InMemoryProductRepository, InMemoryRecipeRepository,
-    InMemoryStockRepository,
+    InMemoryPreparedBatchRepository, InMemoryPreparedMealRepository, InMemoryProductRepository,
+    InMemoryRecipeRepository, InMemoryStockRepository,
 };
 use rust_decimal::Decimal;
 use time::OffsetDateTime;
@@ -68,6 +68,7 @@ fn harness_at(now: OffsetDateTime) -> Harness {
         Arc::new(records.clone()),
         Arc::new(products.clone()),
         Arc::new(ingredients.clone()),
+        Arc::new(InMemoryPreparedMealRepository::new()),
         Arc::new(recipes.clone()),
         Arc::new(InMemoryPreparedBatchRepository::new()),
         Arc::new(FixedClock::new(now)),
@@ -94,6 +95,7 @@ fn seed_product(h: &Harness, nutrition: NutritionFacts) -> Product {
         package_quantity: Some(Quantity::new(Decimal::new(650, 0), Unit::Gram)),
         servings_per_pack: None,
         mapped_ingredient_id: None,
+        mapped_prepared_meal_id: None,
         nutrition,
         provenance: Provenance::local(),
         revision: Revision::INITIAL,

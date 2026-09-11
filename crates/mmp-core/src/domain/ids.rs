@@ -69,6 +69,7 @@ macro_rules! entity_id {
 }
 
 entity_id!(IngredientId, "ingredient");
+entity_id!(PreparedMealId, "prepared_meal");
 entity_id!(ProductId, "product");
 entity_id!(UserId, "user");
 entity_id!(HouseholdMemberId, "household_member");

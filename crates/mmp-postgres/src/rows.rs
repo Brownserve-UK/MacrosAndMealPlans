@@ -7,14 +7,14 @@ use mmp_core::domain::{
     Ingredient, IngredientId, MealItemRef, MealPlanComponentId, MealPlanEntryId, MealSlot,
     MealTimes, MemberAccessGrant, MissingStockInterpretation, NutritionFacts, NutritionGoals,
     NutritionQuality, NutritionTarget, NutritionTargetId, OpportunityException, PreparationSource,
-    PreparedBatch, PreparedBatchId, Product, ProductId, Provenance, Purchase, PurchaseId,
-    PurchaseState, Quantity, RecipeId, Revision, Role, SectionOrder, ShoppingCadence,
-    ShoppingListItem, ShoppingListItemId, ShoppingOpportunityId, ShoppingSection, ShoppingTrip,
-    ShoppingTripId, ShoppingTripRow, ShoppingTripRowId, SourceDate, SourceDateKind, StockEffect,
-    StockEffectId, StockEffectSource, StockEffectState, StockEvent, StockEventId, StockEventKind,
-    StockEventSource, StockItem, StockItemId, StockLevel, StockSubject, StorageLocation,
-    TrackingMode, TripState, Unit, UsabilityDeadline, User, UserId, WeightDisplay, WeightGoal,
-    WeightGoalId, WeightObjective, WeightRecord, WeightRecordId, WeightSource,
+    PreparedBatch, PreparedBatchId, PreparedMeal, PreparedMealId, Product, ProductId, Provenance,
+    Purchase, PurchaseId, PurchaseState, Quantity, RecipeId, Revision, Role, SectionOrder,
+    ShoppingCadence, ShoppingListItem, ShoppingListItemId, ShoppingOpportunityId, ShoppingSection,
+    ShoppingTrip, ShoppingTripId, ShoppingTripRow, ShoppingTripRowId, SourceDate, SourceDateKind,
+    StockEffect, StockEffectId, StockEffectSource, StockEffectState, StockEvent, StockEventId,
+    StockEventKind, StockEventSource, StockItem, StockItemId, StockLevel, StockSubject,
+    StorageLocation, TrackingMode, TripState, Unit, UsabilityDeadline, User, UserId, WeightDisplay,
+    WeightGoal, WeightGoalId, WeightObjective, WeightRecord, WeightRecordId, WeightSource,
     week_day_from_number,
 };
 use mmp_core::{CoreError, RepositoryError};
@@ -84,6 +84,58 @@ impl TryFrom<IngredientRow> for Ingredient {
 }
 
 #[derive(Debug, sqlx::FromRow)]
+pub struct PreparedMealRow {
+    pub id: Uuid,
+    pub name: String,
+    pub default_unit: String,
+    pub origin: String,
+    pub seed_key: Option<String>,
+    pub source_provider: Option<String>,
+    pub source_external_id: Option<String>,
+    pub locally_modified: bool,
+    pub shopping_section: Option<String>,
+    pub track_stock: Option<bool>,
+    pub revision: i64,
+    pub created_at: OffsetDateTime,
+    pub updated_at: OffsetDateTime,
+    pub archived_at: Option<OffsetDateTime>,
+}
+
+impl TryFrom<PreparedMealRow> for PreparedMeal {
+    type Error = CoreError;
+
+    fn try_from(row: PreparedMealRow) -> Result<Self, Self::Error> {
+        Ok(PreparedMeal {
+            id: PreparedMealId::from(row.id),
+            name: row.name,
+            default_unit: Unit::from_str(&row.default_unit)
+                .map_err(|_| bad_value("default_unit", &row.default_unit))?,
+            shopping_section: row
+                .shopping_section
+                .as_deref()
+                .map(|section| {
+                    ShoppingSection::from_str(section)
+                        .map_err(|_| bad_value("shopping_section", section))
+                })
+                .transpose()?,
+            track_stock: row.track_stock,
+            provenance: Provenance {
+                origin: CatalogueOrigin::from_str(&row.origin)
+                    .map_err(|_| bad_value("origin", &row.origin))?,
+                seed_key: row.seed_key,
+                source_provider: row.source_provider,
+                source_external_id: row.source_external_id,
+                locally_modified: row.locally_modified,
+            },
+            revision: Revision::new(row.revision),
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+            archived_at: row.archived_at,
+        })
+    }
+}
+
+#[derive(Debug, sqlx::FromRow)]
 pub struct ProductRow {
     pub id: Uuid,
     pub name: String,
@@ -95,6 +147,7 @@ pub struct ProductRow {
     pub package_quantity_unit: Option<String>,
     pub servings_per_pack: Option<i32>,
     pub mapped_ingredient_id: Option<Uuid>,
+    pub mapped_prepared_meal_id: Option<Uuid>,
     pub nutrition_basis_amount: Option<Decimal>,
     pub nutrition_basis_unit: Option<String>,
     pub energy_kcal: Option<Decimal>,
@@ -149,6 +202,7 @@ impl TryFrom<ProductRow> for Product {
             package_quantity,
             servings_per_pack: row.servings_per_pack,
             mapped_ingredient_id: row.mapped_ingredient_id.map(IngredientId::from),
+            mapped_prepared_meal_id: row.mapped_prepared_meal_id.map(PreparedMealId::from),
             nutrition: NutritionFacts {
                 basis: parse_basis(row.nutrition_basis_amount, row.nutrition_basis_unit)?,
                 energy_kcal: row.energy_kcal,
@@ -763,11 +817,21 @@ pub fn amount_bindings(amount: &ConsumedAmount) -> (&'static str, Decimal, Optio
     }
 }
 
-pub fn item_bindings(item: &MealItemRef) -> (&'static str, Option<Uuid>, Option<Uuid>) {
+pub fn item_bindings(
+    item: &MealItemRef,
+) -> (
+    &'static str,
+    Option<Uuid>,
+    Option<Uuid>,
+    Option<Uuid>,
+    Option<Uuid>,
+) {
     (
         item.kind_code(),
         item.product_id().map(|id| id.as_uuid()),
         item.recipe_id().map(|id| id.as_uuid()),
+        item.ingredient_id().map(|id| id.as_uuid()),
+        item.prepared_meal_id().map(|id| id.as_uuid()),
     )
 }
 
@@ -795,6 +859,8 @@ pub struct ConsumptionRecordRow {
     pub item_kind: String,
     pub product_id: Option<Uuid>,
     pub recipe_id: Option<Uuid>,
+    pub ingredient_id: Option<Uuid>,
+    pub prepared_meal_id: Option<Uuid>,
     pub recorded_by: Option<Uuid>,
     pub meal_plan_entry_id: Option<Uuid>,
     pub meal_plan_component_id: Option<Uuid>,
@@ -835,6 +901,8 @@ impl TryFrom<ConsumptionRecordRow> for ConsumptionRecord {
                 &row.item_kind,
                 row.product_id.map(ProductId::from),
                 row.recipe_id.map(RecipeId::from),
+                row.ingredient_id.map(IngredientId::from),
+                row.prepared_meal_id.map(PreparedMealId::from),
             )
             .map_err(|_| bad_value("item_kind", &row.item_kind))?,
             recorded_by: row.recorded_by.map(UserId::from),
@@ -938,6 +1006,7 @@ impl TryFrom<OpportunityExceptionRow> for OpportunityException {
 pub struct PurchaseRow {
     pub id: Uuid,
     pub ingredient_id: Option<Uuid>,
+    pub prepared_meal_id: Option<Uuid>,
     pub product_id: Option<Uuid>,
     pub name: Option<String>,
     pub quantity_value: Option<Decimal>,
@@ -957,6 +1026,7 @@ pub struct PurchaseRow {
 pub struct ShoppingTripRowRow {
     pub id: Uuid,
     pub ingredient_id: Option<Uuid>,
+    pub prepared_meal_id: Option<Uuid>,
     pub product_id: Option<Uuid>,
     pub name: String,
     pub quantity_value: Option<Decimal>,
@@ -984,6 +1054,7 @@ impl TryFrom<ShoppingTripRowRow> for ShoppingTripRow {
         Ok(ShoppingTripRow {
             id: ShoppingTripRowId::from(row.id),
             ingredient_id: row.ingredient_id.map(IngredientId::from),
+            prepared_meal_id: row.prepared_meal_id.map(PreparedMealId::from),
             product_id: row.product_id.map(ProductId::from),
             name: row.name,
             quantity,
@@ -1026,6 +1097,7 @@ impl ShoppingTripHeadRow {
 pub struct ShoppingListItemRow {
     pub id: Uuid,
     pub ingredient_id: Option<Uuid>,
+    pub prepared_meal_id: Option<Uuid>,
     pub product_id: Option<Uuid>,
     pub name: String,
     pub quantity_value: Option<Decimal>,
@@ -1058,6 +1130,7 @@ impl TryFrom<ShoppingListItemRow> for ShoppingListItem {
         Ok(ShoppingListItem {
             id: ShoppingListItemId::from(row.id),
             ingredient_id: row.ingredient_id.map(IngredientId::from),
+            prepared_meal_id: row.prepared_meal_id.map(PreparedMealId::from),
             product_id: row.product_id.map(ProductId::from),
             name: row.name,
             quantity,
@@ -1085,6 +1158,7 @@ impl TryFrom<PurchaseRow> for Purchase {
         Ok(Purchase {
             id: PurchaseId::from(row.id),
             ingredient_id: row.ingredient_id.map(IngredientId::from),
+            prepared_meal_id: row.prepared_meal_id.map(PreparedMealId::from),
             product_id: row.product_id.map(ProductId::from),
             name: row.name,
             quantity,

@@ -6,8 +6,8 @@ use time::{Date, OffsetDateTime};
 
 use super::{
     HouseholdMemberId, IngredientId, MealPlanEntryId, MealPlanScope, MealSlot, Patch,
-    PreparedBatchId, ProductId, Quantity, RecipeId, Revision, StockEffectId, StockEventId,
-    StockItemId, Unit, UserId,
+    PreparedBatchId, PreparedMealId, ProductId, Quantity, RecipeId, Revision, StockEffectId,
+    StockEventId, StockItemId, Unit, UserId,
 };
 use crate::error::{Result, ValidationErrors};
 
@@ -400,6 +400,7 @@ impl Availability {
 pub enum DemandSubject {
     Product { product_id: ProductId },
     Ingredient { ingredient_id: IngredientId },
+    PreparedMeal { prepared_meal_id: PreparedMealId },
     PreparedPortion { prepared_batch_id: PreparedBatchId },
     CookedFood { recipe_id: RecipeId },
 }
@@ -411,6 +412,10 @@ impl DemandSubject {
 
     pub const fn ingredient(ingredient_id: IngredientId) -> Self {
         DemandSubject::Ingredient { ingredient_id }
+    }
+
+    pub const fn prepared_meal(prepared_meal_id: PreparedMealId) -> Self {
+        DemandSubject::PreparedMeal { prepared_meal_id }
     }
 
     pub const fn prepared_portion(prepared_batch_id: PreparedBatchId) -> Self {
@@ -432,6 +437,7 @@ impl DemandSubject {
         match self {
             DemandSubject::Product { product_id } => Some(*product_id),
             DemandSubject::Ingredient { .. }
+            | DemandSubject::PreparedMeal { .. }
             | DemandSubject::PreparedPortion { .. }
             | DemandSubject::CookedFood { .. } => None,
         }
@@ -441,6 +447,17 @@ impl DemandSubject {
         match self {
             DemandSubject::Ingredient { ingredient_id } => Some(*ingredient_id),
             DemandSubject::Product { .. }
+            | DemandSubject::PreparedMeal { .. }
+            | DemandSubject::PreparedPortion { .. }
+            | DemandSubject::CookedFood { .. } => None,
+        }
+    }
+
+    pub const fn prepared_meal_id(&self) -> Option<PreparedMealId> {
+        match self {
+            DemandSubject::PreparedMeal { prepared_meal_id } => Some(*prepared_meal_id),
+            DemandSubject::Product { .. }
+            | DemandSubject::Ingredient { .. }
             | DemandSubject::PreparedPortion { .. }
             | DemandSubject::CookedFood { .. } => None,
         }
@@ -451,6 +468,7 @@ impl DemandSubject {
             DemandSubject::PreparedPortion { prepared_batch_id } => Some(*prepared_batch_id),
             DemandSubject::Product { .. }
             | DemandSubject::Ingredient { .. }
+            | DemandSubject::PreparedMeal { .. }
             | DemandSubject::CookedFood { .. } => None,
         }
     }
@@ -474,7 +492,7 @@ pub struct DemandClaim {
 #[serde(rename_all = "snake_case")]
 pub enum DemandGap {
     UnresolvedRecipeLine,
-    IngredientHasNoProducts,
+    FoodHasNoProducts,
     RecipeMissing,
     ProductMissing,
     AmountUnresolvable,
@@ -484,7 +502,7 @@ pub enum DemandGap {
 impl DemandGap {
     pub const ALL: [DemandGap; 6] = [
         DemandGap::UnresolvedRecipeLine,
-        DemandGap::IngredientHasNoProducts,
+        DemandGap::FoodHasNoProducts,
         DemandGap::RecipeMissing,
         DemandGap::ProductMissing,
         DemandGap::AmountUnresolvable,
@@ -494,7 +512,7 @@ impl DemandGap {
     pub const fn code(&self) -> &'static str {
         match self {
             DemandGap::UnresolvedRecipeLine => "unresolved_recipe_line",
-            DemandGap::IngredientHasNoProducts => "ingredient_has_no_products",
+            DemandGap::FoodHasNoProducts => "food_has_no_products",
             DemandGap::RecipeMissing => "recipe_missing",
             DemandGap::ProductMissing => "product_missing",
             DemandGap::AmountUnresolvable => "amount_unresolvable",
@@ -513,6 +531,7 @@ impl fmt::Display for DemandGap {
 pub struct AvailabilityReport {
     pub products: Vec<ProductAvailability>,
     pub ingredients: Vec<IngredientAvailability>,
+    pub prepared_meals: Vec<PreparedMealAvailability>,
     pub cooked_food: Vec<CookedFoodAvailability>,
     pub demand_gaps: Vec<DemandGap>,
     pub claims: Vec<DemandClaim>,
@@ -542,6 +561,16 @@ impl DeductionTarget {
     pub fn pool(ingredient_id: IngredientId, product_ids: Vec<ProductId>) -> Self {
         Self {
             subject: DemandSubject::ingredient(ingredient_id),
+            candidates: DeductionCandidates::Products(product_ids),
+        }
+    }
+
+    pub fn prepared_meal_pool(
+        prepared_meal_id: PreparedMealId,
+        product_ids: Vec<ProductId>,
+    ) -> Self {
+        Self {
+            subject: DemandSubject::prepared_meal(prepared_meal_id),
             candidates: DeductionCandidates::Products(product_ids),
         }
     }
@@ -583,6 +612,20 @@ pub struct IngredientAvailability {
 }
 
 impl IngredientAvailability {
+    pub fn demand_incomplete(&self) -> bool {
+        !self.demand_gaps.is_empty()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct PreparedMealAvailability {
+    pub prepared_meal_id: PreparedMealId,
+    pub name: String,
+    pub availability: Availability,
+    pub demand_gaps: Vec<DemandGap>,
+}
+
+impl PreparedMealAvailability {
     pub fn demand_incomplete(&self) -> bool {
         !self.demand_gaps.is_empty()
     }

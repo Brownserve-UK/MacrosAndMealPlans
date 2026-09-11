@@ -6,6 +6,7 @@ pub mod members;
 pub mod meta;
 pub mod nutrition_target;
 pub mod preparation;
+pub mod prepared_meals;
 pub mod products;
 pub mod recipes;
 pub mod review;

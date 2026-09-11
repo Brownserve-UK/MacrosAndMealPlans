@@ -22,8 +22,9 @@ use crate::services::{ConsumptionService, NutritionTargetService};
 use crate::testing::{
     InMemoryConsumptionRecordRepository, InMemoryHouseholdMemberRepository,
     InMemoryHouseholdSettingsRepository, InMemoryIngredientRepository, InMemoryMealPlanRepository,
-    InMemoryNutritionTargetRepository, InMemoryPreparedBatchRepository, InMemoryProductRepository,
-    InMemoryRecipeRepository, InMemoryStockRepository,
+    InMemoryNutritionTargetRepository, InMemoryPreparedBatchRepository,
+    InMemoryPreparedMealRepository, InMemoryProductRepository, InMemoryRecipeRepository,
+    InMemoryStockRepository,
 };
 
 struct Harness {
@@ -155,11 +156,13 @@ fn harness() -> Harness {
     });
     let plans = InMemoryMealPlanRepository::new(records.clone());
     let batches = InMemoryPreparedBatchRepository::with_stock(stock.clone());
+    let prepared_meals = InMemoryPreparedMealRepository::new();
     let preparation = PreparationService::new(
         Arc::new(batches.clone()),
         Arc::new(recipes.clone()),
         Arc::new(products.clone()),
         Arc::new(ingredients.clone()),
+        Arc::new(prepared_meals.clone()),
         clock.clone(),
     );
     let preparation_for_tests = preparation.clone();
@@ -167,6 +170,7 @@ fn harness() -> Harness {
         Arc::new(plans.clone()),
         Arc::new(products.clone()),
         Arc::new(ingredients.clone()),
+        Arc::new(prepared_meals.clone()),
         Arc::new(recipes.clone()),
         Arc::new(records.clone()),
         Arc::new(target_repo.clone()),
@@ -180,6 +184,7 @@ fn harness() -> Harness {
         Arc::new(records.clone()),
         Arc::new(products.clone()),
         Arc::new(ingredients.clone()),
+        Arc::new(prepared_meals.clone()),
         Arc::new(recipes.clone()),
         Arc::new(batches.clone()),
         clock.clone(),
@@ -217,6 +222,7 @@ fn product(name: &str, energy_per_100g: i64) -> Product {
         package_quantity: Some(Quantity::new(Decimal::new(500, 0), Unit::Gram)),
         servings_per_pack: Some(5),
         mapped_ingredient_id: None,
+        mapped_prepared_meal_id: None,
         nutrition: NutritionFacts {
             basis: Some(Quantity::new(Decimal::new(100, 0), Unit::Gram)),
             energy_kcal: Some(Decimal::new(energy_per_100g, 0)),
@@ -2352,6 +2358,7 @@ async fn a_confirmed_component_stops_counting_as_planned_stock_demand() {
         Arc::new(h.stock.clone()),
         Arc::new(h.products.clone()),
         Arc::new(h.ingredients.clone()),
+        Arc::new(InMemoryPreparedMealRepository::new()),
         Arc::new(h.plans.clone()),
         Arc::new(h.recipes.clone()),
         Arc::new(h.batches.clone()),
@@ -3442,6 +3449,7 @@ async fn cooked_food_availability_pools_every_cook_and_nets_off_planned_dishes()
         Arc::new(h.stock.clone()),
         Arc::new(h.products.clone()),
         Arc::new(h.ingredients.clone()),
+        Arc::new(InMemoryPreparedMealRepository::new()),
         Arc::new(h.plans.clone()),
         Arc::new(h.recipes.clone()),
         Arc::new(h.batches.clone()),

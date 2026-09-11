@@ -11,7 +11,7 @@ use crate::error::{CoreError, Result, ValidationErrors};
 use crate::ports::{
     Clock, ConsumptionRecordRepository, HouseholdMemberRepository, HouseholdSettingsRepository,
     IngredientRepository, MealPlanRepository, NutritionTargetRepository, PreparedBatchRepository,
-    ProductRepository, RecipeRepository,
+    PreparedMealRepository, ProductRepository, RecipeRepository,
 };
 use crate::services::PreparationService;
 
@@ -34,6 +34,7 @@ pub struct MealPlanService {
     plans: Arc<dyn MealPlanRepository>,
     products: Arc<dyn ProductRepository>,
     ingredients: Arc<dyn IngredientRepository>,
+    prepared_meals: Arc<dyn PreparedMealRepository>,
     recipes: Arc<dyn RecipeRepository>,
     consumption: Arc<dyn ConsumptionRecordRepository>,
     targets: Arc<dyn NutritionTargetRepository>,
@@ -50,6 +51,7 @@ impl MealPlanService {
         plans: Arc<dyn MealPlanRepository>,
         products: Arc<dyn ProductRepository>,
         ingredients: Arc<dyn IngredientRepository>,
+        prepared_meals: Arc<dyn PreparedMealRepository>,
         recipes: Arc<dyn RecipeRepository>,
         consumption: Arc<dyn ConsumptionRecordRepository>,
         targets: Arc<dyn NutritionTargetRepository>,
@@ -63,6 +65,7 @@ impl MealPlanService {
             plans,
             products,
             ingredients,
+            prepared_meals,
             recipes,
             consumption,
             targets,
@@ -150,6 +153,30 @@ impl MealPlanService {
                         errors.push(
                             format!("components.{index}.amount"),
                             "Cooked food is measured in servings",
+                        );
+                    }
+                }
+                MealItemRef::Ingredient { ingredient_id } => {
+                    self.ingredients
+                        .get(ingredient_id)
+                        .await?
+                        .ok_or_else(|| CoreError::not_found("ingredient", ingredient_id))?;
+                    if !matches!(component.amount, ConsumedAmount::Measure(_)) {
+                        errors.push(
+                            format!("components.{index}.amount"),
+                            "A food without a brand is measured, not counted",
+                        );
+                    }
+                }
+                MealItemRef::PreparedMeal { prepared_meal_id } => {
+                    self.prepared_meals
+                        .get(prepared_meal_id)
+                        .await?
+                        .ok_or_else(|| CoreError::not_found("prepared_meal", prepared_meal_id))?;
+                    if !matches!(component.amount, ConsumedAmount::Measure(_)) {
+                        errors.push(
+                            format!("components.{index}.amount"),
+                            "A food without a brand is measured, not counted",
                         );
                     }
                 }

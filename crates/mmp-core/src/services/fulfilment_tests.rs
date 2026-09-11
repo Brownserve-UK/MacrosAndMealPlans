@@ -26,6 +26,7 @@ fn product(name: &str) -> Product {
         package_quantity: None,
         servings_per_pack: None,
         mapped_ingredient_id: None,
+        mapped_prepared_meal_id: None,
         nutrition: NutritionFacts::default(),
         provenance: Provenance::local(),
         revision: Revision::INITIAL,
@@ -264,7 +265,7 @@ fn an_ingredient_with_no_products_behind_it_reports_a_gap() {
         out.subject_gaps,
         vec![(
             DemandSubject::ingredient(ingredient),
-            DemandGap::IngredientHasNoProducts
+            DemandGap::FoodHasNoProducts
         )]
     );
 }

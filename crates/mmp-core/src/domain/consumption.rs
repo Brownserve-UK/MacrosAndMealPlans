@@ -143,6 +143,30 @@ pub fn recipe_nutrition_for(
     }
 }
 
+pub fn generic_food_nutrition(
+    candidates: &[Product],
+    amount: &ConsumedAmount,
+) -> ConsumedNutrition {
+    let resolved: Vec<NutritionFacts> = candidates
+        .iter()
+        .map(|product| nutrition_for(product, amount))
+        .filter(|consumed| consumed.quality != NutritionQuality::Unknown)
+        .map(|consumed| consumed.facts)
+        .collect();
+    if resolved.is_empty() {
+        return ConsumedNutrition::unknown();
+    }
+    let facts = mean_nutrition(&resolved);
+    ConsumedNutrition {
+        quality: if candidates.len() > resolved.len() {
+            NutritionQuality::Partial
+        } else {
+            NutritionQuality::Estimated
+        },
+        facts,
+    }
+}
+
 pub fn sum_nutrition<'a>(facts: impl IntoIterator<Item = &'a NutritionFacts>) -> NutritionFacts {
     let mut total = NutritionFacts::default();
     for f in facts {

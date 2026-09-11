@@ -16,6 +16,7 @@ pub fn build(state: AppState) -> (Router, utoipa::openapi::OpenApi) {
         .merge(routes::meta::router())
         .merge(routes::auth::router())
         .merge(routes::ingredients::router())
+        .merge(routes::prepared_meals::router())
         .merge(routes::products::router())
         .merge(routes::members::router())
         .merge(routes::users::router())
@@ -76,12 +77,14 @@ pub fn stub_state() -> AppState {
         Arc::new(NoopRecipes),
         Arc::new(NoopProducts),
         Arc::new(NoopIngredients),
+        Arc::new(NoopPreparedMeals),
         Arc::new(SystemClock),
     );
     let stock = mmp_core::services::StockService::new(
         Arc::new(NoopStock),
         Arc::new(NoopProducts),
         Arc::new(NoopIngredients),
+        Arc::new(NoopPreparedMeals),
         Arc::new(NoopMealPlans),
         Arc::new(NoopRecipes),
         Arc::new(NoopPreparedBatches),
@@ -93,6 +96,7 @@ pub fn stub_state() -> AppState {
     AppState::new(
         mmp_core::services::CatalogueService::new(
             Arc::new(NoopIngredients),
+            Arc::new(NoopPreparedMeals),
             products.clone(),
             Arc::new(SystemClock),
         ),
@@ -105,6 +109,7 @@ pub fn stub_state() -> AppState {
             consumption.clone(),
             products.clone(),
             Arc::new(NoopIngredients),
+            Arc::new(NoopPreparedMeals),
             Arc::new(NoopRecipes),
             Arc::new(NoopPreparedBatches),
             Arc::new(SystemClock),
@@ -113,6 +118,7 @@ pub fn stub_state() -> AppState {
             Arc::new(NoopMealPlans),
             products,
             Arc::new(NoopIngredients),
+            Arc::new(NoopPreparedMeals),
             Arc::new(NoopRecipes),
             consumption,
             targets.clone(),
@@ -137,6 +143,7 @@ pub fn stub_state() -> AppState {
             Arc::new(NoopShoppingListItems),
             Arc::new(NoopShoppingTrips),
             Arc::new(NoopIngredients),
+            Arc::new(NoopPreparedMeals),
             Arc::new(NoopProducts),
             Arc::new(NoopHouseholdSettings),
             stock,
@@ -252,6 +259,7 @@ impl mmp_core::ports::RecipeRepository for NoopRecipes {
 }
 
 struct NoopIngredients;
+struct NoopPreparedMeals;
 struct NoopHouseholdSettings;
 struct NoopProducts;
 
@@ -505,6 +513,44 @@ impl mmp_core::ports::IngredientRepository for NoopIngredients {
 }
 
 #[async_trait::async_trait]
+impl mmp_core::ports::PreparedMealRepository for NoopPreparedMeals {
+    async fn get(
+        &self,
+        _: mmp_core::domain::PreparedMealId,
+    ) -> mmp_core::Result<Option<mmp_core::domain::PreparedMeal>> {
+        Ok(None)
+    }
+    async fn find_by_name(
+        &self,
+        _: &str,
+    ) -> mmp_core::Result<Option<mmp_core::domain::PreparedMeal>> {
+        Ok(None)
+    }
+    async fn find_by_seed_key(
+        &self,
+        _: &str,
+    ) -> mmp_core::Result<Option<mmp_core::domain::PreparedMeal>> {
+        Ok(None)
+    }
+    async fn list(
+        &self,
+        q: &mmp_core::ports::PreparedMealQuery,
+    ) -> mmp_core::Result<mmp_core::ports::Paginated<mmp_core::domain::PreparedMeal>> {
+        Ok(mmp_core::ports::Paginated::new(vec![], 0, q.page))
+    }
+    async fn insert(&self, _: &mmp_core::domain::PreparedMeal) -> mmp_core::Result<()> {
+        Ok(())
+    }
+    async fn update(
+        &self,
+        _: &mmp_core::domain::PreparedMeal,
+        _: mmp_core::domain::Revision,
+    ) -> mmp_core::Result<mmp_core::ports::UpdateOutcome> {
+        Ok(mmp_core::ports::UpdateOutcome::NotFound)
+    }
+}
+
+#[async_trait::async_trait]
 impl mmp_core::ports::ProductRepository for NoopProducts {
     async fn count_by_ingredient(
         &self,
@@ -517,6 +563,20 @@ impl mmp_core::ports::ProductRepository for NoopProducts {
         _: &[mmp_core::domain::IngredientId],
     ) -> mmp_core::Result<
         std::collections::HashMap<mmp_core::domain::IngredientId, Vec<mmp_core::domain::Product>>,
+    > {
+        Ok(Default::default())
+    }
+    async fn count_by_prepared_meal(
+        &self,
+        _: &[mmp_core::domain::PreparedMealId],
+    ) -> mmp_core::Result<std::collections::HashMap<mmp_core::domain::PreparedMealId, i64>> {
+        Ok(Default::default())
+    }
+    async fn list_by_prepared_meal(
+        &self,
+        _: &[mmp_core::domain::PreparedMealId],
+    ) -> mmp_core::Result<
+        std::collections::HashMap<mmp_core::domain::PreparedMealId, Vec<mmp_core::domain::Product>>,
     > {
         Ok(Default::default())
     }

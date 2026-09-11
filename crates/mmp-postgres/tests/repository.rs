@@ -77,6 +77,7 @@ fn product(name: &str) -> Product {
         package_quantity: None,
         servings_per_pack: None,
         mapped_ingredient_id: None,
+        mapped_prepared_meal_id: None,
         nutrition: NutritionFacts::default(),
         provenance: Provenance::local(),
         revision: Revision::INITIAL,
@@ -557,6 +558,7 @@ async fn lists_products_filtered_by_mapped_ingredient(pool: PgPool) {
     let found = products
         .list(&ProductQuery {
             mapped_ingredient_id: Some(milk.id),
+            mapped_prepared_meal_id: None,
             ..Default::default()
         })
         .await
@@ -3226,6 +3228,7 @@ async fn a_trip_keeps_the_list_it_set_off_with(pool: PgPool) {
         rows: vec![ShoppingTripRow {
             id: ShoppingTripRowId::new(),
             ingredient_id: Some(milk.id),
+            prepared_meal_id: None,
             product_id: None,
             name: "Whole Milk".to_owned(),
             quantity: Some(Quantity::new(Decimal::new(400, 0), Unit::Millilitre)),
@@ -3274,6 +3277,7 @@ async fn a_hand_added_item_survives_until_its_shop_is_finished(pool: PgPool) {
     let onion_salt = ShoppingListItem {
         id: ShoppingListItemId::new(),
         ingredient_id: None,
+        prepared_meal_id: None,
         product_id: None,
         name: "Onion Salt".to_owned(),
         quantity: None,
@@ -3369,6 +3373,7 @@ async fn a_purchase_and_the_stock_it_creates_land_together(pool: PgPool) {
     let purchase = Purchase {
         id: PurchaseId::new(),
         ingredient_id: Some(milk.id),
+        prepared_meal_id: None,
         product_id: Some(bottle.id),
         name: None,
         quantity: item.level.conservative_quantity(),
@@ -3418,6 +3423,7 @@ async fn a_pending_purchase_creates_no_stock_at_all(pool: PgPool) {
     let purchase = Purchase {
         id: PurchaseId::new(),
         ingredient_id: Some(milk.id),
+        prepared_meal_id: None,
         product_id: None,
         name: None,
         quantity: None,

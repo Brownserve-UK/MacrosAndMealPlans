@@ -12,8 +12,8 @@ use mmp_postgres::PgPool;
 use mmp_postgres::{
     PgAccessGrantRepository, PgConsumptionRecordRepository, PgHouseholdMemberRepository,
     PgHouseholdSettingsRepository, PgIngredientRepository, PgMealPlanRepository,
-    PgNutritionTargetRepository, PgPreparedBatchRepository, PgProductRepository,
-    PgPurchaseRepository, PgRecipeRepository, PgShoppingCadenceRepository,
+    PgNutritionTargetRepository, PgPreparedBatchRepository, PgPreparedMealRepository,
+    PgProductRepository, PgPurchaseRepository, PgRecipeRepository, PgShoppingCadenceRepository,
     PgShoppingListItemRepository, PgShoppingOpportunityRepository, PgShoppingTripRepository,
     PgStockRepository, PgUserRepository, PgWeightGoalRepository, PgWeightRecordRepository,
 };
@@ -72,6 +72,7 @@ fn redact(database_url: &str) -> String {
 pub fn catalogue_service(pool: &PgPool) -> CatalogueService {
     CatalogueService::new(
         Arc::new(PgIngredientRepository::new(pool.clone())),
+        Arc::new(PgPreparedMealRepository::new(pool.clone())),
         Arc::new(PgProductRepository::new(pool.clone())),
         Arc::new(SystemClock),
     )
@@ -91,6 +92,7 @@ pub fn consumption_service(pool: &PgPool) -> ConsumptionService {
         Arc::new(PgConsumptionRecordRepository::new(pool.clone())),
         Arc::new(PgProductRepository::new(pool.clone())),
         Arc::new(PgIngredientRepository::new(pool.clone())),
+        Arc::new(PgPreparedMealRepository::new(pool.clone())),
         Arc::new(PgRecipeRepository::new(pool.clone())),
         Arc::new(PgPreparedBatchRepository::new(pool.clone())),
         Arc::new(SystemClock),
@@ -101,6 +103,7 @@ pub fn app_state(config: &Config, pool: &PgPool) -> AppState {
     let household = household_service(pool);
     let products = Arc::new(PgProductRepository::new(pool.clone()));
     let ingredients = Arc::new(PgIngredientRepository::new(pool.clone()));
+    let prepared_meals = Arc::new(PgPreparedMealRepository::new(pool.clone()));
     let recipes_repo = Arc::new(PgRecipeRepository::new(pool.clone()));
     let consumption_records = Arc::new(PgConsumptionRecordRepository::new(pool.clone()));
     let batches = Arc::new(PgPreparedBatchRepository::new(pool.clone()));
@@ -108,6 +111,7 @@ pub fn app_state(config: &Config, pool: &PgPool) -> AppState {
         consumption_records.clone(),
         products.clone(),
         ingredients.clone(),
+        prepared_meals.clone(),
         recipes_repo.clone(),
         batches.clone(),
         Arc::new(SystemClock),
@@ -117,6 +121,7 @@ pub fn app_state(config: &Config, pool: &PgPool) -> AppState {
         recipes_repo.clone(),
         products.clone(),
         ingredients.clone(),
+        prepared_meals.clone(),
         Arc::new(SystemClock),
     );
     let targets = Arc::new(PgNutritionTargetRepository::new(pool.clone()));
@@ -124,6 +129,7 @@ pub fn app_state(config: &Config, pool: &PgPool) -> AppState {
         Arc::new(PgMealPlanRepository::new(pool.clone())),
         products,
         ingredients,
+        prepared_meals.clone(),
         recipes_repo.clone(),
         consumption_records,
         targets.clone(),
@@ -142,6 +148,7 @@ pub fn app_state(config: &Config, pool: &PgPool) -> AppState {
         Arc::new(PgStockRepository::new(pool.clone())),
         Arc::new(PgProductRepository::new(pool.clone())),
         Arc::new(PgIngredientRepository::new(pool.clone())),
+        prepared_meals.clone(),
         Arc::new(PgMealPlanRepository::new(pool.clone())),
         recipes_repo,
         Arc::new(PgPreparedBatchRepository::new(pool.clone())),
@@ -156,6 +163,7 @@ pub fn app_state(config: &Config, pool: &PgPool) -> AppState {
         Arc::new(PgShoppingListItemRepository::new(pool.clone())),
         Arc::new(PgShoppingTripRepository::new(pool.clone())),
         Arc::new(PgIngredientRepository::new(pool.clone())),
+        prepared_meals,
         Arc::new(PgProductRepository::new(pool.clone())),
         Arc::new(PgHouseholdSettingsRepository::new(pool.clone())),
         stock.clone(),

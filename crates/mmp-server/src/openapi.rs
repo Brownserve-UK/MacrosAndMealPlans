@@ -12,6 +12,7 @@ use utoipa::{Modify, OpenApi};
         (name = "meta", description = "Server and protocol metadata"),
         (name = "auth", description = "Authentication"),
         (name = "ingredients", description = "Generic food concepts used by recipes"),
+        (name = "prepared-meals", description = "Generic convenience meals a brand can fulfil"),
         (name = "products", description = "Specific purchasable items"),
         (name = "household", description = "The people in this installation's household"),
         (name = "accounts", description = "Sign-in accounts and their roles"),

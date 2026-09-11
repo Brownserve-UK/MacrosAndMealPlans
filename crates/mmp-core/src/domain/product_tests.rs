@@ -14,6 +14,7 @@ fn new_product() -> NewProduct {
         package_quantity: Some(Quantity::new(Decimal::new(1, 0), Unit::Litre)),
         servings_per_pack: None,
         mapped_ingredient_id: None,
+        mapped_prepared_meal_id: None,
         nutrition: NutritionFacts::default(),
         provenance: Provenance::local(),
     }

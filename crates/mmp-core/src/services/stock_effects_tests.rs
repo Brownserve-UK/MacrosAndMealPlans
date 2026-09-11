@@ -12,7 +12,8 @@ use crate::domain::{
     Provenance, Quantity, Revision, Shortfall, StockEffectSource, StockOutcome, Unit, UserId,
 };
 use crate::testing::{
-    InMemoryIngredientRepository, InMemoryPreparedBatchRepository, InMemoryProductRepository,
+    InMemoryIngredientRepository, InMemoryPreparedBatchRepository, InMemoryPreparedMealRepository,
+    InMemoryProductRepository,
 };
 
 fn d(value: i64) -> Decimal {
@@ -35,6 +36,7 @@ fn product(name: &str) -> Product {
         package_quantity: None,
         servings_per_pack: None,
         mapped_ingredient_id: None,
+        mapped_prepared_meal_id: None,
         nutrition: NutritionFacts::default(),
         provenance: Provenance::local(),
         revision: Revision::INITIAL,
@@ -207,10 +209,17 @@ async fn naming_nothing_asks_the_repositories_nothing() {
     let products = InMemoryProductRepository::new();
     let ingredients = InMemoryIngredientRepository::new();
     let batches = InMemoryPreparedBatchRepository::new();
+    let prepared_meals = InMemoryPreparedMealRepository::new();
 
-    let named = name_outcomes(&products, &ingredients, &batches, Vec::new())
-        .await
-        .unwrap();
+    let named = name_outcomes(
+        &products,
+        &ingredients,
+        &prepared_meals,
+        &batches,
+        Vec::new(),
+    )
+    .await
+    .unwrap();
 
     assert!(named.is_empty());
 }
@@ -220,6 +229,7 @@ async fn outcomes_are_named_from_whichever_side_the_subject_came_from() {
     let products = InMemoryProductRepository::new();
     let ingredients = InMemoryIngredientRepository::new();
     let batches = InMemoryPreparedBatchRepository::new();
+    let prepared_meals = InMemoryPreparedMealRepository::new();
     let milk = product("Sample Whole Milk");
     let oats = ingredient("Oats");
     products.seed(milk.clone());
@@ -228,6 +238,7 @@ async fn outcomes_are_named_from_whichever_side_the_subject_came_from() {
     let named = name_outcomes(
         &products,
         &ingredients,
+        &prepared_meals,
         &batches,
         vec![
             outcome(DemandSubject::product(milk.id)),
@@ -246,10 +257,12 @@ async fn a_subject_we_cannot_name_is_said_to_be_unknown_rather_than_dropped() {
     let products = InMemoryProductRepository::new();
     let ingredients = InMemoryIngredientRepository::new();
     let batches = InMemoryPreparedBatchRepository::new();
+    let prepared_meals = InMemoryPreparedMealRepository::new();
 
     let named = name_outcomes(
         &products,
         &ingredients,
+        &prepared_meals,
         &batches,
         vec![
             outcome(DemandSubject::product(ProductId::new())),
@@ -269,6 +282,7 @@ async fn naming_preserves_the_figures_and_the_order_it_was_given() {
     let products = InMemoryProductRepository::new();
     let ingredients = InMemoryIngredientRepository::new();
     let batches = InMemoryPreparedBatchRepository::new();
+    let prepared_meals = InMemoryPreparedMealRepository::new();
     let milk = product("Milk");
     products.seed(milk.clone());
 
@@ -286,6 +300,7 @@ async fn naming_preserves_the_figures_and_the_order_it_was_given() {
     let named = name_outcomes(
         &products,
         &ingredients,
+        &prepared_meals,
         &batches,
         vec![outcome(DemandSubject::product(milk.id)), short],
     )

@@ -7,7 +7,9 @@ use crate::domain::{
 };
 use crate::ports::{FixedClock, IngredientQuery, PageRequest};
 use crate::services::CatalogueService;
-use crate::testing::{InMemoryIngredientRepository, InMemoryProductRepository};
+use crate::testing::{
+    InMemoryIngredientRepository, InMemoryPreparedMealRepository, InMemoryProductRepository,
+};
 use rust_decimal::Decimal;
 use time::OffsetDateTime;
 use time::macros::datetime;
@@ -24,9 +26,11 @@ fn harness() -> Harness {
 
 fn harness_at(now: OffsetDateTime) -> Harness {
     let ingredients = InMemoryIngredientRepository::new();
+    let prepared_meals = InMemoryPreparedMealRepository::new();
     let products = InMemoryProductRepository::new();
     let service = CatalogueService::new(
         Arc::new(ingredients.clone()),
+        Arc::new(prepared_meals.clone()),
         Arc::new(products.clone()),
         Arc::new(FixedClock::new(now)),
     );
@@ -60,6 +64,7 @@ fn new_product(name: &str) -> NewProduct {
         package_quantity: None,
         servings_per_pack: None,
         mapped_ingredient_id: None,
+        mapped_prepared_meal_id: None,
         nutrition: NutritionFacts::default(),
         provenance: Provenance::local(),
     }
@@ -473,6 +478,7 @@ async fn lists_products_filtered_by_mapped_ingredient() {
         .service
         .list_products(&crate::ports::ProductQuery {
             mapped_ingredient_id: Some(milk.id),
+            mapped_prepared_meal_id: None,
             ..Default::default()
         })
         .await

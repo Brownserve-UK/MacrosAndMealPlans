@@ -14,8 +14,8 @@ use crate::domain::{
 };
 use crate::error::{CoreError, Result, ValidationErrors};
 use crate::ports::{
-    Clock, IngredientRepository, PreparedBatchRepository, ProductRepository, RecipeRepository,
-    StockDeduction, StockWrite,
+    Clock, IngredientRepository, PreparedBatchRepository, PreparedMealRepository,
+    ProductRepository, RecipeRepository, StockDeduction, StockWrite,
 };
 
 const PREPARED_BATCH: &str = "prepared batch";
@@ -45,6 +45,7 @@ pub struct PreparationService {
     recipes: Arc<dyn RecipeRepository>,
     products: Arc<dyn ProductRepository>,
     ingredients: Arc<dyn IngredientRepository>,
+    prepared_meals: Arc<dyn PreparedMealRepository>,
     clock: Arc<dyn Clock>,
 }
 
@@ -54,6 +55,7 @@ impl PreparationService {
         recipes: Arc<dyn RecipeRepository>,
         products: Arc<dyn ProductRepository>,
         ingredients: Arc<dyn IngredientRepository>,
+        prepared_meals: Arc<dyn PreparedMealRepository>,
         clock: Arc<dyn Clock>,
     ) -> Self {
         Self {
@@ -61,6 +63,7 @@ impl PreparationService {
             recipes,
             products,
             ingredients,
+            prepared_meals,
             clock,
         }
     }
@@ -174,6 +177,7 @@ impl PreparationService {
         let named = name_outcomes(
             &*self.products,
             &*self.ingredients,
+            &*self.prepared_meals,
             &*self.batches,
             outcomes,
         )
@@ -302,6 +306,7 @@ impl PreparationService {
         let named = name_outcomes(
             &*self.products,
             &*self.ingredients,
+            &*self.prepared_meals,
             &*self.batches,
             outcomes,
         )

@@ -1,6 +1,7 @@
 use mmp_core::domain::{
     CatalogueOrigin, Ingredient, IngredientId, IngredientPatch, IngredientSummary, NewIngredient,
-    NewProduct, Patch, Product, ProductPatch, Provenance, ShoppingSection, Unit,
+    NewPreparedMeal, NewProduct, Patch, PreparedMeal, PreparedMealId, PreparedMealPatch,
+    PreparedMealSummary, Product, ProductPatch, Provenance, ShoppingSection, Unit,
 };
 use mmp_core::ports::Paginated;
 use serde::{Deserialize, Serialize};
@@ -141,6 +142,148 @@ impl From<Paginated<IngredientSummary>> for IngredientPage {
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct PreparedMealDto {
+    pub id: Uuid,
+    #[schema(example = "Frozen lasagne")]
+    pub name: String,
+    pub default_unit: Unit,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shopping_section: Option<ShoppingSection>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub track_stock: Option<bool>,
+    pub provenance: ProvenanceDto,
+    #[schema(example = 1)]
+    pub revision: i64,
+    #[serde(with = "time::serde::rfc3339")]
+    #[schema(value_type = String, format = DateTime)]
+    pub created_at: OffsetDateTime,
+    #[serde(with = "time::serde::rfc3339")]
+    #[schema(value_type = String, format = DateTime)]
+    pub updated_at: OffsetDateTime,
+    #[serde(
+        with = "time::serde::rfc3339::option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[schema(value_type = Option<String>, format = DateTime)]
+    pub archived_at: Option<OffsetDateTime>,
+}
+
+impl From<PreparedMeal> for PreparedMealDto {
+    fn from(value: PreparedMeal) -> Self {
+        Self {
+            id: value.id.as_uuid(),
+            name: value.name,
+            default_unit: value.default_unit,
+            shopping_section: value.shopping_section,
+            track_stock: value.track_stock,
+            provenance: value.provenance.into(),
+            revision: value.revision.get(),
+            created_at: value.created_at,
+            updated_at: value.updated_at,
+            archived_at: value.archived_at,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+pub struct CreatePreparedMealRequest {
+    #[serde(default)]
+    pub id: Option<Uuid>,
+    #[schema(example = "Frozen lasagne")]
+    pub name: String,
+    pub default_unit: Unit,
+    #[serde(default)]
+    pub shopping_section: Option<ShoppingSection>,
+    #[serde(default)]
+    pub track_stock: Option<bool>,
+}
+
+impl From<CreatePreparedMealRequest> for NewPreparedMeal {
+    fn from(value: CreatePreparedMealRequest) -> Self {
+        Self {
+            id: value.id.map(PreparedMealId::from),
+            name: value.name,
+            default_unit: value.default_unit,
+            shopping_section: value.shopping_section,
+            track_stock: value.track_stock,
+            provenance: Provenance::local(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Deserialize, ToSchema)]
+pub struct UpdatePreparedMealRequest {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub default_unit: Option<Unit>,
+    #[serde(default)]
+    #[schema(value_type = Option<ShoppingSection>)]
+    pub shopping_section: Patch<ShoppingSection>,
+    #[serde(default)]
+    #[schema(value_type = Option<bool>)]
+    pub track_stock: Patch<bool>,
+}
+
+impl From<UpdatePreparedMealRequest> for PreparedMealPatch {
+    fn from(value: UpdatePreparedMealRequest) -> Self {
+        Self {
+            name: value.name,
+            default_unit: value.default_unit,
+            shopping_section: value.shopping_section,
+            track_stock: value.track_stock,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct PreparedMealListItemDto {
+    #[serde(flatten)]
+    pub prepared_meal: PreparedMealDto,
+    #[schema(example = 2)]
+    pub mapped_product_count: i64,
+}
+
+impl From<PreparedMealSummary> for PreparedMealListItemDto {
+    fn from(value: PreparedMealSummary) -> Self {
+        Self {
+            prepared_meal: value.prepared_meal.into(),
+            mapped_product_count: value.mapped_product_count,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct PreparedMealPage {
+    pub items: Vec<PreparedMealListItemDto>,
+    #[serde(flatten)]
+    pub meta: PageMeta,
+}
+
+impl From<Paginated<PreparedMealSummary>> for PreparedMealPage {
+    fn from(value: Paginated<PreparedMealSummary>) -> Self {
+        let meta = PageMeta::of(&value);
+        Self {
+            items: value.items.into_iter().map(Into::into).collect(),
+            meta,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct PreparedMealListQuery {
+    pub q: Option<String>,
+    pub origin: Option<CatalogueOrigin>,
+    pub needs_products: Option<bool>,
+    pub include_archived: Option<bool>,
+    pub page: Option<u32>,
+    pub per_page: Option<u32>,
+    pub sort_by: Option<IngredientSortDto>,
+    pub sort: Option<SortDirectionDto>,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct ProductDto {
     pub id: Uuid,
     #[schema(example = "Tesco Whole Milk 1L")]
@@ -163,6 +306,8 @@ pub struct ProductDto {
     pub servings_per_pack: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mapped_ingredient_id: Option<Uuid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mapped_prepared_meal_id: Option<Uuid>,
     pub nutrition: NutritionDto,
     pub provenance: ProvenanceDto,
     pub revision: i64,
@@ -193,6 +338,7 @@ impl From<Product> for ProductDto {
             package_quantity: value.package_quantity.map(Into::into),
             servings_per_pack: value.servings_per_pack,
             mapped_ingredient_id: value.mapped_ingredient_id.map(|id| id.as_uuid()),
+            mapped_prepared_meal_id: value.mapped_prepared_meal_id.map(|id| id.as_uuid()),
             nutrition: value.nutrition.into(),
             provenance: value.provenance.into(),
             revision: value.revision.get(),
@@ -226,6 +372,8 @@ pub struct CreateProductRequest {
     #[serde(default)]
     pub mapped_ingredient_id: Option<Uuid>,
     #[serde(default)]
+    pub mapped_prepared_meal_id: Option<Uuid>,
+    #[serde(default)]
     pub nutrition: NutritionDto,
 }
 
@@ -242,6 +390,7 @@ impl From<CreateProductRequest> for NewProduct {
             package_quantity: value.package_quantity.map(Into::into),
             servings_per_pack: value.servings_per_pack,
             mapped_ingredient_id: value.mapped_ingredient_id.map(IngredientId::from),
+            mapped_prepared_meal_id: value.mapped_prepared_meal_id.map(PreparedMealId::from),
             nutrition: value.nutrition.into(),
             provenance: Provenance::local(),
         }
@@ -298,6 +447,11 @@ pub struct SetMappingRequest {
     pub ingredient_id: Uuid,
 }
 
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+pub struct SetPreparedMealMappingRequest {
+    pub prepared_meal_id: Uuid,
+}
+
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct ProductPage {
     pub items: Vec<ProductDto>,
@@ -346,6 +500,16 @@ impl From<IngredientSortDto> for mmp_core::ports::IngredientSort {
     }
 }
 
+impl From<IngredientSortDto> for mmp_core::ports::PreparedMealSort {
+    fn from(value: IngredientSortDto) -> Self {
+        match value {
+            IngredientSortDto::Name => Self::Name,
+            IngredientSortDto::Created => Self::Created,
+            IngredientSortDto::ProductCount => Self::ProductCount,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, Deserialize, IntoParams)]
 #[into_params(parameter_in = Query)]
 pub struct ProductListQuery {
@@ -354,6 +518,7 @@ pub struct ProductListQuery {
     pub barcode: Option<String>,
     pub retailer: Option<String>,
     pub mapped_ingredient_id: Option<Uuid>,
+    pub mapped_prepared_meal_id: Option<Uuid>,
     pub unmapped: Option<bool>,
     pub include_archived: Option<bool>,
     pub page: Option<u32>,

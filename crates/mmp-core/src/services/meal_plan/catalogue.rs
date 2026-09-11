@@ -1,8 +1,9 @@
 use std::collections::HashMap;
 
 use crate::domain::{
-    ConsumedAmount, ConsumedNutrition, MealItemRef, PreparedBatch, Product, ProductId, Recipe,
-    RecipeId, RecipeRequirement, nutrition_for, recipe_nutrition, recipe_nutrition_for,
+    ConsumedAmount, ConsumedNutrition, IngredientId, MealItemRef, PreparedBatch, PreparedMealId,
+    Product, ProductId, Recipe, RecipeId, RecipeRequirement, generic_food_nutrition, nutrition_for,
+    recipe_nutrition, recipe_nutrition_for,
 };
 use crate::error::Result;
 
@@ -13,6 +14,11 @@ pub(super) struct RecipeCard {
     pub(super) name: String,
     pub(super) per_serving: ConsumedNutrition,
     pub(super) archived: bool,
+}
+
+pub(super) struct GenericFoodCard {
+    pub(super) name: String,
+    pub(super) candidates: Vec<Product>,
 }
 
 pub(super) struct ResolvedItem {
@@ -26,6 +32,8 @@ pub(super) struct ItemCatalogue {
     pub(super) recipes: HashMap<RecipeId, RecipeCard>,
     pub(super) definitions: HashMap<RecipeId, Recipe>,
     pub(super) dishes: HashMap<RecipeId, PreparedBatch>,
+    pub(super) ingredients: HashMap<IngredientId, GenericFoodCard>,
+    pub(super) prepared_meals: HashMap<PreparedMealId, GenericFoodCard>,
     pub(super) fulfilments: RecipeFulfilments,
 }
 
@@ -47,6 +55,16 @@ impl ItemCatalogue {
                 .get(&recipe_id)
                 .map(|batch| batch.item_name.clone())
                 .unwrap_or_else(|| "Missing cooked food".to_owned()),
+            MealItemRef::Ingredient { ingredient_id } => self
+                .ingredients
+                .get(&ingredient_id)
+                .map(|card| card.name.clone())
+                .unwrap_or_else(|| "Missing food".to_owned()),
+            MealItemRef::PreparedMeal { prepared_meal_id } => self
+                .prepared_meals
+                .get(&prepared_meal_id)
+                .map(|card| card.name.clone())
+                .unwrap_or_else(|| "Missing food".to_owned()),
         }
     }
 
@@ -102,6 +120,33 @@ impl ItemCatalogue {
                     resolvable: false,
                 },
             },
+            MealItemRef::Ingredient { ingredient_id } => match self.ingredients.get(&ingredient_id)
+            {
+                Some(card) => ResolvedItem {
+                    name: card.name.clone(),
+                    nutrition: generic_food_nutrition(&card.candidates, amount),
+                    resolvable: matches!(amount, ConsumedAmount::Measure(_)),
+                },
+                None => ResolvedItem {
+                    name: "Missing food".to_owned(),
+                    nutrition: ConsumedNutrition::unknown(),
+                    resolvable: false,
+                },
+            },
+            MealItemRef::PreparedMeal { prepared_meal_id } => {
+                match self.prepared_meals.get(&prepared_meal_id) {
+                    Some(card) => ResolvedItem {
+                        name: card.name.clone(),
+                        nutrition: generic_food_nutrition(&card.candidates, amount),
+                        resolvable: matches!(amount, ConsumedAmount::Measure(_)),
+                    },
+                    None => ResolvedItem {
+                        name: "Missing food".to_owned(),
+                        nutrition: ConsumedNutrition::unknown(),
+                        resolvable: false,
+                    },
+                }
+            }
         }
     }
 }
@@ -129,11 +174,17 @@ impl MealPlanService {
         let mut product_ids: Vec<ProductId> = Vec::new();
         let mut recipe_ids: Vec<RecipeId> = Vec::new();
         let mut dish_ids: Vec<RecipeId> = Vec::new();
+        let mut ingredient_ids: Vec<IngredientId> = Vec::new();
+        let mut prepared_meal_ids: Vec<PreparedMealId> = Vec::new();
         for item in items {
             match item {
                 MealItemRef::Product { product_id } => product_ids.push(product_id),
                 MealItemRef::Recipe { recipe_id } => recipe_ids.push(recipe_id),
                 MealItemRef::Dish { recipe_id } => dish_ids.push(recipe_id),
+                MealItemRef::Ingredient { ingredient_id } => ingredient_ids.push(ingredient_id),
+                MealItemRef::PreparedMeal { prepared_meal_id } => {
+                    prepared_meal_ids.push(prepared_meal_id)
+                }
             }
         }
 
@@ -181,11 +232,48 @@ impl MealPlanService {
             }
         }
 
+        let mut ingredients: HashMap<IngredientId, GenericFoodCard> = HashMap::new();
+        if !ingredient_ids.is_empty() {
+            let names = self.ingredients.get_many(&ingredient_ids).await?;
+            let mut by_ingredient = self.products.list_by_ingredient(&ingredient_ids).await?;
+            for ingredient in names {
+                ingredients.insert(
+                    ingredient.id,
+                    GenericFoodCard {
+                        name: ingredient.name,
+                        candidates: by_ingredient.remove(&ingredient.id).unwrap_or_default(),
+                    },
+                );
+            }
+        }
+
+        let mut prepared_meals: HashMap<PreparedMealId, GenericFoodCard> = HashMap::new();
+        if !prepared_meal_ids.is_empty() {
+            let names = self.prepared_meals.get_many(&prepared_meal_ids).await?;
+            let mut by_prepared_meal = self
+                .products
+                .list_by_prepared_meal(&prepared_meal_ids)
+                .await?;
+            for prepared_meal in names {
+                prepared_meals.insert(
+                    prepared_meal.id,
+                    GenericFoodCard {
+                        name: prepared_meal.name,
+                        candidates: by_prepared_meal
+                            .remove(&prepared_meal.id)
+                            .unwrap_or_default(),
+                    },
+                );
+            }
+        }
+
         Ok(ItemCatalogue {
             products,
             recipes: cards,
             definitions,
             dishes,
+            ingredients,
+            prepared_meals,
             fulfilments,
         })
     }

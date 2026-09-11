@@ -12,8 +12,8 @@ use crate::domain::{
 };
 use crate::ports::{FixedClock, PageRequest, StockQuery, StockRepository};
 use crate::testing::{
-    InMemoryIngredientRepository, InMemoryPreparedBatchRepository, InMemoryProductRepository,
-    InMemoryRecipeRepository, InMemoryStockRepository,
+    InMemoryIngredientRepository, InMemoryPreparedBatchRepository, InMemoryPreparedMealRepository,
+    InMemoryProductRepository, InMemoryRecipeRepository, InMemoryStockRepository,
 };
 
 const NOW: time::OffsetDateTime = datetime!(2026-09-06 09:00 UTC);
@@ -47,6 +47,7 @@ fn harness() -> Harness {
         package_quantity: None,
         servings_per_pack: None,
         mapped_ingredient_id: None,
+        mapped_prepared_meal_id: None,
         nutrition: NutritionFacts::default(),
         provenance: Provenance::local(),
         revision: Revision::INITIAL,
@@ -94,6 +95,7 @@ fn harness() -> Harness {
         Arc::new(recipes),
         Arc::new(products),
         Arc::new(InMemoryIngredientRepository::new()),
+        Arc::new(InMemoryPreparedMealRepository::new()),
         Arc::new(FixedClock::new(NOW)),
     );
 

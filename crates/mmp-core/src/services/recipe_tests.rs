@@ -96,6 +96,7 @@ fn seed_product_with(
         package_quantity: None,
         servings_per_pack: None,
         mapped_ingredient_id,
+        mapped_prepared_meal_id: None,
         nutrition: NutritionFacts {
             basis: Some(Quantity::new(d(100), Unit::Gram)),
             energy_kcal: Some(d(energy)),

@@ -22,6 +22,7 @@ fn product_with(
         package_quantity,
         servings_per_pack,
         mapped_ingredient_id: None,
+        mapped_prepared_meal_id: None,
         nutrition,
         provenance: Provenance::local(),
         revision: Revision::INITIAL,

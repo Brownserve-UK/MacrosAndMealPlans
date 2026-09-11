@@ -18,8 +18,8 @@ use mmp_core::testing::{
     InMemoryAccessGrantRepository, InMemoryConsumptionRecordRepository,
     InMemoryHouseholdMemberRepository, InMemoryHouseholdSettingsRepository,
     InMemoryIngredientRepository, InMemoryMealPlanRepository, InMemoryNutritionTargetRepository,
-    InMemoryPreparedBatchRepository, InMemoryProductRepository, InMemoryPurchaseRepository,
-    InMemoryRecipeRepository, InMemoryShoppingCadenceRepository,
+    InMemoryPreparedBatchRepository, InMemoryPreparedMealRepository, InMemoryProductRepository,
+    InMemoryPurchaseRepository, InMemoryRecipeRepository, InMemoryShoppingCadenceRepository,
     InMemoryShoppingListItemRepository, InMemoryShoppingOpportunityRepository,
     InMemoryShoppingTripRepository, InMemoryStockRepository, InMemoryUserRepository,
     InMemoryWeightGoalRepository, InMemoryWeightRecordRepository,
@@ -63,10 +63,12 @@ async fn app() -> Router {
     let batches = Arc::new(InMemoryPreparedBatchRepository::with_stock(
         stock_repo.clone(),
     ));
+    let prepared_meals = Arc::new(InMemoryPreparedMealRepository::new());
     let stock = StockService::new(
         Arc::new(stock_repo.clone()),
         Arc::new(products.clone()),
         ingredients.clone(),
+        prepared_meals.clone(),
         Arc::new(meal_plans.clone()),
         recipes_repo.clone(),
         batches.clone(),
@@ -85,6 +87,7 @@ async fn app() -> Router {
         recipes_repo.clone(),
         Arc::new(products.clone()),
         ingredients.clone(),
+        prepared_meals.clone(),
         clock.clone(),
     );
     let preparation = PreparationService::new(
@@ -92,11 +95,13 @@ async fn app() -> Router {
         recipes_repo.clone(),
         Arc::new(products.clone()),
         ingredients.clone(),
+        prepared_meals.clone(),
         clock.clone(),
     );
     let state = AppState::new(
         CatalogueService::new(
             ingredients.clone(),
+            prepared_meals.clone(),
             Arc::new(products.clone()),
             clock.clone(),
         ),
@@ -106,6 +111,7 @@ async fn app() -> Router {
             Arc::new(consumption.clone()),
             Arc::new(products.clone()),
             ingredients.clone(),
+            prepared_meals.clone(),
             recipes_repo.clone(),
             batches.clone(),
             clock.clone(),
@@ -114,6 +120,7 @@ async fn app() -> Router {
             Arc::new(meal_plans),
             Arc::new(products),
             ingredients.clone(),
+            prepared_meals.clone(),
             recipes_repo.clone(),
             Arc::new(consumption),
             Arc::new(targets.clone()),
@@ -133,6 +140,7 @@ async fn app() -> Router {
             Arc::new(list_items),
             Arc::new(InMemoryShoppingTripRepository::new()),
             ingredients,
+            prepared_meals,
             Arc::new(products_for_shopping),
             Arc::new(settings_repo.clone()),
             stock,

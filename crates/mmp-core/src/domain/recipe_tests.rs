@@ -23,6 +23,7 @@ fn product_per_100g(energy: i64, protein: i64) -> Product {
         package_quantity: None,
         servings_per_pack: None,
         mapped_ingredient_id: None,
+        mapped_prepared_meal_id: None,
         nutrition: NutritionFacts {
             basis: Some(Quantity::new(d(100), Unit::Gram)),
             energy_kcal: Some(d(energy)),

@@ -3,12 +3,13 @@ use std::ops::{Deref, DerefMut};
 
 use crate::domain::{
     ConsumedAmount, ConsumptionRecord, DeductionTarget, DemandSubject, HouseholdMemberId,
-    IngredientId, PreparedBatchId, Product, ProductId, Quantity, Shortfall, StockEffectSource,
-    StockOutcome, UserId,
+    IngredientId, PreparedBatchId, PreparedMealId, Product, ProductId, Quantity, Shortfall,
+    StockEffectSource, StockOutcome, UserId,
 };
 use crate::error::Result;
 use crate::ports::{
-    IngredientRepository, PreparedBatchRepository, ProductRepository, StockDeduction, StockRelease,
+    IngredientRepository, PreparedBatchRepository, PreparedMealRepository, ProductRepository,
+    StockDeduction, StockRelease,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -193,6 +194,7 @@ pub fn record_release(record: &ConsumptionRecord, source_label: String) -> Stock
 pub async fn name_outcomes(
     products: &dyn ProductRepository,
     ingredients: &dyn IngredientRepository,
+    prepared_meals: &dyn PreparedMealRepository,
     batches: &dyn PreparedBatchRepository,
     outcomes: Vec<StockOutcome>,
 ) -> Result<Vec<StockOutcomeView>> {
@@ -211,6 +213,12 @@ pub async fn name_outcomes(
         .collect();
     ingredient_ids.sort_unstable_by_key(|id| id.as_uuid());
     ingredient_ids.dedup();
+    let mut prepared_meal_ids: Vec<PreparedMealId> = outcomes
+        .iter()
+        .filter_map(|o| o.subject.prepared_meal_id())
+        .collect();
+    prepared_meal_ids.sort_unstable_by_key(|id| id.as_uuid());
+    prepared_meal_ids.dedup();
     let mut batch_ids: Vec<PreparedBatchId> = outcomes
         .iter()
         .filter_map(|o| o.subject.prepared_batch_id())
@@ -243,6 +251,12 @@ pub async fn name_outcomes(
         .into_iter()
         .map(|i| (i.id, i.name))
         .collect();
+    let prepared_meal_names: HashMap<PreparedMealId, String> = prepared_meals
+        .get_many(&prepared_meal_ids)
+        .await?
+        .into_iter()
+        .map(|p| (p.id, p.name))
+        .collect();
     let batch_names: HashMap<PreparedBatchId, String> = batches
         .get_many(&batch_ids)
         .await?
@@ -263,6 +277,10 @@ pub async fn name_outcomes(
                     .get(&ingredient_id)
                     .cloned()
                     .unwrap_or_else(|| "Unknown ingredient".to_owned()),
+                DemandSubject::PreparedMeal { prepared_meal_id } => prepared_meal_names
+                    .get(&prepared_meal_id)
+                    .cloned()
+                    .unwrap_or_else(|| "Unknown prepared meal".to_owned()),
                 DemandSubject::PreparedPortion { prepared_batch_id } => batch_names
                     .get(&prepared_batch_id)
                     .cloned()

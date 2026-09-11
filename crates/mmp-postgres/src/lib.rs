@@ -7,6 +7,7 @@ mod ingredient;
 mod meal_plan;
 mod nutrition_target;
 mod prepared;
+mod prepared_meal;
 mod product;
 mod recipe;
 mod rows;
@@ -23,6 +24,7 @@ pub use ingredient::PgIngredientRepository;
 pub use meal_plan::PgMealPlanRepository;
 pub use nutrition_target::PgNutritionTargetRepository;
 pub use prepared::PgPreparedBatchRepository;
+pub use prepared_meal::PgPreparedMealRepository;
 pub use product::PgProductRepository;
 pub use recipe::PgRecipeRepository;
 pub use shopping::{

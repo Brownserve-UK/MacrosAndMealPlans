@@ -15,7 +15,8 @@ use crate::ports::{FixedClock, MealPlanRepository, StockQuery};
 use crate::testing::{
     InMemoryHouseholdMemberRepository, InMemoryHouseholdSettingsRepository,
     InMemoryIngredientRepository, InMemoryMealPlanRepository, InMemoryPreparedBatchRepository,
-    InMemoryProductRepository, InMemoryRecipeRepository, InMemoryStockRepository,
+    InMemoryPreparedMealRepository, InMemoryProductRepository, InMemoryRecipeRepository,
+    InMemoryStockRepository,
 };
 
 struct Harness {
@@ -56,6 +57,7 @@ fn harness() -> Harness {
         Arc::new(stock.clone()),
         Arc::new(products.clone()),
         Arc::new(ingredients.clone()),
+        Arc::new(InMemoryPreparedMealRepository::new()),
         Arc::new(meal_plans.clone()),
         Arc::new(recipes.clone()),
         Arc::new(batches.clone()),
@@ -90,6 +92,7 @@ fn product() -> Product {
         package_quantity: Some(Quantity::new(Decimal::new(1000, 0), Unit::Gram)),
         servings_per_pack: Some(4),
         mapped_ingredient_id: None,
+        mapped_prepared_meal_id: None,
         nutrition: Default::default(),
         provenance: Provenance::local(),
         revision: Revision::INITIAL,
@@ -629,10 +632,7 @@ async fn an_ingredient_with_no_mapped_products_reports_a_gap_rather_than_being_s
         .iter()
         .find(|row| row.ingredient_id == rice)
         .expect("the unmappable ingredient still gets a row");
-    assert_eq!(
-        ingredient.demand_gaps,
-        vec![DemandGap::IngredientHasNoProducts]
-    );
+    assert_eq!(ingredient.demand_gaps, vec![DemandGap::FoodHasNoProducts]);
     assert!(ingredient.demand_incomplete());
 }
 

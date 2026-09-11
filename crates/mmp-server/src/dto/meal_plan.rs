@@ -43,6 +43,8 @@ pub enum MealItemRefDto {
     Product { product_id: Uuid },
     Recipe { recipe_id: Uuid },
     Dish { dish_recipe_id: Uuid },
+    Ingredient { ingredient_id: Uuid },
+    PreparedMeal { prepared_meal_id: Uuid },
 }
 
 impl From<MealItemRef> for MealItemRefDto {
@@ -57,6 +59,12 @@ impl From<MealItemRef> for MealItemRefDto {
             MealItemRef::Dish { recipe_id } => Self::Dish {
                 dish_recipe_id: recipe_id.as_uuid(),
             },
+            MealItemRef::Ingredient { ingredient_id } => Self::Ingredient {
+                ingredient_id: ingredient_id.as_uuid(),
+            },
+            MealItemRef::PreparedMeal { prepared_meal_id } => Self::PreparedMeal {
+                prepared_meal_id: prepared_meal_id.as_uuid(),
+            },
         }
     }
 }
@@ -67,6 +75,12 @@ impl From<MealItemRefDto> for MealItemRef {
             MealItemRefDto::Product { product_id } => MealItemRef::product(product_id.into()),
             MealItemRefDto::Recipe { recipe_id } => MealItemRef::recipe(recipe_id.into()),
             MealItemRefDto::Dish { dish_recipe_id } => MealItemRef::dish(dish_recipe_id.into()),
+            MealItemRefDto::Ingredient { ingredient_id } => {
+                MealItemRef::ingredient(ingredient_id.into())
+            }
+            MealItemRefDto::PreparedMeal { prepared_meal_id } => {
+                MealItemRef::prepared_meal(prepared_meal_id.into())
+            }
         }
     }
 }
@@ -77,6 +91,8 @@ pub enum ItemRefRequest {
     Product { product_id: Uuid },
     Recipe { recipe_id: Uuid },
     Dish { dish_recipe_id: Uuid },
+    Ingredient { ingredient_id: Uuid },
+    PreparedMeal { prepared_meal_id: Uuid },
 }
 
 impl From<ItemRefRequest> for MealItemRef {
@@ -85,6 +101,12 @@ impl From<ItemRefRequest> for MealItemRef {
             ItemRefRequest::Product { product_id } => MealItemRef::product(product_id.into()),
             ItemRefRequest::Recipe { recipe_id } => MealItemRef::recipe(recipe_id.into()),
             ItemRefRequest::Dish { dish_recipe_id } => MealItemRef::dish(dish_recipe_id.into()),
+            ItemRefRequest::Ingredient { ingredient_id } => {
+                MealItemRef::ingredient(ingredient_id.into())
+            }
+            ItemRefRequest::PreparedMeal { prepared_meal_id } => {
+                MealItemRef::prepared_meal(prepared_meal_id.into())
+            }
         }
     }
 }

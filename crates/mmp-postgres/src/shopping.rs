@@ -207,8 +207,9 @@ impl ShoppingOpportunityRepository for PgShoppingOpportunityRepository {
 
 macro_rules! purchase_columns {
     () => {
-        "id, ingredient_id, product_id, name, quantity_value, quantity_unit, opportunity_date, \
-         state, stock_item_id, purchased_at, actor_user_id, note, revision, created_at, updated_at"
+        "id, ingredient_id, prepared_meal_id, product_id, name, quantity_value, quantity_unit, \
+         opportunity_date, state, stock_item_id, purchased_at, actor_user_id, note, revision, \
+         created_at, updated_at"
     };
 }
 
@@ -318,13 +319,14 @@ impl PurchaseRepository for PgPurchaseRepository {
 
         sqlx::query(
             "INSERT INTO purchase (
-                 id, ingredient_id, product_id, name, quantity_value, quantity_unit,
-                 opportunity_date, state, stock_item_id, purchased_at, actor_user_id, note,
-                 revision, created_at, updated_at
-             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)",
+                 id, ingredient_id, prepared_meal_id, product_id, name, quantity_value,
+                 quantity_unit, opportunity_date, state, stock_item_id, purchased_at,
+                 actor_user_id, note, revision, created_at, updated_at
+             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)",
         )
         .bind(purchase.id.as_uuid())
         .bind(purchase.ingredient_id.map(|id| id.as_uuid()))
+        .bind(purchase.prepared_meal_id.map(|id| id.as_uuid()))
         .bind(purchase.product_id.map(|id| id.as_uuid()))
         .bind(purchase.name.as_deref())
         .bind(purchase.quantity.map(|q| q.amount))
@@ -366,13 +368,14 @@ impl PurchaseRepository for PgPurchaseRepository {
 
         let affected = sqlx::query(
             "UPDATE purchase SET
-                 ingredient_id = $2, product_id = $3, name = $4, quantity_value = $5,
-                 quantity_unit = $6, opportunity_date = $7, state = $8, stock_item_id = $9,
-                 note = $10, revision = $11, updated_at = $12
-             WHERE id = $1 AND revision = $13",
+                 ingredient_id = $2, prepared_meal_id = $3, product_id = $4, name = $5,
+                 quantity_value = $6, quantity_unit = $7, opportunity_date = $8, state = $9,
+                 stock_item_id = $10, note = $11, revision = $12, updated_at = $13
+             WHERE id = $1 AND revision = $14",
         )
         .bind(purchase.id.as_uuid())
         .bind(purchase.ingredient_id.map(|id| id.as_uuid()))
+        .bind(purchase.prepared_meal_id.map(|id| id.as_uuid()))
         .bind(purchase.product_id.map(|id| id.as_uuid()))
         .bind(purchase.name.as_deref())
         .bind(purchase.quantity.map(|q| q.amount))
@@ -461,8 +464,9 @@ impl PurchaseRepository for PgPurchaseRepository {
 
 const GET_TRIP: &str = "SELECT id, opportunity_date, state, started_at, finished_at, started_by, \
      revision, created_at, updated_at FROM shopping_trip WHERE opportunity_date = $1";
-const GET_TRIP_ROWS: &str = "SELECT id, ingredient_id, product_id, name, quantity_value, \
-     quantity_unit, section FROM shopping_trip_row WHERE trip_id = $1 ORDER BY position";
+const GET_TRIP_ROWS: &str = "SELECT id, ingredient_id, prepared_meal_id, product_id, name, \
+     quantity_value, quantity_unit, section FROM shopping_trip_row WHERE trip_id = $1 \
+     ORDER BY position";
 
 pub struct PgShoppingTripRepository {
     pool: PgPool,
@@ -526,13 +530,14 @@ impl ShoppingTripRepository for PgShoppingTripRepository {
         for (position, row) in trip.rows.iter().enumerate() {
             sqlx::query(
                 "INSERT INTO shopping_trip_row (
-                     id, trip_id, ingredient_id, product_id, name, quantity_value,
-                     quantity_unit, section, position
-                 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+                     id, trip_id, ingredient_id, prepared_meal_id, product_id, name,
+                     quantity_value, quantity_unit, section, position
+                 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
             )
             .bind(row.id.as_uuid())
             .bind(trip.id.as_uuid())
             .bind(row.ingredient_id.map(|id| id.as_uuid()))
+            .bind(row.prepared_meal_id.map(|id| id.as_uuid()))
             .bind(row.product_id.map(|id| id.as_uuid()))
             .bind(&row.name)
             .bind(row.quantity.map(|quantity| quantity.amount))
@@ -587,8 +592,8 @@ impl ShoppingTripRepository for PgShoppingTripRepository {
 
 macro_rules! list_item_columns {
     () => {
-        "id, ingredient_id, product_id, name, quantity_value, quantity_unit, section, \
-         opportunity_date, created_by, revision, created_at, updated_at"
+        "id, ingredient_id, prepared_meal_id, product_id, name, quantity_value, quantity_unit, \
+         section, opportunity_date, created_by, revision, created_at, updated_at"
     };
 }
 
@@ -602,9 +607,9 @@ const LIST_LIST_ITEMS: &str = concat!(
     list_item_columns!(),
     " FROM shopping_list_item ORDER BY created_at ASC, id ASC"
 );
-const INSERT_LIST_ITEM: &str = "INSERT INTO shopping_list_item (id, ingredient_id, product_id, \
+const INSERT_LIST_ITEM: &str = "INSERT INTO shopping_list_item (id, ingredient_id, prepared_meal_id, product_id, \
      name, quantity_value, quantity_unit, section, opportunity_date, created_by, revision, \
-     created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)";
+     created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)";
 const UPDATE_LIST_ITEM: &str = "UPDATE shopping_list_item SET name = $2, quantity_value = $3, \
      quantity_unit = $4, section = $5, opportunity_date = $6, revision = $7, updated_at = $8 \
      WHERE id = $1 AND revision = $9";
@@ -642,6 +647,7 @@ impl ShoppingListItemRepository for PgShoppingListItemRepository {
         sqlx::query(INSERT_LIST_ITEM)
             .bind(item.id.as_uuid())
             .bind(item.ingredient_id.map(|id| id.as_uuid()))
+            .bind(item.prepared_meal_id.map(|id| id.as_uuid()))
             .bind(item.product_id.map(|id| id.as_uuid()))
             .bind(&item.name)
             .bind(item.quantity.map(|quantity| quantity.amount))

@@ -5,15 +5,16 @@ use time::{Date, Duration};
 use super::revision::{commit_outcome, require_revision};
 use crate::domain::{
     ConsumedAmount, ConsumedNutrition, ConsumptionRecord, ConsumptionRecordId,
-    ConsumptionRecordPatch, HouseholdMemberId, MealItemRef, NewConsumptionRecord, NutritionFacts,
-    NutritionQuality, PreparedBatch, Product, ProductId, Quantity, Recipe, RecipeId,
-    RecipeRequirement, Revision, StockEffectSource, Unit, nutrition_for, recipe_nutrition,
-    recipe_nutrition_for, sum_nutrition,
+    ConsumptionRecordPatch, HouseholdMemberId, IngredientId, MealItemRef, NewConsumptionRecord,
+    NutritionFacts, NutritionQuality, PreparedBatch, PreparedMealId, Product, ProductId, Quantity,
+    Recipe, RecipeId, RecipeRequirement, Revision, StockEffectSource, Unit, generic_food_nutrition,
+    nutrition_for, recipe_nutrition, recipe_nutrition_for, sum_nutrition,
 };
 use crate::error::{CoreError, Result, ValidationErrors};
 use crate::ports::{
     Clock, ConsumptionQuery, ConsumptionRecordRepository, IngredientRepository, PageRequest,
-    PreparedBatchRepository, ProductRepository, RecipeRepository, StockWrite,
+    PreparedBatchRepository, PreparedMealRepository, ProductRepository, RecipeRepository,
+    StockWrite,
 };
 
 use super::fulfilment::{RecipeFulfilments, expand_recipe};
@@ -54,16 +55,19 @@ pub struct ConsumptionService {
     records: Arc<dyn ConsumptionRecordRepository>,
     products: Arc<dyn ProductRepository>,
     ingredients: Arc<dyn IngredientRepository>,
+    prepared_meals: Arc<dyn PreparedMealRepository>,
     recipes: Arc<dyn RecipeRepository>,
     batches: Arc<dyn PreparedBatchRepository>,
     clock: Arc<dyn Clock>,
 }
 
 impl ConsumptionService {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         records: Arc<dyn ConsumptionRecordRepository>,
         products: Arc<dyn ProductRepository>,
         ingredients: Arc<dyn IngredientRepository>,
+        prepared_meals: Arc<dyn PreparedMealRepository>,
         recipes: Arc<dyn RecipeRepository>,
         batches: Arc<dyn PreparedBatchRepository>,
         clock: Arc<dyn Clock>,
@@ -72,6 +76,7 @@ impl ConsumptionService {
             records,
             products,
             ingredients,
+            prepared_meals,
             recipes,
             batches,
             clock,
@@ -107,6 +112,7 @@ impl ConsumptionService {
             name_outcomes(
                 &*self.products,
                 &*self.ingredients,
+                &*self.prepared_meals,
                 &*self.batches,
                 outcomes,
             )
@@ -169,6 +175,58 @@ impl ConsumptionService {
                     recipe_id,
                     Quantity::new(servings, Unit::Serving),
                     format!("Logged food \u{2014} {name}"),
+                    record.recorded_by,
+                    Some(record.member_id),
+                )])
+            }
+            MealItemRef::Ingredient { ingredient_id } => {
+                let ConsumedAmount::Measure(quantity) = record.amount else {
+                    return Ok(Vec::new());
+                };
+                let pool = self
+                    .products
+                    .list_by_ingredient(&[ingredient_id])
+                    .await?
+                    .remove(&ingredient_id)
+                    .unwrap_or_default();
+                let name = self.ingredient_name(ingredient_id).await?;
+                let label = format!("Logged food \u{2014} {name}");
+                Ok(vec![requirement_deduction(
+                    StockEffectSource::ConsumptionRecord,
+                    record.id.as_uuid(),
+                    record.id.as_uuid(),
+                    crate::domain::DeductionTarget::pool(
+                        ingredient_id,
+                        pool.iter().map(|p| p.id).collect(),
+                    ),
+                    quantity,
+                    label,
+                    record.recorded_by,
+                    Some(record.member_id),
+                )])
+            }
+            MealItemRef::PreparedMeal { prepared_meal_id } => {
+                let ConsumedAmount::Measure(quantity) = record.amount else {
+                    return Ok(Vec::new());
+                };
+                let pool = self
+                    .products
+                    .list_by_prepared_meal(&[prepared_meal_id])
+                    .await?
+                    .remove(&prepared_meal_id)
+                    .unwrap_or_default();
+                let name = self.prepared_meal_name(prepared_meal_id).await?;
+                let label = format!("Logged food \u{2014} {name}");
+                Ok(vec![requirement_deduction(
+                    StockEffectSource::ConsumptionRecord,
+                    record.id.as_uuid(),
+                    record.id.as_uuid(),
+                    crate::domain::DeductionTarget::prepared_meal_pool(
+                        prepared_meal_id,
+                        pool.iter().map(|p| p.id).collect(),
+                    ),
+                    quantity,
+                    label,
                     record.recorded_by,
                     Some(record.member_id),
                 )])
@@ -243,6 +301,7 @@ impl ConsumptionService {
             name_outcomes(
                 &*self.products,
                 &*self.ingredients,
+                &*self.prepared_meals,
                 &*self.batches,
                 outcomes,
             )
@@ -275,6 +334,7 @@ impl ConsumptionService {
             name_outcomes(
                 &*self.products,
                 &*self.ingredients,
+                &*self.prepared_meals,
                 &*self.batches,
                 stock_outcomes,
             )
@@ -315,6 +375,12 @@ impl ConsumptionService {
             MealItemRef::Product { product_id } => self.get_product(product_id).await?.name,
             MealItemRef::Recipe { recipe_id } => self.get_recipe(recipe_id, None).await?.name,
             MealItemRef::Dish { recipe_id } => self.cooked_name(recipe_id).await?,
+            MealItemRef::Ingredient { ingredient_id } => {
+                self.ingredient_name(ingredient_id).await?
+            }
+            MealItemRef::PreparedMeal { prepared_meal_id } => {
+                self.prepared_meal_name(prepared_meal_id).await?
+            }
         };
         Ok(format!("Logged food \u{2014} {name}"))
     }
@@ -324,6 +390,24 @@ impl ConsumptionService {
             .get(id)
             .await?
             .ok_or_else(|| CoreError::not_found(PRODUCT, id))
+    }
+
+    async fn ingredient_name(&self, id: IngredientId) -> Result<String> {
+        Ok(self
+            .ingredients
+            .get(id)
+            .await?
+            .map(|ingredient| ingredient.name)
+            .unwrap_or_else(|| "Missing food".to_owned()))
+    }
+
+    async fn prepared_meal_name(&self, id: PreparedMealId) -> Result<String> {
+        Ok(self
+            .prepared_meals
+            .get(id)
+            .await?
+            .map(|prepared_meal| prepared_meal.name)
+            .unwrap_or_else(|| "Missing food".to_owned()))
     }
 
     async fn cooked_first(&self, recipe_id: RecipeId) -> Result<PreparedBatch> {
@@ -371,6 +455,18 @@ impl ConsumptionService {
                         Some(recipe) => Ok(recipe.name),
                         None => Ok("Missing cooked food".to_owned()),
                     },
+                }
+            }
+            MealItemRef::Ingredient { ingredient_id } => {
+                match self.ingredients.get(ingredient_id).await? {
+                    Some(ingredient) => Ok(ingredient.name),
+                    None => Ok("Missing food".to_owned()),
+                }
+            }
+            MealItemRef::PreparedMeal { prepared_meal_id } => {
+                match self.prepared_meals.get(prepared_meal_id).await? {
+                    Some(prepared_meal) => Ok(prepared_meal.name),
+                    None => Ok("Missing food".to_owned()),
                 }
             }
         }
@@ -423,6 +519,34 @@ impl ConsumptionService {
                     return Err(errors.into());
                 }
                 Ok(recipe_nutrition_for(&batch.nutrition, amount))
+            }
+            MealItemRef::Ingredient { ingredient_id } => {
+                if !matches!(amount, ConsumedAmount::Measure(_)) {
+                    let mut errors = ValidationErrors::new();
+                    errors.push("amount", "A food without a brand is measured, not counted");
+                    return Err(errors.into());
+                }
+                let candidates = self
+                    .products
+                    .list_by_ingredient(&[ingredient_id])
+                    .await?
+                    .remove(&ingredient_id)
+                    .unwrap_or_default();
+                Ok(generic_food_nutrition(&candidates, amount))
+            }
+            MealItemRef::PreparedMeal { prepared_meal_id } => {
+                if !matches!(amount, ConsumedAmount::Measure(_)) {
+                    let mut errors = ValidationErrors::new();
+                    errors.push("amount", "A food without a brand is measured, not counted");
+                    return Err(errors.into());
+                }
+                let candidates = self
+                    .products
+                    .list_by_prepared_meal(&[prepared_meal_id])
+                    .await?
+                    .remove(&prepared_meal_id)
+                    .unwrap_or_default();
+                Ok(generic_food_nutrition(&candidates, amount))
             }
         }
     }

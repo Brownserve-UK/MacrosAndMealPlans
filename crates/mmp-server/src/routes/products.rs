@@ -1,6 +1,8 @@
 use axum::Json;
 use axum::extract::{Path, Query, State};
-use mmp_core::domain::{ConsumedAmount, IngredientId, ProductId, Quantity, Revision};
+use mmp_core::domain::{
+    ConsumedAmount, IngredientId, PreparedMealId, ProductId, Quantity, Revision,
+};
 use mmp_core::ports::{PageRequest, ProductQuery};
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
@@ -9,7 +11,8 @@ use uuid::Uuid;
 use crate::auth::{Permission, Principal};
 use crate::dto::{
     AmountKindDto, CreateProductRequest, ProductDto, ProductListQuery, ProductNutritionDto,
-    ProductNutritionQuery, ProductPage, SetMappingRequest, UpdateProductRequest,
+    ProductNutritionQuery, ProductPage, SetMappingRequest, SetPreparedMealMappingRequest,
+    UpdateProductRequest,
 };
 use crate::error::{ApiError, ApiResult};
 use crate::http::{Created, IfMatch, Tagged};
@@ -22,6 +25,10 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(archive))
         .routes(routes!(unarchive))
         .routes(routes!(set_mapping, clear_mapping))
+        .routes(routes!(
+            set_prepared_meal_mapping,
+            clear_prepared_meal_mapping
+        ))
         .routes(routes!(get_nutrition))
 }
 
@@ -32,6 +39,7 @@ pub(crate) fn to_query(query: ProductListQuery) -> ProductQuery {
         barcode: query.barcode.filter(|b| !b.trim().is_empty()),
         retailer: query.retailer.filter(|r| !r.trim().is_empty()),
         mapped_ingredient_id: query.mapped_ingredient_id.map(IngredientId::from),
+        mapped_prepared_meal_id: query.mapped_prepared_meal_id.map(PreparedMealId::from),
         unmapped: query.unmapped,
         include_archived: query.include_archived.unwrap_or(false),
         page: PageRequest::new(
@@ -254,6 +262,68 @@ async fn clear_mapping(
     let updated = state
         .catalogue
         .set_product_mapping(ProductId::from(id), revision, None)
+        .await?;
+    Ok(Tagged(updated.revision, updated.into()))
+}
+
+#[utoipa::path(
+    put,
+    path = "/api/v1/products/{id}/prepared-meal",
+    operation_id = "setProductPreparedMeal",
+    params(
+        ("id" = Uuid, Path, description = "Product id"),
+        ("If-Match" = String, Header, description = "The revision you loaded"),
+    ),
+    request_body = SetPreparedMealMappingRequest,
+    responses(
+        (status = 200, description = "Mapping set", body = ProductDto),
+        (status = 404, description = "The prepared meal does not exist", body = crate::error::Problem),
+        (status = 422, description = "The prepared meal is archived, or a food mapping already exists", body = crate::error::Problem),
+    ),
+    tag = "products",
+    security(("basic" = []))
+)]
+async fn set_prepared_meal_mapping(
+    State(state): State<AppState>,
+    principal: Principal,
+    Path(id): Path<Uuid>,
+    IfMatch(revision): IfMatch,
+    Json(body): Json<SetPreparedMealMappingRequest>,
+) -> ApiResult<Tagged<ProductDto>> {
+    principal.require(Permission::CatalogueWrite)?;
+    let updated = state
+        .catalogue
+        .set_product_prepared_meal_mapping(
+            ProductId::from(id),
+            revision,
+            Some(PreparedMealId::from(body.prepared_meal_id)),
+        )
+        .await?;
+    Ok(Tagged(updated.revision, updated.into()))
+}
+
+#[utoipa::path(
+    delete,
+    path = "/api/v1/products/{id}/prepared-meal",
+    operation_id = "clearProductPreparedMeal",
+    params(
+        ("id" = Uuid, Path, description = "Product id"),
+        ("If-Match" = String, Header, description = "The revision you loaded"),
+    ),
+    responses((status = 200, description = "Mapping cleared", body = ProductDto)),
+    tag = "products",
+    security(("basic" = []))
+)]
+async fn clear_prepared_meal_mapping(
+    State(state): State<AppState>,
+    principal: Principal,
+    Path(id): Path<Uuid>,
+    IfMatch(revision): IfMatch,
+) -> ApiResult<Tagged<ProductDto>> {
+    principal.require(Permission::CatalogueWrite)?;
+    let updated = state
+        .catalogue
+        .set_product_prepared_meal_mapping(ProductId::from(id), revision, None)
         .await?;
     Ok(Tagged(updated.revision, updated.into()))
 }

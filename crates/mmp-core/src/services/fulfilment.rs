@@ -110,12 +110,12 @@ pub(crate) fn expand_recipe(
                 let Fulfilment::Candidates(products) = fulfilments.get(&component.requirement)
                 else {
                     out.subject_gaps
-                        .push((subject, DemandGap::IngredientHasNoProducts));
+                        .push((subject, DemandGap::FoodHasNoProducts));
                     continue;
                 };
                 if products.is_empty() {
                     out.subject_gaps
-                        .push((subject, DemandGap::IngredientHasNoProducts));
+                        .push((subject, DemandGap::FoodHasNoProducts));
                     continue;
                 }
                 let ConsumedAmount::Measure(want) = scaled else {

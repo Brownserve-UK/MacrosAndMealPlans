@@ -763,6 +763,7 @@ impl MealPlanService {
         let named = name_outcomes(
             &*self.products,
             &*self.ingredients,
+            &*self.prepared_meals,
             &*self.batches,
             outcomes,
         )
@@ -836,6 +837,54 @@ impl MealPlanService {
                     subject,
                 )])
             }
+            MealItemRef::Ingredient { ingredient_id } => {
+                if already_drawn {
+                    return Ok(Vec::new());
+                }
+                let ConsumedAmount::Measure(want) = *prepared_amount else {
+                    return Ok(Vec::new());
+                };
+                let Some(card) = catalogue.ingredients.get(&ingredient_id) else {
+                    return Ok(Vec::new());
+                };
+                Ok(vec![requirement_deduction(
+                    StockEffectSource::MealPlanComponent,
+                    component_id.as_uuid(),
+                    component_id.as_uuid(),
+                    crate::domain::DeductionTarget::pool(
+                        ingredient_id,
+                        card.candidates.iter().map(|p| p.id).collect(),
+                    ),
+                    want,
+                    stock_source_label(entry, &card.name),
+                    Some(actor),
+                    subject,
+                )])
+            }
+            MealItemRef::PreparedMeal { prepared_meal_id } => {
+                if already_drawn {
+                    return Ok(Vec::new());
+                }
+                let ConsumedAmount::Measure(want) = *prepared_amount else {
+                    return Ok(Vec::new());
+                };
+                let Some(card) = catalogue.prepared_meals.get(&prepared_meal_id) else {
+                    return Ok(Vec::new());
+                };
+                Ok(vec![requirement_deduction(
+                    StockEffectSource::MealPlanComponent,
+                    component_id.as_uuid(),
+                    component_id.as_uuid(),
+                    crate::domain::DeductionTarget::prepared_meal_pool(
+                        prepared_meal_id,
+                        card.candidates.iter().map(|p| p.id).collect(),
+                    ),
+                    want,
+                    stock_source_label(entry, &card.name),
+                    Some(actor),
+                    subject,
+                )])
+            }
         }
     }
 
@@ -900,6 +949,48 @@ impl MealPlanService {
                     Some(record.member_id),
                 )]
             }
+            MealItemRef::Ingredient { ingredient_id } => {
+                let ConsumedAmount::Measure(want) = record.amount else {
+                    return Vec::new();
+                };
+                let Some(card) = catalogue.ingredients.get(&ingredient_id) else {
+                    return Vec::new();
+                };
+                vec![requirement_deduction(
+                    StockEffectSource::ConsumptionRecord,
+                    record.id.as_uuid(),
+                    record.id.as_uuid(),
+                    crate::domain::DeductionTarget::pool(
+                        ingredient_id,
+                        card.candidates.iter().map(|p| p.id).collect(),
+                    ),
+                    want,
+                    card.name.clone(),
+                    record.recorded_by,
+                    Some(record.member_id),
+                )]
+            }
+            MealItemRef::PreparedMeal { prepared_meal_id } => {
+                let ConsumedAmount::Measure(want) = record.amount else {
+                    return Vec::new();
+                };
+                let Some(card) = catalogue.prepared_meals.get(&prepared_meal_id) else {
+                    return Vec::new();
+                };
+                vec![requirement_deduction(
+                    StockEffectSource::ConsumptionRecord,
+                    record.id.as_uuid(),
+                    record.id.as_uuid(),
+                    crate::domain::DeductionTarget::prepared_meal_pool(
+                        prepared_meal_id,
+                        card.candidates.iter().map(|p| p.id).collect(),
+                    ),
+                    want,
+                    card.name.clone(),
+                    record.recorded_by,
+                    Some(record.member_id),
+                )]
+            }
         }
     }
 
@@ -922,6 +1013,18 @@ impl MealPlanService {
                     if self.batches.held_for_recipe(recipe_id).await?.is_empty() {
                         return Err(CoreError::not_found(DISH, recipe_id));
                     }
+                }
+                MealItemRef::Ingredient { ingredient_id } => {
+                    self.ingredients
+                        .get(ingredient_id)
+                        .await?
+                        .ok_or_else(|| CoreError::not_found("ingredient", ingredient_id))?;
+                }
+                MealItemRef::PreparedMeal { prepared_meal_id } => {
+                    self.prepared_meals
+                        .get(prepared_meal_id)
+                        .await?
+                        .ok_or_else(|| CoreError::not_found("prepared_meal", prepared_meal_id))?;
                 }
             }
         }
@@ -948,6 +1051,28 @@ impl MealPlanService {
                     .products
                     .get(&product_id)
                     .map(|p| p.name.clone())
+                    .unwrap_or_else(|| "food".to_owned());
+                (name, None)
+            }
+            MealItemRef::Ingredient { ingredient_id } => {
+                if still_eaten {
+                    return None;
+                }
+                let name = catalogue
+                    .ingredients
+                    .get(&ingredient_id)
+                    .map(|c| c.name.clone())
+                    .unwrap_or_else(|| "food".to_owned());
+                (name, None)
+            }
+            MealItemRef::PreparedMeal { prepared_meal_id } => {
+                if still_eaten {
+                    return None;
+                }
+                let name = catalogue
+                    .prepared_meals
+                    .get(&prepared_meal_id)
+                    .map(|c| c.name.clone())
                     .unwrap_or_else(|| "food".to_owned());
                 (name, None)
             }

@@ -1319,3 +1319,41 @@ ALTER TABLE consumption_record
             num_nonnulls(product_id, recipe_id) = 1
             AND (item_kind = 'product') = (product_id IS NOT NULL)
         );
+
+CREATE TABLE prepared_meal (
+    id                  UUID PRIMARY KEY,
+    name                TEXT NOT NULL,
+    default_unit        unit_code NOT NULL,
+    shopping_section    shopping_section_code,
+    track_stock         BOOLEAN,
+
+    origin              TEXT NOT NULL,
+    seed_key            TEXT,
+    source_provider     TEXT,
+    source_external_id  TEXT,
+    locally_modified    BOOLEAN NOT NULL DEFAULT FALSE,
+
+    revision            BIGINT NOT NULL DEFAULT 1,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    archived_at         TIMESTAMPTZ,
+
+    CONSTRAINT prepared_meal_name_not_blank
+        CHECK (btrim(name) <> ''),
+    CONSTRAINT prepared_meal_origin_valid
+        CHECK (origin IN ('seeded', 'local', 'external')),
+    CONSTRAINT prepared_meal_seeded_has_key
+        CHECK (origin <> 'seeded' OR seed_key IS NOT NULL)
+);
+
+CREATE UNIQUE INDEX prepared_meal_name_unique ON prepared_meal (lower(name));
+CREATE UNIQUE INDEX prepared_meal_seed_key_unique ON prepared_meal (seed_key) WHERE seed_key IS NOT NULL;
+CREATE INDEX prepared_meal_name_trgm ON prepared_meal USING GIN (name gin_trgm_ops);
+
+ALTER TABLE product
+    ADD COLUMN mapped_prepared_meal_id UUID REFERENCES prepared_meal (id) ON DELETE RESTRICT,
+    ADD CONSTRAINT product_mapping_exclusive
+        CHECK (num_nonnulls(mapped_ingredient_id, mapped_prepared_meal_id) <= 1);
+
+CREATE INDEX product_mapped_prepared_meal ON product (mapped_prepared_meal_id)
+    WHERE mapped_prepared_meal_id IS NOT NULL;

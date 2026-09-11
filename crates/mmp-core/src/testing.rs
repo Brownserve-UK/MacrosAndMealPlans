@@ -11,20 +11,21 @@ use crate::domain::{
     HouseholdMember, HouseholdMemberId, HouseholdSettings, Ingredient, IngredientId,
     MealParticipant, MealPlanComponentId, MealPlanEntry, MealPlanEntryId, MealTimes,
     MemberAccessGrant, MissingStockInterpretation, NewStockEvent, NutritionTarget,
-    NutritionTargetId, OpportunityException, PreparedBatch, PreparedBatchId, Product, ProductId,
-    Purchase, PurchaseId, PurchaseState, Quantity, Recipe, RecipeId, RecipePhoto, RecipeSummary,
-    RecipeVisibility, Revision, Role, SectionOrder, ShoppingCadence, ShoppingListItem,
-    ShoppingListItemId, ShoppingOpportunityId, ShoppingTrip, StockEffect, StockEffectSource,
-    StockEvent, StockEventId, StockItem, StockItemId, StockOutcome, StockSubject, Unit, User,
-    UserId, WeightGoal, WeightGoalId, WeightRecord, WeightRecordId,
+    NutritionTargetId, OpportunityException, PreparedBatch, PreparedBatchId, PreparedMeal,
+    PreparedMealId, Product, ProductId, Purchase, PurchaseId, PurchaseState, Quantity, Recipe,
+    RecipeId, RecipePhoto, RecipeSummary, RecipeVisibility, Revision, Role, SectionOrder,
+    ShoppingCadence, ShoppingListItem, ShoppingListItemId, ShoppingOpportunityId, ShoppingTrip,
+    StockEffect, StockEffectSource, StockEvent, StockEventId, StockItem, StockItemId, StockOutcome,
+    StockSubject, Unit, User, UserId, WeightGoal, WeightGoalId, WeightRecord, WeightRecordId,
 };
 use crate::error::{CoreError, Result};
 use crate::ports::{
     AccessGrantRepository, ConsumptionQuery, ConsumptionRecordRepository, FinishedPurchase,
     HouseholdMemberRepository, HouseholdSettingsRepository, IngredientQuery, IngredientRepository,
     IngredientSort, MealPlanComponentUpdate, MealPlanQuery, MealPlanRepository, MemberQuery,
-    NewStockFromPurchase, NutritionTargetRepository, Paginated, ProductQuery, ProductRepository,
-    PurchaseQuery, PurchaseRepository, RecipeQuery, RecipeRepository, ShoppingCadenceRepository,
+    NewStockFromPurchase, NutritionTargetRepository, Paginated, PreparedMealQuery,
+    PreparedMealRepository, PreparedMealSort, ProductQuery, ProductRepository, PurchaseQuery,
+    PurchaseRepository, RecipeQuery, RecipeRepository, ShoppingCadenceRepository,
     ShoppingListItemRepository, ShoppingOpportunityRepository, ShoppingTripRepository, SnapshotOp,
     SortDirection, StockQuery, StockRepository, StockWrite, UpdateOutcome, UserQuery,
     UserRepository, WeightGoalRepository, WeightRecordRepository,
@@ -47,6 +48,30 @@ fn enforce_ingredient_uniqueness(
             && existing.provenance.seed_key == candidate.provenance.seed_key
         {
             return Err(CoreError::duplicate("ingredient", "seed_key", ""));
+        }
+    }
+    Ok(())
+}
+
+fn enforce_prepared_meal_uniqueness(
+    rows: &HashMap<PreparedMealId, PreparedMeal>,
+    candidate: &PreparedMeal,
+) -> Result<()> {
+    for existing in rows.values() {
+        if existing.id == candidate.id {
+            continue;
+        }
+        if existing.name.eq_ignore_ascii_case(&candidate.name) {
+            return Err(CoreError::duplicate(
+                "prepared_meal",
+                "name",
+                &candidate.name,
+            ));
+        }
+        if candidate.provenance.seed_key.is_some()
+            && existing.provenance.seed_key == candidate.provenance.seed_key
+        {
+            return Err(CoreError::duplicate("prepared_meal", "seed_key", ""));
         }
     }
     Ok(())
@@ -253,6 +278,153 @@ impl IngredientRepository for InMemoryIngredientRepository {
 }
 
 #[derive(Default, Clone)]
+pub struct InMemoryPreparedMealRepository {
+    rows: Arc<Mutex<HashMap<PreparedMealId, PreparedMeal>>>,
+    products: Arc<Mutex<Option<InMemoryProductRepository>>>,
+}
+
+impl InMemoryPreparedMealRepository {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn seed(&self, prepared_meal: PreparedMeal) {
+        self.rows
+            .lock()
+            .unwrap()
+            .insert(prepared_meal.id, prepared_meal);
+    }
+
+    pub fn count(&self) -> usize {
+        self.rows.lock().unwrap().len()
+    }
+
+    pub fn link_products(&self, products: &InMemoryProductRepository) {
+        *self.products.lock().unwrap() = Some(products.clone());
+    }
+
+    fn product_counts(&self) -> HashMap<PreparedMealId, i64> {
+        let guard = self.products.lock().unwrap();
+        let Some(products) = guard.as_ref() else {
+            return HashMap::new();
+        };
+        let rows = products.rows.lock().unwrap();
+        let mut counts: HashMap<PreparedMealId, i64> = HashMap::new();
+        for product in rows.values().filter(|p| !p.is_archived()) {
+            if let Some(id) = product.mapped_prepared_meal_id {
+                *counts.entry(id).or_default() += 1;
+            }
+        }
+        counts
+    }
+}
+
+#[async_trait]
+impl PreparedMealRepository for InMemoryPreparedMealRepository {
+    async fn get(&self, id: PreparedMealId) -> Result<Option<PreparedMeal>> {
+        Ok(self.rows.lock().unwrap().get(&id).cloned())
+    }
+
+    async fn find_by_name(&self, name: &str) -> Result<Option<PreparedMeal>> {
+        Ok(self
+            .rows
+            .lock()
+            .unwrap()
+            .values()
+            .find(|i| i.name.eq_ignore_ascii_case(name))
+            .cloned())
+    }
+
+    async fn find_by_seed_key(&self, seed_key: &str) -> Result<Option<PreparedMeal>> {
+        Ok(self
+            .rows
+            .lock()
+            .unwrap()
+            .values()
+            .find(|i| i.provenance.seed_key.as_deref() == Some(seed_key))
+            .cloned())
+    }
+
+    async fn list(&self, query: &PreparedMealQuery) -> Result<Paginated<PreparedMeal>> {
+        let with_products: Option<std::collections::HashSet<PreparedMealId>> =
+            query.needs_products.and_then(|_| {
+                let guard = self.products.lock().unwrap();
+                guard.as_ref().map(|products| {
+                    let product_rows = products.rows.lock().unwrap();
+                    product_rows
+                        .values()
+                        .filter(|p| !p.is_archived())
+                        .filter_map(|p| p.mapped_prepared_meal_id)
+                        .collect()
+                })
+            });
+
+        let rows = self.rows.lock().unwrap();
+        let items: Vec<PreparedMeal> = rows
+            .values()
+            .filter(|i| query.include_archived || !i.is_archived())
+            .filter(|i| query.origin.is_none_or(|o| i.provenance.origin == o))
+            .filter(|i| {
+                query
+                    .search
+                    .as_deref()
+                    .is_none_or(|needle| matches(&i.name, needle))
+            })
+            .filter(|i| match (query.needs_products, &with_products) {
+                (Some(needs), Some(mapped)) => mapped.contains(&i.id) != needs,
+                _ => true,
+            })
+            .cloned()
+            .collect();
+        drop(rows);
+
+        Ok(match query.sort_by {
+            PreparedMealSort::Name => paginate(items, query.page, query.sort, |i| i.name.clone()),
+            PreparedMealSort::Created => paginate_by(items, query.page, query.sort, |i| {
+                (i.created_at, i.name.to_lowercase())
+            }),
+            PreparedMealSort::ProductCount => {
+                let counts = self.product_counts();
+                paginate_by(items, query.page, query.sort, |i| {
+                    (
+                        counts.get(&i.id).copied().unwrap_or(0),
+                        std::cmp::Reverse(i.name.to_lowercase()),
+                    )
+                })
+            }
+        })
+    }
+
+    async fn insert(&self, prepared_meal: &PreparedMeal) -> Result<()> {
+        let mut rows = self.rows.lock().unwrap();
+        enforce_prepared_meal_uniqueness(&rows, prepared_meal)?;
+        rows.insert(prepared_meal.id, prepared_meal.clone());
+        Ok(())
+    }
+
+    async fn update(
+        &self,
+        prepared_meal: &PreparedMeal,
+        expected: Revision,
+    ) -> Result<UpdateOutcome> {
+        let mut rows = self.rows.lock().unwrap();
+        match rows.get(&prepared_meal.id) {
+            None => Ok(UpdateOutcome::NotFound),
+            Some(existing) if existing.revision != expected => {
+                Ok(UpdateOutcome::RevisionMismatch {
+                    actual: existing.revision,
+                })
+            }
+            Some(_) => {
+                enforce_prepared_meal_uniqueness(&rows, prepared_meal)?;
+                rows.insert(prepared_meal.id, prepared_meal.clone());
+                Ok(UpdateOutcome::Updated)
+            }
+        }
+    }
+}
+
+#[derive(Default, Clone)]
 pub struct InMemoryProductRepository {
     rows: Arc<Mutex<HashMap<ProductId, Product>>>,
 }
@@ -327,6 +499,11 @@ impl ProductRepository for InMemoryProductRepository {
             })
             .filter(|p| {
                 query
+                    .mapped_prepared_meal_id
+                    .is_none_or(|id| p.mapped_prepared_meal_id == Some(id))
+            })
+            .filter(|p| {
+                query
                     .search
                     .as_deref()
                     .is_none_or(|needle| matches(&p.name, needle))
@@ -362,6 +539,40 @@ impl ProductRepository for InMemoryProductRepository {
             let mut products: Vec<Product> = rows
                 .values()
                 .filter(|p| !p.is_archived() && p.mapped_ingredient_id == Some(*id))
+                .cloned()
+                .collect();
+            products.sort_by_key(|product| product.name.to_lowercase());
+            grouped.insert(*id, products);
+        }
+        Ok(grouped)
+    }
+
+    async fn count_by_prepared_meal(
+        &self,
+        prepared_meal_ids: &[PreparedMealId],
+    ) -> Result<std::collections::HashMap<PreparedMealId, i64>> {
+        let rows = self.rows.lock().unwrap();
+        let mut counts = std::collections::HashMap::new();
+        for id in prepared_meal_ids {
+            let count = rows
+                .values()
+                .filter(|p| !p.is_archived() && p.mapped_prepared_meal_id == Some(*id))
+                .count() as i64;
+            counts.insert(*id, count);
+        }
+        Ok(counts)
+    }
+
+    async fn list_by_prepared_meal(
+        &self,
+        prepared_meal_ids: &[PreparedMealId],
+    ) -> Result<std::collections::HashMap<PreparedMealId, Vec<Product>>> {
+        let rows = self.rows.lock().unwrap();
+        let mut grouped = std::collections::HashMap::new();
+        for id in prepared_meal_ids {
+            let mut products: Vec<Product> = rows
+                .values()
+                .filter(|p| !p.is_archived() && p.mapped_prepared_meal_id == Some(*id))
                 .cloned()
                 .collect();
             products.sort_by_key(|product| product.name.to_lowercase());

@@ -3,9 +3,9 @@ use super::str_enum::str_enum;
 use time::{Date, OffsetDateTime, Time, Weekday};
 
 use super::{
-    DemandClaim, DemandGap, DemandSubject, IngredientId, ProductId, PurchaseId, Quantity, Revision,
-    ShoppingListItemId, ShoppingOpportunityId, ShoppingTripId, ShoppingTripRowId, StockItemId,
-    UserId,
+    DemandClaim, DemandGap, DemandSubject, IngredientId, PreparedMealId, ProductId, PurchaseId,
+    Quantity, Revision, ShoppingListItemId, ShoppingOpportunityId, ShoppingTripId,
+    ShoppingTripRowId, StockItemId, UserId,
 };
 use crate::error::{Result, ValidationErrors};
 
@@ -383,6 +383,7 @@ impl PurchaseState {
 pub struct Purchase {
     pub id: PurchaseId,
     pub ingredient_id: Option<IngredientId>,
+    pub prepared_meal_id: Option<PreparedMealId>,
     pub product_id: Option<ProductId>,
     pub name: Option<String>,
     pub quantity: Option<Quantity>,
@@ -410,6 +411,12 @@ impl Purchase {
                         .product_id
                         .is_some_and(|product_id| pool.contains(&product_id))
             }
+            DemandSubject::PreparedMeal { prepared_meal_id } => {
+                self.prepared_meal_id == Some(*prepared_meal_id)
+                    || self
+                        .product_id
+                        .is_some_and(|product_id| pool.contains(&product_id))
+            }
             DemandSubject::Product { product_id } => self.product_id == Some(*product_id),
             DemandSubject::PreparedPortion { .. } | DemandSubject::CookedFood { .. } => false,
         }
@@ -419,6 +426,7 @@ impl Purchase {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewPurchase {
     pub ingredient_id: Option<IngredientId>,
+    pub prepared_meal_id: Option<PreparedMealId>,
     pub product_id: Option<ProductId>,
     pub name: Option<String>,
     pub quantity: Option<Quantity>,
@@ -433,7 +441,11 @@ impl NewPurchase {
             .name
             .as_ref()
             .is_some_and(|name| !name.trim().is_empty());
-        if self.ingredient_id.is_none() && self.product_id.is_none() && !named {
+        if self.ingredient_id.is_none()
+            && self.prepared_meal_id.is_none()
+            && self.product_id.is_none()
+            && !named
+        {
             errors.push("product_id", "Say what was bought.");
         }
         if let Some(quantity) = self.quantity
@@ -469,6 +481,7 @@ impl TripState {
 pub struct ShoppingTripRow {
     pub id: ShoppingTripRowId,
     pub ingredient_id: Option<IngredientId>,
+    pub prepared_meal_id: Option<PreparedMealId>,
     pub product_id: Option<ProductId>,
     pub name: String,
     pub quantity: Option<Quantity>,
@@ -499,6 +512,9 @@ impl ShoppingTrip {
             DemandSubject::Ingredient { ingredient_id } => {
                 row.ingredient_id == Some(*ingredient_id)
             }
+            DemandSubject::PreparedMeal { prepared_meal_id } => {
+                row.prepared_meal_id == Some(*prepared_meal_id)
+            }
             DemandSubject::Product { product_id } => row.product_id == Some(*product_id),
             DemandSubject::PreparedPortion { .. } | DemandSubject::CookedFood { .. } => false,
         })
@@ -509,6 +525,7 @@ impl ShoppingTrip {
 pub struct ShoppingListItem {
     pub id: ShoppingListItemId,
     pub ingredient_id: Option<IngredientId>,
+    pub prepared_meal_id: Option<PreparedMealId>,
     pub product_id: Option<ProductId>,
     pub name: String,
     pub quantity: Option<Quantity>,
@@ -523,6 +540,7 @@ pub struct ShoppingListItem {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewShoppingListItem {
     pub ingredient_id: Option<IngredientId>,
+    pub prepared_meal_id: Option<PreparedMealId>,
     pub product_id: Option<ProductId>,
     pub name: String,
     pub quantity: Option<Quantity>,

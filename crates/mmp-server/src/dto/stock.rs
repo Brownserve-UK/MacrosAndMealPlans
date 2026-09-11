@@ -381,6 +381,7 @@ pub struct StockOutcomesResponse {
 pub enum DemandSubjectDto {
     Product { product_id: Uuid },
     Ingredient { ingredient_id: Uuid },
+    PreparedMeal { prepared_meal_id: Uuid },
     PreparedPortion { prepared_batch_id: Uuid },
     CookedFood { recipe_id: Uuid },
 }
@@ -393,6 +394,9 @@ impl From<DemandSubject> for DemandSubjectDto {
             },
             DemandSubject::Ingredient { ingredient_id } => Self::Ingredient {
                 ingredient_id: ingredient_id.as_uuid(),
+            },
+            DemandSubject::PreparedMeal { prepared_meal_id } => Self::PreparedMeal {
+                prepared_meal_id: prepared_meal_id.as_uuid(),
             },
             DemandSubject::PreparedPortion { prepared_batch_id } => Self::PreparedPortion {
                 prepared_batch_id: prepared_batch_id.as_uuid(),
@@ -408,7 +412,7 @@ impl From<DemandSubject> for DemandSubjectDto {
 #[serde(rename_all = "snake_case")]
 pub enum DemandGapDto {
     UnresolvedRecipeLine,
-    IngredientHasNoProducts,
+    FoodHasNoProducts,
     RecipeMissing,
     ProductMissing,
     AmountUnresolvable,
@@ -419,7 +423,7 @@ impl From<DemandGap> for DemandGapDto {
     fn from(value: DemandGap) -> Self {
         match value {
             DemandGap::UnresolvedRecipeLine => Self::UnresolvedRecipeLine,
-            DemandGap::IngredientHasNoProducts => Self::IngredientHasNoProducts,
+            DemandGap::FoodHasNoProducts => Self::FoodHasNoProducts,
             DemandGap::RecipeMissing => Self::RecipeMissing,
             DemandGap::ProductMissing => Self::ProductMissing,
             DemandGap::AmountUnresolvable => Self::AmountUnresolvable,
@@ -552,6 +556,25 @@ impl From<IngredientAvailability> for IngredientAvailabilityDto {
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct PreparedMealAvailabilityDto {
+    pub prepared_meal_id: Uuid,
+    pub name: String,
+    pub availability: AvailabilityDto,
+    pub demand_gaps: Vec<DemandGapDto>,
+}
+
+impl From<mmp_core::domain::PreparedMealAvailability> for PreparedMealAvailabilityDto {
+    fn from(value: mmp_core::domain::PreparedMealAvailability) -> Self {
+        Self {
+            prepared_meal_id: value.prepared_meal_id.as_uuid(),
+            name: value.name,
+            availability: value.availability.into(),
+            demand_gaps: value.demand_gaps.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct CookedFoodAvailabilityDto {
     pub recipe_id: Uuid,
     pub name: String,
@@ -572,6 +595,8 @@ impl From<CookedFoodAvailability> for CookedFoodAvailabilityDto {
 pub struct AvailabilityReportDto {
     pub products: Vec<ProductAvailabilityDto>,
     pub ingredients: Vec<IngredientAvailabilityDto>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub prepared_meals: Vec<PreparedMealAvailabilityDto>,
     pub cooked_food: Vec<CookedFoodAvailabilityDto>,
     pub demand_gaps: Vec<DemandGapDto>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -583,6 +608,7 @@ impl From<AvailabilityReport> for AvailabilityReportDto {
         Self {
             products: value.products.into_iter().map(Into::into).collect(),
             ingredients: value.ingredients.into_iter().map(Into::into).collect(),
+            prepared_meals: value.prepared_meals.into_iter().map(Into::into).collect(),
             cooked_food: value.cooked_food.into_iter().map(Into::into).collect(),
             demand_gaps: value.demand_gaps.into_iter().map(Into::into).collect(),
             claims: value.claims.into_iter().map(Into::into).collect(),
