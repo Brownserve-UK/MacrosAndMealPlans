@@ -2,7 +2,7 @@
 
 use mmp_core::CoreError;
 use mmp_core::domain::{
-    AccessScope, Assumption, CatalogueOrigin, ConsumedAmount, ConsumptionRecord,
+    AccessScope, Assumption, CatalogueOrigin, ConsumedAmount, ConsumedNutrition, ConsumptionRecord,
     ConsumptionRecordId, ExceptionState, HouseholdMember, HouseholdMemberId, Ingredient,
     IngredientId, MealCategory, MealGuestAllocation, MealGuestAllocationId, MealGuestGroup,
     MealGuestGroupId, MealItemRef, MealParticipant, MealParticipantAllocation,
@@ -10,15 +10,15 @@ use mmp_core::domain::{
     MealPlanComponentSnapshot, MealPlanEntry, MealPlanEntryId, MealPlanScope, MealPlanStatus,
     MealSlot, MealTemplate, MealTemplateComponent, MealTemplateComponentId, MealTemplateId,
     MemberAccessGrant, NewStockEvent, NutritionFacts, NutritionGoals, NutritionQuality,
-    NutritionTarget, NutritionTargetId, OpportunityException, ParticipantStatus, PreparedMeal,
-    PreparedMealId, Product, ProductId, Provenance, Purchase, PurchaseId, PurchaseState, Quantity,
-    Recipe, RecipeComponent, RecipeComponentId, RecipeId, RecipeInstruction, RecipeInstructionId,
-    RecipePhoto, RecipePhotoDerivatives, RecipeRequirement, RecipeVisibility, Revision, Role,
-    SectionOrder, ShoppingCadence, ShoppingListItem, ShoppingListItemId, ShoppingOpportunityId,
-    ShoppingSection, ShoppingTrip, ShoppingTripId, ShoppingTripRow, ShoppingTripRowId,
-    StockEventKind, StockItem, StockItemId, StockLevel, StockSubject, StorageLocation, TripState,
-    Unit, User, UserId, WeightDisplay, WeightGoal, WeightGoalId, WeightObjective, WeightRecord,
-    WeightRecordId, WeightSource,
+    NutritionTarget, NutritionTargetId, OpportunityException, ParticipantStatus, PreparationSource,
+    PreparedBatch, PreparedBatchId, PreparedMeal, PreparedMealId, Product, ProductId, Provenance,
+    Purchase, PurchaseId, PurchaseState, Quantity, Recipe, RecipeComponent, RecipeComponentId,
+    RecipeId, RecipeInstruction, RecipeInstructionId, RecipePhoto, RecipePhotoDerivatives,
+    RecipeRequirement, RecipeVisibility, Revision, Role, SectionOrder, ShoppingCadence,
+    ShoppingListItem, ShoppingListItemId, ShoppingOpportunityId, ShoppingSection, ShoppingTrip,
+    ShoppingTripId, ShoppingTripRow, ShoppingTripRowId, StockEventKind, StockItem, StockItemId,
+    StockLevel, StockSubject, StorageLocation, TripState, Unit, User, UserId, WeightDisplay,
+    WeightGoal, WeightGoalId, WeightObjective, WeightRecord, WeightRecordId, WeightSource,
 };
 use mmp_core::domain::{DeductionTarget, StockEffectSource, StockEventSource};
 use mmp_core::ports::{
@@ -26,11 +26,11 @@ use mmp_core::ports::{
     HouseholdMemberRepository, HouseholdSettingsRepository, IngredientQuery, IngredientRepository,
     IngredientSort, MealPlanComponentUpdate, MealPlanQuery, MealPlanRepository, MealTemplateQuery,
     MealTemplateRepository, MemberQuery, NewStockFromPurchase, NutritionTargetRepository,
-    PageRequest, PreparedMealRepository, ProductQuery, ProductRepository, PurchaseRepository,
-    RecipeQuery, RecipeRepository, ShoppingCadenceRepository, ShoppingListItemRepository,
-    ShoppingOpportunityRepository, ShoppingTripRepository, SnapshotOp, SortDirection,
-    StockDeduction, StockQuery, StockRepository, StockWrite, UpdateOutcome, UserRepository,
-    WeightGoalRepository, WeightRecordRepository,
+    PageRequest, PreparedBatchRepository, PreparedMealRepository, ProductQuery, ProductRepository,
+    PurchaseRepository, RecipeQuery, RecipeRepository, ShoppingCadenceRepository,
+    ShoppingListItemRepository, ShoppingOpportunityRepository, ShoppingTripRepository, SnapshotOp,
+    SortDirection, StockDeduction, StockQuery, StockRepository, StockWrite, UpdateOutcome,
+    UserRepository, WeightGoalRepository, WeightRecordRepository,
 };
 
 fn no_stock() -> StockWrite {
@@ -39,10 +39,11 @@ fn no_stock() -> StockWrite {
 use mmp_postgres::{
     PgAccessGrantRepository, PgConsumptionRecordRepository, PgHouseholdMemberRepository,
     PgHouseholdSettingsRepository, PgIngredientRepository, PgMealPlanRepository,
-    PgMealTemplateRepository, PgNutritionTargetRepository, PgPreparedMealRepository,
-    PgProductRepository, PgPurchaseRepository, PgRecipeRepository, PgShoppingCadenceRepository,
-    PgShoppingListItemRepository, PgShoppingOpportunityRepository, PgShoppingTripRepository,
-    PgStockRepository, PgUserRepository, PgWeightGoalRepository, PgWeightRecordRepository,
+    PgMealTemplateRepository, PgNutritionTargetRepository, PgPreparedBatchRepository,
+    PgPreparedMealRepository, PgProductRepository, PgPurchaseRepository, PgRecipeRepository,
+    PgShoppingCadenceRepository, PgShoppingListItemRepository, PgShoppingOpportunityRepository,
+    PgShoppingTripRepository, PgStockRepository, PgUserRepository, PgWeightGoalRepository,
+    PgWeightRecordRepository,
 };
 use rust_decimal::Decimal;
 use sqlx::PgPool;
@@ -1058,7 +1059,7 @@ fn consumption_record(member_id: HouseholdMemberId, product_id: ProductId) -> Co
 #[sqlx::test]
 async fn round_trips_a_measured_consumption_record(pool: PgPool) {
     let (member_id, product_id) = seed_member_and_product(&pool).await;
-    let repo = PgConsumptionRecordRepository::new(pool);
+    let repo = PgConsumptionRecordRepository::new(pool.clone());
     let original = consumption_record(member_id, product_id);
 
     repo.insert(&original, &no_stock()).await.unwrap();
@@ -1187,25 +1188,42 @@ async fn updating_a_missing_consumption_record_is_not_found(pool: PgPool) {
 }
 
 #[sqlx::test]
-async fn deleting_a_consumption_record_removes_it(pool: PgPool) {
+async fn archiving_a_consumption_record_hides_it_without_removing_it(pool: PgPool) {
     let (member_id, product_id) = seed_member_and_product(&pool).await;
-    let repo = PgConsumptionRecordRepository::new(pool);
+    let repo = PgConsumptionRecordRepository::new(pool.clone());
     let original = consumption_record(member_id, product_id);
     repo.insert(&original, &no_stock()).await.unwrap();
 
     let (outcome, _) = repo
-        .delete(original.id, original.revision, &no_stock())
+        .archive(
+            original.id,
+            original.revision,
+            OffsetDateTime::now_utc(),
+            &no_stock(),
+        )
         .await
         .unwrap();
     assert_eq!(outcome, UpdateOutcome::Updated);
     assert!(repo.get(original.id).await.unwrap().is_none());
+    let archived_at: Option<OffsetDateTime> =
+        sqlx::query_scalar("SELECT archived_at FROM consumption_record WHERE id = $1")
+            .bind(original.id.as_uuid())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(archived_at.is_some());
 }
 
 #[sqlx::test]
-async fn deleting_a_missing_consumption_record_reports_false(pool: PgPool) {
+async fn archiving_a_missing_consumption_record_reports_not_found(pool: PgPool) {
     let repo = PgConsumptionRecordRepository::new(pool);
     let (outcome, _) = repo
-        .delete(ConsumptionRecordId::new(), Revision::INITIAL, &no_stock())
+        .archive(
+            ConsumptionRecordId::new(),
+            Revision::INITIAL,
+            OffsetDateTime::now_utc(),
+            &no_stock(),
+        )
         .await
         .unwrap();
     assert_eq!(outcome, UpdateOutcome::NotFound);
@@ -2350,6 +2368,162 @@ fn recipe(owner: UserId, components: Vec<RecipeComponent>) -> Recipe {
         updated_at: now,
         archived_at: None,
     }
+}
+
+fn prepared_batch(
+    actor: UserId,
+    recipe_id: Option<RecipeId>,
+    source: PreparationSource,
+) -> PreparedBatch {
+    let now = time::macros::datetime!(2026-09-06 09:00 UTC);
+    PreparedBatch {
+        id: PreparedBatchId::new(),
+        recipe_id,
+        source,
+        prepared_at: now,
+        servings_produced: Decimal::new(4, 0),
+        item_name: "Test batch".to_owned(),
+        nutrition: ConsumedNutrition {
+            facts: NutritionFacts {
+                energy_kcal: Some(Decimal::new(500, 0)),
+                ..Default::default()
+            },
+            quality: NutritionQuality::Known,
+        },
+        created_by: actor,
+        revision: Revision::INITIAL,
+        created_at: now,
+        updated_at: now,
+    }
+}
+
+#[sqlx::test]
+async fn prepared_batches_round_trip_and_list_by_id_and_date(pool: PgPool) {
+    let users = PgUserRepository::new(pool.clone());
+    let actor = user("batch-cook", vec![Role::Admin]);
+    users.insert(&actor).await.unwrap();
+    let repo = PgPreparedBatchRepository::new(pool);
+    let original = prepared_batch(actor.id, None, PreparationSource::Standalone);
+
+    repo.insert(&original, &[], &no_stock()).await.unwrap();
+
+    let loaded = repo.get(original.id).await.unwrap().unwrap();
+    assert_eq!(loaded.id, original.id);
+    assert_eq!(loaded.source, PreparationSource::Standalone);
+    assert_eq!(loaded.servings_produced, Decimal::new(4, 0));
+    assert_eq!(
+        loaded.nutrition.facts.energy_kcal,
+        Some(Decimal::new(500, 0))
+    );
+
+    let many = repo
+        .get_many(&[PreparedBatchId::new(), original.id])
+        .await
+        .unwrap();
+    assert_eq!(many.len(), 1);
+    assert_eq!(many[0].id, original.id);
+    assert!(repo.get_many(&[]).await.unwrap().is_empty());
+
+    let in_range = repo
+        .list_in_range(date!(2026 - 09 - 06), date!(2026 - 09 - 06))
+        .await
+        .unwrap();
+    assert_eq!(in_range.len(), 1);
+    assert_eq!(in_range[0].id, original.id);
+    assert!(
+        repo.list_in_range(date!(2026 - 09 - 07), date!(2026 - 09 - 08))
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[sqlx::test]
+async fn prepared_batches_are_found_for_meal_plan_components(pool: PgPool) {
+    let (member_id, product_id, actor_id) = seed_meal_plan_dependencies(&pool).await;
+    let plans = PgMealPlanRepository::new(pool.clone());
+    let entry = meal_plan_entry(member_id, product_id, actor_id);
+    let component_id = entry.components[0].id;
+    plans.insert(&entry).await.unwrap();
+
+    let repo = PgPreparedBatchRepository::new(pool);
+    let original = prepared_batch(
+        actor_id,
+        None,
+        PreparationSource::MealPlanComponent {
+            entry_id: entry.id,
+            component_id,
+        },
+    );
+    repo.insert(&original, &[], &no_stock()).await.unwrap();
+
+    let found = repo.for_component(component_id).await.unwrap().unwrap();
+    assert_eq!(found.id, original.id);
+    let found = repo
+        .for_components(&[MealPlanComponentId::new(), component_id])
+        .await
+        .unwrap();
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[&component_id].id, original.id);
+    assert!(repo.for_components(&[]).await.unwrap().is_empty());
+}
+
+#[sqlx::test]
+async fn prepared_batches_find_and_replace_held_portions(pool: PgPool) {
+    let (actor_id, product_id, _) = seed_recipe_dependencies(&pool).await;
+    let recipes = PgRecipeRepository::new(pool.clone());
+    let dish = recipe(actor_id, vec![recipe_component(product_id, 0)]);
+    recipes.insert(&dish).await.unwrap();
+    let members = PgHouseholdMemberRepository::new(pool.clone());
+    let subject = member("Batch eater");
+    members.insert(&subject).await.unwrap();
+    let repo = PgPreparedBatchRepository::new(pool);
+    let batch = prepared_batch(actor_id, Some(dish.id), PreparationSource::Standalone);
+    let now = OffsetDateTime::now_utc();
+    let portion = StockItem {
+        id: StockItemId::new(),
+        subject: StockSubject::prepared_portion(batch.id),
+        level: StockLevel::Exact {
+            quantity: Quantity::new(Decimal::new(4, 0), Unit::Serving),
+        },
+        storage_location: StorageLocation::Chilled,
+        source_date: None,
+        usability_deadline: None,
+        note: None,
+        revision: Revision::INITIAL,
+        created_at: now,
+        updated_at: now,
+        archived_at: None,
+    };
+    repo.insert(
+        &batch,
+        &[(portion.clone(), added_event(actor_id, subject.id))],
+        &no_stock(),
+    )
+    .await
+    .unwrap();
+
+    let held = repo.held_for_recipe(dish.id).await.unwrap();
+    assert_eq!(held.len(), 1);
+    assert_eq!(held[0].id, batch.id);
+    let portions = repo.portions(batch.id).await.unwrap();
+    assert_eq!(portions.len(), 1);
+    assert_eq!(portions[0].id, portion.id);
+
+    let mut replacement = portion.clone();
+    replacement.id = StockItemId::new();
+    replacement.storage_location = StorageLocation::Frozen;
+    repo.place_portions(
+        &[(replacement.clone(), added_event(actor_id, subject.id))],
+        &[portion.id],
+    )
+    .await
+    .unwrap();
+
+    let portions = repo.portions(batch.id).await.unwrap();
+    assert_eq!(portions.len(), 1);
+    assert_eq!(portions[0].id, replacement.id);
+    assert_eq!(portions[0].storage_location, StorageLocation::Frozen);
 }
 
 #[sqlx::test]

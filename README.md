@@ -25,6 +25,17 @@ docker compose up --build
 
 That brings up PostgreSQL, the API and the web client, applies migrations and seeds the catalogue.
 
+The initial migration is still being refined before release. If its checksum changes, recreate any
+existing local development database before starting the stack again:
+
+```sh
+docker compose down -v
+docker compose up
+```
+
+This removes the local database volume. SQLx rejects an existing database whose recorded migration
+checksum no longer matches the migration file.
+
 | What | Where |
 | --- | --- |
 | Web client | <http://localhost:5173> |

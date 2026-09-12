@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use async_trait::async_trait;
-use time::Date;
+use time::{Date, OffsetDateTime};
 
 use super::{PageRequest, Paginated};
 use crate::domain::{
@@ -361,10 +361,11 @@ pub trait ConsumptionRecordRepository: Send + Sync + 'static {
         stock: &StockWrite,
     ) -> Result<(UpdateOutcome, Vec<StockOutcome>)>;
 
-    async fn delete(
+    async fn archive(
         &self,
         id: ConsumptionRecordId,
         expected: Revision,
+        archived_at: OffsetDateTime,
         stock: &StockWrite,
     ) -> Result<(UpdateOutcome, Vec<StockOutcome>)>;
 }

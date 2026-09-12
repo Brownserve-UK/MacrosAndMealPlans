@@ -139,7 +139,19 @@ fn unique_violation(constraint: &str) -> Option<(&'static str, &'static str)> {
         "household_member_linked_user_id_key" => Some(("household member", "account")),
         "household_member_pkey" => Some(("household member", "id")),
         "member_access_grant_pkey" => Some(("access grant", "id")),
-        "meal_plan_component_entry_id_position_key" => Some(("meal plan component", "position")),
+        "meal_plan_component_entry_id_position_unique" => Some(("meal plan component", "position")),
+        "recipe_component_recipe_id_position_unique" => Some(("recipe component", "position")),
+        "recipe_instruction_recipe_id_position_unique" => Some(("recipe instruction", "position")),
+        "recipe_meal_category_recipe_id_position_unique" => {
+            Some(("recipe meal category", "position"))
+        }
+        "recipe_country_category_recipe_id_position_unique" => {
+            Some(("recipe country category", "position"))
+        }
+        "recipe_tag_recipe_id_position_unique" => Some(("recipe tag", "position")),
+        "meal_template_component_template_id_position_unique" => {
+            Some(("meal template component", "position"))
+        }
         "recipe_tag_case_insensitive" => Some(("recipe", "tag")),
         "user_role_pkey" => Some(("user", "role")),
         _ => None,

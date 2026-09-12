@@ -327,7 +327,10 @@ impl ConsumptionService {
             .releases
             .push(record_release(&current, self.log_label(&current).await?));
 
-        let (outcome, stock_outcomes) = self.records.delete(id, expected, &write).await?;
+        let (outcome, stock_outcomes) = self
+            .records
+            .archive(id, expected, self.clock.now(), &write)
+            .await?;
         commit_outcome(CONSUMPTION_RECORD, id, expected, outcome)?;
         Ok(StockAffected::new(
             (),

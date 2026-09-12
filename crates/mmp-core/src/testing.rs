@@ -1,6 +1,6 @@
 // In-memory implementations for testing purposes
 // This exists so we can test behaviour without needing to set up a database.
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
@@ -916,6 +916,7 @@ impl AccessGrantRepository for InMemoryAccessGrantRepository {
 #[derive(Default, Clone)]
 pub struct InMemoryConsumptionRecordRepository {
     rows: Arc<Mutex<HashMap<ConsumptionRecordId, ConsumptionRecord>>>,
+    archived: Arc<Mutex<HashSet<ConsumptionRecordId>>>,
     stock: InMemoryStockRepository,
 }
 
@@ -927,29 +928,42 @@ impl InMemoryConsumptionRecordRepository {
     pub fn with_stock(stock: InMemoryStockRepository) -> Self {
         Self {
             rows: Arc::new(Mutex::new(HashMap::new())),
+            archived: Arc::new(Mutex::new(HashSet::new())),
             stock,
         }
     }
 
     pub fn seed(&self, record: ConsumptionRecord) {
+        self.archived.lock().unwrap().remove(&record.id);
         self.rows.lock().unwrap().insert(record.id, record);
     }
 
     pub fn count(&self) -> usize {
-        self.rows.lock().unwrap().len()
+        let archived = self.archived.lock().unwrap().clone();
+        self.rows
+            .lock()
+            .unwrap()
+            .keys()
+            .filter(|id| !archived.contains(id))
+            .count()
     }
 }
 
 #[async_trait]
 impl ConsumptionRecordRepository for InMemoryConsumptionRecordRepository {
     async fn get(&self, id: ConsumptionRecordId) -> Result<Option<ConsumptionRecord>> {
+        if self.archived.lock().unwrap().contains(&id) {
+            return Ok(None);
+        }
         Ok(self.rows.lock().unwrap().get(&id).cloned())
     }
 
     async fn list(&self, query: &ConsumptionQuery) -> Result<Paginated<ConsumptionRecord>> {
+        let archived = self.archived.lock().unwrap().clone();
         let rows = self.rows.lock().unwrap();
         let mut items: Vec<ConsumptionRecord> = rows
             .values()
+            .filter(|r| !archived.contains(&r.id))
             .filter(|r| query.member_id.is_none_or(|id| r.member_id == id))
             .filter(|r| query.from.is_none_or(|from| r.consumed_on >= from))
             .filter(|r| query.to.is_none_or(|to| r.consumed_on <= to))
@@ -972,11 +986,13 @@ impl ConsumptionRecordRepository for InMemoryConsumptionRecordRepository {
         from: time::Date,
         to: time::Date,
     ) -> Result<Vec<ConsumptionRecord>> {
+        let archived = self.archived.lock().unwrap().clone();
         let mut records: Vec<_> = self
             .rows
             .lock()
             .unwrap()
             .values()
+            .filter(|record| !archived.contains(&record.id))
             .filter(|record| record.member_id == member_id)
             .filter(|record| record.consumed_on >= from && record.consumed_on <= to)
             .cloned()
@@ -989,11 +1005,13 @@ impl ConsumptionRecordRepository for InMemoryConsumptionRecordRepository {
         &self,
         entry_id: MealPlanEntryId,
     ) -> Result<Vec<ConsumptionRecord>> {
+        let archived = self.archived.lock().unwrap().clone();
         let mut records: Vec<_> = self
             .rows
             .lock()
             .unwrap()
             .values()
+            .filter(|record| !archived.contains(&record.id))
             .filter(|record| record.meal_plan_entry_id == Some(entry_id))
             .cloned()
             .collect();
@@ -1006,6 +1024,7 @@ impl ConsumptionRecordRepository for InMemoryConsumptionRecordRepository {
         record: &ConsumptionRecord,
         stock: &StockWrite,
     ) -> Result<Vec<StockOutcome>> {
+        self.archived.lock().unwrap().remove(&record.id);
         self.rows.lock().unwrap().insert(record.id, record.clone());
         Ok(self
             .stock
@@ -1018,10 +1037,12 @@ impl ConsumptionRecordRepository for InMemoryConsumptionRecordRepository {
         expected: Revision,
         stock: &StockWrite,
     ) -> Result<(UpdateOutcome, Vec<StockOutcome>)> {
+        let is_archived = self.archived.lock().unwrap().contains(&record.id);
         let outcome = {
             let mut rows = self.rows.lock().unwrap();
             match rows.get(&record.id) {
                 None => UpdateOutcome::NotFound,
+                Some(_) if is_archived => UpdateOutcome::NotFound,
                 Some(existing) if existing.revision != expected => {
                     UpdateOutcome::RevisionMismatch {
                         actual: existing.revision,
@@ -1043,23 +1064,26 @@ impl ConsumptionRecordRepository for InMemoryConsumptionRecordRepository {
         }
     }
 
-    async fn delete(
+    async fn archive(
         &self,
         id: ConsumptionRecordId,
         expected: Revision,
+        _archived_at: time::OffsetDateTime,
         stock: &StockWrite,
     ) -> Result<(UpdateOutcome, Vec<StockOutcome>)> {
+        let is_archived = self.archived.lock().unwrap().contains(&id);
         let outcome = {
-            let mut rows = self.rows.lock().unwrap();
+            let rows = self.rows.lock().unwrap();
             match rows.get(&id) {
                 None => UpdateOutcome::NotFound,
+                Some(_) if is_archived => UpdateOutcome::NotFound,
                 Some(existing) if existing.revision != expected => {
                     UpdateOutcome::RevisionMismatch {
                         actual: existing.revision,
                     }
                 }
                 Some(_) => {
-                    rows.remove(&id);
+                    self.archived.lock().unwrap().insert(id);
                     UpdateOutcome::Updated
                 }
             }

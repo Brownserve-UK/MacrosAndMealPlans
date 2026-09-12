@@ -38,8 +38,10 @@ specification or ADRs.
       the household planner warns that fewer servings were cooked than people are due.
 - [ ] Align the `ensure_slot_free` error with the database-constraint fallback error.
 - [ ] Seed an opted-out member with a genuinely free personal slot for manual testing.
-- [ ] Validate `meal_guest_allocation.allocated_unit` and `confirmed_unit` with `unit_code`, or
+- [x] Validate `meal_guest_allocation.allocated_unit` and `confirmed_unit` with `unit_code`, or
       document why those columns must remain unrestricted.
+- [ ] Add Consumption Record amendment history so corrections retain the previous nutrition and
+      quantity snapshot. Deletion history is retained through soft deletion.
 
 ## Recipes and food catalogue
 
@@ -65,12 +67,12 @@ specification or ADRs.
 - [ ] Surface `DemandGapDto` warnings in the stock UI.
 - [ ] Avoid `get_many` plus `list_by_ingredient` on every stock overview request.
 - [ ] Add server-side stock search when the list needs pagination.
-- [ ] `PgPreparedBatchRepository` has no database tests, so its SQL is only exercised by hand.
+- [x] `PgPreparedBatchRepository` has no database tests, so its SQL is only exercised by hand.
 - [ ] Putting leftovers away moves only the first stock item belonging to a cook, so a batch stored
       in more than one place leaves the rest behind.
 - [ ] Remove the late pooled-stock sample-data workaround once the pooled scenario can be seeded
       before historical consumption.
-- [ ] Collapse the `dish_batch_id` add-then-drop churn in `0001_init.sql` before release, so the
+- [x] Collapse the `dish_batch_id` add-then-drop churn in `0001_init.sql` before release, so the
       shipped schema never creates a column it immediately removes.
 
 ## Shopping

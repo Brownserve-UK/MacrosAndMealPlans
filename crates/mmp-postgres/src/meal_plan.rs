@@ -609,7 +609,7 @@ impl MealPlanRepository for PgMealPlanRepository {
         replace_participants(&mut tx, entry.id, &entry.participants).await?;
         replace_guests(&mut tx, entry.id, &entry.guest_groups).await?;
         for record_id in delete_records {
-            delete_consumption(&mut tx, *record_id).await?;
+            archive_consumption(&mut tx, *record_id).await?;
         }
         let stock_outcomes = apply_stock_write(&mut tx, stock, OffsetDateTime::now_utc()).await?;
         tx.commit()
@@ -700,7 +700,7 @@ impl MealPlanRepository for PgMealPlanRepository {
         }
         replace_participants(&mut tx, entry_id, participants).await?;
         if let Some(record_id) = delete_record {
-            delete_consumption(&mut tx, record_id).await?;
+            archive_consumption(&mut tx, record_id).await?;
         }
         bump_entry_revision(&mut tx, entry_id, component).await?;
         let stock_outcomes = apply_stock_write(&mut tx, stock, OffsetDateTime::now_utc()).await?;
@@ -711,15 +711,19 @@ impl MealPlanRepository for PgMealPlanRepository {
     }
 }
 
-async fn delete_consumption(
+async fn archive_consumption(
     tx: &mut Transaction<'_, Postgres>,
     id: ConsumptionRecordId,
 ) -> Result<()> {
-    sqlx::query("DELETE FROM consumption_record WHERE id = $1")
-        .bind(id.as_uuid())
-        .execute(&mut **tx)
-        .await
-        .map_err(|error| map_db_error(error, "removing a consumption record"))?;
+    sqlx::query(
+        "UPDATE consumption_record
+         SET archived_at = now(), updated_at = now(), revision = revision + 1
+         WHERE id = $1 AND archived_at IS NULL",
+    )
+    .bind(id.as_uuid())
+    .execute(&mut **tx)
+    .await
+    .map_err(|error| map_db_error(error, "archiving a consumption record"))?;
     Ok(())
 }
 

@@ -22,7 +22,8 @@ macro_rules! columns {
 
 macro_rules! filter {
     () => {
-        " WHERE ($1::uuid IS NULL OR c.member_id = $1) \
+        " WHERE c.archived_at IS NULL \
+          AND ($1::uuid IS NULL OR c.member_id = $1) \
           AND ($2::date IS NULL OR c.consumed_on >= $2) \
           AND ($3::date IS NULL OR c.consumed_on <= $3)"
     };
@@ -31,7 +32,7 @@ macro_rules! filter {
 const GET_BY_ID: &str = concat!(
     "SELECT ",
     columns!(),
-    " FROM consumption_record c WHERE c.id = $1"
+    " FROM consumption_record c WHERE c.id = $1 AND c.archived_at IS NULL"
 );
 const COUNT: &str = concat!("SELECT count(*) FROM consumption_record c", filter!());
 const LIST_ASC: &str = concat!(
@@ -52,16 +53,19 @@ const LIST_PERIOD: &str = concat!(
     "SELECT ",
     columns!(),
     " FROM consumption_record c ",
-    "WHERE c.member_id = $1 AND c.consumed_on >= $2 AND c.consumed_on <= $3 ",
+    "WHERE c.member_id = $1 AND c.consumed_on >= $2 AND c.consumed_on <= $3 \
+     AND c.archived_at IS NULL ",
     "ORDER BY c.created_at ASC, c.id ASC"
 );
 const LIST_FOR_MEAL_PLAN_ENTRY: &str = concat!(
     "SELECT ",
     columns!(),
     " FROM consumption_record c ",
-    "WHERE c.meal_plan_entry_id = $1 ORDER BY c.created_at ASC, c.id ASC"
+    "WHERE c.meal_plan_entry_id = $1 AND c.archived_at IS NULL \
+     ORDER BY c.created_at ASC, c.id ASC"
 );
-const CURRENT_REVISION: &str = "SELECT revision FROM consumption_record WHERE id = $1";
+const CURRENT_REVISION: &str =
+    "SELECT revision FROM consumption_record WHERE id = $1 AND archived_at IS NULL";
 
 pub struct PgConsumptionRecordRepository {
     pool: PgPool,
@@ -252,7 +256,7 @@ impl ConsumptionRecordRepository for PgConsumptionRecordRepository {
                  nutrition_quality = $23,
                  revision = $24, updated_at = $25,
                  item_kind = $27, recipe_id = $28, ingredient_id = $29, prepared_meal_id = $30
-             WHERE id = $1 AND revision = $26",
+             WHERE id = $1 AND revision = $26 AND archived_at IS NULL",
         )
         .bind(record.id.as_uuid())
         .bind(record.member_id.as_uuid())
@@ -317,37 +321,42 @@ impl ConsumptionRecordRepository for PgConsumptionRecordRepository {
         })
     }
 
-    async fn delete(
+    async fn archive(
         &self,
         id: ConsumptionRecordId,
         expected: Revision,
+        archived_at: OffsetDateTime,
         stock: &StockWrite,
     ) -> Result<(UpdateOutcome, Vec<StockOutcome>)> {
         let mut tx = self
             .pool
             .begin()
             .await
-            .map_err(|e| repository_error("starting a consumption delete", e))?;
-        let affected =
-            sqlx::query("DELETE FROM consumption_record WHERE id = $1 AND revision = $2")
-                .bind(id.as_uuid())
-                .bind(expected.get())
-                .execute(&mut *tx)
-                .await
-                .map_err(|e| map_db_error(e, "deleting a consumption record"))?
-                .rows_affected();
+            .map_err(|e| repository_error("starting a consumption archive", e))?;
+        let affected = sqlx::query(
+            "UPDATE consumption_record
+             SET archived_at = $3, updated_at = $3, revision = revision + 1
+             WHERE id = $1 AND revision = $2 AND archived_at IS NULL",
+        )
+        .bind(id.as_uuid())
+        .bind(expected.get())
+        .bind(archived_at)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| map_db_error(e, "archiving a consumption record"))?
+        .rows_affected();
 
         if affected == 1 {
             let outcomes = apply_stock_write(&mut tx, stock, OffsetDateTime::now_utc()).await?;
             tx.commit()
                 .await
-                .map_err(|e| repository_error("committing a consumption delete", e))?;
+                .map_err(|e| repository_error("committing a consumption archive", e))?;
             return Ok((UpdateOutcome::Updated, outcomes));
         }
 
         tx.rollback()
             .await
-            .map_err(|e| repository_error("rolling back a consumption delete", e))?;
+            .map_err(|e| repository_error("rolling back a consumption archive", e))?;
         let current: Option<(i64,)> = sqlx::query_as(CURRENT_REVISION)
             .bind(id.as_uuid())
             .fetch_optional(&self.pool)
