@@ -57,7 +57,7 @@ impl Modify for SecurityAddon {
 
 impl ApiDoc {
     pub fn openapi_with_routes() -> String {
-        let (_, api) = crate::app::build(crate::app::stub_state());
+        let api = crate::app::api_document();
         serde_json::to_string_pretty(&api).expect("the OpenAPI document should serialise")
     }
 }
