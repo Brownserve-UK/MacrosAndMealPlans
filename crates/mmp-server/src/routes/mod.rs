@@ -5,6 +5,7 @@ pub mod meal_plan;
 pub mod meal_templates;
 pub mod members;
 pub mod meta;
+pub mod nutrition_plan;
 pub mod nutrition_target;
 pub mod preparation;
 pub mod prepared_meals;

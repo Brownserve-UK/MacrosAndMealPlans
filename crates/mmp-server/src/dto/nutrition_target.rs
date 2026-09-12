@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use mmp_core::domain::{
     HouseholdMemberId, NUTRIENT_KEYS, NewNutritionTarget, NutritionGoals, NutritionGoalsPatch,
-    NutritionTarget, NutritionTargetId, NutritionTargetPatch, Patch, TargetDirection,
+    NutritionTarget, NutritionTargetId, NutritionTargetPatch, Patch, TargetDirection, TargetSource,
     default_direction_for,
 };
 use rust_decimal::Decimal;
@@ -59,6 +59,22 @@ pub enum TargetDirectionDto {
     Around,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum TargetSourceDto {
+    UserDefined,
+    Calculated,
+}
+
+impl From<TargetSource> for TargetSourceDto {
+    fn from(value: TargetSource) -> Self {
+        match value {
+            TargetSource::UserDefined => Self::UserDefined,
+            TargetSource::Calculated => Self::Calculated,
+        }
+    }
+}
+
 impl From<TargetDirection> for TargetDirectionDto {
     fn from(value: TargetDirection) -> Self {
         match value {
@@ -83,6 +99,7 @@ pub struct NutritionTargetDto {
     #[serde(with = "iso_date")]
     #[schema(value_type = String, format = Date, example = "2026-08-25")]
     pub effective_from: Date,
+    pub source: TargetSourceDto,
     #[serde(flatten)]
     pub goals: NutritionGoalsDto,
     pub revision: i64,
@@ -100,6 +117,7 @@ impl From<NutritionTarget> for NutritionTargetDto {
             id: value.id.as_uuid(),
             member_id: value.member_id.as_uuid(),
             effective_from: value.effective_from,
+            source: value.source.into(),
             goals: value.goals.into(),
             revision: value.revision.get(),
             created_at: value.created_at,

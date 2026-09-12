@@ -580,6 +580,86 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/members/{member_id}/body-profile": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getMemberBodyProfile"];
+        put: operations["updateMemberBodyProfile"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/members/{member_id}/calorie-target/guided": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["setGuidedCalorieTarget"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/members/{member_id}/calorie-target/manual": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["setManualCalorieTarget"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/members/{member_id}/calorie-target/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["previewCalorieTarget"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/members/{member_id}/nutrition-plan": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getNutritionPlan"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/members/{member_id}/nutrition-targets": {
         parameters: {
             query?: never;
@@ -1573,6 +1653,73 @@ export interface components {
             prepared_meals?: components["schemas"]["PreparedMealAvailabilityDto"][];
             products: components["schemas"]["ProductAvailabilityDto"][];
         };
+        CalorieCalculationDto: {
+            activity_source: string;
+            /**
+             * Format: double
+             * @example -550
+             */
+            adjustment_kcal: number;
+            /** Format: int32 */
+            age_years: number;
+            /**
+             * Format: double
+             * @example 0.5
+             */
+            applied_rate_kg_per_week?: number | null;
+            /**
+             * Format: date
+             * @example 2026-09-12
+             */
+            calculated_on: string;
+            /** Format: date-time */
+            created_at: string;
+            eased: boolean;
+            /**
+             * Format: double
+             * @example 1500
+             */
+            floor_kcal: number;
+            formula: string;
+            habitual_activity: components["schemas"]["HabitualActivityDto"];
+            /**
+             * Format: double
+             * @example 180
+             */
+            height_cm: number;
+            /** Format: uuid */
+            id: string;
+            /**
+             * Format: double
+             * @example 2480
+             */
+            maintenance_kcal: number;
+            /** Format: uuid */
+            member_id: string;
+            /** Format: uuid */
+            nutrition_target_id: string;
+            objective: components["schemas"]["WeightObjectiveDto"];
+            /**
+             * Format: double
+             * @example 1930
+             */
+            recommended_kcal: number;
+            /**
+             * Format: double
+             * @example 0.5
+             */
+            requested_rate_kg_per_week?: number | null;
+            /** Format: int64 */
+            revision: number;
+            sex: components["schemas"]["SexDto"];
+            /** Format: date-time */
+            updated_at: string;
+            /**
+             * Format: double
+             * @example 80
+             */
+            weight_kg: number;
+        };
         /** @enum {string} */
         CatalogueOrigin: "seeded" | "local" | "external";
         CertaintyDto: {
@@ -1931,6 +2078,15 @@ export interface components {
             /** Format: uuid */
             user_id: string;
         };
+        GuidedNutritionPlanDto: {
+            calculation: components["schemas"]["CalorieCalculationDto"];
+            goal: components["schemas"]["WeightGoalDto"];
+            profile: components["schemas"]["MemberBodyProfileDto"];
+            target: components["schemas"]["NutritionTargetDto"];
+            weight_record?: null | components["schemas"]["WeightRecordDto"];
+        };
+        /** @enum {string} */
+        HabitualActivityDto: "mostly_sedentary" | "lightly_active" | "active" | "very_active";
         HealthDto: {
             status: string;
         };
@@ -2024,6 +2180,13 @@ export interface components {
         LinkAccountRequest: {
             /** Format: uuid */
             user_id: string;
+        };
+        ManualCalorieTargetRequest: {
+            /**
+             * Format: double
+             * @example 1800
+             */
+            energy_kcal: number;
         };
         MarkMealPlanComponentEatenRequest: {
             amount: components["schemas"]["AmountDto"];
@@ -2286,6 +2449,28 @@ export interface components {
             /** Format: uuid */
             subject_member_id: string;
         };
+        MemberBodyProfileDto: {
+            /** Format: date-time */
+            created_at: string;
+            /**
+             * Format: date
+             * @example 1986-01-01
+             */
+            date_of_birth?: string | null;
+            habitual_activity?: null | components["schemas"]["HabitualActivityDto"];
+            /**
+             * Format: double
+             * @example 180
+             */
+            height_cm?: number | null;
+            /** Format: uuid */
+            member_id: string;
+            /** Format: int64 */
+            revision: number;
+            sex?: null | components["schemas"]["SexDto"];
+            /** Format: date-time */
+            updated_at: string;
+        };
         MemberPage: components["schemas"]["PageMeta"] & {
             items: components["schemas"]["HouseholdMemberDto"][];
         };
@@ -2368,6 +2553,29 @@ export interface components {
             /** Format: double */
             sugar_g?: number | null;
         };
+        NutritionPlanAnswersRequest: {
+            current_weight: components["schemas"]["QuantityDto"];
+            /**
+             * Format: date
+             * @example 1986-01-01
+             */
+            date_of_birth: string;
+            habitual_activity: components["schemas"]["HabitualActivityDto"];
+            /**
+             * Format: double
+             * @example 180
+             */
+            height_cm: number;
+            objective: components["schemas"]["WeightObjectiveDto"];
+            pace?: null | components["schemas"]["PaceDto"];
+            sex: components["schemas"]["SexDto"];
+            target_weight?: null | components["schemas"]["QuantityDto"];
+        };
+        NutritionPlanDto: {
+            calculation?: null | components["schemas"]["CalorieCalculationDto"];
+            calorie_direction?: null | components["schemas"]["TargetDirectionDto"];
+            target?: null | components["schemas"]["NutritionTargetDto"];
+        };
         /** @enum {string} */
         NutritionQuality: "known" | "estimated" | "partial" | "unknown";
         NutritionSummaryDto: {
@@ -2391,11 +2599,14 @@ export interface components {
             member_id: string;
             /** Format: int64 */
             revision: number;
+            source: components["schemas"]["TargetSourceDto"];
             /** Format: date-time */
             updated_at: string;
         };
         /** @enum {string} */
         OpportunityStateDto: "normal" | "moved" | "one_off";
+        /** @enum {string} */
+        PaceDto: "steady" | "standard" | "faster" | "fastest";
         PageMeta: {
             /**
              * Format: int32
@@ -2905,6 +3116,8 @@ export interface components {
             interval_weeks: number;
             usual_time?: string | null;
         };
+        /** @enum {string} */
+        SexDto: "male" | "female";
         ShopCountDto: {
             /**
              * Format: date
@@ -3146,6 +3359,8 @@ export interface components {
         /** @enum {string} */
         TargetDirectionDto: "at_least" | "at_most" | "around";
         /** @enum {string} */
+        TargetSourceDto: "user_defined" | "calculated";
+        /** @enum {string} */
         TrackingModeDto: "exact" | "estimated" | "not_tracked";
         /** @enum {string} */
         TripStateDto: "shopping" | "finished";
@@ -3159,6 +3374,17 @@ export interface components {
             dimension: string;
             /** @example gram */
             label: string;
+        };
+        UpdateBodyProfileRequest: {
+            /** Format: date */
+            date_of_birth?: string | null;
+            habitual_activity?: null | components["schemas"]["HabitualActivityDto"];
+            /**
+             * Format: double
+             * @example 180
+             */
+            height_cm?: number | null;
+            sex?: null | components["schemas"]["SexDto"];
         };
         UpdateConsumptionRequest: {
             amount?: null | components["schemas"]["AmountDto"];
@@ -5106,6 +5332,300 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HouseholdMemberDto"];
+                };
+            };
+        };
+    };
+    getMemberBodyProfile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Household member id */
+                member_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The member's body profile */
+            200: {
+                headers: {
+                    /** @description The revision to send back as If-Match */
+                    ETag?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MemberBodyProfileDto"];
+                };
+            };
+            /** @description Not permitted */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No body profile set */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    updateMemberBodyProfile: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The revision you loaded */
+                "If-Match": string;
+            };
+            path: {
+                /** @description Household member id */
+                member_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateBodyProfileRequest"];
+            };
+        };
+        responses: {
+            /** @description Updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MemberBodyProfileDto"];
+                };
+            };
+            /** @description Not permitted */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No body profile set */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Someone else changed it first */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description If-Match is required */
+            428: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    setGuidedCalorieTarget: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Household member id */
+                member_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NutritionPlanAnswersRequest"];
+            };
+        };
+        responses: {
+            /** @description Saved the guided target and its calculation */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GuidedNutritionPlanDto"];
+                };
+            };
+            /** @description Not permitted */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Someone else changed it first */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    setManualCalorieTarget: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Household member id */
+                member_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ManualCalorieTargetRequest"];
+            };
+        };
+        responses: {
+            /** @description Saved the user-defined calorie target */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NutritionTargetDto"];
+                };
+            };
+            /** @description Not permitted */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    previewCalorieTarget: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Household member id */
+                member_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NutritionPlanAnswersRequest"];
+            };
+        };
+        responses: {
+            /** @description The calculated recommendation without saving it */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalorieCalculationDto"];
+                };
+            };
+            /** @description Not permitted */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    getNutritionPlan: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Household member id */
+                member_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The current calorie target and its calculation */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NutritionPlanDto"];
+                };
+            };
+            /** @description Not permitted */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
         };

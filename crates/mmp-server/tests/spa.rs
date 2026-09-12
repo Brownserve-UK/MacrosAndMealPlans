@@ -6,13 +6,14 @@ use http_body_util::BodyExt;
 use mmp_core::ports::SystemClock;
 use mmp_core::services::{
     CatalogueService, ConsumptionService, HouseholdService, HouseholdSettingsService,
-    MealPlanService, MealTemplateService, NutritionTargetService, PreparationService,
-    RecipeService, ShoppingService, StockService, WeightService,
+    MealPlanService, MealTemplateService, NutritionPlanService, NutritionTargetService,
+    PreparationService, RecipeService, ShoppingService, StockService, WeightService,
 };
 use mmp_core::testing::{
-    InMemoryAccessGrantRepository, InMemoryConsumptionRecordRepository,
-    InMemoryHouseholdMemberRepository, InMemoryHouseholdSettingsRepository,
-    InMemoryIngredientRepository, InMemoryMealPlanRepository, InMemoryMealTemplateRepository,
+    InMemoryAccessGrantRepository, InMemoryCalorieCalculationRepository,
+    InMemoryConsumptionRecordRepository, InMemoryHouseholdMemberRepository,
+    InMemoryHouseholdSettingsRepository, InMemoryIngredientRepository, InMemoryMealPlanRepository,
+    InMemoryMealTemplateRepository, InMemoryMemberBodyProfileRepository,
     InMemoryNutritionTargetRepository, InMemoryPreparedBatchRepository,
     InMemoryPreparedMealRepository, InMemoryProductRepository, InMemoryPurchaseRepository,
     InMemoryRecipeRepository, InMemoryShoppingCadenceRepository,
@@ -72,6 +73,19 @@ fn app_with_web(dist: &std::path::Path) -> axum::Router {
         Arc::new(InMemoryMealPlanRepository::default()),
         Arc::new(SystemClock),
     );
+    let nutrition_plan = NutritionPlanService::new(
+        Arc::new(InMemoryMemberBodyProfileRepository::new()),
+        Arc::new(InMemoryCalorieCalculationRepository::new()),
+        NutritionTargetService::new(Arc::new(targets.clone()), Arc::new(SystemClock)),
+        WeightService::new(
+            Arc::new(InMemoryWeightRecordRepository::new()),
+            Arc::new(InMemoryWeightGoalRepository::new()),
+            Arc::new(InMemoryHouseholdSettingsRepository::new()),
+            Arc::new(SystemClock),
+        ),
+        Arc::new(InMemoryHouseholdSettingsRepository::new()),
+        Arc::new(SystemClock),
+    );
     let state = AppState::new(
         CatalogueService::new(
             ingredients.clone(),
@@ -119,6 +133,7 @@ fn app_with_web(dist: &std::path::Path) -> axum::Router {
         ),
         meal_templates,
         NutritionTargetService::new(Arc::new(targets), Arc::new(SystemClock)),
+        nutrition_plan,
         recipes,
         stock_service.clone(),
         ShoppingService::new(
@@ -275,6 +290,19 @@ async fn without_a_web_build_the_api_still_works() {
         Arc::new(InMemoryMealPlanRepository::default()),
         Arc::new(SystemClock),
     );
+    let nutrition_plan = NutritionPlanService::new(
+        Arc::new(InMemoryMemberBodyProfileRepository::new()),
+        Arc::new(InMemoryCalorieCalculationRepository::new()),
+        NutritionTargetService::new(Arc::new(targets.clone()), Arc::new(SystemClock)),
+        WeightService::new(
+            Arc::new(InMemoryWeightRecordRepository::new()),
+            Arc::new(InMemoryWeightGoalRepository::new()),
+            Arc::new(InMemoryHouseholdSettingsRepository::new()),
+            Arc::new(SystemClock),
+        ),
+        Arc::new(InMemoryHouseholdSettingsRepository::new()),
+        Arc::new(SystemClock),
+    );
     let state = AppState::new(
         CatalogueService::new(
             ingredients.clone(),
@@ -322,6 +350,7 @@ async fn without_a_web_build_the_api_still_works() {
         ),
         meal_templates,
         NutritionTargetService::new(Arc::new(targets), Arc::new(SystemClock)),
+        nutrition_plan,
         recipes,
         stock_service.clone(),
         ShoppingService::new(

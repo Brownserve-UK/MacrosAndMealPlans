@@ -2,16 +2,16 @@ use std::sync::Arc;
 
 use rust_decimal::Decimal;
 
-use super::revision::commit_outcome;
+use super::revision::{commit_outcome, require_revision};
 use super::{NutritionTargetService, WeightService};
 use crate::domain::{
     CalorieCalculation, CalorieCalculationId, CalorieCalculationInput, HabitualActivity,
-    HouseholdMemberId, MemberBodyProfile, NewNutritionTarget, NewWeightGoal, NewWeightRecord,
-    NutritionGoals, NutritionTarget, NutritionTargetId, Pace, Patch, Quantity, Revision, Sex,
-    TargetSource, Unit, UserId, WeightGoal, WeightObjective, WeightRecord, WeightSource, calculate,
-    current_weight,
+    HouseholdMemberId, MemberBodyProfile, MemberBodyProfilePatch, NewNutritionTarget,
+    NewWeightGoal, NewWeightRecord, NutritionGoals, NutritionTarget, NutritionTargetId, Pace,
+    Patch, Quantity, Revision, Sex, TargetSource, Unit, UserId, WeightGoal, WeightObjective,
+    WeightRecord, WeightSource, calculate, current_weight, resolve_on,
 };
-use crate::error::Result;
+use crate::error::{CoreError, Result};
 use crate::ports::{
     CalorieCalculationRepository, Clock, HouseholdSettingsRepository, MemberBodyProfileRepository,
 };
@@ -40,6 +40,13 @@ pub struct GuidedNutritionPlan {
     pub goal: WeightGoal,
     pub target: NutritionTarget,
     pub calculation: CalorieCalculation,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NutritionPlan {
+    pub target: Option<NutritionTarget>,
+    pub calculation: Option<CalorieCalculation>,
+    pub objective: Option<WeightObjective>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -87,11 +94,59 @@ impl NutritionPlanService {
         self.profiles.for_member(member_id).await
     }
 
+    pub async fn update_body_profile(
+        &self,
+        member_id: HouseholdMemberId,
+        expected: Revision,
+        patch: MemberBodyProfilePatch,
+    ) -> Result<MemberBodyProfile> {
+        let mut profile = self
+            .body_profile(member_id)
+            .await?
+            .ok_or_else(|| CoreError::not_found(BODY_PROFILE, member_id))?;
+        require_revision(BODY_PROFILE, member_id, expected, profile.revision)?;
+
+        if patch.is_empty() {
+            return Ok(profile);
+        }
+
+        patch.apply(&mut profile);
+        profile.validate(self.today().await?)?;
+        profile.revision = profile.revision.next();
+        profile.updated_at = self.clock.now();
+        commit_outcome(
+            BODY_PROFILE,
+            member_id,
+            expected,
+            self.profiles.update(&profile, expected).await?,
+        )?;
+        Ok(profile)
+    }
+
     pub async fn calculation_for_target(
         &self,
         target_id: NutritionTargetId,
     ) -> Result<Option<CalorieCalculation>> {
         self.calculations.for_target(target_id).await
+    }
+
+    pub async fn current(&self, member_id: HouseholdMemberId) -> Result<NutritionPlan> {
+        let today = self.today().await?;
+        let target = resolve_on(&self.targets.list(member_id).await?, today).cloned();
+        let calculation = match target.as_ref() {
+            Some(target) => self.calculation_for_target(target.id).await?,
+            None => None,
+        };
+        let objective = self
+            .weight
+            .goal(member_id)
+            .await?
+            .map(|goal| goal.objective);
+        Ok(NutritionPlan {
+            target,
+            calculation,
+            objective,
+        })
     }
 
     pub async fn preview(&self, answers: NutritionPlanAnswers) -> Result<CalorieCalculation> {

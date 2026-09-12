@@ -20,6 +20,7 @@ use utoipa::{Modify, OpenApi};
         (name = "meal-plan", description = "What the signed-in household member intends to eat"),
         (name = "needs-review", description = "Items that need attention"),
         (name = "nutrition-targets", description = "Per-member calorie, macro and dietary targets"),
+        (name = "nutrition-plan", description = "Guided calorie-target setup and calculation provenance"),
         (name = "recipes", description = "Reusable multi-component recipes with derived nutrition"),
         (name = "stock", description = "Physical household stock and its availability against plans"),
         (name = "shopping", description = "What needs buying, when the household shops, and what they bought"),

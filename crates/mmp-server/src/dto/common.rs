@@ -48,6 +48,21 @@ pub mod iso_date {
                 .transpose()
         }
     }
+
+    pub mod patch {
+        use mmp_core::domain::Patch;
+        use serde::{Deserialize, Deserializer};
+        use time::Date;
+
+        pub fn deserialize<'de, D: Deserializer<'de>>(
+            deserializer: D,
+        ) -> Result<Patch<Date>, D::Error> {
+            let raw = Option::<String>::deserialize(deserializer)?;
+            raw.map(|raw| Date::parse(&raw, super::FORMAT).map_err(serde::de::Error::custom))
+                .transpose()
+                .map(|value| value.map_or(Patch::Clear, Patch::Set))
+        }
+    }
 }
 
 pub mod iso_time {

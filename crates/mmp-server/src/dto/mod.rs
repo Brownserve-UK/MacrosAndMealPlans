@@ -1,3 +1,4 @@
+pub mod body_profile;
 pub mod catalogue;
 pub mod common;
 pub mod consumption;
@@ -5,6 +6,7 @@ pub mod household;
 pub mod meal_plan;
 pub mod meal_template;
 pub mod nutrition;
+pub mod nutrition_plan;
 pub mod nutrition_target;
 pub mod preparation;
 pub mod recipe;
@@ -13,6 +15,7 @@ pub mod shopping;
 pub mod stock;
 pub mod weight;
 
+pub use body_profile::*;
 pub use catalogue::*;
 pub use common::*;
 pub use consumption::*;
@@ -20,6 +23,7 @@ pub use household::*;
 pub use meal_plan::*;
 pub use meal_template::*;
 pub use nutrition::*;
+pub use nutrition_plan::*;
 pub use nutrition_target::*;
 pub use preparation::*;
 pub use recipe::*;

@@ -22,6 +22,7 @@ fn routes() -> (Router<AppState>, utoipa::openapi::OpenApi) {
         .merge(routes::meal_plan::router())
         .merge(routes::meal_templates::router())
         .merge(routes::nutrition_target::router())
+        .merge(routes::nutrition_plan::router())
         .merge(routes::recipes::router())
         .merge(routes::review::router())
         .merge(routes::settings::router())

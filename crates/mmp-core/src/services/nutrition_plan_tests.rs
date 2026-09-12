@@ -197,3 +197,37 @@ async fn changing_calories_preserves_other_targets_for_today() {
     assert_eq!(target.goals.energy_kcal, Some(Decimal::from(1800)));
     assert_eq!(target.goals.protein_g, Some(Decimal::from(120)));
 }
+
+#[tokio::test]
+async fn updates_an_existing_body_profile_with_a_matching_revision() {
+    let h = harness();
+    let guided = h.service.set_guided(answers()).await.unwrap();
+
+    let profile = h
+        .service
+        .update_body_profile(
+            answers().member_id,
+            guided.profile.revision,
+            MemberBodyProfilePatch {
+                height_cm: Patch::Set(Decimal::from(181)),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(profile.height_cm, Some(Decimal::from(181)));
+    assert_eq!(profile.revision, guided.profile.revision.next());
+}
+
+#[tokio::test]
+async fn resolves_the_current_target_calculation_and_objective() {
+    let h = harness();
+    let guided = h.service.set_guided(answers()).await.unwrap();
+
+    let plan = h.service.current(answers().member_id).await.unwrap();
+
+    assert_eq!(plan.target, Some(guided.target));
+    assert_eq!(plan.calculation, Some(guided.calculation));
+    assert_eq!(plan.objective, Some(WeightObjective::Lose));
+}

@@ -11,13 +11,14 @@ use image::{DynamicImage, ImageFormat, RgbImage};
 use mmp_core::ports::FixedClock;
 use mmp_core::services::{
     CatalogueService, ConsumptionService, HouseholdService, HouseholdSettingsService,
-    MealPlanService, MealTemplateService, NutritionTargetService, PreparationService,
-    RecipeService, ShoppingService, StockService, WeightService,
+    MealPlanService, MealTemplateService, NutritionPlanService, NutritionTargetService,
+    PreparationService, RecipeService, ShoppingService, StockService, WeightService,
 };
 use mmp_core::testing::{
-    InMemoryAccessGrantRepository, InMemoryConsumptionRecordRepository,
-    InMemoryHouseholdMemberRepository, InMemoryHouseholdSettingsRepository,
-    InMemoryIngredientRepository, InMemoryMealPlanRepository, InMemoryMealTemplateRepository,
+    InMemoryAccessGrantRepository, InMemoryCalorieCalculationRepository,
+    InMemoryConsumptionRecordRepository, InMemoryHouseholdMemberRepository,
+    InMemoryHouseholdSettingsRepository, InMemoryIngredientRepository, InMemoryMealPlanRepository,
+    InMemoryMealTemplateRepository, InMemoryMemberBodyProfileRepository,
     InMemoryNutritionTargetRepository, InMemoryPreparedBatchRepository,
     InMemoryPreparedMealRepository, InMemoryProductRepository, InMemoryPurchaseRepository,
     InMemoryRecipeRepository, InMemoryShoppingCadenceRepository,
@@ -107,6 +108,21 @@ async fn app() -> Router {
         Arc::new(meal_plans.clone()),
         clock.clone(),
     );
+    let nutrition_targets = NutritionTargetService::new(Arc::new(targets.clone()), clock.clone());
+    let weight = WeightService::new(
+        Arc::new(InMemoryWeightRecordRepository::new()),
+        Arc::new(InMemoryWeightGoalRepository::new()),
+        Arc::new(settings_repo.clone()),
+        clock.clone(),
+    );
+    let nutrition_plan = NutritionPlanService::new(
+        Arc::new(InMemoryMemberBodyProfileRepository::new()),
+        Arc::new(InMemoryCalorieCalculationRepository::new()),
+        nutrition_targets.clone(),
+        weight.clone(),
+        Arc::new(settings_repo.clone()),
+        clock.clone(),
+    );
     let state = AppState::new(
         CatalogueService::new(
             ingredients.clone(),
@@ -142,7 +158,8 @@ async fn app() -> Router {
             clock.clone(),
         ),
         meal_templates,
-        NutritionTargetService::new(Arc::new(targets), clock.clone()),
+        nutrition_targets,
+        nutrition_plan,
         recipes,
         stock.clone(),
         ShoppingService::new(
@@ -158,12 +175,7 @@ async fn app() -> Router {
             stock,
             clock.clone(),
         ),
-        WeightService::new(
-            Arc::new(InMemoryWeightRecordRepository::new()),
-            Arc::new(InMemoryWeightGoalRepository::new()),
-            Arc::new(settings_repo.clone()),
-            clock.clone(),
-        ),
+        weight,
         preparation2,
         Arc::new(DevBasicAuthProvider::new(household, PASSWORD)),
     );
@@ -2799,6 +2811,137 @@ async fn another_member_cannot_read_your_targets() {
     )
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+}
+
+fn guided_calorie_target_answers() -> Value {
+    json!({
+        "date_of_birth": "1986-01-01",
+        "sex": "male",
+        "height_cm": 180.0,
+        "current_weight": {"amount": 80.0, "unit": "kg"},
+        "habitual_activity": "lightly_active",
+        "objective": "lose",
+        "target_weight": {"amount": 75.0, "unit": "kg"},
+        "pace": "standard",
+    })
+}
+
+#[tokio::test]
+async fn guided_calorie_target_routes_round_trip_through_http() {
+    let app = app().await;
+    let member = my_member_id(&app).await;
+
+    let (status, preview, _) = send(
+        &app,
+        Call::new(
+            "POST",
+            format!("/api/v1/members/{member}/calorie-target/preview"),
+        )
+        .body(guided_calorie_target_answers()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    assert_eq!(preview["recommended_kcal"], 2130.0);
+
+    let (status, empty_plan, _) = send(
+        &app,
+        Call::new("GET", format!("/api/v1/members/{member}/nutrition-plan")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{empty_plan}");
+    assert!(empty_plan["target"].is_null());
+    assert!(empty_plan["calculation"].is_null());
+
+    let (status, guided, headers) = send(
+        &app,
+        Call::new(
+            "PUT",
+            format!("/api/v1/members/{member}/calorie-target/guided"),
+        )
+        .body(guided_calorie_target_answers()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{guided}");
+    assert_eq!(guided["target"]["source"], "calculated");
+    assert_eq!(guided["calculation"]["recommended_kcal"], 2130.0);
+    assert_eq!(etag(&headers), "1");
+
+    let (status, profile, headers) = send(
+        &app,
+        Call::new("GET", format!("/api/v1/members/{member}/body-profile")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{profile}");
+    assert_eq!(profile["height_cm"], 180.0);
+    assert_eq!(etag(&headers), "1");
+
+    let (status, body, _) = send(
+        &app,
+        Call::new("PUT", format!("/api/v1/members/{member}/body-profile"))
+            .body(json!({"height_cm": 181.0})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::PRECONDITION_REQUIRED, "{body}");
+
+    let (status, profile, headers) = send(
+        &app,
+        Call::new("PUT", format!("/api/v1/members/{member}/body-profile"))
+            .if_match(etag(&headers))
+            .body(json!({"height_cm": 181.0})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{profile}");
+    assert_eq!(profile["height_cm"], 181.0);
+    assert_eq!(etag(&headers), "2");
+
+    let (status, plan, _) = send(
+        &app,
+        Call::new("GET", format!("/api/v1/members/{member}/nutrition-plan")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{plan}");
+    assert_eq!(plan["target"]["source"], "calculated");
+    assert_eq!(plan["calculation"]["recommended_kcal"], 2130.0);
+    assert_eq!(plan["calorie_direction"], "at_most");
+
+    let (status, manual, headers) = send(
+        &app,
+        Call::new(
+            "PUT",
+            format!("/api/v1/members/{member}/calorie-target/manual"),
+        )
+        .body(json!({"energy_kcal": 1800.0})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{manual}");
+    assert_eq!(manual["source"], "user_defined");
+    assert_eq!(manual["energy_kcal"], 1800.0);
+    assert_eq!(etag(&headers), "2");
+
+    let (status, plan, _) = send(
+        &app,
+        Call::new("GET", format!("/api/v1/members/{member}/nutrition-plan")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{plan}");
+    assert!(plan["calculation"].is_null());
+    assert_eq!(plan["calorie_direction"], "at_most");
+}
+
+#[tokio::test]
+async fn a_household_manager_without_health_data_access_cannot_read_nutrition_plan_data() {
+    let app = app().await;
+    let member = my_member_id(&app).await;
+    create_user(&app, "manager", &["household_manager"]).await;
+
+    for path in [
+        format!("/api/v1/members/{member}/body-profile"),
+        format!("/api/v1/members/{member}/nutrition-plan"),
+    ] {
+        let (status, body, _) = send(&app, Call::new("GET", path).signed_in_as("manager")).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+        assert_eq!(body["status"], 403);
+    }
 }
 
 #[tokio::test]
