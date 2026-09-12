@@ -301,6 +301,10 @@ fn validate_goal(objective: WeightObjective, amounts: &GoalAmounts) -> Result<()
             }
             if amounts.rate_kg_per_week.is_none() {
                 errors.push("planned_rate", "Required");
+            } else if objective == WeightObjective::Gain
+                && amounts.rate_kg_per_week == Some(Decimal::ZERO)
+            {
+                errors.push("planned_rate", "Must be more than zero");
             }
         }
     }
@@ -324,7 +328,7 @@ fn rate_in_kilograms_per_week(field: &str, quantity: Quantity) -> Result<Decimal
     let kilograms = to_kilograms(field, quantity)?;
     let mut errors = ValidationErrors::new();
     let minimum = Decimal::from_str(MIN_RATE_KG_PER_WEEK).expect("a valid constant");
-    if kilograms < minimum {
+    if !kilograms.is_zero() && kilograms < minimum {
         errors.push(field, "Too slow to reach your goal");
     } else if kilograms > Decimal::from(MAX_RATE_KG_PER_WEEK) {
         errors.push(field, "Faster than is safe");

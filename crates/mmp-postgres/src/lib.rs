@@ -1,4 +1,6 @@
 mod access_grant;
+mod body_profile;
+mod calorie_calculation;
 mod consumption_record;
 mod error;
 mod household_member;
@@ -18,6 +20,8 @@ mod user;
 mod weight;
 
 pub use access_grant::PgAccessGrantRepository;
+pub use body_profile::PgMemberBodyProfileRepository;
+pub use calorie_calculation::PgCalorieCalculationRepository;
 pub use consumption_record::PgConsumptionRecordRepository;
 pub use household_member::PgHouseholdMemberRepository;
 pub use household_settings::PgHouseholdSettingsRepository;

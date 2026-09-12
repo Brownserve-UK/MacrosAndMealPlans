@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use mmp_core::domain::{
     HouseholdMemberId, NUTRIENT_KEYS, NewNutritionTarget, NutritionGoals, NutritionGoalsPatch,
     NutritionTarget, NutritionTargetId, NutritionTargetPatch, Patch, TargetDirection,
-    direction_for,
+    default_direction_for,
 };
 use rust_decimal::Decimal;
 use rust_decimal::prelude::FromPrimitive;
@@ -72,7 +72,7 @@ impl From<TargetDirection> for TargetDirectionDto {
 pub fn nutrient_directions() -> BTreeMap<String, TargetDirectionDto> {
     NUTRIENT_KEYS
         .into_iter()
-        .map(|key| (key.to_owned(), direction_for(key).into()))
+        .map(|key| (key.to_owned(), default_direction_for(key).into()))
         .collect()
 }
 

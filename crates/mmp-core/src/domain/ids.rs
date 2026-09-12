@@ -84,6 +84,7 @@ entity_id!(
 entity_id!(MealGuestGroupId, "meal_guest_group");
 entity_id!(MealGuestAllocationId, "meal_guest_allocation");
 entity_id!(NutritionTargetId, "nutrition_target");
+entity_id!(CalorieCalculationId, "calorie_target_calculation");
 entity_id!(RecipeId, "recipe");
 entity_id!(RecipeComponentId, "recipe_component");
 entity_id!(RecipeInstructionId, "recipe_instruction");

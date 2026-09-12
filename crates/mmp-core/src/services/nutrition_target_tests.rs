@@ -49,9 +49,44 @@ async fn create_persists_a_target() {
     let h = harness();
     let created = create_at(&h, date!(2026 - 08 - 25), goals_kcal(2000)).await;
     assert_eq!(created.revision, Revision::INITIAL);
+    assert_eq!(created.source, TargetSource::UserDefined);
     assert_eq!(h.targets.count(), 1);
     let stored = h.service.get(created.id).await.unwrap();
     assert_eq!(stored.goals.energy_kcal, Some(Decimal::new(2000, 0)));
+}
+
+#[tokio::test]
+async fn setting_a_target_for_a_date_updates_in_place() {
+    let h = harness();
+    let first = h
+        .service
+        .set_for_date(
+            NewNutritionTarget {
+                member_id: member(),
+                effective_from: date!(2026 - 08 - 25),
+                goals: goals_kcal(2000),
+            },
+            TargetSource::Calculated,
+        )
+        .await
+        .unwrap();
+    let second = h
+        .service
+        .set_for_date(
+            NewNutritionTarget {
+                member_id: member(),
+                effective_from: date!(2026 - 08 - 25),
+                goals: goals_kcal(1800),
+            },
+            TargetSource::UserDefined,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(second.id, first.id);
+    assert_eq!(second.revision, first.revision.next());
+    assert_eq!(second.source, TargetSource::UserDefined);
+    assert_eq!(h.targets.count(), 1);
 }
 
 #[tokio::test]

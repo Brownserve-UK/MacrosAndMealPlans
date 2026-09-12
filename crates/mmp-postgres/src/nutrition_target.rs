@@ -9,7 +9,7 @@ use crate::rows::NutritionTargetRow;
 
 macro_rules! columns {
     () => {
-        "id, member_id, effective_from, energy_kcal, protein_g, carbohydrate_g, sugar_g, fat_g, saturated_fat_g, fibre_g, salt_g, cholesterol_mg, revision, created_at, updated_at"
+        "id, member_id, effective_from, source, energy_kcal, protein_g, carbohydrate_g, sugar_g, fat_g, saturated_fat_g, fibre_g, salt_g, cholesterol_mg, revision, created_at, updated_at"
     };
 }
 
@@ -43,7 +43,7 @@ impl NutritionTargetRepository for PgNutritionTargetRepository {
             .fetch_optional(&self.pool)
             .await
             .map_err(|e| repository_error("loading a nutrition target", e))?;
-        Ok(row.map(Into::into))
+        row.map(TryInto::try_into).transpose()
     }
 
     async fn list_for_member(&self, member_id: HouseholdMemberId) -> Result<Vec<NutritionTarget>> {
@@ -52,27 +52,28 @@ impl NutritionTargetRepository for PgNutritionTargetRepository {
             .fetch_all(&self.pool)
             .await
             .map_err(|e| repository_error("listing nutrition targets", e))?;
-        Ok(rows.into_iter().map(Into::into).collect())
+        rows.into_iter().map(TryInto::try_into).collect()
     }
 
     async fn insert(&self, target: &NutritionTarget) -> Result<()> {
         let goals = &target.goals;
         sqlx::query(
             "INSERT INTO nutrition_target (
-                 id, member_id, effective_from,
+                 id, member_id, effective_from, source,
                  energy_kcal, protein_g, carbohydrate_g, sugar_g, fat_g,
                  saturated_fat_g, fibre_g, salt_g, cholesterol_mg,
                  revision, created_at, updated_at
              ) VALUES (
-                 $1, $2, $3,
-                 $4, $5, $6, $7, $8,
-                 $9, $10, $11, $12,
-                 $13, $14, $15
+                 $1, $2, $3, $4,
+                 $5, $6, $7, $8, $9,
+                 $10, $11, $12, $13,
+                 $14, $15, $16
              )",
         )
         .bind(target.id.as_uuid())
         .bind(target.member_id.as_uuid())
         .bind(target.effective_from)
+        .bind(target.source.code())
         .bind(goals.energy_kcal)
         .bind(goals.protein_g)
         .bind(goals.carbohydrate_g)
@@ -91,19 +92,73 @@ impl NutritionTargetRepository for PgNutritionTargetRepository {
         Ok(())
     }
 
+    async fn set_for_date(&self, target: &NutritionTarget) -> Result<NutritionTarget> {
+        let goals = &target.goals;
+        let query = concat!(
+            "INSERT INTO nutrition_target (
+                 id, member_id, effective_from, source,
+                 energy_kcal, protein_g, carbohydrate_g, sugar_g, fat_g,
+                 saturated_fat_g, fibre_g, salt_g, cholesterol_mg,
+                 revision, created_at, updated_at
+             ) VALUES (
+                 $1, $2, $3, $4,
+                 $5, $6, $7, $8, $9,
+                 $10, $11, $12, $13,
+                 $14, $15, $16
+             )
+             ON CONFLICT (member_id, effective_from) DO UPDATE SET
+                 source = EXCLUDED.source,
+                 energy_kcal = EXCLUDED.energy_kcal,
+                 protein_g = EXCLUDED.protein_g,
+                 carbohydrate_g = EXCLUDED.carbohydrate_g,
+                 sugar_g = EXCLUDED.sugar_g,
+                 fat_g = EXCLUDED.fat_g,
+                 saturated_fat_g = EXCLUDED.saturated_fat_g,
+                 fibre_g = EXCLUDED.fibre_g,
+                 salt_g = EXCLUDED.salt_g,
+                 cholesterol_mg = EXCLUDED.cholesterol_mg,
+                 revision = nutrition_target.revision + 1,
+                 updated_at = EXCLUDED.updated_at
+             RETURNING ",
+            columns!()
+        );
+        let row: NutritionTargetRow = sqlx::query_as(query)
+            .bind(target.id.as_uuid())
+            .bind(target.member_id.as_uuid())
+            .bind(target.effective_from)
+            .bind(target.source.code())
+            .bind(goals.energy_kcal)
+            .bind(goals.protein_g)
+            .bind(goals.carbohydrate_g)
+            .bind(goals.sugar_g)
+            .bind(goals.fat_g)
+            .bind(goals.saturated_fat_g)
+            .bind(goals.fibre_g)
+            .bind(goals.salt_g)
+            .bind(goals.cholesterol_mg)
+            .bind(target.revision.get())
+            .bind(target.created_at)
+            .bind(target.updated_at)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| map_db_error(e, "setting a nutrition target for a date"))?;
+        row.try_into()
+    }
+
     async fn update(&self, target: &NutritionTarget, expected: Revision) -> Result<UpdateOutcome> {
         let goals = &target.goals;
         let affected = sqlx::query(
             "UPDATE nutrition_target SET
-                 effective_from = $2,
-                 energy_kcal = $3, protein_g = $4, carbohydrate_g = $5, sugar_g = $6,
-                 fat_g = $7, saturated_fat_g = $8, fibre_g = $9, salt_g = $10,
-                 cholesterol_mg = $11,
-                 revision = $12, updated_at = $13
-             WHERE id = $1 AND revision = $14",
+                 effective_from = $2, source = $3,
+                 energy_kcal = $4, protein_g = $5, carbohydrate_g = $6, sugar_g = $7,
+                 fat_g = $8, saturated_fat_g = $9, fibre_g = $10, salt_g = $11,
+                 cholesterol_mg = $12,
+                 revision = $13, updated_at = $14
+             WHERE id = $1 AND revision = $15",
         )
         .bind(target.id.as_uuid())
         .bind(target.effective_from)
+        .bind(target.source.code())
         .bind(goals.energy_kcal)
         .bind(goals.protein_g)
         .bind(goals.carbohydrate_g)

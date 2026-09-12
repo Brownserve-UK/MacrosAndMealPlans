@@ -7,29 +7,31 @@ use async_trait::async_trait;
 use time::Date;
 
 use crate::domain::{
-    AccessScope, ConsumptionRecord, ConsumptionRecordId, DeductionCandidates, DemandSubject,
-    HouseholdMember, HouseholdMemberId, HouseholdSettings, Ingredient, IngredientId,
-    MealParticipant, MealPlanComponentId, MealPlanEntry, MealPlanEntryId, MealTemplate,
-    MealTemplateId, MealTimes, MemberAccessGrant, MissingStockInterpretation, NewStockEvent,
-    NutritionTarget, NutritionTargetId, OpportunityException, PreparedBatch, PreparedBatchId,
-    PreparedMeal, PreparedMealId, Product, ProductId, Purchase, PurchaseId, PurchaseState,
-    Quantity, Recipe, RecipeId, RecipePhoto, RecipeSummary, RecipeVisibility, Revision, Role,
-    SectionOrder, ShoppingCadence, ShoppingListItem, ShoppingListItemId, ShoppingOpportunityId,
-    ShoppingTrip, StockEffect, StockEffectSource, StockEvent, StockEventId, StockItem, StockItemId,
-    StockOutcome, StockSubject, Unit, User, UserId, WeightGoal, WeightGoalId, WeightRecord,
-    WeightRecordId,
+    AccessScope, CalorieCalculation, CalorieCalculationId, ConsumptionRecord, ConsumptionRecordId,
+    DeductionCandidates, DemandSubject, HouseholdMember, HouseholdMemberId, HouseholdSettings,
+    Ingredient, IngredientId, MealParticipant, MealPlanComponentId, MealPlanEntry, MealPlanEntryId,
+    MealTemplate, MealTemplateId, MealTimes, MemberAccessGrant, MemberBodyProfile,
+    MissingStockInterpretation, NewStockEvent, NutritionTarget, NutritionTargetId,
+    OpportunityException, PreparedBatch, PreparedBatchId, PreparedMeal, PreparedMealId, Product,
+    ProductId, Purchase, PurchaseId, PurchaseState, Quantity, Recipe, RecipeId, RecipePhoto,
+    RecipeSummary, RecipeVisibility, Revision, Role, SectionOrder, ShoppingCadence,
+    ShoppingListItem, ShoppingListItemId, ShoppingOpportunityId, ShoppingTrip, StockEffect,
+    StockEffectSource, StockEvent, StockEventId, StockItem, StockItemId, StockOutcome,
+    StockSubject, Unit, User, UserId, WeightGoal, WeightGoalId, WeightRecord, WeightRecordId,
 };
 use crate::error::{CoreError, Result};
 use crate::ports::{
-    AccessGrantRepository, ConsumptionQuery, ConsumptionRecordRepository, FinishedPurchase,
-    HouseholdMemberRepository, HouseholdSettingsRepository, IngredientQuery, IngredientRepository,
-    IngredientSort, MealPlanComponentUpdate, MealPlanQuery, MealPlanRepository, MealTemplateQuery,
-    MealTemplateRepository, MemberQuery, NewStockFromPurchase, NutritionTargetRepository,
-    Paginated, PreparedMealQuery, PreparedMealRepository, PreparedMealSort, ProductQuery,
-    ProductRepository, PurchaseQuery, PurchaseRepository, RecipeQuery, RecipeRepository,
-    ShoppingCadenceRepository, ShoppingListItemRepository, ShoppingOpportunityRepository,
-    ShoppingTripRepository, SnapshotOp, SortDirection, StockQuery, StockRepository, StockWrite,
-    UpdateOutcome, UserQuery, UserRepository, WeightGoalRepository, WeightRecordRepository,
+    AccessGrantRepository, CalorieCalculationRepository, ConsumptionQuery,
+    ConsumptionRecordRepository, FinishedPurchase, HouseholdMemberRepository,
+    HouseholdSettingsRepository, IngredientQuery, IngredientRepository, IngredientSort,
+    MealPlanComponentUpdate, MealPlanQuery, MealPlanRepository, MealTemplateQuery,
+    MealTemplateRepository, MemberBodyProfileRepository, MemberQuery, NewStockFromPurchase,
+    NutritionTargetRepository, Paginated, PreparedMealQuery, PreparedMealRepository,
+    PreparedMealSort, ProductQuery, ProductRepository, PurchaseQuery, PurchaseRepository,
+    RecipeQuery, RecipeRepository, ShoppingCadenceRepository, ShoppingListItemRepository,
+    ShoppingOpportunityRepository, ShoppingTripRepository, SnapshotOp, SortDirection, StockQuery,
+    StockRepository, StockWrite, UpdateOutcome, UserQuery, UserRepository, WeightGoalRepository,
+    WeightRecordRepository,
 };
 
 // This _should_ reflect the indexes that a real database would enforce
@@ -1731,6 +1733,34 @@ impl NutritionTargetRepository for InMemoryNutritionTargetRepository {
         Ok(())
     }
 
+    async fn set_for_date(&self, target: &NutritionTarget) -> Result<NutritionTarget> {
+        let mut rows = self.rows.lock().unwrap();
+        let existing_id = rows
+            .values()
+            .find(|existing| {
+                existing.member_id == target.member_id
+                    && existing.effective_from == target.effective_from
+            })
+            .map(|existing| existing.id);
+        let stored = if let Some(existing_id) = existing_id {
+            let existing = rows.get(&existing_id).expect("the target still exists");
+            NutritionTarget {
+                id: existing.id,
+                member_id: target.member_id,
+                effective_from: target.effective_from,
+                source: target.source,
+                goals: target.goals.clone(),
+                revision: existing.revision.next(),
+                created_at: existing.created_at,
+                updated_at: target.updated_at,
+            }
+        } else {
+            target.clone()
+        };
+        rows.insert(stored.id, stored.clone());
+        Ok(stored)
+    }
+
     async fn update(&self, target: &NutritionTarget, expected: Revision) -> Result<UpdateOutcome> {
         let mut rows = self.rows.lock().unwrap();
         match rows.get(&target.id) {
@@ -1749,6 +1779,164 @@ impl NutritionTargetRepository for InMemoryNutritionTargetRepository {
     }
 
     async fn delete(&self, id: NutritionTargetId, expected: Revision) -> Result<UpdateOutcome> {
+        let mut rows = self.rows.lock().unwrap();
+        match rows.get(&id) {
+            None => Ok(UpdateOutcome::NotFound),
+            Some(existing) if existing.revision != expected => {
+                Ok(UpdateOutcome::RevisionMismatch {
+                    actual: existing.revision,
+                })
+            }
+            Some(_) => {
+                rows.remove(&id);
+                Ok(UpdateOutcome::Updated)
+            }
+        }
+    }
+}
+
+#[derive(Default, Clone)]
+pub struct InMemoryMemberBodyProfileRepository {
+    rows: Arc<Mutex<HashMap<HouseholdMemberId, MemberBodyProfile>>>,
+}
+
+impl InMemoryMemberBodyProfileRepository {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn seed(&self, profile: MemberBodyProfile) {
+        self.rows.lock().unwrap().insert(profile.member_id, profile);
+    }
+
+    pub fn count(&self) -> usize {
+        self.rows.lock().unwrap().len()
+    }
+}
+
+#[async_trait]
+impl MemberBodyProfileRepository for InMemoryMemberBodyProfileRepository {
+    async fn for_member(&self, member_id: HouseholdMemberId) -> Result<Option<MemberBodyProfile>> {
+        Ok(self.rows.lock().unwrap().get(&member_id).cloned())
+    }
+
+    async fn insert(&self, profile: &MemberBodyProfile) -> Result<()> {
+        let mut rows = self.rows.lock().unwrap();
+        if rows.contains_key(&profile.member_id) {
+            return Err(CoreError::duplicate(
+                "member body profile",
+                "member",
+                profile.member_id,
+            ));
+        }
+        rows.insert(profile.member_id, profile.clone());
+        Ok(())
+    }
+
+    async fn update(
+        &self,
+        profile: &MemberBodyProfile,
+        expected: Revision,
+    ) -> Result<UpdateOutcome> {
+        let mut rows = self.rows.lock().unwrap();
+        match rows.get(&profile.member_id) {
+            None => Ok(UpdateOutcome::NotFound),
+            Some(existing) if existing.revision != expected => {
+                Ok(UpdateOutcome::RevisionMismatch {
+                    actual: existing.revision,
+                })
+            }
+            Some(_) => {
+                rows.insert(profile.member_id, profile.clone());
+                Ok(UpdateOutcome::Updated)
+            }
+        }
+    }
+}
+
+#[derive(Default, Clone)]
+pub struct InMemoryCalorieCalculationRepository {
+    rows: Arc<Mutex<HashMap<CalorieCalculationId, CalorieCalculation>>>,
+}
+
+fn enforce_calculation_uniqueness(
+    rows: &HashMap<CalorieCalculationId, CalorieCalculation>,
+    candidate: &CalorieCalculation,
+) -> Result<()> {
+    if rows.values().any(|existing| {
+        existing.id != candidate.id && existing.nutrition_target_id == candidate.nutrition_target_id
+    }) {
+        return Err(CoreError::duplicate(
+            "calorie target calculation",
+            "nutrition target",
+            candidate.nutrition_target_id,
+        ));
+    }
+    Ok(())
+}
+
+impl InMemoryCalorieCalculationRepository {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn seed(&self, calculation: CalorieCalculation) {
+        self.rows
+            .lock()
+            .unwrap()
+            .insert(calculation.id, calculation);
+    }
+
+    pub fn count(&self) -> usize {
+        self.rows.lock().unwrap().len()
+    }
+}
+
+#[async_trait]
+impl CalorieCalculationRepository for InMemoryCalorieCalculationRepository {
+    async fn get(&self, id: CalorieCalculationId) -> Result<Option<CalorieCalculation>> {
+        Ok(self.rows.lock().unwrap().get(&id).cloned())
+    }
+
+    async fn for_target(&self, target_id: NutritionTargetId) -> Result<Option<CalorieCalculation>> {
+        Ok(self
+            .rows
+            .lock()
+            .unwrap()
+            .values()
+            .find(|calculation| calculation.nutrition_target_id == target_id)
+            .cloned())
+    }
+
+    async fn insert(&self, calculation: &CalorieCalculation) -> Result<()> {
+        let mut rows = self.rows.lock().unwrap();
+        enforce_calculation_uniqueness(&rows, calculation)?;
+        rows.insert(calculation.id, calculation.clone());
+        Ok(())
+    }
+
+    async fn update(
+        &self,
+        calculation: &CalorieCalculation,
+        expected: Revision,
+    ) -> Result<UpdateOutcome> {
+        let mut rows = self.rows.lock().unwrap();
+        match rows.get(&calculation.id) {
+            None => Ok(UpdateOutcome::NotFound),
+            Some(existing) if existing.revision != expected => {
+                Ok(UpdateOutcome::RevisionMismatch {
+                    actual: existing.revision,
+                })
+            }
+            Some(_) => {
+                enforce_calculation_uniqueness(&rows, calculation)?;
+                rows.insert(calculation.id, calculation.clone());
+                Ok(UpdateOutcome::Updated)
+            }
+        }
+    }
+
+    async fn delete(&self, id: CalorieCalculationId, expected: Revision) -> Result<UpdateOutcome> {
         let mut rows = self.rows.lock().unwrap();
         match rows.get(&id) {
             None => Ok(UpdateOutcome::NotFound),

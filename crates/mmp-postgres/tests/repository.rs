@@ -2,31 +2,34 @@
 
 use mmp_core::CoreError;
 use mmp_core::domain::{
-    AccessScope, Assumption, CatalogueOrigin, ConsumedAmount, ConsumedNutrition, ConsumptionRecord,
-    ConsumptionRecordId, ExceptionState, HouseholdMember, HouseholdMemberId, Ingredient,
-    IngredientId, MealCategory, MealGuestAllocation, MealGuestAllocationId, MealGuestGroup,
-    MealGuestGroupId, MealItemRef, MealParticipant, MealParticipantAllocation,
+    ACTIVITY_SOURCE_SELF_REPORTED, AccessScope, Assumption, CALORIE_FORMULA, CalorieCalculation,
+    CalorieCalculationId, CatalogueOrigin, ConsumedAmount, ConsumedNutrition, ConsumptionRecord,
+    ConsumptionRecordId, ExceptionState, HabitualActivity, HouseholdMember, HouseholdMemberId,
+    Ingredient, IngredientId, MealCategory, MealGuestAllocation, MealGuestAllocationId,
+    MealGuestGroup, MealGuestGroupId, MealItemRef, MealParticipant, MealParticipantAllocation,
     MealParticipantAllocationId, MealParticipantId, MealPlanComponent, MealPlanComponentId,
     MealPlanComponentSnapshot, MealPlanEntry, MealPlanEntryId, MealPlanScope, MealPlanStatus,
     MealSlot, MealTemplate, MealTemplateComponent, MealTemplateComponentId, MealTemplateId,
-    MemberAccessGrant, NewStockEvent, NutritionFacts, NutritionGoals, NutritionQuality,
-    NutritionTarget, NutritionTargetId, OpportunityException, ParticipantStatus, PreparationSource,
-    PreparedBatch, PreparedBatchId, PreparedMeal, PreparedMealId, Product, ProductId, Provenance,
-    Purchase, PurchaseId, PurchaseState, Quantity, Recipe, RecipeComponent, RecipeComponentId,
-    RecipeId, RecipeInstruction, RecipeInstructionId, RecipePhoto, RecipePhotoDerivatives,
-    RecipeRequirement, RecipeVisibility, Revision, Role, SectionOrder, ShoppingCadence,
-    ShoppingListItem, ShoppingListItemId, ShoppingOpportunityId, ShoppingSection, ShoppingTrip,
-    ShoppingTripId, ShoppingTripRow, ShoppingTripRowId, StockEventKind, StockItem, StockItemId,
-    StockLevel, StockSubject, StorageLocation, TripState, Unit, User, UserId, WeightDisplay,
-    WeightGoal, WeightGoalId, WeightObjective, WeightRecord, WeightRecordId, WeightSource,
+    MemberAccessGrant, MemberBodyProfile, NewStockEvent, NutritionFacts, NutritionGoals,
+    NutritionQuality, NutritionTarget, NutritionTargetId, OpportunityException, ParticipantStatus,
+    PreparationSource, PreparedBatch, PreparedBatchId, PreparedMeal, PreparedMealId, Product,
+    ProductId, Provenance, Purchase, PurchaseId, PurchaseState, Quantity, Recipe, RecipeComponent,
+    RecipeComponentId, RecipeId, RecipeInstruction, RecipeInstructionId, RecipePhoto,
+    RecipePhotoDerivatives, RecipeRequirement, RecipeVisibility, Revision, Role, SectionOrder, Sex,
+    ShoppingCadence, ShoppingListItem, ShoppingListItemId, ShoppingOpportunityId, ShoppingSection,
+    ShoppingTrip, ShoppingTripId, ShoppingTripRow, ShoppingTripRowId, StockEventKind, StockItem,
+    StockItemId, StockLevel, StockSubject, StorageLocation, TargetSource, TripState, Unit, User,
+    UserId, WeightDisplay, WeightGoal, WeightGoalId, WeightObjective, WeightRecord, WeightRecordId,
+    WeightSource,
 };
 use mmp_core::domain::{DeductionTarget, StockEffectSource, StockEventSource};
 use mmp_core::ports::{
-    AccessGrantRepository, ConsumptionQuery, ConsumptionRecordRepository,
-    HouseholdMemberRepository, HouseholdSettingsRepository, IngredientQuery, IngredientRepository,
-    IngredientSort, MealPlanComponentUpdate, MealPlanQuery, MealPlanRepository, MealTemplateQuery,
-    MealTemplateRepository, MemberQuery, NewStockFromPurchase, NutritionTargetRepository,
-    PageRequest, PreparedBatchRepository, PreparedMealRepository, ProductQuery, ProductRepository,
+    AccessGrantRepository, CalorieCalculationRepository, ConsumptionQuery,
+    ConsumptionRecordRepository, HouseholdMemberRepository, HouseholdSettingsRepository,
+    IngredientQuery, IngredientRepository, IngredientSort, MealPlanComponentUpdate, MealPlanQuery,
+    MealPlanRepository, MealTemplateQuery, MealTemplateRepository, MemberBodyProfileRepository,
+    MemberQuery, NewStockFromPurchase, NutritionTargetRepository, PageRequest,
+    PreparedBatchRepository, PreparedMealRepository, ProductQuery, ProductRepository,
     PurchaseRepository, RecipeQuery, RecipeRepository, ShoppingCadenceRepository,
     ShoppingListItemRepository, ShoppingOpportunityRepository, ShoppingTripRepository, SnapshotOp,
     SortDirection, StockDeduction, StockQuery, StockRepository, StockWrite, UpdateOutcome,
@@ -37,17 +40,17 @@ fn no_stock() -> StockWrite {
     StockWrite::default()
 }
 use mmp_postgres::{
-    PgAccessGrantRepository, PgConsumptionRecordRepository, PgHouseholdMemberRepository,
-    PgHouseholdSettingsRepository, PgIngredientRepository, PgMealPlanRepository,
-    PgMealTemplateRepository, PgNutritionTargetRepository, PgPreparedBatchRepository,
-    PgPreparedMealRepository, PgProductRepository, PgPurchaseRepository, PgRecipeRepository,
-    PgShoppingCadenceRepository, PgShoppingListItemRepository, PgShoppingOpportunityRepository,
-    PgShoppingTripRepository, PgStockRepository, PgUserRepository, PgWeightGoalRepository,
-    PgWeightRecordRepository,
+    PgAccessGrantRepository, PgCalorieCalculationRepository, PgConsumptionRecordRepository,
+    PgHouseholdMemberRepository, PgHouseholdSettingsRepository, PgIngredientRepository,
+    PgMealPlanRepository, PgMealTemplateRepository, PgMemberBodyProfileRepository,
+    PgNutritionTargetRepository, PgPreparedBatchRepository, PgPreparedMealRepository,
+    PgProductRepository, PgPurchaseRepository, PgRecipeRepository, PgShoppingCadenceRepository,
+    PgShoppingListItemRepository, PgShoppingOpportunityRepository, PgShoppingTripRepository,
+    PgStockRepository, PgUserRepository, PgWeightGoalRepository, PgWeightRecordRepository,
 };
 use rust_decimal::Decimal;
 use sqlx::PgPool;
-use time::macros::{date, time};
+use time::macros::{date, datetime, time};
 use time::{Date, OffsetDateTime, Time, Weekday};
 use uuid::Uuid;
 
@@ -2047,6 +2050,7 @@ fn target(
         id: NutritionTargetId::new(),
         member_id,
         effective_from: effective,
+        source: TargetSource::UserDefined,
         goals,
         revision: Revision::INITIAL,
         created_at: now,
@@ -2230,6 +2234,161 @@ async fn nutrition_targets_can_be_deleted(pool: PgPool) {
         UpdateOutcome::Updated
     );
     assert!(repo.get(original.id).await.unwrap().is_none());
+}
+
+#[sqlx::test]
+async fn setting_a_nutrition_target_for_the_same_date_updates_in_place(pool: PgPool) {
+    let members = PgHouseholdMemberRepository::new(pool.clone());
+    let repo = PgNutritionTargetRepository::new(pool);
+    let joe = member("Joe");
+    members.insert(&joe).await.unwrap();
+    let first = target(
+        joe.id,
+        date!(2026 - 09 - 12),
+        NutritionGoals {
+            energy_kcal: Some(Decimal::from(2000)),
+            ..Default::default()
+        },
+    );
+    let inserted = repo.set_for_date(&first).await.unwrap();
+    let mut replacement = target(
+        joe.id,
+        date!(2026 - 09 - 12),
+        NutritionGoals {
+            energy_kcal: Some(Decimal::from(1800)),
+            ..Default::default()
+        },
+    );
+    replacement.source = TargetSource::Calculated;
+
+    let updated = repo.set_for_date(&replacement).await.unwrap();
+
+    assert_eq!(updated.id, inserted.id);
+    assert_eq!(updated.revision, inserted.revision.next());
+    assert_eq!(updated.source, TargetSource::Calculated);
+    assert_eq!(updated.goals.energy_kcal, Some(Decimal::from(1800)));
+}
+
+#[sqlx::test]
+async fn round_trips_and_updates_a_member_body_profile(pool: PgPool) {
+    let members = PgHouseholdMemberRepository::new(pool.clone());
+    let repo = PgMemberBodyProfileRepository::new(pool);
+    let joe = member("Joe");
+    members.insert(&joe).await.unwrap();
+    let now = datetime!(2026-09-12 09:00 UTC);
+    let profile = MemberBodyProfile {
+        member_id: joe.id,
+        date_of_birth: Some(date!(1985 - 04 - 12)),
+        sex: Some(Sex::Male),
+        height_cm: Some(Decimal::new(178, 0)),
+        habitual_activity: Some(HabitualActivity::LightlyActive),
+        revision: Revision::INITIAL,
+        created_at: now,
+        updated_at: now,
+    };
+    repo.insert(&profile).await.unwrap();
+
+    let loaded = repo
+        .for_member(joe.id)
+        .await
+        .unwrap()
+        .expect("should exist");
+    assert_eq!(loaded, profile);
+
+    let mut updated = loaded.clone();
+    updated.height_cm = Some(Decimal::new(180, 0));
+    updated.revision = loaded.revision.next();
+    assert_eq!(
+        repo.update(&updated, loaded.revision).await.unwrap(),
+        UpdateOutcome::Updated
+    );
+    assert_eq!(
+        repo.update(&updated, loaded.revision).await.unwrap(),
+        UpdateOutcome::RevisionMismatch {
+            actual: updated.revision
+        }
+    );
+}
+
+fn calorie_calculation(
+    member_id: HouseholdMemberId,
+    target_id: NutritionTargetId,
+) -> CalorieCalculation {
+    let now = datetime!(2026-09-12 09:00 UTC);
+    CalorieCalculation {
+        id: CalorieCalculationId::new(),
+        member_id,
+        nutrition_target_id: target_id,
+        calculated_on: date!(2026 - 09 - 12),
+        formula: CALORIE_FORMULA.to_owned(),
+        activity_source: ACTIVITY_SOURCE_SELF_REPORTED.to_owned(),
+        habitual_activity: HabitualActivity::LightlyActive,
+        age_years: 41,
+        sex: Sex::Male,
+        height_cm: Decimal::new(178, 0),
+        weight_kg: Decimal::new(824, 1),
+        objective: WeightObjective::Lose,
+        requested_rate_kg_per_week: Some(Decimal::new(5, 1)),
+        applied_rate_kg_per_week: Some(Decimal::new(5, 1)),
+        maintenance_kcal: Decimal::from(2500),
+        adjustment_kcal: Decimal::from(-550),
+        recommended_kcal: Decimal::from(1950),
+        floor_kcal: Decimal::from(1500),
+        eased: false,
+        revision: Revision::INITIAL,
+        created_at: now,
+        updated_at: now,
+    }
+}
+
+#[sqlx::test]
+async fn round_trips_updates_and_deletes_a_calorie_calculation(pool: PgPool) {
+    let members = PgHouseholdMemberRepository::new(pool.clone());
+    let targets = PgNutritionTargetRepository::new(pool.clone());
+    let repo = PgCalorieCalculationRepository::new(pool);
+    let joe = member("Joe");
+    members.insert(&joe).await.unwrap();
+    let target = target(
+        joe.id,
+        date!(2026 - 09 - 12),
+        NutritionGoals {
+            energy_kcal: Some(Decimal::from(1950)),
+            ..Default::default()
+        },
+    );
+    targets.insert(&target).await.unwrap();
+    let calculation = calorie_calculation(joe.id, target.id);
+    repo.insert(&calculation).await.unwrap();
+
+    let loaded = repo
+        .for_target(target.id)
+        .await
+        .unwrap()
+        .expect("should exist");
+    assert_eq!(loaded, calculation);
+    assert_eq!(
+        repo.get(calculation.id).await.unwrap(),
+        Some(calculation.clone())
+    );
+
+    let mut updated = calculation.clone();
+    updated.recommended_kcal = Decimal::from(2000);
+    updated.revision = calculation.revision.next();
+    assert_eq!(
+        repo.update(&updated, calculation.revision).await.unwrap(),
+        UpdateOutcome::Updated
+    );
+    assert_eq!(
+        repo.update(&updated, calculation.revision).await.unwrap(),
+        UpdateOutcome::RevisionMismatch {
+            actual: updated.revision
+        }
+    );
+    assert_eq!(
+        repo.delete(updated.id, updated.revision).await.unwrap(),
+        UpdateOutcome::Updated
+    );
+    assert!(repo.get(updated.id).await.unwrap().is_none());
 }
 
 #[sqlx::test]

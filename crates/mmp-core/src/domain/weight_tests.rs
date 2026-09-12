@@ -162,6 +162,34 @@ fn a_rate_faster_than_is_safe_is_rejected() {
 }
 
 #[test]
+fn a_zero_applied_rate_represents_no_safe_deficit() {
+    assert!(
+        new_goal(
+            WeightObjective::Lose,
+            kg("40"),
+            Some(kg("35")),
+            Some(kg("0")),
+        )
+        .validate()
+        .is_ok()
+    );
+}
+
+#[test]
+fn a_gain_goal_still_needs_a_positive_rate() {
+    assert!(
+        new_goal(
+            WeightObjective::Gain,
+            kg("40"),
+            Some(kg("45")),
+            Some(kg("0")),
+        )
+        .validate()
+        .is_err()
+    );
+}
+
+#[test]
 fn losing_on_plan_projects_a_date() {
     let goal = goal(WeightObjective::Lose, "80", Some("76"), Some("0.5"));
     let today = date!(2026 - 09 - 03);

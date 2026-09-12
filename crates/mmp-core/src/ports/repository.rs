@@ -5,16 +5,16 @@ use time::{Date, OffsetDateTime};
 
 use super::{PageRequest, Paginated};
 use crate::domain::{
-    AccessScope, CatalogueOrigin, ConsumptionRecord, ConsumptionRecordId, DeductionTarget,
-    HouseholdMember, HouseholdMemberId, HouseholdSettings, Ingredient, IngredientId,
-    MealParticipant, MealPlanComponentId, MealPlanComponentSnapshot, MealPlanEntry,
-    MealPlanEntryId, MealTemplate, MealTemplateId, MemberAccessGrant, NewStockEvent,
-    NutritionTarget, NutritionTargetId, OpportunityException, PreparedBatch, PreparedBatchId,
-    PreparedMeal, PreparedMealId, Product, ProductId, Purchase, PurchaseId, PurchaseState,
-    Quantity, Recipe, RecipeId, RecipePhoto, RecipeSummary, Revision, Role, ShoppingCadence,
-    ShoppingListItem, ShoppingListItemId, ShoppingOpportunityId, ShoppingTrip, StockEffect,
-    StockEffectSource, StockEvent, StockItem, StockItemId, StockOutcome, User, UserId, WeightGoal,
-    WeightGoalId, WeightRecord, WeightRecordId,
+    AccessScope, CalorieCalculation, CalorieCalculationId, CatalogueOrigin, ConsumptionRecord,
+    ConsumptionRecordId, DeductionTarget, HouseholdMember, HouseholdMemberId, HouseholdSettings,
+    Ingredient, IngredientId, MealParticipant, MealPlanComponentId, MealPlanComponentSnapshot,
+    MealPlanEntry, MealPlanEntryId, MealTemplate, MealTemplateId, MemberAccessGrant,
+    MemberBodyProfile, NewStockEvent, NutritionTarget, NutritionTargetId, OpportunityException,
+    PreparedBatch, PreparedBatchId, PreparedMeal, PreparedMealId, Product, ProductId, Purchase,
+    PurchaseId, PurchaseState, Quantity, Recipe, RecipeId, RecipePhoto, RecipeSummary, Revision,
+    Role, ShoppingCadence, ShoppingListItem, ShoppingListItemId, ShoppingOpportunityId,
+    ShoppingTrip, StockEffect, StockEffectSource, StockEvent, StockItem, StockItemId, StockOutcome,
+    User, UserId, WeightGoal, WeightGoalId, WeightRecord, WeightRecordId,
 };
 use crate::error::Result;
 
@@ -582,9 +582,41 @@ pub trait NutritionTargetRepository: Send + Sync + 'static {
 
     async fn insert(&self, target: &NutritionTarget) -> Result<()>;
 
+    async fn set_for_date(&self, target: &NutritionTarget) -> Result<NutritionTarget>;
+
     async fn update(&self, target: &NutritionTarget, expected: Revision) -> Result<UpdateOutcome>;
 
     async fn delete(&self, id: NutritionTargetId, expected: Revision) -> Result<UpdateOutcome>;
+}
+
+#[async_trait]
+pub trait MemberBodyProfileRepository: Send + Sync + 'static {
+    async fn for_member(&self, member_id: HouseholdMemberId) -> Result<Option<MemberBodyProfile>>;
+
+    async fn insert(&self, profile: &MemberBodyProfile) -> Result<()>;
+
+    async fn update(
+        &self,
+        profile: &MemberBodyProfile,
+        expected: Revision,
+    ) -> Result<UpdateOutcome>;
+}
+
+#[async_trait]
+pub trait CalorieCalculationRepository: Send + Sync + 'static {
+    async fn get(&self, id: CalorieCalculationId) -> Result<Option<CalorieCalculation>>;
+
+    async fn for_target(&self, target_id: NutritionTargetId) -> Result<Option<CalorieCalculation>>;
+
+    async fn insert(&self, calculation: &CalorieCalculation) -> Result<()>;
+
+    async fn update(
+        &self,
+        calculation: &CalorieCalculation,
+        expected: Revision,
+    ) -> Result<UpdateOutcome>;
+
+    async fn delete(&self, id: CalorieCalculationId, expected: Revision) -> Result<UpdateOutcome>;
 }
 
 #[async_trait]

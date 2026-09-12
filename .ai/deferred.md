@@ -9,8 +9,11 @@ specification or ADRs.
 
 ## Nutrition and weight
 
-- [ ] `direction_for()` derives calorie target direction from the nutrient name instead of the
-      member's objective, so the current target progress can contradict `NUT-023` and `DEC-069`.
+- [ ] `direction_for()` now takes the objective in `mmp-core`, but the day/week target payloads and
+      `NutritionSummary.tsx` still read the static `/api/v1/meta` direction, so target progress can
+      still contradict `NUT-023` and `DEC-069` until that's wired through.
+- [ ] Make guided nutrition-plan writes atomic across the profile, weigh-in, goal, target, and
+      calculation repositories.
 - [ ] Avoid loading every weigh-in in `summary()` when only the latest reading and chart range are
       needed.
 - [ ] Let the weigh-in dialog set `recorded_at`; the API and schema already support it.

@@ -1,7 +1,10 @@
 use rust_decimal::Decimal;
 use time::{Date, OffsetDateTime};
 
-use super::{HouseholdMemberId, NutritionFacts, NutritionTargetId, Patch, Revision};
+use super::str_enum::str_enum;
+use super::{
+    HouseholdMemberId, NutritionFacts, NutritionTargetId, Patch, Revision, WeightObjective,
+};
 use crate::error::{Result, ValidationErrors};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -12,12 +15,41 @@ pub enum TargetDirection {
     Around,
 }
 
-pub fn direction_for(nutrient: &str) -> TargetDirection {
+str_enum!(TargetSource, UnknownTargetSource, "target source");
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TargetSource {
+    UserDefined,
+    Calculated,
+}
+
+impl TargetSource {
+    pub const ALL: [TargetSource; 2] = [TargetSource::UserDefined, TargetSource::Calculated];
+
+    pub const fn code(&self) -> &'static str {
+        match self {
+            TargetSource::UserDefined => "user_defined",
+            TargetSource::Calculated => "calculated",
+        }
+    }
+}
+
+pub fn direction_for(nutrient: &str, objective: WeightObjective) -> TargetDirection {
     match nutrient {
+        "energy_kcal" => match objective {
+            WeightObjective::Gain => TargetDirection::AtLeast,
+            WeightObjective::Maintain => TargetDirection::Around,
+            WeightObjective::Lose => TargetDirection::AtMost,
+        },
         "protein_g" | "fibre_g" => TargetDirection::AtLeast,
         "carbohydrate_g" | "fat_g" => TargetDirection::Around,
         _ => TargetDirection::AtMost,
     }
+}
+
+pub fn default_direction_for(nutrient: &str) -> TargetDirection {
+    direction_for(nutrient, WeightObjective::Lose)
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -131,6 +163,7 @@ pub struct NutritionTarget {
     pub id: NutritionTargetId,
     pub member_id: HouseholdMemberId,
     pub effective_from: Date,
+    pub source: TargetSource,
     pub goals: NutritionGoals,
     pub revision: Revision,
     pub created_at: OffsetDateTime,

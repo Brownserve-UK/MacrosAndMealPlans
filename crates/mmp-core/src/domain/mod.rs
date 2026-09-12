@@ -1,4 +1,6 @@
 mod access;
+mod body_profile;
+mod calorie_target;
 mod consumption;
 mod coverage;
 mod household;
@@ -23,6 +25,14 @@ mod str_enum;
 mod weight;
 
 pub use access::{AccessScope, Permission, Role, UnknownAccessScope, UnknownRole};
+pub use body_profile::{
+    HabitualActivity, MemberBodyProfile, MemberBodyProfilePatch, Sex, UnknownHabitualActivity,
+    UnknownSex, age_on,
+};
+pub use calorie_target::{
+    ACTIVITY_SOURCE_SELF_REPORTED, CALORIE_FORMULA, CalorieCalculation, CalorieCalculationInput,
+    Pace, calculate,
+};
 pub use consumption::{
     AmountError, ConsumedAmount, ConsumedNutrition, ConsumptionRecord, ConsumptionRecordPatch,
     NewConsumptionRecord, NutritionQuality, UnknownNutritionQuality, generic_food_nutrition,
@@ -37,7 +47,10 @@ pub use household_settings::{
     HouseholdSettings, HouseholdSettingsPatch, MealTimes, MissingStockInterpretation, SectionOrder,
     UnknownMissingStockInterpretation,
 };
-pub use ids::{ConsumptionRecordId, HouseholdMemberId, IngredientId, ProductId, Revision, UserId};
+pub use ids::{
+    CalorieCalculationId, ConsumptionRecordId, HouseholdMemberId, IngredientId, ProductId,
+    Revision, UserId,
+};
 pub use ids::{
     MealGuestAllocationId, MealGuestGroupId, MealParticipantAllocationId, MealParticipantId,
     MealPlanComponentId, MealPlanEntryId, MealTemplateComponentId, MealTemplateId,
@@ -78,7 +91,8 @@ pub use meal_template::{
 pub use nutrition::NutritionFacts;
 pub use nutrition_target::{
     NUTRIENT_KEYS, NewNutritionTarget, NutritionGoals, NutritionGoalsPatch, NutritionTarget,
-    NutritionTargetPatch, TargetDirection, direction_for, resolve_on, validate_goals,
+    NutritionTargetPatch, TargetDirection, TargetSource, UnknownTargetSource,
+    default_direction_for, direction_for, resolve_on, validate_goals,
 };
 pub use patch::Patch;
 pub use prepared::{

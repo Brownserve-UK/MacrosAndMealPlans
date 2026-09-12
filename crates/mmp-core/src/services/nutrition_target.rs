@@ -3,7 +3,7 @@ use std::sync::Arc;
 use super::revision::{commit_outcome, require_revision};
 use crate::domain::{
     HouseholdMemberId, NewNutritionTarget, NutritionTarget, NutritionTargetId,
-    NutritionTargetPatch, Revision, validate_goals,
+    NutritionTargetPatch, Revision, TargetSource, validate_goals,
 };
 use crate::error::{CoreError, Result, ValidationErrors};
 use crate::ports::{Clock, NutritionTargetRepository};
@@ -39,6 +39,7 @@ impl NutritionTargetService {
             id: NutritionTargetId::new(),
             member_id: input.member_id,
             effective_from: input.effective_from,
+            source: TargetSource::UserDefined,
             goals: input.goals,
             revision: Revision::INITIAL,
             created_at: now,
@@ -46,6 +47,27 @@ impl NutritionTargetService {
         };
         self.targets.insert(&target).await?;
         Ok(target)
+    }
+
+    pub async fn set_for_date(
+        &self,
+        input: NewNutritionTarget,
+        source: TargetSource,
+    ) -> Result<NutritionTarget> {
+        input.validate()?;
+        let now = self.clock.now();
+        self.targets
+            .set_for_date(&NutritionTarget {
+                id: NutritionTargetId::new(),
+                member_id: input.member_id,
+                effective_from: input.effective_from,
+                source,
+                goals: input.goals,
+                revision: Revision::INITIAL,
+                created_at: now,
+                updated_at: now,
+            })
+            .await
     }
 
     pub async fn update(

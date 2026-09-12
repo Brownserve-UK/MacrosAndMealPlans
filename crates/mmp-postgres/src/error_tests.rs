@@ -64,6 +64,10 @@ fn foreign_keys_name_the_thing_that_is_missing() {
         foreign_key_target("consumption_record_product_id_fkey"),
         "product"
     );
+    assert_eq!(
+        foreign_key_target("calorie_target_calculation_nutrition_target_id_fkey"),
+        "nutrition target"
+    );
 }
 
 #[test]

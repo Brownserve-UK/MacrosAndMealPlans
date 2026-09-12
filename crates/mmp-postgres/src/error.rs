@@ -41,7 +41,7 @@ pub fn map_db_error(error: sqlx::Error, context: &str) -> CoreError {
     }
 }
 
-const UNIQUE_CONSTRAINTS: [(&str, &str, &str); 37] = [
+const UNIQUE_CONSTRAINTS: [(&str, &str, &str); 40] = [
     ("ingredient_name_unique", "ingredient", "name"),
     ("ingredient_seed_key_unique", "ingredient", "seed_key"),
     ("ingredient_pkey", "ingredient", "id"),
@@ -102,6 +102,17 @@ const UNIQUE_CONSTRAINTS: [(&str, &str, &str); 37] = [
         "component",
     ),
     ("nutrition_target_pkey", "nutrition target", "id"),
+    ("member_body_profile_pkey", "member body profile", "member"),
+    (
+        "calorie_target_calculation_pkey",
+        "calorie target calculation",
+        "id",
+    ),
+    (
+        "calorie_target_calculation_target_unique",
+        "calorie target calculation",
+        "nutrition target",
+    ),
     ("weight_record_pkey", "weight record", "id"),
     ("weight_goal_pkey", "weight goal", "id"),
     ("weight_goal_member_unique", "weight goal", "member"),
@@ -173,6 +184,9 @@ fn foreign_key_target(constraint: &str) -> &'static str {
     }
     if constraint.contains("meal_plan_component_id") {
         return "meal plan component";
+    }
+    if constraint.contains("nutrition_target_id") {
+        return "nutrition target";
     }
     if constraint.contains("user_id") || constraint.contains("_by_fkey") {
         return "user";

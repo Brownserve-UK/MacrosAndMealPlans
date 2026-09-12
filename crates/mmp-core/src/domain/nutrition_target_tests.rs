@@ -18,6 +18,7 @@ fn target(id: &str, effective: Date, goals: NutritionGoals) -> NutritionTarget {
         id: NutritionTargetId::seeded(id),
         member_id: HouseholdMemberId::seeded("someone"),
         effective_from: effective,
+        source: TargetSource::UserDefined,
         goals,
         revision: Revision::INITIAL,
         created_at: now,
@@ -27,15 +28,50 @@ fn target(id: &str, effective: Date, goals: NutritionGoals) -> NutritionTarget {
 
 #[test]
 fn directions_match_the_agreed_defaults() {
-    assert_eq!(direction_for("energy_kcal"), TargetDirection::AtMost);
-    assert_eq!(direction_for("protein_g"), TargetDirection::AtLeast);
-    assert_eq!(direction_for("fibre_g"), TargetDirection::AtLeast);
-    assert_eq!(direction_for("carbohydrate_g"), TargetDirection::Around);
-    assert_eq!(direction_for("fat_g"), TargetDirection::Around);
-    assert_eq!(direction_for("sugar_g"), TargetDirection::AtMost);
-    assert_eq!(direction_for("saturated_fat_g"), TargetDirection::AtMost);
-    assert_eq!(direction_for("salt_g"), TargetDirection::AtMost);
-    assert_eq!(direction_for("cholesterol_mg"), TargetDirection::AtMost);
+    assert_eq!(
+        direction_for("energy_kcal", WeightObjective::Lose),
+        TargetDirection::AtMost
+    );
+    assert_eq!(
+        direction_for("energy_kcal", WeightObjective::Maintain),
+        TargetDirection::Around
+    );
+    assert_eq!(
+        direction_for("energy_kcal", WeightObjective::Gain),
+        TargetDirection::AtLeast
+    );
+    assert_eq!(
+        direction_for("protein_g", WeightObjective::Maintain),
+        TargetDirection::AtLeast
+    );
+    assert_eq!(
+        direction_for("fibre_g", WeightObjective::Maintain),
+        TargetDirection::AtLeast
+    );
+    assert_eq!(
+        direction_for("carbohydrate_g", WeightObjective::Maintain),
+        TargetDirection::Around
+    );
+    assert_eq!(
+        direction_for("fat_g", WeightObjective::Maintain),
+        TargetDirection::Around
+    );
+    assert_eq!(
+        direction_for("sugar_g", WeightObjective::Maintain),
+        TargetDirection::AtMost
+    );
+    assert_eq!(
+        direction_for("saturated_fat_g", WeightObjective::Maintain),
+        TargetDirection::AtMost
+    );
+    assert_eq!(
+        direction_for("salt_g", WeightObjective::Maintain),
+        TargetDirection::AtMost
+    );
+    assert_eq!(
+        direction_for("cholesterol_mg", WeightObjective::Maintain),
+        TargetDirection::AtMost
+    );
 }
 
 #[test]

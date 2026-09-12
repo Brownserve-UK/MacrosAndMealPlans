@@ -2,20 +2,21 @@ use std::collections::BTreeMap;
 use std::str::FromStr;
 
 use mmp_core::domain::{
-    AccessScope, CatalogueOrigin, ConsumedAmount, ConsumedNutrition, ConsumptionRecord,
-    ConsumptionRecordId, ExceptionState, HouseholdMember, HouseholdMemberId, HouseholdSettings,
-    Ingredient, IngredientId, MealItemRef, MealPlanComponentId, MealPlanEntryId, MealSlot,
-    MealTimes, MemberAccessGrant, MissingStockInterpretation, NutritionFacts, NutritionGoals,
+    AccessScope, CalorieCalculation, CalorieCalculationId, CatalogueOrigin, ConsumedAmount,
+    ConsumedNutrition, ConsumptionRecord, ConsumptionRecordId, ExceptionState, HabitualActivity,
+    HouseholdMember, HouseholdMemberId, HouseholdSettings, Ingredient, IngredientId, MealItemRef,
+    MealPlanComponentId, MealPlanEntryId, MealSlot, MealTimes, MemberAccessGrant,
+    MemberBodyProfile, MissingStockInterpretation, NutritionFacts, NutritionGoals,
     NutritionQuality, NutritionTarget, NutritionTargetId, OpportunityException, PreparationSource,
     PreparedBatch, PreparedBatchId, PreparedMeal, PreparedMealId, Product, ProductId, Provenance,
-    Purchase, PurchaseId, PurchaseState, Quantity, RecipeId, Revision, Role, SectionOrder,
+    Purchase, PurchaseId, PurchaseState, Quantity, RecipeId, Revision, Role, SectionOrder, Sex,
     ShoppingCadence, ShoppingListItem, ShoppingListItemId, ShoppingOpportunityId, ShoppingSection,
     ShoppingTrip, ShoppingTripId, ShoppingTripRow, ShoppingTripRowId, SourceDate, SourceDateKind,
     StockEffect, StockEffectId, StockEffectSource, StockEffectState, StockEvent, StockEventId,
     StockEventKind, StockEventSource, StockItem, StockItemId, StockLevel, StockSubject,
-    StorageLocation, TrackingMode, TripState, Unit, UsabilityDeadline, User, UserId, WeightDisplay,
-    WeightGoal, WeightGoalId, WeightObjective, WeightRecord, WeightRecordId, WeightSource,
-    week_day_from_number,
+    StorageLocation, TargetSource, TrackingMode, TripState, Unit, UsabilityDeadline, User, UserId,
+    WeightDisplay, WeightGoal, WeightGoalId, WeightObjective, WeightRecord, WeightRecordId,
+    WeightSource, week_day_from_number,
 };
 use mmp_core::{CoreError, RepositoryError};
 use rust_decimal::Decimal;
@@ -443,6 +444,7 @@ pub struct NutritionTargetRow {
     pub id: Uuid,
     pub member_id: Uuid,
     pub effective_from: Date,
+    pub source: String,
     pub energy_kcal: Option<Decimal>,
     pub protein_g: Option<Decimal>,
     pub carbohydrate_g: Option<Decimal>,
@@ -457,12 +459,16 @@ pub struct NutritionTargetRow {
     pub updated_at: OffsetDateTime,
 }
 
-impl From<NutritionTargetRow> for NutritionTarget {
-    fn from(row: NutritionTargetRow) -> Self {
-        NutritionTarget {
+impl TryFrom<NutritionTargetRow> for NutritionTarget {
+    type Error = CoreError;
+
+    fn try_from(row: NutritionTargetRow) -> Result<Self, Self::Error> {
+        Ok(NutritionTarget {
             id: NutritionTargetId::from(row.id),
             member_id: HouseholdMemberId::from(row.member_id),
             effective_from: row.effective_from,
+            source: TargetSource::from_str(&row.source)
+                .map_err(|_| bad_value("source", &row.source))?,
             goals: NutritionGoals {
                 energy_kcal: row.energy_kcal,
                 protein_g: row.protein_g,
@@ -477,7 +483,106 @@ impl From<NutritionTargetRow> for NutritionTarget {
             revision: Revision::new(row.revision),
             created_at: row.created_at,
             updated_at: row.updated_at,
-        }
+        })
+    }
+}
+
+#[derive(Debug, sqlx::FromRow)]
+pub struct MemberBodyProfileRow {
+    pub member_id: Uuid,
+    pub date_of_birth: Option<Date>,
+    pub sex: Option<String>,
+    pub height_cm: Option<Decimal>,
+    pub habitual_activity: Option<String>,
+    pub revision: i64,
+    pub created_at: OffsetDateTime,
+    pub updated_at: OffsetDateTime,
+}
+
+impl TryFrom<MemberBodyProfileRow> for MemberBodyProfile {
+    type Error = CoreError;
+
+    fn try_from(row: MemberBodyProfileRow) -> Result<Self, Self::Error> {
+        Ok(MemberBodyProfile {
+            member_id: HouseholdMemberId::from(row.member_id),
+            date_of_birth: row.date_of_birth,
+            sex: row
+                .sex
+                .as_deref()
+                .map(|value| Sex::from_str(value).map_err(|_| bad_value("sex", value)))
+                .transpose()?,
+            height_cm: row.height_cm,
+            habitual_activity: row
+                .habitual_activity
+                .as_deref()
+                .map(|value| {
+                    HabitualActivity::from_str(value)
+                        .map_err(|_| bad_value("habitual_activity", value))
+                })
+                .transpose()?,
+            revision: Revision::new(row.revision),
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+        })
+    }
+}
+
+#[derive(Debug, sqlx::FromRow)]
+pub struct CalorieCalculationRow {
+    pub id: Uuid,
+    pub member_id: Uuid,
+    pub nutrition_target_id: Uuid,
+    pub calculated_on: Date,
+    pub formula: String,
+    pub activity_source: String,
+    pub habitual_activity: String,
+    pub age_years: i32,
+    pub sex: String,
+    pub height_cm: Decimal,
+    pub weight_kg: Decimal,
+    pub objective: String,
+    pub requested_rate_kg_per_week: Option<Decimal>,
+    pub applied_rate_kg_per_week: Option<Decimal>,
+    pub maintenance_kcal: Decimal,
+    pub adjustment_kcal: Decimal,
+    pub recommended_kcal: Decimal,
+    pub floor_kcal: Decimal,
+    pub eased: bool,
+    pub revision: i64,
+    pub created_at: OffsetDateTime,
+    pub updated_at: OffsetDateTime,
+}
+
+impl TryFrom<CalorieCalculationRow> for CalorieCalculation {
+    type Error = CoreError;
+
+    fn try_from(row: CalorieCalculationRow) -> Result<Self, Self::Error> {
+        Ok(CalorieCalculation {
+            id: CalorieCalculationId::from(row.id),
+            member_id: HouseholdMemberId::from(row.member_id),
+            nutrition_target_id: NutritionTargetId::from(row.nutrition_target_id),
+            calculated_on: row.calculated_on,
+            formula: row.formula,
+            activity_source: row.activity_source,
+            habitual_activity: HabitualActivity::from_str(&row.habitual_activity)
+                .map_err(|_| bad_value("habitual_activity", &row.habitual_activity))?,
+            age_years: row.age_years,
+            sex: Sex::from_str(&row.sex).map_err(|_| bad_value("sex", &row.sex))?,
+            height_cm: row.height_cm,
+            weight_kg: row.weight_kg,
+            objective: WeightObjective::from_str(&row.objective)
+                .map_err(|_| bad_value("objective", &row.objective))?,
+            requested_rate_kg_per_week: row.requested_rate_kg_per_week,
+            applied_rate_kg_per_week: row.applied_rate_kg_per_week,
+            maintenance_kcal: row.maintenance_kcal,
+            adjustment_kcal: row.adjustment_kcal,
+            recommended_kcal: row.recommended_kcal,
+            floor_kcal: row.floor_kcal,
+            eased: row.eased,
+            revision: Revision::new(row.revision),
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+        })
     }
 }
 

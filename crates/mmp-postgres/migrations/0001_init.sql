@@ -231,6 +231,7 @@ CREATE TABLE nutrition_target (
     id              UUID PRIMARY KEY,
     member_id       UUID NOT NULL REFERENCES household_member (id) ON DELETE CASCADE,
     effective_from  DATE NOT NULL,
+    source          TEXT NOT NULL DEFAULT 'user_defined',
 
     energy_kcal         NUMERIC(12, 3),
     protein_g           NUMERIC(12, 3),
@@ -265,7 +266,9 @@ CREATE TABLE nutrition_target (
     CONSTRAINT nutrition_target_salt_g_non_negative
         CHECK (salt_g IS NULL OR salt_g >= 0),
     CONSTRAINT nutrition_target_cholesterol_mg_non_negative
-        CHECK (cholesterol_mg IS NULL OR cholesterol_mg >= 0)
+        CHECK (cholesterol_mg IS NULL OR cholesterol_mg >= 0),
+    CONSTRAINT nutrition_target_source_known
+        CHECK (source IN ('user_defined', 'calculated'))
 );
 
 CREATE TABLE recipe (
@@ -1082,7 +1085,7 @@ CREATE TABLE weight_goal (
                 AND target_weight_kg IS NOT NULL
                 AND target_weight_kg < starting_weight_kg
                 AND planned_rate_kg_per_week IS NOT NULL
-                AND planned_rate_kg_per_week > 0)
+                AND planned_rate_kg_per_week >= 0)
             OR (objective = 'gain'
                 AND target_weight_kg IS NOT NULL
                 AND target_weight_kg > starting_weight_kg
@@ -1090,6 +1093,52 @@ CREATE TABLE weight_goal (
                 AND planned_rate_kg_per_week > 0)
         )
 );
+
+CREATE TABLE member_body_profile (
+    member_id          UUID PRIMARY KEY REFERENCES household_member (id) ON DELETE CASCADE,
+    date_of_birth      DATE,
+    sex                TEXT,
+    height_cm          NUMERIC(5, 1),
+    habitual_activity  TEXT,
+    revision           BIGINT NOT NULL DEFAULT 1,
+    created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT member_body_profile_sex_known
+        CHECK (sex IS NULL OR sex IN ('male', 'female')),
+    CONSTRAINT member_body_profile_activity_known
+        CHECK (habitual_activity IS NULL OR habitual_activity IN
+            ('mostly_sedentary', 'lightly_active', 'active', 'very_active')),
+    CONSTRAINT member_body_profile_height_plausible
+        CHECK (height_cm IS NULL OR (height_cm > 50 AND height_cm <= 260))
+);
+
+CREATE TABLE calorie_target_calculation (
+    id                          UUID PRIMARY KEY,
+    member_id                   UUID NOT NULL REFERENCES household_member (id) ON DELETE CASCADE,
+    nutrition_target_id         UUID NOT NULL REFERENCES nutrition_target (id) ON DELETE CASCADE,
+    calculated_on               DATE NOT NULL,
+    formula                     TEXT NOT NULL,
+    activity_source             TEXT NOT NULL,
+    habitual_activity           TEXT NOT NULL,
+    age_years                   INTEGER NOT NULL,
+    sex                         TEXT NOT NULL,
+    height_cm                   NUMERIC(5, 1) NOT NULL,
+    weight_kg                   NUMERIC(6, 3) NOT NULL,
+    objective                   TEXT NOT NULL,
+    requested_rate_kg_per_week  NUMERIC(5, 3),
+    applied_rate_kg_per_week    NUMERIC(5, 3),
+    maintenance_kcal            NUMERIC(12, 3) NOT NULL,
+    adjustment_kcal             NUMERIC(12, 3) NOT NULL,
+    recommended_kcal            NUMERIC(12, 3) NOT NULL,
+    floor_kcal                  NUMERIC(12, 3) NOT NULL,
+    eased                       BOOLEAN NOT NULL DEFAULT false,
+    revision                    BIGINT NOT NULL DEFAULT 1,
+    created_at                  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at                  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE UNIQUE INDEX calorie_target_calculation_target_unique
+    ON calorie_target_calculation (nutrition_target_id);
 
 CREATE TABLE meal_template (
     id            UUID PRIMARY KEY,
