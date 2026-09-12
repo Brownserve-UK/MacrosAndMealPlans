@@ -33,6 +33,7 @@ export type ScopeSummary = {
   remaining: Summary;
   projected: Summary;
   target?: NutritionGoals | null;
+  calorieDirection?: TargetDirection | null;
   notEnoughData?: readonly string[];
 };
 
@@ -101,7 +102,7 @@ function energyStatus(
 function EnergyDial({ scope, label, directions }: { scope: ScopeSummary; label: string; directions: Directions }) {
   const value = scope.projected.nutrition.energy_kcal;
   const target = scope.target?.energy_kcal;
-  const direction = directions.energy_kcal;
+  const direction = scope.calorieDirection ?? directions.energy_kcal;
   const incomplete = scope.notEnoughData?.includes('energy_kcal') ?? false;
   const status = incomplete ? 'neutral' : classify(value, target, direction);
   const display = incomplete

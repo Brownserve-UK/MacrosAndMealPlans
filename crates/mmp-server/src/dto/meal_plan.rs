@@ -5,7 +5,7 @@ use mmp_core::domain::{
     NewMealGuestGroup, NewMealParticipant, NewMealParticipantAllocation, NewMealPlanComponent,
     NewMealPlanEntry, ParticipantStatus, Patch, ReplacementItem, ReviewMealOutcomes,
     ReviewedGuestOutcome, ReviewedMealOutcome, ReviewedMemberOutcome, SetMealParticipants,
-    SlotAttendance,
+    SlotAttendance, WeightObjective, direction_for,
 };
 use mmp_core::services::{
     MealItem, MealItemSource, MealParticipantView, MealPlanComponentView, MealPlanDay,
@@ -18,7 +18,10 @@ use utoipa::ToSchema;
 use uuid::Uuid;
 
 use super::common::{iso_date, iso_time};
-use super::{AmountDto, ConsumptionRecordDto, NutritionDto, NutritionGoalsDto, StockOutcomeDto};
+use super::{
+    AmountDto, ConsumptionRecordDto, NutritionDto, NutritionGoalsDto, StockOutcomeDto,
+    TargetDirectionDto,
+};
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct NutritionSummaryDto {
@@ -513,6 +516,8 @@ pub struct MealPlanDayDto {
     pub projected: NutritionSummaryDto,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target: Option<NutritionGoalsDto>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub calorie_direction: Option<TargetDirectionDto>,
 }
 
 impl From<MealPlanDay> for MealPlanDayDto {
@@ -525,6 +530,7 @@ impl From<MealPlanDay> for MealPlanDayDto {
             remaining_planned: value.remaining_planned.into(),
             projected: value.projected.into(),
             target: value.target.map(Into::into),
+            calorie_direction: None,
         }
     }
 }
@@ -544,6 +550,8 @@ pub struct MealPlanWeekDto {
     pub projected: NutritionSummaryDto,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target: Option<NutritionGoalsDto>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub calorie_direction: Option<TargetDirectionDto>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub insufficient_target_coverage: Vec<String>,
 }
@@ -637,9 +645,31 @@ impl From<MealPlanWeek> for MealPlanWeekDto {
             remaining_planned: value.remaining_planned.into(),
             projected: value.projected.into(),
             target: value.target.map(Into::into),
+            calorie_direction: None,
             insufficient_target_coverage: value.insufficient_target_coverage,
         }
     }
+}
+
+impl MealPlanWeekDto {
+    pub fn with_calorie_direction(mut self, objective: Option<WeightObjective>) -> Self {
+        self.calorie_direction = calorie_direction(&self.target, objective);
+        for day in &mut self.days {
+            day.calorie_direction = calorie_direction(&day.target, objective);
+        }
+        self
+    }
+}
+
+fn calorie_direction(
+    target: &Option<NutritionGoalsDto>,
+    objective: Option<WeightObjective>,
+) -> Option<TargetDirectionDto> {
+    target
+        .as_ref()
+        .filter(|target| target.energy_kcal.is_some())
+        .zip(objective)
+        .map(|(_, objective)| direction_for("energy_kcal", objective).into())
 }
 
 #[derive(Debug, Clone, Deserialize, ToSchema)]

@@ -9,7 +9,7 @@ specification or ADRs.
 
 ## Nutrition and weight
 
-- [ ] `direction_for()` now takes the objective in `mmp-core`, but the day/week target payloads and
+- [x] `direction_for()` now takes the objective in `mmp-core`, but the day/week target payloads and
       `NutritionSummary.tsx` still read the static `/api/v1/meta` direction, so target progress can
       still contradict `NUT-023` and `DEC-069` until that's wired through.
 - [ ] Make guided nutrition-plan writes atomic across the profile, weigh-in, goal, target, and

@@ -2333,6 +2333,7 @@ export interface components {
         };
         MealPlanDayDto: {
             actual: components["schemas"]["NutritionSummaryDto"];
+            calorie_direction?: null | components["schemas"]["TargetDirectionDto"];
             /** Format: date */
             date: string;
             entries: components["schemas"]["MealPlanEntryDto"][];
@@ -2380,6 +2381,7 @@ export interface components {
         MealPlanStatus: "planned" | "assumed" | "partially_resolved" | "eaten" | "not_eaten";
         MealPlanWeekDto: {
             actual: components["schemas"]["NutritionSummaryDto"];
+            calorie_direction?: null | components["schemas"]["TargetDirectionDto"];
             days: components["schemas"]["MealPlanDayDto"][];
             insufficient_target_coverage?: string[];
             /** Format: uuid */

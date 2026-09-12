@@ -202,7 +202,10 @@ async fn get_week(
         .meal_plan
         .week(member, parse_week_start(&week_start)?)
         .await?;
-    Ok(Json(week.into()))
+    let objective = state.weight.goal(member).await?.map(|goal| goal.objective);
+    Ok(Json(
+        MealPlanWeekDto::from(week).with_calorie_direction(objective),
+    ))
 }
 
 #[utoipa::path(

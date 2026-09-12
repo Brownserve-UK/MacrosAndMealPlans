@@ -2948,6 +2948,18 @@ async fn a_household_manager_without_health_data_access_cannot_read_nutrition_pl
 async fn the_meal_plan_week_carries_a_resolved_target() {
     let app = app().await;
     let member = my_member_id(&app).await;
+    let (status, goal, _) = send(
+        &app,
+        Call::new("POST", format!("/api/v1/members/{member}/weight-goal")).body(json!({
+            "objective": "gain",
+            "starting_weight": {"amount": 80.0, "unit": "kg"},
+            "target_weight": {"amount": 85.0, "unit": "kg"},
+            "planned_rate": {"amount": 0.5, "unit": "kg"},
+            "started_on": "2026-08-01",
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{goal}");
     send(
         &app,
         Call::new(
@@ -2961,7 +2973,9 @@ async fn the_meal_plan_week_carries_a_resolved_target() {
     let (status, week, _) = send(&app, Call::new("GET", "/api/v1/meal-plan/2026-08-24")).await;
     assert_eq!(status, StatusCode::OK, "{week}");
     assert_eq!(week["target"]["energy_kcal"], 14000.0);
+    assert_eq!(week["calorie_direction"], "at_least");
     assert_eq!(week["days"][0]["target"]["energy_kcal"], 2000.0);
+    assert_eq!(week["days"][0]["calorie_direction"], "at_least");
     assert!(
         week["insufficient_target_coverage"].as_array().is_none()
             || week["insufficient_target_coverage"]

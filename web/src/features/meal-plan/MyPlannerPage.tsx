@@ -266,12 +266,14 @@ export function MyPlannerPage({ weekStart, day }: { weekStart: string; day: stri
               remaining: selectedDay.remaining_planned,
               projected: selectedDay.projected,
               target: selectedDay.target,
+              calorieDirection: selectedDay.calorie_direction,
             }}
             week={{
               actual: week.data.actual,
               remaining: week.data.remaining_planned,
               projected: week.data.projected,
               target: week.data.target,
+              calorieDirection: week.data.calorie_direction,
               notEnoughData: week.data.insufficient_target_coverage,
             }}
           />

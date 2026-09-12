@@ -117,6 +117,20 @@ describe('DayWeekNutrition', () => {
     ).toBeInTheDocument();
   });
 
+  it('prefers the resolved calorie direction over the static direction map', () => {
+    const target: NutritionGoals = { energy_kcal: 1200 };
+    render(
+      <DayWeekNutrition
+        day={scopeFrom(detailed, 0, 0, { target, calorieDirection: 'at_least' })}
+        week={weekScope}
+        directions={ALL_DIRECTIONS}
+      />,
+    );
+
+    expect(screen.getByText('Above')).toBeInTheDocument();
+    expect(screen.queryByText('Over')).not.toBeInTheDocument();
+  });
+
   it('shows Not enough data for a partially-covered weekly nutrient', () => {
     const week = scopeFrom(
       { energy_kcal: 5000, protein_g: 1, carbohydrate_g: 1, fat_g: 1 },
