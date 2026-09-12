@@ -131,6 +131,7 @@ pub struct ShoppingOpportunityDto {
     pub usual_time: Option<Time>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
+    pub revision: i64,
 }
 
 impl From<ShoppingOpportunity> for ShoppingOpportunityDto {
@@ -142,6 +143,7 @@ impl From<ShoppingOpportunity> for ShoppingOpportunityDto {
             generated_for: value.generated_for,
             usual_time: value.usual_time,
             note: value.note,
+            revision: value.revision.get(),
         }
     }
 }

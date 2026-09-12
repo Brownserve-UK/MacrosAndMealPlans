@@ -552,6 +552,9 @@ pub trait PreparedBatchRepository: Send + Sync + 'static {
         archive: &[StockItemId],
     ) -> Result<Vec<StockOutcome>>;
 
+    async fn bump_revision(&self, id: PreparedBatchId, expected: Revision)
+    -> Result<UpdateOutcome>;
+
     async fn insert(
         &self,
         batch: &PreparedBatch,
@@ -614,9 +617,9 @@ pub trait WeightGoalRepository: Send + Sync + 'static {
 pub trait ShoppingCadenceRepository: Send + Sync + 'static {
     async fn get(&self) -> Result<Option<ShoppingCadence>>;
 
-    async fn set(&self, cadence: &ShoppingCadence) -> Result<()>;
+    async fn set(&self, cadence: &ShoppingCadence, expected: Revision) -> Result<UpdateOutcome>;
 
-    async fn clear(&self) -> Result<()>;
+    async fn clear(&self, expected: Revision) -> Result<UpdateOutcome>;
 }
 
 #[async_trait]
@@ -630,7 +633,11 @@ pub trait ShoppingOpportunityRepository: Send + Sync + 'static {
         generated_for: Date,
     ) -> Result<Option<OpportunityException>>;
 
-    async fn upsert(&self, exception: &OpportunityException) -> Result<()>;
+    async fn upsert(
+        &self,
+        exception: &OpportunityException,
+        expected: Revision,
+    ) -> Result<UpdateOutcome>;
 
     async fn delete(&self, id: ShoppingOpportunityId) -> Result<UpdateOutcome>;
 }
@@ -696,7 +703,7 @@ pub trait ShoppingListItemRepository: Send + Sync + 'static {
 
     async fn update(&self, item: &ShoppingListItem, expected: Revision) -> Result<UpdateOutcome>;
 
-    async fn delete(&self, id: ShoppingListItemId) -> Result<UpdateOutcome>;
+    async fn delete(&self, id: ShoppingListItemId, expected: Revision) -> Result<UpdateOutcome>;
 
     async fn delete_for_opportunity(&self, date: Date) -> Result<()>;
 }

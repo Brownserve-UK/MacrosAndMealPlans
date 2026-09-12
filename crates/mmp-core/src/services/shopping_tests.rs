@@ -234,12 +234,15 @@ async fn plan_ingredient(
 
 async fn weekly_saturdays(h: &Harness) {
     h.shopping
-        .set_cadence(NewShoppingCadence {
-            interval_weeks: 1,
-            days: vec![Weekday::Saturday],
-            anchor: TODAY,
-            usual_time: None,
-        })
+        .set_cadence(
+            Revision::UNRECORDED,
+            NewShoppingCadence {
+                interval_weeks: 1,
+                days: vec![Weekday::Saturday],
+                anchor: TODAY,
+                usual_time: None,
+            },
+        )
         .await
         .unwrap();
 }
@@ -506,7 +509,7 @@ async fn finishing_closes_the_trip_it_was_started_as() {
         .await
         .unwrap();
     h.shopping
-        .finish_shop(date!(2026 - 09 - 05), h.actor_id)
+        .finish_shop(date!(2026 - 09 - 05), h.actor_id, Revision::INITIAL)
         .await
         .unwrap();
 
@@ -559,7 +562,7 @@ async fn finishing_puts_the_shopping_where_it_belongs() {
     }
 
     h.shopping
-        .finish_shop(date!(2026 - 09 - 05), h.actor_id)
+        .finish_shop(date!(2026 - 09 - 05), h.actor_id, Revision::UNRECORDED)
         .await
         .unwrap();
 
@@ -606,7 +609,7 @@ async fn something_grabbed_in_store_is_recorded_by_name_alone() {
     assert_eq!(list.unplanned[0].name.as_deref(), Some("Kiwi Fruit"));
 
     h.shopping
-        .finish_shop(date!(2026 - 09 - 05), h.actor_id)
+        .finish_shop(date!(2026 - 09 - 05), h.actor_id, Revision::UNRECORDED)
         .await
         .unwrap();
     assert_eq!(h.stock.count(), 0);
@@ -755,7 +758,7 @@ async fn finishing_a_shop_clears_the_things_you_added_to_it() {
         .unwrap();
 
     h.shopping
-        .finish_shop(date!(2026 - 09 - 05), h.actor_id)
+        .finish_shop(date!(2026 - 09 - 05), h.actor_id, Revision::UNRECORDED)
         .await
         .unwrap();
 
@@ -897,7 +900,7 @@ async fn buying_with_full_details_still_makes_no_stock_until_the_shop_is_finishe
 
     let finished = h
         .shopping
-        .finish_shop(date!(2026 - 09 - 05), h.actor_id)
+        .finish_shop(date!(2026 - 09 - 05), h.actor_id, Revision::UNRECORDED)
         .await
         .unwrap();
 
@@ -1006,7 +1009,7 @@ async fn two_products_can_answer_one_requirement() {
 
     let finished = h
         .shopping
-        .finish_shop(date!(2026 - 09 - 05), h.actor_id)
+        .finish_shop(date!(2026 - 09 - 05), h.actor_id, Revision::UNRECORDED)
         .await
         .unwrap();
 
@@ -1040,7 +1043,7 @@ async fn finishing_leaves_a_purchase_with_no_details_waiting() {
 
     let finished = h
         .shopping
-        .finish_shop(date!(2026 - 09 - 05), h.actor_id)
+        .finish_shop(date!(2026 - 09 - 05), h.actor_id, Revision::UNRECORDED)
         .await
         .unwrap();
 
@@ -1077,12 +1080,12 @@ async fn finishing_a_shop_twice_changes_nothing_and_locks_what_it_stocked() {
         .unwrap();
 
     h.shopping
-        .finish_shop(date!(2026 - 09 - 05), h.actor_id)
+        .finish_shop(date!(2026 - 09 - 05), h.actor_id, Revision::UNRECORDED)
         .await
         .unwrap();
     let again = h
         .shopping
-        .finish_shop(date!(2026 - 09 - 05), h.actor_id)
+        .finish_shop(date!(2026 - 09 - 05), h.actor_id, Revision::UNRECORDED)
         .await
         .unwrap();
 
@@ -1113,7 +1116,7 @@ async fn skipping_the_next_shop_moves_the_list_to_the_one_after() {
     assert_eq!(before.focus, Some(date!(2026 - 09 - 05)));
 
     h.shopping
-        .skip_opportunity(date!(2026 - 09 - 05))
+        .skip_opportunity(date!(2026 - 09 - 05), Revision::UNRECORDED)
         .await
         .unwrap();
 

@@ -171,7 +171,11 @@ export function MealOutcomeDialog({ meal, onClose }: { meal: PlannerMeal; onClos
           ...(frozen > 0 ? [{ storage_location: 'frozen' as const, servings: frozen }] : []),
         ];
         if (placements.length === 0) continue;
-        await place.mutateAsync({ id: food.cooked.prepared_batch_id, body: { placements } });
+        await place.mutateAsync({
+          id: food.cooked.prepared_batch_id,
+          revision: food.cooked.revision,
+          body: { placements },
+        });
       }
       onClose();
     } catch (caught) {

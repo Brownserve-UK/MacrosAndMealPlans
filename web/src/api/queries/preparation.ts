@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { client, unwrap } from '../client';
+import { client, ifMatch, unwrap } from '../client';
 import type { components } from '../schema';
 import { mealPlanKeys, preparationKeys, stockKeys } from '../keys';
 
@@ -39,11 +39,12 @@ export function usePlacePortions() {
   return useMutation({
     mutationFn: async (input: {
       id: string;
+      revision: number;
       body: components['schemas']['PlacePortionsRequest'];
     }) =>
       unwrap(
         await client.PUT('/api/v1/preparations/{id}/placements', {
-          params: { path: { id: input.id } },
+          params: { path: { id: input.id }, header: ifMatch(input.revision) },
           body: input.body,
         }),
       ),

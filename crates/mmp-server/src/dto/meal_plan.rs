@@ -293,6 +293,7 @@ impl From<MealPlanComponentView> for MealPlanComponentDto {
                 prepared_batch_id: batch.id.as_uuid(),
                 prepared_at: batch.prepared_at,
                 servings_produced: batch.servings_produced,
+                revision: batch.revision.get(),
             }),
             consumption_record: value.consumption_record.map(Into::into),
         }
@@ -585,6 +586,7 @@ pub struct CookedDto {
     #[serde(with = "rust_decimal::serde::float")]
     #[schema(value_type = f64)]
     pub servings_produced: Decimal,
+    pub revision: i64,
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]

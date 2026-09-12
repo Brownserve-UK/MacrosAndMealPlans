@@ -192,6 +192,7 @@ async fn putting_leftovers_away_can_split_them_between_two_places() {
     h.service
         .place(
             batch.id,
+            batch.revision,
             vec![
                 placement(StorageLocation::Chilled, 2, date!(2026 - 09 - 09)),
                 placement(StorageLocation::Frozen, 4, date!(2026 - 12 - 05)),
@@ -236,6 +237,7 @@ async fn putting_away_more_than_is_left_is_refused() {
         .service
         .place(
             batch.id,
+            batch.revision,
             vec![placement(StorageLocation::Frozen, 5, date!(2026 - 12 - 05))],
             UserId::new(),
         )

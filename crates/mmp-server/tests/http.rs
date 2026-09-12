@@ -3456,7 +3456,9 @@ async fn the_shopping_routes_need_the_shopping_permissions() {
 
     let (status, _, _) = send(
         &app,
-        Call::new("POST", "/api/v1/shopping/opportunities/2026-09-05/finish").signed_in_as("nina"),
+        Call::new("POST", "/api/v1/shopping/opportunities/2026-09-05/finish")
+            .signed_in_as("nina")
+            .if_match(0),
     )
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN);
@@ -3494,7 +3496,9 @@ async fn the_shopping_routes_need_the_shopping_permissions() {
 
     let (status, body, _) = send(
         &app,
-        Call::new("POST", "/api/v1/shopping/opportunities/2026-09-05/finish").signed_in_as("sam"),
+        Call::new("POST", "/api/v1/shopping/opportunities/2026-09-05/finish")
+            .signed_in_as("sam")
+            .if_match(0),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -3516,6 +3520,7 @@ async fn changing_when_the_household_shops_needs_household_write() {
         &app,
         Call::new("PUT", "/api/v1/shopping/cadence")
             .signed_in_as("sam")
+            .if_match(0)
             .body(cadence.clone()),
     )
     .await;
@@ -3523,7 +3528,9 @@ async fn changing_when_the_household_shops_needs_household_write() {
 
     let (status, body, _) = send(
         &app,
-        Call::new("PUT", "/api/v1/shopping/cadence").body(cadence),
+        Call::new("PUT", "/api/v1/shopping/cadence")
+            .if_match(0)
+            .body(cadence),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -3565,6 +3572,7 @@ async fn something_put_on_the_list_by_hand_comes_back_on_it() {
     assert_eq!(created["name"], json!("Onion Salt"));
     assert_eq!(created["section"], json!("ambient"));
     let id = created["id"].as_str().expect("an id").to_owned();
+    let revision = created["revision"].as_i64().unwrap();
 
     let (status, listed, _) = send(&app, Call::new("GET", "/api/v1/shopping/items")).await;
     assert_eq!(status, StatusCode::OK);
@@ -3576,7 +3584,7 @@ async fn something_put_on_the_list_by_hand_comes_back_on_it() {
 
     let (status, _, _) = send(
         &app,
-        Call::new("DELETE", format!("/api/v1/shopping/items/{id}")),
+        Call::new("DELETE", format!("/api/v1/shopping/items/{id}")).if_match(revision),
     )
     .await;
     assert_eq!(status, StatusCode::NO_CONTENT);
@@ -4057,7 +4065,7 @@ async fn unknown_weight_goal_ids_return_not_found() {
 }
 
 #[tokio::test]
-async fn preparations_round_trip_without_if_match() {
+async fn preparations_round_trip_and_placements_enforce_if_match() {
     let app = app().await;
     let (recipe, created) = create_preparation(&app).await;
     let id = created["id"].as_str().unwrap();
@@ -4079,9 +4087,9 @@ async fn preparations_round_trip_without_if_match() {
         send(&app, Call::new("GET", format!("/api/v1/preparations/{id}"))).await;
     assert_eq!(status, StatusCode::OK, "{fetched}");
     assert_eq!(fetched["id"], id);
-    assert!(!headers.contains_key(header::ETAG));
+    assert!(headers.contains_key(header::ETAG));
 
-    let (status, placed, _) = send(
+    let (status, _, _) = send(
         &app,
         Call::new("PUT", format!("/api/v1/preparations/{id}/placements")).body(json!({
             "placements": [{
@@ -4090,6 +4098,21 @@ async fn preparations_round_trip_without_if_match() {
                 "note": "For later",
             }],
         })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::PRECONDITION_REQUIRED);
+
+    let (status, placed, _) = send(
+        &app,
+        Call::new("PUT", format!("/api/v1/preparations/{id}/placements"))
+            .if_match(created["revision"].as_i64().unwrap())
+            .body(json!({
+                "placements": [{
+                    "storage_location": "frozen",
+                    "servings": 4.0,
+                    "note": "For later",
+                }],
+            })),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{placed}");
@@ -4134,9 +4157,11 @@ async fn unknown_preparation_ids_return_not_found() {
 
     let (status, body, _) = send(
         &app,
-        Call::new("PUT", format!("/api/v1/preparations/{id}/placements")).body(json!({
-            "placements": [{"storage_location": "frozen", "servings": 1.0}],
-        })),
+        Call::new("PUT", format!("/api/v1/preparations/{id}/placements"))
+            .if_match(1)
+            .body(json!({
+                "placements": [{"storage_location": "frozen", "servings": 1.0}],
+            })),
     )
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND, "{body}");

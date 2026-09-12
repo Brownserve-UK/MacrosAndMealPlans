@@ -12,7 +12,7 @@ use crate::dto::{
     PreparedBatchDto, RecordPreparationRequest, StockItemDto,
 };
 use crate::error::ApiResult;
-use crate::http::Created;
+use crate::http::{Created, IfMatch, Tagged};
 use crate::state::AppState;
 
 pub fn router() -> OpenApiRouter<AppState> {
@@ -62,14 +62,19 @@ async fn move_cooked(
     put,
     path = "/api/v1/preparations/{id}/placements",
     operation_id = "placePortions",
-    params(("id" = Uuid, Path, description = "Prepared batch id")),
+    params(
+        ("id" = Uuid, Path, description = "Prepared batch id"),
+        ("If-Match" = String, Header, description = "The revision you loaded"),
+    ),
     request_body = PlacePortionsRequest,
     responses(
         (status = 200, description = "Where the cook's remaining portions now live",
          body = PreparationResponse),
         (status = 404, description = "No such preparation", body = crate::error::Problem),
+        (status = 409, description = "Someone else changed it first", body = crate::error::Problem),
         (status = 422, description = "That does not add up to what is left",
          body = crate::error::Problem),
+        (status = 428, description = "If-Match is required", body = crate::error::Problem),
     ),
     tag = "preparation",
     security(("basic" = []))
@@ -78,21 +83,28 @@ async fn place(
     State(state): State<AppState>,
     principal: Principal,
     Path(id): Path<Uuid>,
+    IfMatch(expected): IfMatch,
     Json(body): Json<PlacePortionsRequest>,
-) -> ApiResult<Json<PreparationResponse>> {
+) -> ApiResult<Tagged<PreparationResponse>> {
     let placed = state
         .preparation
         .place(
             PreparedBatchId::from(id),
+            expected,
             body.placements.into_iter().map(Into::into).collect(),
             principal.user_id,
         )
         .await?;
     let stock_outcomes = placed.stock.iter().cloned().map(Into::into).collect();
-    Ok(Json(PreparationResponse {
-        batch: placed.into_value().into(),
-        stock_outcomes,
-    }))
+    let batch = placed.into_value();
+    let revision = batch.revision;
+    Ok(Tagged(
+        revision,
+        PreparationResponse {
+            batch: batch.into(),
+            stock_outcomes,
+        },
+    ))
 }
 
 #[utoipa::path(
@@ -169,7 +181,8 @@ async fn record(
     operation_id = "getPreparation",
     params(("id" = Uuid, Path, description = "Prepared batch id")),
     responses(
-        (status = 200, description = "The cooking event", body = PreparedBatchDto),
+        (status = 200, description = "The cooking event", body = PreparedBatchDto,
+         headers(("ETag" = String, description = "The revision to send back as If-Match"))),
         (status = 404, description = "No such preparation", body = crate::error::Problem),
     ),
     tag = "preparation",
@@ -179,7 +192,8 @@ async fn get(
     State(state): State<AppState>,
     _principal: Principal,
     Path(id): Path<Uuid>,
-) -> ApiResult<Json<PreparedBatchDto>> {
+) -> ApiResult<Tagged<PreparedBatchDto>> {
     let batch = state.preparation.get(PreparedBatchId::from(id)).await?;
-    Ok(Json(batch.into()))
+    let revision = batch.revision;
+    Ok(Tagged(revision, batch.into()))
 }

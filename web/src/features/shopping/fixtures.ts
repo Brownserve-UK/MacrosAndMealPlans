@@ -15,9 +15,9 @@ const claim = (planned_on: string, amount: number) => ({
 
 export const shoppingList: ShoppingList = {
   opportunities: [
-    { date: '2026-09-05', state: 'normal' },
-    { date: '2026-09-12', state: 'normal' },
-    { date: '2026-09-19', state: 'normal' },
+    { date: '2026-09-05', state: 'normal', revision: 0 },
+    { date: '2026-09-12', state: 'normal', revision: 0 },
+    { date: '2026-09-19', state: 'normal', revision: 0 },
   ],
   focus: '2026-09-05',
   cadence_configured: true,

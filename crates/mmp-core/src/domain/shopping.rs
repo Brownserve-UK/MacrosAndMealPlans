@@ -183,6 +183,7 @@ pub struct ShoppingOpportunity {
     pub generated_for: Option<Date>,
     pub usual_time: Option<Time>,
     pub note: Option<String>,
+    pub revision: Revision,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -246,6 +247,7 @@ pub fn expand_opportunities(
                 generated_for: None,
                 usual_time: cadence.and_then(|cadence| cadence.usual_time),
                 note: None,
+                revision: Revision::UNRECORDED,
             }),
             Some(exception) => match exception.state {
                 ExceptionState::Skipped => {}
@@ -258,6 +260,7 @@ pub fn expand_opportunities(
                             generated_for: exception.generated_for,
                             usual_time: exception.usual_time,
                             note: exception.note.clone(),
+                            revision: exception.revision,
                         });
                     }
                 }
@@ -280,6 +283,7 @@ pub fn expand_opportunities(
                 generated_for: None,
                 usual_time: exception.usual_time,
                 note: exception.note.clone(),
+                revision: exception.revision,
             });
         }
     }

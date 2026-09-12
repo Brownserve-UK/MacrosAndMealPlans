@@ -3335,18 +3335,23 @@ async fn the_shopping_cadence_is_a_singleton_that_replaces_itself(pool: PgPool) 
 
     assert!(repo.get().await.unwrap().is_none());
 
-    repo.set(&cadence(1, vec![Weekday::Wednesday, Weekday::Saturday]))
-        .await
-        .unwrap();
+    repo.set(
+        &cadence(1, vec![Weekday::Wednesday, Weekday::Saturday]),
+        Revision::UNRECORDED,
+    )
+    .await
+    .unwrap();
     let loaded = repo.get().await.unwrap().expect("a cadence is stored");
     assert_eq!(loaded.days, vec![Weekday::Wednesday, Weekday::Saturday]);
 
-    repo.set(&cadence(2, vec![Weekday::Friday])).await.unwrap();
+    repo.set(&cadence(2, vec![Weekday::Friday]), loaded.revision)
+        .await
+        .unwrap();
     let loaded = repo.get().await.unwrap().expect("a cadence is stored");
     assert_eq!(loaded.interval_weeks, 2);
     assert_eq!(loaded.days, vec![Weekday::Friday]);
 
-    repo.clear().await.unwrap();
+    repo.clear(loaded.revision).await.unwrap();
     assert!(repo.get().await.unwrap().is_none());
 }
 
@@ -3355,16 +3360,19 @@ async fn an_occurrence_can_only_carry_one_exception(pool: PgPool) {
     let repo = PgShoppingOpportunityRepository::new(pool);
     let occurrence = date!(2026 - 09 - 05);
 
-    repo.upsert(&exception(
-        ExceptionState::Moved,
-        Some(occurrence),
-        Some(date!(2026 - 09 - 03)),
-    ))
+    repo.upsert(
+        &exception(
+            ExceptionState::Moved,
+            Some(occurrence),
+            Some(date!(2026 - 09 - 03)),
+        ),
+        Revision::UNRECORDED,
+    )
     .await
     .unwrap();
 
     let clash = exception(ExceptionState::Skipped, Some(occurrence), None);
-    let error = repo.upsert(&clash).await.unwrap_err();
+    let error = repo.upsert(&clash, Revision::UNRECORDED).await.unwrap_err();
     assert!(
         matches!(error, CoreError::Duplicate { .. }),
         "expected a duplicate, got {error:?}"
@@ -3494,7 +3502,10 @@ async fn a_hand_added_item_survives_until_its_shop_is_finished(pool: PgPool) {
     assert_eq!(left[0].name, "Kitchen roll");
 
     assert_eq!(
-        items.delete(kitchen_roll.id).await.unwrap(),
+        items
+            .delete(kitchen_roll.id, kitchen_roll.revision)
+            .await
+            .unwrap(),
         UpdateOutcome::Updated
     );
     assert!(items.list().await.unwrap().is_empty());

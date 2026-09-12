@@ -4,6 +4,7 @@ use rust_decimal::Decimal;
 use time::OffsetDateTime;
 
 use super::fulfilment::{RecipeFulfilments, expand_recipe};
+use super::revision::commit_outcome;
 use super::stock_effects::{StockAffected, name_outcomes, requirement_deduction};
 use crate::domain::{
     ConsumedNutrition, MealPlanComponentId, NewPreparedBatch, NewStockEvent, PortionPlacement,
@@ -122,10 +123,13 @@ impl PreparationService {
     pub async fn place(
         &self,
         batch_id: PreparedBatchId,
+        expected: Revision,
         placements: Vec<PortionPlacement>,
         actor: UserId,
     ) -> Result<StockAffected<PreparedBatch>> {
         let batch = self.get(batch_id).await?;
+        let bumped = self.batches.bump_revision(batch_id, expected).await?;
+        commit_outcome(PREPARED_BATCH, batch_id, expected, bumped)?;
         let held = self.batches.portions(batch_id).await?;
         let remaining: Decimal = held
             .iter()
@@ -174,6 +178,11 @@ impl PreparationService {
             .map(|item| item.id)
             .collect();
         let outcomes = self.batches.place_portions(&portions, &archive).await?;
+        let batch = PreparedBatch {
+            revision: expected.next(),
+            updated_at: now,
+            ..batch
+        };
         let named = name_outcomes(
             &*self.products,
             &*self.ingredients,

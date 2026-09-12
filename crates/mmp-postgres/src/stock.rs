@@ -163,6 +163,39 @@ pub(crate) async fn place_portions(
     Ok(Vec::new())
 }
 
+pub(crate) async fn bump_prepared_batch_revision(
+    pool: &sqlx::PgPool,
+    batch_id: mmp_core::domain::PreparedBatchId,
+    expected: mmp_core::domain::Revision,
+) -> Result<mmp_core::ports::UpdateOutcome> {
+    let affected = sqlx::query(
+        "UPDATE prepared_batch SET revision = revision + 1, updated_at = now() \
+         WHERE id = $1 AND revision = $2",
+    )
+    .bind(batch_id.as_uuid())
+    .bind(expected.get())
+    .execute(pool)
+    .await
+    .map_err(|e| map_db_error(e, "placing a cook's portions"))?
+    .rows_affected();
+
+    if affected == 1 {
+        return Ok(mmp_core::ports::UpdateOutcome::Updated);
+    }
+    let current: Option<(i64,)> =
+        sqlx::query_as("SELECT revision FROM prepared_batch WHERE id = $1")
+            .bind(batch_id.as_uuid())
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| repository_error("checking a preparation revision", e))?;
+    Ok(match current {
+        Some((actual,)) => mmp_core::ports::UpdateOutcome::RevisionMismatch {
+            actual: mmp_core::domain::Revision::new(actual),
+        },
+        None => mmp_core::ports::UpdateOutcome::NotFound,
+    })
+}
+
 pub(crate) async fn insert_stock_item(
     conn: &mut sqlx::PgConnection,
     item: &StockItem,

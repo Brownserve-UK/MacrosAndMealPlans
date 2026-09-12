@@ -8,6 +8,7 @@ import Stack from '@mui/material/Stack';
 import Typography from '@mui/material/Typography';
 import { useNavigate, useParams } from '@tanstack/react-router';
 import { useMemo, useState } from 'react';
+import { ApiError } from '../../api/client';
 import type { ShoppingListItem, ShoppingRequirement } from '../../api/client';
 import {
   useAddShoppingListItem,
@@ -20,6 +21,7 @@ import {
 } from '../../api/queries';
 import { Link } from '@tanstack/react-router';
 import { BackLabel } from '../../components/BackLink';
+import { ConflictDialog } from '../../components/ConflictDialog';
 import { FormDialog } from '../../components/FormDialog';
 import { PageHeader } from '../../components/PageHeader';
 import { ErrorState, Loading } from '../../components/States';
@@ -48,6 +50,7 @@ export function TripPage() {
   const [showingKey, setShowingKey] = useState<string | null>(null);
   const [finishing, setFinishing] = useState(false);
   const [dismissed, setDismissed] = useState<string[]>([]);
+  const [conflict, setConflict] = useState<ApiError | null>(null);
 
   const pinned = useMemo(() => (list.data ? pinnedList(list.data) : null), [list.data]);
 
@@ -140,9 +143,16 @@ export function TripPage() {
   }
 
   async function onFinish() {
-    await finish.mutateAsync(date);
-    setFinishing(false);
-    void navigate({ to: ready > 0 ? '/shopping/put-away' : '/shopping' });
+    try {
+      await finish.mutateAsync({ date, revision: data.trip?.revision ?? 0 });
+      setFinishing(false);
+      void navigate({ to: ready > 0 ? '/shopping/put-away' : '/shopping' });
+    } catch (caught) {
+      if (caught instanceof ApiError && caught.isConflict) {
+        setFinishing(false);
+        setConflict(caught);
+      }
+    }
   }
 
   return (
@@ -190,7 +200,7 @@ export function TripPage() {
                     item={item}
                     bought={boughtManually(item).length > 0}
                     onToggle={(next) => tickManual(item, next)}
-                    onRemove={() => removeItem.mutate(item.id)}
+                    onRemove={() => removeItem.mutate({ id: item.id, revision: item.revision })}
                   />
                 );
               }
@@ -314,6 +324,15 @@ export function TripPage() {
         opportunityDate={date}
         buying
         onClose={() => setShowingKey(null)}
+      />
+
+      <ConflictDialog
+        error={conflict}
+        onReload={() => {
+          setConflict(null);
+          void list.refetch();
+        }}
+        onDismiss={() => setConflict(null)}
       />
 
       <Box />

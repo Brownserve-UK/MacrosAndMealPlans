@@ -154,6 +154,7 @@ fn opportunity(date: Date) -> ShoppingOpportunity {
         generated_for: None,
         usual_time: None,
         note: None,
+        revision: Revision::UNRECORDED,
     }
 }
 

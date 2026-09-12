@@ -205,18 +205,20 @@ impl ShoppingService {
         Ok(item)
     }
 
-    pub async fn remove_list_item(&self, id: ShoppingListItemId) -> Result<()> {
-        match self.list_items.delete(id).await? {
-            UpdateOutcome::Updated => Ok(()),
-            _ => Err(CoreError::not_found(LIST_ITEM, id.to_string())),
-        }
+    pub async fn remove_list_item(&self, id: ShoppingListItemId, expected: Revision) -> Result<()> {
+        let outcome = self.list_items.delete(id, expected).await?;
+        commit_outcome(LIST_ITEM, id, expected, outcome)
     }
 
     pub async fn cadence(&self) -> Result<Option<ShoppingCadence>> {
         self.cadence.get().await
     }
 
-    pub async fn set_cadence(&self, input: NewShoppingCadence) -> Result<ShoppingCadence> {
+    pub async fn set_cadence(
+        &self,
+        expected: Revision,
+        input: NewShoppingCadence,
+    ) -> Result<ShoppingCadence> {
         input.validate()?;
         let now = self.clock.now();
         let existing = self.cadence.get().await?;
@@ -232,15 +234,14 @@ impl ShoppingService {
             created_at: existing.map(|current| current.created_at).unwrap_or(now),
             updated_at: now,
         };
-        self.cadence.set(&cadence).await?;
+        let outcome = self.cadence.set(&cadence, expected).await?;
+        commit_outcome(CADENCE, "singleton", expected, outcome)?;
         Ok(cadence)
     }
 
-    pub async fn clear_cadence(&self) -> Result<()> {
-        if self.cadence.get().await?.is_none() {
-            return Err(CoreError::not_found(CADENCE, "singleton"));
-        }
-        self.cadence.clear().await
+    pub async fn clear_cadence(&self, expected: Revision) -> Result<()> {
+        let outcome = self.cadence.clear(expected).await?;
+        commit_outcome(CADENCE, "singleton", expected, outcome)
     }
 
     pub async fn opportunities(&self, from: Date, to: Date) -> Result<Vec<ShoppingOpportunity>> {
@@ -260,18 +261,35 @@ impl ShoppingService {
             .await
     }
 
-    pub async fn move_opportunity(&self, occurrence: Date, to: Date) -> Result<()> {
-        self.record_exception(ExceptionState::Moved, Some(occurrence), Some(to), None)
-            .await
+    pub async fn move_opportunity(
+        &self,
+        occurrence: Date,
+        to: Date,
+        expected: Revision,
+    ) -> Result<()> {
+        self.record_exception(
+            ExceptionState::Moved,
+            Some(occurrence),
+            Some(to),
+            None,
+            Some(expected),
+        )
+        .await
     }
 
-    pub async fn skip_opportunity(&self, occurrence: Date) -> Result<()> {
-        self.record_exception(ExceptionState::Skipped, Some(occurrence), None, None)
-            .await
+    pub async fn skip_opportunity(&self, occurrence: Date, expected: Revision) -> Result<()> {
+        self.record_exception(
+            ExceptionState::Skipped,
+            Some(occurrence),
+            None,
+            None,
+            Some(expected),
+        )
+        .await
     }
 
     pub async fn add_one_off(&self, date: Date, note: Option<String>) -> Result<()> {
-        self.record_exception(ExceptionState::OneOff, None, Some(date), note)
+        self.record_exception(ExceptionState::OneOff, None, Some(date), note, None)
             .await
     }
 
@@ -298,12 +316,33 @@ impl ShoppingService {
         generated_for: Option<Date>,
         effective_date: Option<Date>,
         note: Option<String>,
+        expected: Option<Revision>,
     ) -> Result<()> {
         let now = self.clock.now();
         let existing = match generated_for {
             Some(occurrence) => self.opportunities.find_for_occurrence(occurrence).await?,
             None => None,
         };
+        if let Some(expected) = expected {
+            let actual = existing
+                .as_ref()
+                .map(|current| current.revision)
+                .unwrap_or(Revision::UNRECORDED);
+            if actual != expected {
+                return Err(CoreError::RevisionMismatch {
+                    resource: OPPORTUNITY,
+                    id: generated_for
+                        .map(|date| date.to_string())
+                        .unwrap_or_default(),
+                    expected,
+                    actual,
+                });
+            }
+        }
+        let write_expected = existing
+            .as_ref()
+            .map(|current| current.revision)
+            .unwrap_or(Revision::UNRECORDED);
         let exception = OpportunityException {
             id: existing
                 .as_ref()
@@ -321,7 +360,12 @@ impl ShoppingService {
             created_at: existing.map(|current| current.created_at).unwrap_or(now),
             updated_at: now,
         };
-        self.opportunities.upsert(&exception).await
+        let id = exception.id;
+        let outcome = self
+            .opportunities
+            .upsert(&exception, write_expected)
+            .await?;
+        commit_outcome(OPPORTUNITY, id, write_expected, outcome)
     }
 
     pub async fn requirements(&self, focus: Option<Date>) -> Result<ShoppingList> {
@@ -722,7 +766,26 @@ impl ShoppingService {
         Ok(purchase)
     }
 
-    pub async fn finish_shop(&self, date: Date, actor: UserId) -> Result<FinishedShop> {
+    pub async fn finish_shop(
+        &self,
+        date: Date,
+        actor: UserId,
+        expected_trip: Revision,
+    ) -> Result<FinishedShop> {
+        let trip = self.trips.for_date(date).await?;
+        let actual_trip = trip
+            .as_ref()
+            .map(|trip| trip.revision)
+            .unwrap_or(Revision::UNRECORDED);
+        if actual_trip != expected_trip {
+            return Err(CoreError::RevisionMismatch {
+                resource: "shopping trip",
+                id: date.to_string(),
+                expected: expected_trip,
+                actual: actual_trip,
+            });
+        }
+
         let pending: Vec<Purchase> = self
             .purchases
             .list_open()
@@ -773,7 +836,7 @@ impl ShoppingService {
 
         self.list_items.delete_for_opportunity(date).await?;
 
-        if let Some(mut trip) = self.trips.for_date(date).await?
+        if let Some(mut trip) = trip
             && !trip.is_finished()
         {
             let expected = trip.revision;

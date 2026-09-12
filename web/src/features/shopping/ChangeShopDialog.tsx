@@ -8,27 +8,32 @@ import TextField from '@mui/material/TextField';
 import { useState, type FormEvent } from 'react';
 import { ApiError } from '../../api/client';
 import { useMoveShoppingOpportunity, useSkipShoppingOpportunity } from '../../api/queries';
+import { ConflictDialog } from '../../components/ConflictDialog';
 import { FormDialog } from '../../components/FormDialog';
 
 export function ChangeShopDialog({
   date,
+  revision,
   earliest,
   onClose,
 }: {
   date: string | null;
+  revision: number;
   earliest: string;
   onClose: () => void;
 }) {
   if (!date) return null;
-  return <Body key={date} date={date} earliest={earliest} onClose={onClose} />;
+  return <Body key={date} date={date} revision={revision} earliest={earliest} onClose={onClose} />;
 }
 
 function Body({
   date,
+  revision,
   earliest,
   onClose,
 }: {
   date: string;
+  revision: number;
   earliest: string;
   onClose: () => void;
 }) {
@@ -36,25 +41,28 @@ function Body({
   const skip = useSkipShoppingOpportunity();
   const [to, setTo] = useState(date);
   const [failure, setFailure] = useState<string | null>(null);
+  const [conflict, setConflict] = useState<ApiError | null>(null);
 
   async function onSubmit(event: FormEvent) {
     event.preventDefault();
     setFailure(null);
     try {
-      await move.mutateAsync({ date, to });
+      await move.mutateAsync({ date, to, revision });
       onClose();
     } catch (caught) {
-      setFailure(caught instanceof ApiError ? caught.message : 'Could not move that shop.');
+      if (caught instanceof ApiError && caught.isConflict) setConflict(caught);
+      else setFailure(caught instanceof ApiError ? caught.message : 'Could not move that shop.');
     }
   }
 
   async function onSkip() {
     setFailure(null);
     try {
-      await skip.mutateAsync(date);
+      await skip.mutateAsync({ date, revision });
       onClose();
     } catch (caught) {
-      setFailure(caught instanceof ApiError ? caught.message : 'Could not skip that shop.');
+      if (caught instanceof ApiError && caught.isConflict) setConflict(caught);
+      else setFailure(caught instanceof ApiError ? caught.message : 'Could not skip that shop.');
     }
   }
 
@@ -87,6 +95,15 @@ function Body({
           </Stack>
         </DialogActions>
       </form>
+
+      <ConflictDialog
+        error={conflict}
+        onReload={() => {
+          setConflict(null);
+          onClose();
+        }}
+        onDismiss={() => setConflict(null)}
+      />
     </FormDialog>
   );
 }

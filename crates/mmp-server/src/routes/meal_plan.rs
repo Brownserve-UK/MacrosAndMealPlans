@@ -266,6 +266,7 @@ async fn get_planner_week(
                     prepared_batch_id: batch.id.as_uuid(),
                     prepared_at: batch.prepared_at,
                     servings_produced: batch.servings_produced,
+                    revision: batch.revision.get(),
                 }),
             })
             .collect();

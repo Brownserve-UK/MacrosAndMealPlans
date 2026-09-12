@@ -5,6 +5,7 @@ import Stack from '@mui/material/Stack';
 import Typography from '@mui/material/Typography';
 import { Link } from '@tanstack/react-router';
 import { useState } from 'react';
+import type { ShoppingOpportunity } from '../../api/client';
 import { usePendingPutAway, useShoppingList } from '../../api/queries';
 import { PageHeader } from '../../components/PageHeader';
 import { ErrorState, Loading } from '../../components/States';
@@ -16,7 +17,7 @@ import { TripCard } from './TripCard';
 export function ShoppingPage() {
   const list = useShoppingList(undefined);
   const waiting = usePendingPutAway();
-  const [changing, setChanging] = useState<string | null>(null);
+  const [changing, setChanging] = useState<ShoppingOpportunity | null>(null);
 
   if (list.isLoading) return <Loading label="Working out what you need" />;
   if (list.isError) return <ErrorState error={list.error} onRetry={() => list.refetch()} />;
@@ -74,7 +75,7 @@ export function ShoppingPage() {
             count={countFor(next.date)}
             sections={sections}
             imminent
-            onChange={() => setChanging(next.generated_for ?? next.date)}
+            onChange={() => setChanging(next)}
           />
         ) : null}
 
@@ -85,7 +86,7 @@ export function ShoppingPage() {
             key={opportunity.date}
             opportunity={opportunity}
             count={countFor(opportunity.date)}
-            onChange={() => setChanging(opportunity.generated_for ?? opportunity.date)}
+            onChange={() => setChanging(opportunity)}
           />
         ))}
 
@@ -104,7 +105,12 @@ export function ShoppingPage() {
         </Box>
       </Stack>
 
-      <ChangeShopDialog date={changing} earliest={todayIso()} onClose={() => setChanging(null)} />
+      <ChangeShopDialog
+        date={changing ? (changing.generated_for ?? changing.date) : null}
+        revision={changing?.revision ?? 0}
+        earliest={todayIso()}
+        onClose={() => setChanging(null)}
+      />
     </>
   );
 }

@@ -1250,6 +1250,24 @@ impl crate::ports::PreparedBatchRepository for InMemoryPreparedBatchRepository {
         Ok(Vec::new())
     }
 
+    async fn bump_revision(
+        &self,
+        id: PreparedBatchId,
+        expected: crate::domain::Revision,
+    ) -> Result<crate::ports::UpdateOutcome> {
+        let mut batches = self.rows.lock().unwrap();
+        let Some(batch) = batches.iter_mut().find(|b| b.id == id) else {
+            return Ok(crate::ports::UpdateOutcome::NotFound);
+        };
+        if batch.revision != expected {
+            return Ok(crate::ports::UpdateOutcome::RevisionMismatch {
+                actual: batch.revision,
+            });
+        }
+        batch.revision = batch.revision.next();
+        Ok(crate::ports::UpdateOutcome::Updated)
+    }
+
     async fn insert(
         &self,
         batch: &PreparedBatch,
@@ -2539,14 +2557,34 @@ impl ShoppingCadenceRepository for InMemoryShoppingCadenceRepository {
         Ok(self.row.lock().unwrap().clone())
     }
 
-    async fn set(&self, cadence: &ShoppingCadence) -> Result<()> {
-        *self.row.lock().unwrap() = Some(cadence.clone());
-        Ok(())
+    async fn set(&self, cadence: &ShoppingCadence, expected: Revision) -> Result<UpdateOutcome> {
+        let mut row = self.row.lock().unwrap();
+        match row.as_ref() {
+            None if expected == Revision::UNRECORDED => {}
+            None => return Ok(UpdateOutcome::NotFound),
+            Some(current) if current.revision != expected => {
+                return Ok(UpdateOutcome::RevisionMismatch {
+                    actual: current.revision,
+                });
+            }
+            Some(_) => {}
+        }
+        *row = Some(cadence.clone());
+        Ok(UpdateOutcome::Updated)
     }
 
-    async fn clear(&self) -> Result<()> {
-        *self.row.lock().unwrap() = None;
-        Ok(())
+    async fn clear(&self, expected: Revision) -> Result<UpdateOutcome> {
+        let mut row = self.row.lock().unwrap();
+        match row.as_ref() {
+            None => Ok(UpdateOutcome::NotFound),
+            Some(current) if current.revision != expected => Ok(UpdateOutcome::RevisionMismatch {
+                actual: current.revision,
+            }),
+            Some(_) => {
+                *row = None;
+                Ok(UpdateOutcome::Updated)
+            }
+        }
     }
 }
 
@@ -2603,21 +2641,29 @@ impl ShoppingOpportunityRepository for InMemoryShoppingOpportunityRepository {
             .cloned())
     }
 
-    async fn upsert(&self, exception: &OpportunityException) -> Result<()> {
+    async fn upsert(
+        &self,
+        exception: &OpportunityException,
+        expected: Revision,
+    ) -> Result<UpdateOutcome> {
         let mut rows = self.rows.lock().unwrap();
-        if let Some(generated_for) = exception.generated_for
-            && let Some(existing) = rows
-                .iter_mut()
-                .find(|row| row.generated_for == Some(generated_for))
-        {
-            *existing = exception.clone();
-            return Ok(());
+        let existing = rows.iter_mut().find(|row| row.id == exception.id);
+        match existing {
+            None if expected == Revision::UNRECORDED => {
+                rows.push(exception.clone());
+                Ok(UpdateOutcome::Updated)
+            }
+            None => Ok(UpdateOutcome::NotFound),
+            Some(existing) if existing.revision != expected => {
+                Ok(UpdateOutcome::RevisionMismatch {
+                    actual: existing.revision,
+                })
+            }
+            Some(existing) => {
+                *existing = exception.clone();
+                Ok(UpdateOutcome::Updated)
+            }
         }
-        match rows.iter_mut().find(|row| row.id == exception.id) {
-            Some(existing) => *existing = exception.clone(),
-            None => rows.push(exception.clone()),
-        }
-        Ok(())
     }
 
     async fn delete(&self, id: ShoppingOpportunityId) -> Result<UpdateOutcome> {
@@ -2853,15 +2899,20 @@ impl ShoppingListItemRepository for InMemoryShoppingListItemRepository {
         Ok(UpdateOutcome::Updated)
     }
 
-    async fn delete(&self, id: ShoppingListItemId) -> Result<UpdateOutcome> {
+    async fn delete(&self, id: ShoppingListItemId, expected: Revision) -> Result<UpdateOutcome> {
         let mut rows = self.rows.lock().unwrap();
-        let before = rows.len();
-        rows.retain(|row| row.id != id);
-        Ok(if rows.len() == before {
-            UpdateOutcome::NotFound
-        } else {
-            UpdateOutcome::Updated
-        })
+        match rows.iter().position(|row| row.id == id) {
+            None => Ok(UpdateOutcome::NotFound),
+            Some(index) if rows[index].revision != expected => {
+                Ok(UpdateOutcome::RevisionMismatch {
+                    actual: rows[index].revision,
+                })
+            }
+            Some(index) => {
+                rows.remove(index);
+                Ok(UpdateOutcome::Updated)
+            }
+        }
     }
 
     async fn delete_for_opportunity(&self, date: Date) -> Result<()> {

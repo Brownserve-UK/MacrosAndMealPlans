@@ -117,6 +117,7 @@ pub struct Revision(i64);
 
 impl Revision {
     pub const INITIAL: Revision = Revision(1);
+    pub const UNRECORDED: Revision = Revision(0);
 
     pub const fn new(value: i64) -> Self {
         Self(value)

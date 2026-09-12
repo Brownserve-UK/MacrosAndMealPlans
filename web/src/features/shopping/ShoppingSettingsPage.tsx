@@ -15,6 +15,7 @@ import {
   useSetShoppingCadence,
   useShoppingCadence,
 } from '../../api/queries';
+import { ConflictDialog } from '../../components/ConflictDialog';
 import { PageHeader } from '../../components/PageHeader';
 import { ErrorState, Loading } from '../../components/States';
 import { startOfWeekIso, todayIso } from '../meal-plan/date';
@@ -42,17 +43,25 @@ export function ShoppingSettingsPage() {
     <EditCadence
       key={cadence.data ? 'configured' : 'none'}
       cadence={cadence.data ?? null}
+      onReload={() => void cadence.refetch()}
     />
   );
 }
 
-function EditCadence({ cadence }: { cadence: ShoppingCadence | null }) {
+function EditCadence({
+  cadence,
+  onReload,
+}: {
+  cadence: ShoppingCadence | null;
+  onReload: () => void;
+}) {
   const save = useSetShoppingCadence();
   const clear = useClearShoppingCadence();
 
   const [interval, setInterval] = useState(cadence?.interval_weeks ?? 1);
   const [days, setDays] = useState<number[]>(cadence?.days ?? [6]);
   const [failure, setFailure] = useState<string | null>(null);
+  const [conflict, setConflict] = useState<ApiError | null>(null);
   const [saved, setSaved] = useState(false);
 
   async function onSubmit(event: FormEvent) {
@@ -65,13 +74,31 @@ function EditCadence({ cadence }: { cadence: ShoppingCadence | null }) {
     }
     try {
       await save.mutateAsync({
+        revision: cadence?.revision ?? 0,
         interval_weeks: interval,
         days: [...days].sort((a, b) => a - b),
         anchor: startOfWeekIso(todayIso()),
       });
       setSaved(true);
     } catch (caught) {
-      setFailure(caught instanceof ApiError ? caught.message : 'Could not save.');
+      if (caught instanceof ApiError && caught.isConflict) {
+        setConflict(caught);
+      } else {
+        setFailure(caught instanceof ApiError ? caught.message : 'Could not save.');
+      }
+    }
+  }
+
+  async function onClear() {
+    if (!cadence) return;
+    try {
+      await clear.mutateAsync(cadence.revision);
+    } catch (caught) {
+      if (caught instanceof ApiError && caught.isConflict) {
+        setConflict(caught);
+      } else {
+        setFailure(caught instanceof ApiError ? caught.message : 'Could not clear.');
+      }
     }
   }
 
@@ -129,11 +156,7 @@ function EditCadence({ cadence }: { cadence: ShoppingCadence | null }) {
                 {save.isPending ? 'Saving…' : 'Save'}
               </Button>
               {cadence && (
-                <Button
-                  color="inherit"
-                  disabled={clear.isPending}
-                  onClick={() => clear.mutate()}
-                >
+                <Button color="inherit" disabled={clear.isPending} onClick={() => void onClear()}>
                   Clear
                 </Button>
               )}
@@ -141,6 +164,15 @@ function EditCadence({ cadence }: { cadence: ShoppingCadence | null }) {
           </Stack>
         </form>
       </Paper>
+
+      <ConflictDialog
+        error={conflict}
+        onReload={() => {
+          setConflict(null);
+          onReload();
+        }}
+        onDismiss={() => setConflict(null)}
+      />
     </>
   );
 }

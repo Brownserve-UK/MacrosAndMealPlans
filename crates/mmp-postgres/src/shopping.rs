@@ -51,44 +51,79 @@ impl ShoppingCadenceRepository for PgShoppingCadenceRepository {
         row.map(TryInto::try_into).transpose()
     }
 
-    async fn set(&self, cadence: &ShoppingCadence) -> Result<()> {
+    async fn set(&self, cadence: &ShoppingCadence, expected: Revision) -> Result<UpdateOutcome> {
         let days: Vec<i16> = cadence
             .days
             .iter()
             .map(|day| i16::from(mmp_core::domain::week_day_number(day)))
             .collect();
-        sqlx::query(
-            "INSERT INTO shopping_cadence (
-                 singleton, interval_weeks, days_of_week, anchor_date, usual_time,
-                 revision, created_at, updated_at
-             ) VALUES (TRUE, $1, $2, $3, $4, $5, $6, $7)
-             ON CONFLICT (singleton) DO UPDATE SET
-                 interval_weeks = EXCLUDED.interval_weeks,
-                 days_of_week = EXCLUDED.days_of_week,
-                 anchor_date = EXCLUDED.anchor_date,
-                 usual_time = EXCLUDED.usual_time,
-                 revision = EXCLUDED.revision,
-                 updated_at = EXCLUDED.updated_at",
-        )
-        .bind(i32::from(cadence.interval_weeks))
-        .bind(&days)
-        .bind(cadence.anchor)
-        .bind(cadence.usual_time)
-        .bind(cadence.revision.get())
-        .bind(cadence.created_at)
-        .bind(cadence.updated_at)
-        .execute(&self.pool)
-        .await
-        .map_err(|e| map_db_error(e, "saving the shopping cadence"))?;
-        Ok(())
-    }
-
-    async fn clear(&self) -> Result<()> {
-        sqlx::query("DELETE FROM shopping_cadence WHERE singleton")
+        let affected = if expected == Revision::UNRECORDED {
+            sqlx::query(
+                "INSERT INTO shopping_cadence (
+                     singleton, interval_weeks, days_of_week, anchor_date, usual_time,
+                     revision, created_at, updated_at
+                 ) VALUES (TRUE, $1, $2, $3, $4, $5, $6, $7)
+                 ON CONFLICT (singleton) DO NOTHING",
+            )
+            .bind(i32::from(cadence.interval_weeks))
+            .bind(&days)
+            .bind(cadence.anchor)
+            .bind(cadence.usual_time)
+            .bind(cadence.revision.get())
+            .bind(cadence.created_at)
+            .bind(cadence.updated_at)
             .execute(&self.pool)
             .await
-            .map_err(|e| map_db_error(e, "clearing the shopping cadence"))?;
-        Ok(())
+            .map_err(|e| map_db_error(e, "saving the shopping cadence"))?
+            .rows_affected()
+        } else {
+            sqlx::query(
+                "UPDATE shopping_cadence SET
+                     interval_weeks = $1, days_of_week = $2, anchor_date = $3, usual_time = $4,
+                     revision = $5, updated_at = $6
+                 WHERE singleton AND revision = $7",
+            )
+            .bind(i32::from(cadence.interval_weeks))
+            .bind(&days)
+            .bind(cadence.anchor)
+            .bind(cadence.usual_time)
+            .bind(cadence.revision.get())
+            .bind(cadence.updated_at)
+            .bind(expected.get())
+            .execute(&self.pool)
+            .await
+            .map_err(|e| map_db_error(e, "saving the shopping cadence"))?
+            .rows_affected()
+        };
+
+        if affected == 1 {
+            return Ok(UpdateOutcome::Updated);
+        }
+        match self.get().await? {
+            Some(current) => Ok(UpdateOutcome::RevisionMismatch {
+                actual: current.revision,
+            }),
+            None => Ok(UpdateOutcome::NotFound),
+        }
+    }
+
+    async fn clear(&self, expected: Revision) -> Result<UpdateOutcome> {
+        let affected =
+            sqlx::query("DELETE FROM shopping_cadence WHERE singleton AND revision = $1")
+                .bind(expected.get())
+                .execute(&self.pool)
+                .await
+                .map_err(|e| map_db_error(e, "clearing the shopping cadence"))?
+                .rows_affected();
+        if affected == 1 {
+            return Ok(UpdateOutcome::Updated);
+        }
+        match self.get().await? {
+            Some(current) => Ok(UpdateOutcome::RevisionMismatch {
+                actual: current.revision,
+            }),
+            None => Ok(UpdateOutcome::NotFound),
+        }
     }
 }
 
@@ -160,34 +195,62 @@ impl ShoppingOpportunityRepository for PgShoppingOpportunityRepository {
         row.map(TryInto::try_into).transpose()
     }
 
-    async fn upsert(&self, exception: &OpportunityException) -> Result<()> {
-        sqlx::query(
-            "INSERT INTO shopping_opportunity (
-                 id, generated_for, effective_date, usual_time, state, note,
-                 revision, created_at, updated_at
-             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-             ON CONFLICT (id) DO UPDATE SET
-                 generated_for = EXCLUDED.generated_for,
-                 effective_date = EXCLUDED.effective_date,
-                 usual_time = EXCLUDED.usual_time,
-                 state = EXCLUDED.state,
-                 note = EXCLUDED.note,
-                 revision = EXCLUDED.revision,
-                 updated_at = EXCLUDED.updated_at",
-        )
-        .bind(exception.id.as_uuid())
-        .bind(exception.generated_for)
-        .bind(exception.effective_date)
-        .bind(exception.usual_time)
-        .bind(exception.state.code())
-        .bind(exception.note.as_deref())
-        .bind(exception.revision.get())
-        .bind(exception.created_at)
-        .bind(exception.updated_at)
-        .execute(&self.pool)
-        .await
-        .map_err(|e| map_db_error(e, "saving a shopping opportunity"))?;
-        Ok(())
+    async fn upsert(
+        &self,
+        exception: &OpportunityException,
+        expected: Revision,
+    ) -> Result<UpdateOutcome> {
+        let affected = if expected == Revision::UNRECORDED {
+            sqlx::query(
+                "INSERT INTO shopping_opportunity (
+                     id, generated_for, effective_date, usual_time, state, note,
+                     revision, created_at, updated_at
+                 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+            )
+            .bind(exception.id.as_uuid())
+            .bind(exception.generated_for)
+            .bind(exception.effective_date)
+            .bind(exception.usual_time)
+            .bind(exception.state.code())
+            .bind(exception.note.as_deref())
+            .bind(exception.revision.get())
+            .bind(exception.created_at)
+            .bind(exception.updated_at)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| map_db_error(e, "saving a shopping opportunity"))?
+            .rows_affected()
+        } else {
+            sqlx::query(
+                "UPDATE shopping_opportunity SET
+                     generated_for = $1, effective_date = $2, usual_time = $3, state = $4,
+                     note = $5, revision = $6, updated_at = $7
+                 WHERE id = $8 AND revision = $9",
+            )
+            .bind(exception.generated_for)
+            .bind(exception.effective_date)
+            .bind(exception.usual_time)
+            .bind(exception.state.code())
+            .bind(exception.note.as_deref())
+            .bind(exception.revision.get())
+            .bind(exception.updated_at)
+            .bind(exception.id.as_uuid())
+            .bind(expected.get())
+            .execute(&self.pool)
+            .await
+            .map_err(|e| map_db_error(e, "saving a shopping opportunity"))?
+            .rows_affected()
+        };
+
+        if affected == 1 {
+            return Ok(UpdateOutcome::Updated);
+        }
+        match self.get(exception.id).await? {
+            Some(current) => Ok(UpdateOutcome::RevisionMismatch {
+                actual: current.revision,
+            }),
+            None => Ok(UpdateOutcome::NotFound),
+        }
     }
 
     async fn delete(&self, id: ShoppingOpportunityId) -> Result<UpdateOutcome> {
@@ -698,17 +761,29 @@ impl ShoppingListItemRepository for PgShoppingListItemRepository {
         })
     }
 
-    async fn delete(&self, id: ShoppingListItemId) -> Result<UpdateOutcome> {
-        let affected = sqlx::query("DELETE FROM shopping_list_item WHERE id = $1")
-            .bind(id.as_uuid())
-            .execute(&self.pool)
-            .await
-            .map_err(|e| repository_error("removing a shopping list item", e))?
-            .rows_affected();
-        Ok(if affected == 1 {
-            UpdateOutcome::Updated
-        } else {
-            UpdateOutcome::NotFound
+    async fn delete(&self, id: ShoppingListItemId, expected: Revision) -> Result<UpdateOutcome> {
+        let affected =
+            sqlx::query("DELETE FROM shopping_list_item WHERE id = $1 AND revision = $2")
+                .bind(id.as_uuid())
+                .bind(expected.get())
+                .execute(&self.pool)
+                .await
+                .map_err(|e| repository_error("removing a shopping list item", e))?
+                .rows_affected();
+        if affected == 1 {
+            return Ok(UpdateOutcome::Updated);
+        }
+        let current: Option<(i64,)> =
+            sqlx::query_as("SELECT revision FROM shopping_list_item WHERE id = $1")
+                .bind(id.as_uuid())
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(|e| repository_error("checking a shopping list item revision", e))?;
+        Ok(match current {
+            Some((actual,)) => UpdateOutcome::RevisionMismatch {
+                actual: Revision::new(actual),
+            },
+            None => UpdateOutcome::NotFound,
         })
     }
 

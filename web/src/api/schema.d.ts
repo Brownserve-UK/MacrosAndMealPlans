@@ -1644,6 +1644,8 @@ export interface components {
             prepared_at: string;
             /** Format: uuid */
             prepared_batch_id: string;
+            /** Format: int64 */
+            revision: number;
             /** Format: double */
             servings_produced: number;
         };
@@ -2976,6 +2978,8 @@ export interface components {
             /** Format: uuid */
             id?: string | null;
             note?: string | null;
+            /** Format: int64 */
+            revision: number;
             state: components["schemas"]["OpportunityStateDto"];
             usual_time?: string | null;
         };
@@ -5699,6 +5703,8 @@ export interface operations {
             /** @description The cooking event */
             200: {
                 headers: {
+                    /** @description The revision to send back as If-Match */
+                    ETag?: string;
                     [name: string]: unknown;
                 };
                 content: {
@@ -5719,7 +5725,10 @@ export interface operations {
     placePortions: {
         parameters: {
             query?: never;
-            header?: never;
+            header: {
+                /** @description The revision you loaded */
+                "If-Match": string;
+            };
             path: {
                 /** @description Prepared batch id */
                 id: string;
@@ -5750,8 +5759,26 @@ export interface operations {
                     "application/json": components["schemas"]["Problem"];
                 };
             };
+            /** @description Someone else changed it first */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
             /** @description That does not add up to what is left */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description If-Match is required */
+            428: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -6958,6 +6985,8 @@ export interface operations {
             /** @description When the household normally shops */
             200: {
                 headers: {
+                    /** @description The revision to send back as If-Match */
+                    ETag?: string;
                     [name: string]: unknown;
                 };
                 content: {
@@ -6978,7 +7007,10 @@ export interface operations {
     setShoppingCadence: {
         parameters: {
             query?: never;
-            header?: never;
+            header: {
+                /** @description The revision you loaded, or 0 if none is configured yet */
+                "If-Match": string;
+            };
             path?: never;
             cookie?: never;
         };
@@ -6997,8 +7029,26 @@ export interface operations {
                     "application/json": components["schemas"]["ShoppingCadenceDto"];
                 };
             };
+            /** @description Someone else changed it first */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
             /** @description Validation failed */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description If-Match is required */
+            428: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -7011,7 +7061,10 @@ export interface operations {
     clearShoppingCadence: {
         parameters: {
             query?: never;
-            header?: never;
+            header: {
+                /** @description The revision you loaded */
+                "If-Match": string;
+            };
             path?: never;
             cookie?: never;
         };
@@ -7026,6 +7079,24 @@ export interface operations {
             };
             /** @description No cadence is configured */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Someone else changed it first */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description If-Match is required */
+            428: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -7091,7 +7162,10 @@ export interface operations {
     removeShoppingListItem: {
         parameters: {
             query?: never;
-            header?: never;
+            header: {
+                /** @description The revision you loaded */
+                "If-Match": string;
+            };
             path: {
                 /** @description The item */
                 id: string;
@@ -7109,6 +7183,24 @@ export interface operations {
             };
             /** @description No such item */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Someone else changed it first */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description If-Match is required */
+            428: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -7211,7 +7303,10 @@ export interface operations {
     moveShoppingOpportunity: {
         parameters: {
             query?: never;
-            header?: never;
+            header: {
+                /** @description The revision you loaded, or 0 if this day has never been overridden */
+                "If-Match": string;
+            };
             path: {
                 /** @description The expected shop being moved, as YYYY-MM-DD */
                 date: string;
@@ -7240,12 +7335,33 @@ export interface operations {
                     "application/json": components["schemas"]["Problem"];
                 };
             };
+            /** @description Someone else changed it first */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description If-Match is required */
+            428: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
         };
     };
     skipShoppingOpportunity: {
         parameters: {
             query?: never;
-            header?: never;
+            header: {
+                /** @description The revision you loaded, or 0 if this day has never been overridden */
+                "If-Match": string;
+            };
             path: {
                 /** @description The expected shop being skipped, as YYYY-MM-DD */
                 date: string;
@@ -7270,12 +7386,33 @@ export interface operations {
                     "application/json": components["schemas"]["Problem"];
                 };
             };
+            /** @description Someone else changed it first */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description If-Match is required */
+            428: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
         };
     };
     finishShop: {
         parameters: {
             query?: never;
-            header?: never;
+            header: {
+                /** @description The trip revision you loaded, or 0 if it was never started */
+                "If-Match": string;
+            };
             path: {
                 /** @description The shop being finished, as YYYY-MM-DD */
                 date: string;
@@ -7295,6 +7432,24 @@ export interface operations {
             };
             /** @description The date could not be read */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Someone else changed it first */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description If-Match is required */
+            428: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -15,9 +15,9 @@ use mmp_core::domain::{
     NewRecipeComponent, NewRecipeInstruction, NewShoppingCadence, NewShoppingListItem,
     NewStockItem, NewUser, NewWeightGoal, NewWeightRecord, NutritionFacts, NutritionGoals,
     OutcomeActor, Patch, PreparedMealId, ProductId, Provenance, Quantity, RecipeId, RecipePatch,
-    RecipeRequirement, Role, SectionOrder, ShoppingSection, SourceDate, SourceDateKind, StockLevel,
-    StockSubject, StorageLocation, Unit, UsabilityDeadline, User, UserId, WeightObjective,
-    WeightSource,
+    RecipeRequirement, Revision, Role, SectionOrder, ShoppingSection, SourceDate, SourceDateKind,
+    StockLevel, StockSubject, StorageLocation, Unit, UsabilityDeadline, User, UserId,
+    WeightObjective, WeightSource,
 };
 use mmp_server::state::AppState;
 use rust_decimal::Decimal;
@@ -1189,12 +1189,15 @@ impl Loader<'_> {
         if fresh {
             self.state
                 .shopping
-                .set_cadence(NewShoppingCadence {
-                    interval_weeks: 1,
-                    days: vec![Weekday::Wednesday, Weekday::Saturday],
-                    anchor: self.week_start,
-                    usual_time: Time::from_hms(10, 0, 0).ok(),
-                })
+                .set_cadence(
+                    Revision::UNRECORDED,
+                    NewShoppingCadence {
+                        interval_weeks: 1,
+                        days: vec![Weekday::Wednesday, Weekday::Saturday],
+                        anchor: self.week_start,
+                        usual_time: Time::from_hms(10, 0, 0).ok(),
+                    },
+                )
                 .await?;
             self.report.shopping_seeded += 1;
         }
@@ -1211,10 +1214,13 @@ impl Loader<'_> {
                 .map(|opportunity| opportunity.date)
                 .collect();
             if let [skip, move_me, ..] = later.as_slice() {
-                self.state.shopping.skip_opportunity(*skip).await?;
                 self.state
                     .shopping
-                    .move_opportunity(*move_me, *move_me - Duration::days(1))
+                    .skip_opportunity(*skip, Revision::UNRECORDED)
+                    .await?;
+                self.state
+                    .shopping
+                    .move_opportunity(*move_me, *move_me - Duration::days(1), Revision::UNRECORDED)
                     .await?;
                 self.report.shopping_seeded += 2;
             }

@@ -16,6 +16,7 @@ import {
 } from '../../api/queries';
 import { useAuth } from '../../auth/AuthProvider';
 import { BackLabel } from '../../components/BackLink';
+import { ConflictDialog } from '../../components/ConflictDialog';
 import { PageHeader } from '../../components/PageHeader';
 import { ErrorState, Loading } from '../../components/States';
 import { displayUnit } from '../../components/UnitSelect';
@@ -76,6 +77,7 @@ export function StockItemPage({ id }: { id: string }) {
   const [draft, setDraft] = useState<StockDraft | null>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [failure, setFailure] = useState<string | null>(null);
+  const [conflict, setConflict] = useState<ApiError | null>(null);
   const [showHistory, setShowHistory] = useState(false);
 
   const product = useProduct(item.data?.product_id ?? '', {
@@ -118,6 +120,10 @@ export function StockItemPage({ id }: { id: string }) {
       setDraft(null);
     } catch (caught) {
       if (caught instanceof ApiError) {
+        if (caught.isConflict) {
+          setConflict(caught);
+          return;
+        }
         const fields = caught.fieldErrors;
         if (Object.keys(fields).length > 0) setErrors(fields);
         else setFailure(caught.message);
@@ -200,6 +206,16 @@ export function StockItemPage({ id }: { id: string }) {
           )}
         </Paper>
       )}
+
+      <ConflictDialog
+        error={conflict}
+        onReload={() => {
+          setConflict(null);
+          setDraft(null);
+          void item.refetch();
+        }}
+        onDismiss={() => setConflict(null)}
+      />
     </>
   );
 }

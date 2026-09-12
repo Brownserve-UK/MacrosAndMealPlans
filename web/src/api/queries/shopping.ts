@@ -56,12 +56,24 @@ function useShoppingInvalidation() {
 export function useSetShoppingCadence() {
   const invalidate = useShoppingInvalidation();
   return useMutation({
-    mutationFn: async (body: {
+    mutationFn: async (input: {
+      revision: number;
       interval_weeks: number;
       days: number[];
       anchor: string;
       usual_time?: string | null;
-    }) => unwrap(await client.PUT('/api/v1/shopping/cadence', { body })),
+    }) =>
+      unwrap(
+        await client.PUT('/api/v1/shopping/cadence', {
+          params: { header: ifMatch(input.revision) },
+          body: {
+            interval_weeks: input.interval_weeks,
+            days: input.days,
+            anchor: input.anchor,
+            usual_time: input.usual_time,
+          },
+        }),
+      ),
     onSuccess: invalidate,
   });
 }
@@ -69,7 +81,12 @@ export function useSetShoppingCadence() {
 export function useClearShoppingCadence() {
   const invalidate = useShoppingInvalidation();
   return useMutation({
-    mutationFn: async () => unwrap(await client.DELETE('/api/v1/shopping/cadence', {})),
+    mutationFn: async (revision: number) =>
+      unwrap(
+        await client.DELETE('/api/v1/shopping/cadence', {
+          params: { header: ifMatch(revision) },
+        }),
+      ),
     onSuccess: invalidate,
   });
 }
@@ -77,10 +94,10 @@ export function useClearShoppingCadence() {
 export function useMoveShoppingOpportunity() {
   const invalidate = useShoppingInvalidation();
   return useMutation({
-    mutationFn: async (input: { date: string; to: string }) =>
+    mutationFn: async (input: { date: string; to: string; revision: number }) =>
       unwrap(
         await client.PUT('/api/v1/shopping/opportunities/{date}', {
-          params: { path: { date: input.date } },
+          params: { path: { date: input.date }, header: ifMatch(input.revision) },
           body: { to: input.to },
         }),
       ),
@@ -144,10 +161,10 @@ export function useAddShoppingListItem() {
 export function useRemoveShoppingListItem() {
   const invalidate = useShoppingInvalidation();
   return useMutation({
-    mutationFn: async (id: string) =>
+    mutationFn: async (input: { id: string; revision: number }) =>
       unwrap(
         await client.DELETE('/api/v1/shopping/items/{id}', {
-          params: { path: { id } },
+          params: { path: { id: input.id }, header: ifMatch(input.revision) },
         }),
       ),
     onSuccess: invalidate,
@@ -170,10 +187,10 @@ export function useStartShop() {
 export function useFinishShop() {
   const invalidate = useShoppingInvalidation();
   return useMutation({
-    mutationFn: async (date: string) =>
+    mutationFn: async (input: { date: string; revision: number }) =>
       unwrap(
         await client.POST('/api/v1/shopping/opportunities/{date}/finish', {
-          params: { path: { date } },
+          params: { path: { date: input.date }, header: ifMatch(input.revision) },
         }),
       ),
     onSuccess: invalidate,
@@ -183,10 +200,10 @@ export function useFinishShop() {
 export function useSkipShoppingOpportunity() {
   const invalidate = useShoppingInvalidation();
   return useMutation({
-    mutationFn: async (date: string) =>
+    mutationFn: async (input: { date: string; revision: number }) =>
       unwrap(
         await client.DELETE('/api/v1/shopping/opportunities/{date}', {
-          params: { path: { date } },
+          params: { path: { date: input.date }, header: ifMatch(input.revision) },
         }),
       ),
     onSuccess: invalidate,

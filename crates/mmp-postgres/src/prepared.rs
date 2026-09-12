@@ -3,10 +3,10 @@ use std::collections::HashMap;
 use async_trait::async_trait;
 use mmp_core::Result;
 use mmp_core::domain::{
-    MealPlanComponentId, NewStockEvent, PreparedBatch, PreparedBatchId, RecipeId, StockItem,
-    StockItemId, StockOutcome,
+    MealPlanComponentId, NewStockEvent, PreparedBatch, PreparedBatchId, RecipeId, Revision,
+    StockItem, StockItemId, StockOutcome,
 };
-use mmp_core::ports::{PreparedBatchRepository, StockWrite};
+use mmp_core::ports::{PreparedBatchRepository, StockWrite, UpdateOutcome};
 use sqlx::PgPool;
 use time::Date;
 use uuid::Uuid;
@@ -156,6 +156,14 @@ impl PreparedBatchRepository for PgPreparedBatchRepository {
         archive: &[StockItemId],
     ) -> Result<Vec<StockOutcome>> {
         crate::stock::place_portions(&self.pool, portions, archive).await
+    }
+
+    async fn bump_revision(
+        &self,
+        id: PreparedBatchId,
+        expected: Revision,
+    ) -> Result<UpdateOutcome> {
+        crate::stock::bump_prepared_batch_revision(&self.pool, id, expected).await
     }
 
     async fn insert(
