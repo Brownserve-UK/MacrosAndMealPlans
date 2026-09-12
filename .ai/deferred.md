@@ -14,12 +14,14 @@ specification or ADRs.
 - [ ] Avoid loading every weigh-in in `summary()` when only the latest reading and chart range are
       needed.
 - [ ] Let the weigh-in dialog set `recorded_at`; the API and schema already support it.
-- [ ] Either add a query for `weightKeys.goal(memberId)` or remove its no-op invalidations.
+- [ ] `NewWeightRecord::validate` and `NewWeightGoal::validate` are never called outside their own
+      tests; `WeightService` validates through `weight_kg()`/`resolve()` instead. Wire them in or
+      remove them.
+- [ ] `weightKeys.goal(memberId)` is invalidated in `queries/weight.ts` but no query uses that key,
+      so the invalidation is a no-op. Add a query that reads it, or drop the invalidation.
 
 ## Meal planning and consumption
 
-- [ ] The 90-day `REVIEW_LOOKBACK_DAYS` window hides older unresolved meals. Replace it with an
-      oldest-unresolved query.
 - [ ] Batch the per-entry `records_for_entry` calls in `needs_review`.
 - [ ] "Ate something else" currently resolves the member's whole meal. Add per-component
       replacements.
@@ -88,6 +90,23 @@ specification or ADRs.
 - [ ] Reassess `SuggestionReason::UnknownAvailability` if manual items and prediction do not give it
       a useful path.
 
+## API and validation
+
+- [ ] Handlers reject bad input three different ways: `ApiError::bad_request` with no field detail,
+      a hand-rolled `ValidationErrors` duplicated across `routes/consumption.rs` and
+      `routes/meal_plan.rs`, and DTO-level `ValidationErrors`. Settle on one and give it one HTTP
+      status.
+- [ ] Foreign-key violations in `mmp-postgres/src/error.rs` map to 404 with the literal id string
+      `"referenced here"` rather than a validation error against the offending field.
+
+## Documentation and tooling
+
+- [ ] `docs/CONTRIBUTING.md` tells contributors to start a new migration file and names the Rust test
+      convention `.tests`; both contradict `AGENTS.md` and the code, which keep one migration file
+      and `_tests.rs` siblings.
+- [ ] There is no CI. `cargo fmt`, `clippy -D warnings`, the workspace test suite, the `db-tests`
+      feature, and the web `lint`/`typecheck`/`test` scripts are only ever run by hand.
+
 ## Web interface and design
 
 - [ ] Move the hard-coded recipe and stock colours into the theme so dark mode works correctly.
@@ -97,6 +116,8 @@ specification or ADRs.
 - [ ] Review whether `SearchField` and `RouteStates` still justify shared abstractions.
 - [ ] Move cross-feature quantity, amount, and date formatters into a shared formatting module, and
       align the stock formatter test filename.
+- [ ] `date.ts` still lives under `features/meal-plan/` despite shopping, stock, and profile all
+      importing it. Move it somewhere shared.
 - [ ] Reformat the oversized Instructions line in `RecipeFormPage.tsx` and decide whether formatting
       should be enforced.
 - [ ] Add a committed Playwright end-to-end suite covering real queries, authentication, and routing.
