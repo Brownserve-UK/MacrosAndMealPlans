@@ -14,6 +14,8 @@ specification or ADRs.
       still contradict `NUT-023` and `DEC-069` until that's wired through.
 - [ ] Make guided nutrition-plan writes atomic across the profile, weigh-in, goal, target, and
       calculation repositories.
+- [ ] `GoalsPage` always labels the primary action "Review my plan" once a target exists, even for
+      a manually-set target that was never guided.
 - [ ] Avoid loading every weigh-in in `summary()` when only the latest reading and chart range are
       needed.
 - [ ] Let the weigh-in dialog set `recorded_at`; the API and schema already support it.
