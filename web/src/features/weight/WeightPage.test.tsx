@@ -19,6 +19,7 @@ vi.mock('../../auth/AuthProvider', () => ({
 vi.mock('../../api/queries', () => ({
   useWeightSummary: () => mocks.summary(),
   useWeightRecords: () => mocks.records(),
+  useHouseholdSettings: () => ({ data: undefined }),
   useMember: () => mocks.member(),
   useUpdateMember: () => ({ mutate: mocks.updateMember, isPending: false }),
   useDeleteWeighIn: () => ({ mutateAsync: vi.fn(), isPending: false }),

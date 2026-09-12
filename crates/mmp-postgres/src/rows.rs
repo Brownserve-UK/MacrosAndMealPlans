@@ -486,6 +486,7 @@ pub struct HouseholdSettingsRow {
     pub breakfast_time: Time,
     pub lunch_time: Time,
     pub dinner_time: Time,
+    pub timezone: String,
     pub missing_stock_interpretation: String,
     pub default_all_members_participate: bool,
     pub assume_eaten_when_time_passes: bool,
@@ -520,6 +521,7 @@ impl TryFrom<HouseholdSettingsRow> for HouseholdSettings {
                 lunch: row.lunch_time,
                 dinner: row.dinner_time,
             },
+            timezone: row.timezone,
             missing_stock_interpretation: MissingStockInterpretation::from_str(
                 &row.missing_stock_interpretation,
             )

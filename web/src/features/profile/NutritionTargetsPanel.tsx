@@ -14,6 +14,8 @@ import DeleteIcon from '@mui/icons-material/DeleteOutlineOutlined';
 import EditIcon from '@mui/icons-material/EditOutlined';
 import { useState } from 'react';
 import { ApiError, type NutritionGoals, type NutritionTarget } from '../../api/client';
+import { useHouseholdTimeZone } from '../../hooks/useHouseholdTimeZone';
+import { todayIso } from '../meal-plan/date';
 import {
   useCreateNutritionTarget,
   useDeleteNutritionTarget,
@@ -52,10 +54,6 @@ const GROUPS: { title: string; fields: Field[] }[] = [
 ];
 
 const FIELDS: Field[] = GROUPS.flatMap((group) => group.fields);
-
-function todayIso() {
-  return new Date().toISOString().slice(0, 10);
-}
 
 function formatDate(iso: string) {
   return new Date(`${iso}T00:00:00`).toLocaleDateString('en-GB', {
@@ -239,9 +237,10 @@ function TargetDialog({
   const editing = state.mode === 'edit';
   const create = useCreateNutritionTarget();
   const update = useUpdateNutritionTarget();
+  const timeZone = useHouseholdTimeZone();
 
   const [effectiveFrom, setEffectiveFrom] = useState(() =>
-    editing ? state.target.effective_from : todayIso(),
+    editing ? state.target.effective_from : todayIso(timeZone),
   );
   const [draft, setDraft] = useState<Record<string, string>>(() =>
     goalsToDraft(editing ? state.target : state.from ?? {}),

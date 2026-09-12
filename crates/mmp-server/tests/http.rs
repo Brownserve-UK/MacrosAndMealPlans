@@ -90,6 +90,7 @@ async fn app() -> Router {
         Arc::new(products.clone()),
         ingredients.clone(),
         prepared_meals.clone(),
+        Arc::new(settings_repo.clone()),
         clock.clone(),
     );
     let preparation = PreparationService::new(
@@ -98,6 +99,7 @@ async fn app() -> Router {
         Arc::new(products.clone()),
         ingredients.clone(),
         prepared_meals.clone(),
+        Arc::new(settings_repo.clone()),
         clock.clone(),
     );
     let meal_templates = MealTemplateService::new(
@@ -121,6 +123,7 @@ async fn app() -> Router {
             prepared_meals.clone(),
             recipes_repo.clone(),
             batches.clone(),
+            Arc::new(settings_repo.clone()),
             clock.clone(),
         ),
         MealPlanService::new(
@@ -158,6 +161,7 @@ async fn app() -> Router {
         WeightService::new(
             Arc::new(InMemoryWeightRecordRepository::new()),
             Arc::new(InMemoryWeightGoalRepository::new()),
+            Arc::new(settings_repo.clone()),
             clock.clone(),
         ),
         preparation2,
@@ -1954,8 +1958,7 @@ async fn the_household_planner_and_attendance_need_household_write() {
 #[tokio::test]
 async fn household_meal_times_are_published_with_defaults_and_an_etag() {
     let app = app().await;
-    let (status, body, headers) =
-        send(&app, Call::new("GET", "/api/v1/household/meal-times")).await;
+    let (status, body, headers) = send(&app, Call::new("GET", "/api/v1/household/settings")).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["breakfast"], "08:00");
     assert_eq!(body["lunch"], "12:30");
@@ -1968,7 +1971,7 @@ async fn a_household_manager_can_change_a_meal_time() {
     let app = app().await;
     let (status, body, _) = send(
         &app,
-        Call::new("PUT", "/api/v1/household/meal-times")
+        Call::new("PUT", "/api/v1/household/settings")
             .if_match(1)
             .body(json!({ "lunch": "13:15" })),
     )
@@ -1978,19 +1981,19 @@ async fn a_household_manager_can_change_a_meal_time() {
     assert_eq!(body["breakfast"], "08:00");
     assert_eq!(body["revision"], json!(2));
 
-    let (_, reread, _) = send(&app, Call::new("GET", "/api/v1/household/meal-times")).await;
+    let (_, reread, _) = send(&app, Call::new("GET", "/api/v1/household/settings")).await;
     assert_eq!(reread["lunch"], "13:15");
 }
 
 #[tokio::test]
 async fn the_assumed_eaten_setting_round_trips() {
     let app = app().await;
-    let (_, body, _) = send(&app, Call::new("GET", "/api/v1/household/meal-times")).await;
+    let (_, body, _) = send(&app, Call::new("GET", "/api/v1/household/settings")).await;
     let before = body["assume_eaten_when_time_passes"].as_bool().unwrap();
 
     let (status, body, _) = send(
         &app,
-        Call::new("PUT", "/api/v1/household/meal-times")
+        Call::new("PUT", "/api/v1/household/settings")
             .if_match(1)
             .body(json!({ "assume_eaten_when_time_passes": !before })),
     )
@@ -1998,7 +2001,7 @@ async fn the_assumed_eaten_setting_round_trips() {
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["assume_eaten_when_time_passes"], json!(!before));
 
-    let (_, reread, _) = send(&app, Call::new("GET", "/api/v1/household/meal-times")).await;
+    let (_, reread, _) = send(&app, Call::new("GET", "/api/v1/household/settings")).await;
     assert_eq!(reread["assume_eaten_when_time_passes"], json!(!before));
 }
 
@@ -2038,7 +2041,7 @@ async fn a_stale_meal_times_revision_conflicts() {
     let app = app().await;
     let (status, _, _) = send(
         &app,
-        Call::new("PUT", "/api/v1/household/meal-times")
+        Call::new("PUT", "/api/v1/household/settings")
             .if_match(9)
             .body(json!({ "dinner": "19:00" })),
     )
@@ -2052,7 +2055,7 @@ async fn a_basic_user_cannot_change_meal_times() {
     create_user(&app, "sam", &["basic_user"]).await;
     let (status, _, _) = send(
         &app,
-        Call::new("PUT", "/api/v1/household/meal-times")
+        Call::new("PUT", "/api/v1/household/settings")
             .signed_in_as("sam")
             .if_match(1)
             .body(json!({ "dinner": "19:00" })),

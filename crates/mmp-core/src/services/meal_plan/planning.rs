@@ -19,7 +19,7 @@ use crate::services::revision::{commit_outcome, require_revision};
 
 impl MealPlanService {
     pub async fn create(&self, input: NewMealPlanEntry) -> Result<MealPlanEntryView> {
-        ensure_not_past(&*self.clock, input.planned_on)?;
+        ensure_not_past(&self.clock, &*self.settings, input.planned_on).await?;
         self.create_backdated(input).await
     }
 
@@ -473,7 +473,7 @@ impl MealPlanService {
                 .collect();
         }
         if let Some(planned_on) = patch.planned_on {
-            ensure_not_past(&*self.clock, planned_on)?;
+            ensure_not_past(&self.clock, &*self.settings, planned_on).await?;
             entry.planned_on = planned_on;
         }
         if let Some(planned_time) = patch.planned_time {

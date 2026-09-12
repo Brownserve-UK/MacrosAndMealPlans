@@ -163,6 +163,7 @@ fn harness() -> Harness {
         Arc::new(products.clone()),
         Arc::new(ingredients.clone()),
         Arc::new(prepared_meals.clone()),
+        Arc::new(settings.clone()),
         clock.clone(),
     );
     let preparation_for_tests = preparation.clone();
@@ -200,6 +201,7 @@ fn harness() -> Harness {
         Arc::new(prepared_meals.clone()),
         Arc::new(recipes.clone()),
         Arc::new(batches.clone()),
+        Arc::new(settings.clone()),
         clock.clone(),
     );
     let targets = NutritionTargetService::new(Arc::new(target_repo.clone()), clock);

@@ -22,6 +22,7 @@ const putAway: unknown[] = [];
 vi.mock('../../api/queries', () => ({
   useShoppingList: () => ({ isLoading: false, isError: false, data: shoppingList }),
   usePendingPutAway: () => ({ data: putAway }),
+  useHouseholdSettings: () => ({ data: undefined }),
   useMoveShoppingOpportunity: () => ({ isPending: false, mutateAsync: vi.fn() }),
   useSkipShoppingOpportunity: () => ({ isPending: false, mutateAsync: vi.fn() }),
   useAddShoppingOpportunity: () => ({ isPending: false, mutateAsync: vi.fn() }),

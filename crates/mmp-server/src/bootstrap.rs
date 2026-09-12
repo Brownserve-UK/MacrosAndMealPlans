@@ -98,6 +98,7 @@ pub fn consumption_service(pool: &PgPool) -> ConsumptionService {
         Arc::new(PgPreparedMealRepository::new(pool.clone())),
         Arc::new(PgRecipeRepository::new(pool.clone())),
         Arc::new(PgPreparedBatchRepository::new(pool.clone())),
+        Arc::new(PgHouseholdSettingsRepository::new(pool.clone())),
         Arc::new(SystemClock),
     )
 }
@@ -117,6 +118,7 @@ pub fn app_state(config: &Config, pool: &PgPool) -> AppState {
         prepared_meals.clone(),
         recipes_repo.clone(),
         batches.clone(),
+        Arc::new(PgHouseholdSettingsRepository::new(pool.clone())),
         Arc::new(SystemClock),
     );
     let preparation = PreparationService::new(
@@ -125,6 +127,7 @@ pub fn app_state(config: &Config, pool: &PgPool) -> AppState {
         products.clone(),
         ingredients.clone(),
         prepared_meals.clone(),
+        Arc::new(PgHouseholdSettingsRepository::new(pool.clone())),
         Arc::new(SystemClock),
     );
     let targets = Arc::new(PgNutritionTargetRepository::new(pool.clone()));
@@ -181,6 +184,7 @@ pub fn app_state(config: &Config, pool: &PgPool) -> AppState {
     let weight = WeightService::new(
         Arc::new(PgWeightRecordRepository::new(pool.clone())),
         Arc::new(PgWeightGoalRepository::new(pool.clone())),
+        Arc::new(PgHouseholdSettingsRepository::new(pool.clone())),
         Arc::new(SystemClock),
     );
     let recipes = RecipeService::new(

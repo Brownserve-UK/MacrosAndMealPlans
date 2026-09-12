@@ -12,8 +12,9 @@ use crate::domain::{
 };
 use crate::ports::{FixedClock, PageRequest, StockQuery, StockRepository};
 use crate::testing::{
-    InMemoryIngredientRepository, InMemoryPreparedBatchRepository, InMemoryPreparedMealRepository,
-    InMemoryProductRepository, InMemoryRecipeRepository, InMemoryStockRepository,
+    InMemoryHouseholdSettingsRepository, InMemoryIngredientRepository,
+    InMemoryPreparedBatchRepository, InMemoryPreparedMealRepository, InMemoryProductRepository,
+    InMemoryRecipeRepository, InMemoryStockRepository,
 };
 
 const NOW: time::OffsetDateTime = datetime!(2026-09-06 09:00 UTC);
@@ -96,6 +97,7 @@ fn harness() -> Harness {
         Arc::new(products),
         Arc::new(InMemoryIngredientRepository::new()),
         Arc::new(InMemoryPreparedMealRepository::new()),
+        Arc::new(InMemoryHouseholdSettingsRepository::new()),
         Arc::new(FixedClock::new(NOW)),
     );
 

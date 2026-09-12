@@ -1,4 +1,29 @@
+use std::sync::Arc;
+
+use time::macros::{date, datetime};
+
 use super::*;
+
+#[test]
+fn a_household_calendar_rolls_the_date_over_at_local_midnight_not_utc_midnight() {
+    let clock: Arc<dyn Clock> = Arc::new(FixedClock::new(datetime!(2026-06-15 23:30 UTC)));
+    let calendar = HouseholdCalendar::new(clock, "Europe/London");
+    assert_eq!(calendar.today(), date!(2026 - 06 - 16));
+}
+
+#[test]
+fn a_household_calendar_in_utc_matches_the_clock_exactly() {
+    let clock: Arc<dyn Clock> = Arc::new(FixedClock::new(datetime!(2026-06-15 23:30 UTC)));
+    let calendar = HouseholdCalendar::new(clock, DEFAULT_TIMEZONE);
+    assert_eq!(calendar.today(), date!(2026 - 06 - 15));
+}
+
+#[test]
+fn an_unknown_timezone_name_falls_back_to_utc() {
+    let clock: Arc<dyn Clock> = Arc::new(FixedClock::new(datetime!(2026-06-15 23:30 UTC)));
+    let calendar = HouseholdCalendar::new(clock, "Not/A_Zone");
+    assert_eq!(calendar.today(), date!(2026 - 06 - 15));
+}
 
 #[test]
 fn page_requests_are_clamped() {

@@ -9,20 +9,21 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('../../api/queries', () => ({
-  useMealTimes: () => ({
+  useHouseholdSettings: () => ({
     isLoading: false,
     isError: false,
     data: {
       breakfast: '08:00',
       lunch: '12:30',
       dinner: '18:00',
+      timezone: 'Etc/UTC',
       revision: 4,
       created_at: '2026-08-27T00:00:00Z',
       updated_at: '2026-08-27T00:00:00Z',
     },
     refetch: vi.fn(),
   }),
-  useUpdateMealTimes: () => ({ isPending: false, mutateAsync: mocks.updateMealTimes }),
+  useUpdateHouseholdSettings: () => ({ isPending: false, mutateAsync: mocks.updateMealTimes }),
 }));
 
 vi.mock('../../auth/AuthProvider', () => ({

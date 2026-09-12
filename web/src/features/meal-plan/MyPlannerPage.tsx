@@ -20,6 +20,7 @@ import {
 import { useAuth } from '../../auth/AuthProvider';
 import { PageHeader } from '../../components/PageHeader';
 import { ErrorState, Loading } from '../../components/States';
+import { useHouseholdTimeZone } from '../../hooks/useHouseholdTimeZone';
 import { addDays, defaultDayFor, parseIsoDate, startOfWeekIso, todayIso } from './date';
 import { CookedSection } from './CookedSection';
 import { CookSomethingDialog } from './CookSomethingDialog';
@@ -167,13 +168,17 @@ export function MyPlannerPage({ weekStart, day }: { weekStart: string; day: stri
   const [saving, setSaving] = useState<MealPlanEntry | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  const timeZone = useHouseholdTimeZone();
   const activeDate = day >= weekStart && day <= addDays(weekStart, 6) ? day : weekStart;
   const days = Array.from({ length: 7 }, (_, index) => addDays(weekStart, index));
-  const canPlan = activeDate >= addDays(todayIso(), -1);
+  const canPlan = activeDate >= addDays(todayIso(timeZone), -1);
   const busy = optOut.isPending || rejoin.isPending;
 
   function goToWeek(start: string) {
-    void navigate({ to: '/planner/$weekStart/$day', params: { weekStart: start, day: defaultDayFor(start) } });
+    void navigate({
+      to: '/planner/$weekStart/$day',
+      params: { weekStart: start, day: defaultDayFor(start, timeZone) },
+    });
   }
 
   function goToDay(date: string) {
@@ -244,7 +249,7 @@ export function MyPlannerPage({ weekStart, day }: { weekStart: string; day: stri
               ) ?? 0,
           }))}
           selectedDate={activeDate}
-          currentMonday={startOfWeekIso(todayIso())}
+          currentMonday={startOfWeekIso(todayIso(timeZone))}
           onWeekChange={goToWeek}
           onDayChange={goToDay}
         />

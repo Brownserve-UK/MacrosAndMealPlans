@@ -9,6 +9,7 @@ import type { ShoppingOpportunity } from '../../api/client';
 import { usePendingPutAway, useShoppingList } from '../../api/queries';
 import { PageHeader } from '../../components/PageHeader';
 import { ErrorState, Loading } from '../../components/States';
+import { useHouseholdTimeZone } from '../../hooks/useHouseholdTimeZone';
 import { todayIso } from '../meal-plan/date';
 import { ChangeShopDialog } from './ChangeShopDialog';
 import { GapCard } from './GapCard';
@@ -17,6 +18,7 @@ import { TripCard } from './TripCard';
 export function ShoppingPage() {
   const list = useShoppingList(undefined);
   const waiting = usePendingPutAway();
+  const timeZone = useHouseholdTimeZone();
   const [changing, setChanging] = useState<ShoppingOpportunity | null>(null);
 
   if (list.isLoading) return <Loading label="Working out what you need" />;
@@ -108,7 +110,7 @@ export function ShoppingPage() {
       <ChangeShopDialog
         date={changing ? (changing.generated_for ?? changing.date) : null}
         revision={changing?.revision ?? 0}
-        earliest={todayIso()}
+        earliest={todayIso(timeZone)}
         onClose={() => setChanging(null)}
       />
     </>

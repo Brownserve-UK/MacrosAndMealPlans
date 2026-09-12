@@ -8,9 +8,9 @@ use crate::domain::{
 use crate::domain::{StockItem, StockItemId, StockLevel, StorageLocation};
 use crate::ports::{FixedClock, StockRepository};
 use crate::testing::{
-    InMemoryConsumptionRecordRepository, InMemoryIngredientRepository,
-    InMemoryPreparedBatchRepository, InMemoryPreparedMealRepository, InMemoryProductRepository,
-    InMemoryRecipeRepository, InMemoryStockRepository,
+    InMemoryConsumptionRecordRepository, InMemoryHouseholdSettingsRepository,
+    InMemoryIngredientRepository, InMemoryPreparedBatchRepository, InMemoryPreparedMealRepository,
+    InMemoryProductRepository, InMemoryRecipeRepository, InMemoryStockRepository,
 };
 use rust_decimal::Decimal;
 use time::OffsetDateTime;
@@ -71,6 +71,7 @@ fn harness_at(now: OffsetDateTime) -> Harness {
         Arc::new(InMemoryPreparedMealRepository::new()),
         Arc::new(recipes.clone()),
         Arc::new(InMemoryPreparedBatchRepository::new()),
+        Arc::new(InMemoryHouseholdSettingsRepository::new()),
         Arc::new(FixedClock::new(now)),
     );
     Harness {
@@ -435,7 +436,7 @@ async fn recording_food_in_the_future_is_refused() {
 }
 
 #[tokio::test]
-async fn recording_food_a_day_ahead_is_allowed_for_timezone_slack() {
+async fn recording_food_a_day_ahead_is_allowed_by_the_logging_grace() {
     let h = harness();
     let product = seed_product(&h, known_nutrition());
     let member = HouseholdMemberId::new();

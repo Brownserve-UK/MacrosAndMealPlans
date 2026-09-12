@@ -34,7 +34,7 @@ impl MealPlanService {
         input: ConfirmMealPlanComponent,
     ) -> Result<StockAffected<MealPlanEntryView>> {
         let entry = self.get_entry(id).await?;
-        ensure_due(&*self.clock, entry.planned_on)?;
+        ensure_due(&self.clock, &*self.settings, entry.planned_on).await?;
         self.mark_component_eaten_backdated(id, component_id, expected, input)
             .await
     }
@@ -156,7 +156,7 @@ impl MealPlanService {
         actor: OutcomeActor,
     ) -> Result<StockAffected<MealPlanEntryView>> {
         let entry = self.get_entry(id).await?;
-        ensure_due(&*self.clock, entry.planned_on)?;
+        ensure_due(&self.clock, &*self.settings, entry.planned_on).await?;
         self.mark_component_not_eaten_backdated(id, component_id, expected, actor)
             .await
     }
@@ -316,7 +316,7 @@ impl MealPlanService {
         actor: OutcomeActor,
     ) -> Result<StockAffected<MealPlanEntryView>> {
         let entry = self.get_entry(id).await?;
-        ensure_due(&*self.clock, entry.planned_on)?;
+        ensure_due(&self.clock, &*self.settings, entry.planned_on).await?;
         self.mark_not_eaten_backdated(id, expected, actor).await
     }
 
@@ -361,7 +361,7 @@ impl MealPlanService {
         input: ConfirmMealPlanEntry,
     ) -> Result<StockAffected<MealPlanEntryView>> {
         let entry = self.get_entry(id).await?;
-        ensure_due(&*self.clock, entry.planned_on)?;
+        ensure_due(&self.clock, &*self.settings, entry.planned_on).await?;
         self.mark_eaten_backdated(id, expected, input).await
     }
 
@@ -468,7 +468,7 @@ impl MealPlanService {
         input: ReviewMealOutcomes,
     ) -> Result<StockAffected<MealPlanEntryView>> {
         let entry = self.get_entry(id).await?;
-        ensure_due(&*self.clock, entry.planned_on)?;
+        ensure_due(&self.clock, &*self.settings, entry.planned_on).await?;
         self.review_outcomes_backdated(id, expected, input).await
     }
 

@@ -12,6 +12,7 @@ import { useRecipe, useRecipeNutrition, useStock, useStockAvailability, useStock
 import { BackLabel } from '../../components/BackLink';
 import { IconTile } from '../../components/IconTile';
 import { EmptyState, ErrorState, Loading } from '../../components/States';
+import { useHouseholdTimeZone } from '../../hooks/useHouseholdTimeZone';
 import { MoveCookedDialog } from './MoveCookedDialog';
 import { MealEditorDialog } from '../meal-plan/MealEditorDialog';
 import { MealSlotMenu } from '../meal-plan/MealSlotMenu';
@@ -84,6 +85,7 @@ export function DishPage({ recipeId }: { recipeId: string }) {
   const availability = useStockAvailability();
   const [planning, setPlanning] = useState<MealSlot | null>(null);
   const [moving, setMoving] = useState<Move | null>(null);
+  const timeZone = useHouseholdTimeZone();
 
   const portions = (stock.data?.items ?? []).filter(
     (item) => item.prepared_recipe_id === recipeId && servingsOf(item) > 0,
@@ -280,7 +282,7 @@ export function DishPage({ recipeId }: { recipeId: string }) {
           open
           mode="household"
           onClose={() => setPlanning(null)}
-          date={todayIso()}
+          date={todayIso(timeZone)}
           slot={planning}
           meal={null}
           startWith={{ recipeId, name: recipe.data.name, servings: left }}

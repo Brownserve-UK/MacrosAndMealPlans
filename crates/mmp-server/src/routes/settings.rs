@@ -10,21 +10,21 @@ use crate::http::{IfMatch, Tagged};
 use crate::state::AppState;
 
 pub fn router() -> OpenApiRouter<AppState> {
-    OpenApiRouter::new().routes(routes!(get_meal_times, update_meal_times))
+    OpenApiRouter::new().routes(routes!(get_settings, update_settings))
 }
 
 #[utoipa::path(
     get,
-    path = "/api/v1/household/meal-times",
-    operation_id = "getHouseholdMealTimes",
+    path = "/api/v1/household/settings",
+    operation_id = "getHouseholdSettings",
     responses(
-        (status = 200, description = "The household's default meal times", body = HouseholdSettingsDto,
+        (status = 200, description = "The household's settings", body = HouseholdSettingsDto,
          headers(("ETag" = String, description = "The revision to send back as If-Match"))),
     ),
     tag = "household",
     security(("basic" = []))
 )]
-async fn get_meal_times(
+async fn get_settings(
     State(state): State<AppState>,
     _principal: Principal,
 ) -> ApiResult<Tagged<HouseholdSettingsDto>> {
@@ -34,8 +34,8 @@ async fn get_meal_times(
 
 #[utoipa::path(
     put,
-    path = "/api/v1/household/meal-times",
-    operation_id = "updateHouseholdMealTimes",
+    path = "/api/v1/household/settings",
+    operation_id = "updateHouseholdSettings",
     params(("If-Match" = String, Header, description = "The revision you loaded")),
     request_body = UpdateMealTimesRequest,
     responses(
@@ -47,7 +47,7 @@ async fn get_meal_times(
     tag = "household",
     security(("basic" = []))
 )]
-async fn update_meal_times(
+async fn update_settings(
     State(state): State<AppState>,
     principal: Principal,
     IfMatch(revision): IfMatch,

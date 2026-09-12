@@ -12,9 +12,9 @@ use crate::domain::{
 };
 use crate::error::{CoreError, Result, ValidationErrors};
 use crate::ports::{
-    Clock, ConsumptionQuery, ConsumptionRecordRepository, IngredientRepository, PageRequest,
-    PreparedBatchRepository, PreparedMealRepository, ProductRepository, RecipeRepository,
-    StockWrite,
+    Clock, ConsumptionQuery, ConsumptionRecordRepository, HouseholdSettingsRepository,
+    IngredientRepository, PageRequest, PreparedBatchRepository, PreparedMealRepository,
+    ProductRepository, RecipeRepository, StockWrite,
 };
 
 use super::fulfilment::{RecipeFulfilments, expand_recipe};
@@ -58,6 +58,7 @@ pub struct ConsumptionService {
     prepared_meals: Arc<dyn PreparedMealRepository>,
     recipes: Arc<dyn RecipeRepository>,
     batches: Arc<dyn PreparedBatchRepository>,
+    settings: Arc<dyn HouseholdSettingsRepository>,
     clock: Arc<dyn Clock>,
 }
 
@@ -70,6 +71,7 @@ impl ConsumptionService {
         prepared_meals: Arc<dyn PreparedMealRepository>,
         recipes: Arc<dyn RecipeRepository>,
         batches: Arc<dyn PreparedBatchRepository>,
+        settings: Arc<dyn HouseholdSettingsRepository>,
         clock: Arc<dyn Clock>,
     ) -> Self {
         Self {
@@ -79,6 +81,7 @@ impl ConsumptionService {
             prepared_meals,
             recipes,
             batches,
+            settings,
             clock,
         }
     }
@@ -87,7 +90,7 @@ impl ConsumptionService {
         &self,
         input: NewConsumptionRecord,
     ) -> Result<StockAffected<ConsumptionRecord>> {
-        ensure_not_future(&*self.clock, input.consumed_on)?;
+        ensure_not_future(&self.clock, &*self.settings, input.consumed_on).await?;
         self.record_backdated(input).await
     }
 
@@ -263,7 +266,7 @@ impl ConsumptionService {
         }
 
         if let Some(consumed_on) = patch.consumed_on {
-            ensure_not_future(&*self.clock, consumed_on)?;
+            ensure_not_future(&self.clock, &*self.settings, consumed_on).await?;
             current.consumed_on = consumed_on;
         }
         if let Some(consumed_at) = patch.consumed_at {
@@ -584,8 +587,17 @@ fn ensure_resolvable(product: &Product, amount: &ConsumedAmount) -> Result<()> {
     Ok(())
 }
 
-fn ensure_not_future(clock: &dyn Clock, consumed_on: Date) -> Result<()> {
-    let latest = clock.now().date() + Duration::days(1);
+const LOGGING_GRACE_DAYS: i64 = 1;
+
+async fn ensure_not_future(
+    clock: &Arc<dyn Clock>,
+    settings: &dyn HouseholdSettingsRepository,
+    consumed_on: Date,
+) -> Result<()> {
+    let today = super::calendar::household_calendar(settings, clock)
+        .await?
+        .today();
+    let latest = today + Duration::days(LOGGING_GRACE_DAYS);
     if consumed_on > latest {
         let mut errors = ValidationErrors::new();
         errors.push("consumed_on", "Food cannot be logged in the future");

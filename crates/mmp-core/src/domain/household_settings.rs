@@ -50,9 +50,10 @@ impl MissingStockInterpretation {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HouseholdSettings {
     pub meal_times: MealTimes,
+    pub timezone: String,
     pub missing_stock_interpretation: MissingStockInterpretation,
     pub default_all_members_participate: bool,
     pub assume_eaten_when_time_passes: bool,
@@ -111,6 +112,7 @@ pub struct HouseholdSettingsPatch {
     pub breakfast_time: Option<Time>,
     pub lunch_time: Option<Time>,
     pub dinner_time: Option<Time>,
+    pub timezone: Option<String>,
     pub missing_stock_interpretation: Option<MissingStockInterpretation>,
     pub default_all_members_participate: Option<bool>,
     pub assume_eaten_when_time_passes: Option<bool>,
@@ -122,10 +124,21 @@ impl HouseholdSettingsPatch {
         self.breakfast_time.is_none()
             && self.lunch_time.is_none()
             && self.dinner_time.is_none()
+            && self.timezone.is_none()
             && self.missing_stock_interpretation.is_none()
             && self.default_all_members_participate.is_none()
             && self.assume_eaten_when_time_passes.is_none()
             && self.section_order.is_none()
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        let mut errors = ValidationErrors::new();
+        if let Some(timezone) = &self.timezone
+            && crate::ports::resolve_timezone(timezone).is_none()
+        {
+            errors.push("timezone", "That is not a timezone we recognise.");
+        }
+        errors.into_result()
     }
 
     pub fn apply(self, mut times: MealTimes) -> MealTimes {

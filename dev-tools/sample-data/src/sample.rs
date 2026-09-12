@@ -1395,6 +1395,7 @@ impl Loader<'_> {
                 .update(
                     settings.revision,
                     HouseholdSettingsPatch {
+                        timezone: Some("Europe/London".to_owned()),
                         section_order: Some(vec![
                             ShoppingSection::MeatFish,
                             ShoppingSection::FreshProduce,

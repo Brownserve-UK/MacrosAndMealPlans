@@ -30,6 +30,7 @@ import { InitialsAvatar } from '../../components/InitialsAvatar';
 import { PageHeader } from '../../components/PageHeader';
 import { ErrorState, Loading } from '../../components/States';
 import { MaybeNumber } from '../../components/Unknown';
+import { useHouseholdTimeZone } from '../../hooks/useHouseholdTimeZone';
 import { AddFoodDialog } from './AddFoodDialog';
 import { AteSomethingElseDialog } from './AteSomethingElseDialog';
 import { addDays, combineDateTime, defaultDayFor, extractTime, parseIsoDate, startOfWeekIso, todayIso } from './date';
@@ -406,13 +407,14 @@ export function MealPlanPage({ weekStart, day }: { weekStart: string; day: strin
   const markComponentEaten = useMarkMealPlanComponentEaten();
   const reopenComponent = useReopenMealPlanComponent();
 
-  const currentMonday = startOfWeekIso(todayIso());
+  const timeZone = useHouseholdTimeZone();
+  const currentMonday = startOfWeekIso(todayIso(timeZone));
   const activeDate = day >= weekStart && day <= addDays(weekStart, 6) ? day : weekStart;
 
   function goToWeek(start: string) {
     void navigate({
       to: '/food-log/$weekStart/$day',
-      params: { weekStart: start, day: defaultDayFor(start) },
+      params: { weekStart: start, day: defaultDayFor(start, timeZone) },
     });
   }
 
@@ -497,7 +499,7 @@ export function MealPlanPage({ weekStart, day }: { weekStart: string; day: strin
     }
   }
 
-  const future = activeDate > todayIso();
+  const future = activeDate > todayIso(timeZone);
   const allowChanges = !future;
 
   return (

@@ -77,6 +77,14 @@ impl StockService {
         }
     }
 
+    pub async fn today(&self) -> Result<time::Date> {
+        Ok(
+            super::calendar::household_calendar(&*self.settings, &self.clock)
+                .await?
+                .today(),
+        )
+    }
+
     pub async fn list(&self, query: &StockQuery) -> Result<Paginated<StockItem>> {
         self.stock.list(query).await
     }
@@ -849,8 +857,9 @@ impl StockService {
         let fulfilments = RecipeFulfilments::load(&*self.products, &requirements).await?;
 
         let settings = self.settings.get().await?;
+        let calendar = crate::ports::HouseholdCalendar::new(self.clock.clone(), &settings.timezone);
         let assumption_rules = crate::domain::AssumptionRules {
-            now: self.clock.now(),
+            now: calendar.now(),
             meal_times: settings.meal_times,
             enabled: settings.assume_eaten_when_time_passes,
         };

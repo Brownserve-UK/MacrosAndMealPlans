@@ -2247,7 +2247,7 @@ async fn household_settings_updates_report_revision_outcomes(pool: PgPool) {
     let repo = PgHouseholdSettingsRepository::new(pool);
     let original = repo.get().await.unwrap();
 
-    let mut updated = original;
+    let mut updated = original.clone();
     updated.meal_times.lunch = time!(13:15);
     updated.revision = original.revision.next();
     assert_eq!(
@@ -2277,7 +2277,7 @@ async fn a_reordered_store_layout_is_kept(pool: PgPool) {
         ShoppingSection::FreshProduce
     );
 
-    let mut updated = original;
+    let mut updated = original.clone();
     updated.section_order = SectionOrder::new([
         ShoppingSection::Bakery,
         ShoppingSection::FreshProduce,

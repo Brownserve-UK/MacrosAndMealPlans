@@ -1,7 +1,9 @@
 mod clock;
 mod repository;
 
-pub use clock::{Clock, FixedClock, SystemClock};
+pub use clock::{
+    Clock, DEFAULT_TIMEZONE, FixedClock, HouseholdCalendar, SystemClock, resolve_timezone,
+};
 pub use repository::{
     AccessGrantRepository, ConsumptionQuery, ConsumptionRecordRepository, FinishedPurchase,
     HouseholdMemberRepository, HouseholdSettingsRepository, IngredientQuery, IngredientRepository,

@@ -20,8 +20,8 @@ import type { Amount, Ingredient, MealSlot, PlannerMeal, PreparedMeal, Product, 
 import { ApiError } from '../../api/client';
 import {
   useCreateMealPlanEntry,
+  useHouseholdSettings,
   useHouseholdSlotAttendance,
-  useMealTimes,
   useMembers,
   useRecipeNutrition,
   useUpdateMealPlanEntry,
@@ -128,7 +128,7 @@ export function MealEditorDialog({
   const { principal } = useAuth();
   const household = mode === 'household';
   const members = useMembers({ include_archived: false, per_page: 200 });
-  const mealTimes = useMealTimes();
+  const mealTimes = useHouseholdSettings();
   const create = useCreateMealPlanEntry();
   const update = useUpdateMealPlanEntry();
   const [plannedTimeOverride, setPlannedTimeOverride] = useState<string | null>(

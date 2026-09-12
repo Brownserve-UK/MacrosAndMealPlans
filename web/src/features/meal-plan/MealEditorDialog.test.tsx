@@ -9,7 +9,9 @@ vi.mock('../../auth/AuthProvider', () => ({ useAuth: () => ({ principal: { membe
 vi.mock('../../api/queries', () => ({
   useCreateMealPlanEntry: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useUpdateMealPlanEntry: () => ({ mutateAsync: vi.fn(), isPending: false }),
-  useMealTimes: () => ({ data: { breakfast: '08:00', lunch: '12:30', dinner: '18:00' } }),
+  useHouseholdSettings: () => ({
+    data: { breakfast: '08:00', lunch: '12:30', dinner: '18:00', timezone: 'Etc/UTC' },
+  }),
   useHouseholdSlotAttendance: () => ({ data: attendance.rows, isFetching: attendance.isFetching }),
   useMembers: () => ({
     data: {

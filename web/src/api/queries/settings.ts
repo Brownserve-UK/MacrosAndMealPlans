@@ -19,14 +19,14 @@ export function useMeta() {
   });
 }
 
-export function useMealTimes() {
+export function useHouseholdSettings() {
   return useQuery({
     queryKey: settingsKeys.mealTimes(),
-    queryFn: async () => unwrap(await client.GET('/api/v1/household/meal-times')),
+    queryFn: async () => unwrap(await client.GET('/api/v1/household/settings', {})),
   });
 }
 
-export function useUpdateMealTimes() {
+export function useUpdateHouseholdSettings() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (input: {
@@ -34,7 +34,7 @@ export function useUpdateMealTimes() {
       body: components['schemas']['UpdateMealTimesRequest'];
     }) =>
       unwrap(
-        await client.PUT('/api/v1/household/meal-times', {
+        await client.PUT('/api/v1/household/settings', {
           params: { header: ifMatch(input.revision) },
           body: input.body,
         }),

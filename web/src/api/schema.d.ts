@@ -116,22 +116,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/household/meal-times": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get: operations["getHouseholdMealTimes"];
-        put: operations["updateHouseholdMealTimes"];
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/v1/household/planner/attendance/{date}/{slot}": {
         parameters: {
             query?: never;
@@ -141,6 +125,22 @@ export interface paths {
         };
         get: operations["getHouseholdSlotAttendance"];
         put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/household/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getHouseholdSettings"];
+        put: operations["updateHouseholdSettings"];
         post?: never;
         delete?: never;
         options?: never;
@@ -1961,6 +1961,7 @@ export interface components {
             /** Format: int64 */
             revision: number;
             shopping_section_order: components["schemas"]["ShoppingSection"][];
+            timezone: string;
             /** Format: date-time */
             updated_at: string;
         };
@@ -3200,6 +3201,7 @@ export interface components {
             lunch?: string | null;
             missing_stock_interpretation?: null | components["schemas"]["MissingStockInterpretationDto"];
             shopping_section_order?: components["schemas"]["ShoppingSection"][] | null;
+            timezone?: string | null;
         };
         UpdateMemberRequest: {
             display_name?: string | null;
@@ -3802,7 +3804,33 @@ export interface operations {
             };
         };
     };
-    getHouseholdMealTimes: {
+    getHouseholdSlotAttendance: {
+        parameters: {
+            query?: {
+                exclude_entry?: string;
+            };
+            header?: never;
+            path: {
+                /** @example 2026-09-10 */
+                date: string;
+                /** @example dinner */
+                slot: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SlotAttendanceDto"][];
+                };
+            };
+        };
+    };
+    getHouseholdSettings: {
         parameters: {
             query?: never;
             header?: never;
@@ -3811,7 +3839,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The household's default meal times */
+            /** @description The household's settings */
             200: {
                 headers: {
                     /** @description The revision to send back as If-Match */
@@ -3824,7 +3852,7 @@ export interface operations {
             };
         };
     };
-    updateHouseholdMealTimes: {
+    updateHouseholdSettings: {
         parameters: {
             query?: never;
             header: {
@@ -3874,32 +3902,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Problem"];
-                };
-            };
-        };
-    };
-    getHouseholdSlotAttendance: {
-        parameters: {
-            query?: {
-                exclude_entry?: string;
-            };
-            header?: never;
-            path: {
-                /** @example 2026-09-10 */
-                date: string;
-                /** @example dinner */
-                slot: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SlotAttendanceDto"][];
                 };
             };
         };

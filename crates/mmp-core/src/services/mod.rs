@@ -1,3 +1,4 @@
+mod calendar;
 mod catalogue;
 mod consumption;
 mod fulfilment;

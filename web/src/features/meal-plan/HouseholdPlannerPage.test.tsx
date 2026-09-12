@@ -46,6 +46,7 @@ vi.mock('@tanstack/react-router', () => ({ useNavigate: () => mocks.navigate }))
 vi.mock('../../api/queries', () => ({
   useHouseholdPlannerWeek: () => ({ data: week, isLoading: false, isError: false, refetch: vi.fn() }),
   useDeleteMealPlanEntry: () => ({ mutateAsync: mocks.remove, isPending: false }),
+  useHouseholdSettings: () => ({ data: undefined }),
   useCooks: () => ({ data: [] }),
   useStock: () => ({ data: { items: [] } }),
   useShoppingList: () => ({ data: undefined }),

@@ -11,7 +11,7 @@ import { Link } from '@tanstack/react-router';
 import { useState, type FormEvent } from 'react';
 import { ApiError, type MealTimesSettings } from '../../api/client';
 import type { components } from '../../api/schema';
-import { useMealTimes, useUpdateMealTimes } from '../../api/queries';
+import { useHouseholdSettings, useUpdateHouseholdSettings } from '../../api/queries';
 import { useAuth } from '../../auth/AuthProvider';
 import { BackLabel } from '../../components/BackLink';
 import { ConflictDialog } from '../../components/ConflictDialog';
@@ -25,7 +25,7 @@ const SLOTS = [
 ] as const;
 
 export function MealTimesPage() {
-  const query = useMealTimes();
+  const query = useHouseholdSettings();
 
   if (query.isLoading) return <Loading label="Loading meal times" />;
   if (query.isError) return <ErrorState error={query.error} onRetry={() => query.refetch()} />;
@@ -44,12 +44,13 @@ function EditMealTimes({
   const { principal } = useAuth();
   const canManage = principal?.permissions.includes('household:write') ?? false;
 
-  const update = useUpdateMealTimes();
+  const update = useUpdateHouseholdSettings();
   const [times, setTimes] = useState({
     breakfast: settings.breakfast,
     lunch: settings.lunch,
     dinner: settings.dinner,
   });
+  const [timezone, setTimezone] = useState(settings.timezone);
   const [failure, setFailure] = useState<string | null>(null);
   const [conflict, setConflict] = useState<ApiError | null>(null);
   const [saved, setSaved] = useState(false);
@@ -58,6 +59,7 @@ function EditMealTimes({
 
   const dirty =
     SLOTS.some(({ key }) => times[key] !== settings[key]) ||
+    timezone !== settings.timezone ||
     defaultAll !== settings.default_all_members_participate ||
     assumeEaten !== settings.assume_eaten_when_time_passes;
 
@@ -67,6 +69,9 @@ function EditMealTimes({
     const body: components['schemas']['UpdateMealTimesRequest'] = {};
     for (const { key } of SLOTS) {
       if (times[key] !== settings[key]) body[key] = times[key];
+    }
+    if (timezone !== settings.timezone) {
+      body.timezone = timezone;
     }
     if (defaultAll !== settings.default_all_members_participate) {
       body.default_all_members_participate = defaultAll;
@@ -120,6 +125,15 @@ function EditMealTimes({
             <Typography variant="body2" color="text.secondary">
               Snacks have no set time.
             </Typography>
+
+            <TextField
+              label="Timezone"
+              value={timezone}
+              onChange={(event) => setTimezone(event.target.value)}
+              disabled={!canManage}
+              helperText="An IANA timezone name, such as Europe/London."
+              fullWidth
+            />
 
             <FormControlLabel
               control={

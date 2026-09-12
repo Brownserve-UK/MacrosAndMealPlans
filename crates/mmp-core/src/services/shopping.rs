@@ -106,6 +106,14 @@ impl ShoppingService {
         self.trips.for_date(date).await
     }
 
+    pub async fn today(&self) -> Result<Date> {
+        Ok(
+            super::calendar::household_calendar(&*self.settings, &self.clock)
+                .await?
+                .today(),
+        )
+    }
+
     pub async fn start_shop(&self, date: Date, actor: UserId) -> Result<ShoppingTrip> {
         if let Some(existing) = self.trips.for_date(date).await? {
             return Ok(existing);
@@ -256,7 +264,9 @@ impl ShoppingService {
     }
 
     pub async fn upcoming(&self) -> Result<Vec<ShoppingOpportunity>> {
-        let today = self.clock.now().date();
+        let today = super::calendar::household_calendar(&*self.settings, &self.clock)
+            .await?
+            .today();
         self.opportunities(today, today + Duration::days(OPPORTUNITY_LOOKAHEAD_DAYS))
             .await
     }
@@ -369,7 +379,9 @@ impl ShoppingService {
     }
 
     pub async fn requirements(&self, focus: Option<Date>) -> Result<ShoppingList> {
-        let today = self.clock.now().date();
+        let today = super::calendar::household_calendar(&*self.settings, &self.clock)
+            .await?
+            .today();
         let cadence = self.cadence.get().await?;
         let lookahead = today + Duration::days(OPPORTUNITY_LOOKAHEAD_DAYS);
         let exceptions = self.opportunities.list_in_range(today, lookahead).await?;
@@ -643,7 +655,9 @@ impl ShoppingService {
     }
 
     pub async fn awaiting_put_away(&self) -> Result<Vec<Purchase>> {
-        let today = self.clock.now().date();
+        let today = super::calendar::household_calendar(&*self.settings, &self.clock)
+            .await?
+            .today();
         let pending = self.pending_purchases().await?;
 
         let mut waiting = Vec::new();

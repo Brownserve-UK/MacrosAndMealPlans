@@ -9,11 +9,13 @@ import { useState, type FormEvent } from 'react';
 import { ApiError } from '../../api/client';
 import { useAddShoppingOpportunity } from '../../api/queries';
 import { FormDialog } from '../../components/FormDialog';
+import { useHouseholdTimeZone } from '../../hooks/useHouseholdTimeZone';
 import { todayIso } from '../meal-plan/date';
 
 export function AddShopDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const add = useAddShoppingOpportunity();
-  const [date, setDate] = useState(todayIso());
+  const timeZone = useHouseholdTimeZone();
+  const [date, setDate] = useState(todayIso(timeZone));
   const [failure, setFailure] = useState<string | null>(null);
 
   async function onSubmit(event: FormEvent) {
@@ -39,7 +41,7 @@ export function AddShopDialog({ open, onClose }: { open: boolean; onClose: () =>
               label="Shop on"
               value={date}
               onChange={(e) => setDate(e.target.value)}
-              slotProps={{ htmlInput: { min: todayIso() } }}
+              slotProps={{ htmlInput: { min: todayIso(timeZone) } }}
               fullWidth
             />
           </Stack>

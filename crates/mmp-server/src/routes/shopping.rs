@@ -2,7 +2,7 @@ use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use mmp_core::ports::{PageRequest, PurchaseQuery};
-use time::{Date, Duration, OffsetDateTime};
+use time::{Date, Duration};
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
 use uuid::Uuid;
@@ -71,7 +71,7 @@ async fn opportunities(
     Query(query): Query<OpportunityRangeQuery>,
 ) -> ApiResult<Json<Vec<ShoppingOpportunityDto>>> {
     principal.require(Permission::ShoppingRead)?;
-    let today = OffsetDateTime::now_utc().date();
+    let today = state.shopping.today().await?;
     let from = query.from.unwrap_or(today);
     let to = query.to.unwrap_or(from + Duration::days(56));
     let opportunities = state.shopping.opportunities(from, to).await?;

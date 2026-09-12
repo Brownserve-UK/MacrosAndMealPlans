@@ -11,11 +11,9 @@ import { ApiError, type WeightDisplay, type WeightRecord } from '../../api/clien
 import { useRecordWeighIn, useUpdateWeighIn } from '../../api/queries';
 import { ConflictDialog } from '../../components/ConflictDialog';
 import { FormDialog } from '../../components/FormDialog';
+import { useHouseholdTimeZone } from '../../hooks/useHouseholdTimeZone';
+import { todayIso } from '../meal-plan/date';
 import { EMPTY_INPUT, parseWeightInput, toInput, unitLabel, type WeightInput } from './weightFormat';
-
-function todayIso() {
-  return new Date().toISOString().slice(0, 10);
-}
 
 export type WeighInDialogState = { mode: 'create' } | { mode: 'edit'; record: WeightRecord };
 
@@ -33,12 +31,13 @@ export function WeighInDialog({
   const editing = state.mode === 'edit';
   const create = useRecordWeighIn();
   const update = useUpdateWeighIn();
+  const timeZone = useHouseholdTimeZone();
 
   const [weight, setWeight] = useState<WeightInput>(() =>
     editing ? toInput(state.record.weight_kg, display) : EMPTY_INPUT,
   );
   const [recordedOn, setRecordedOn] = useState(() =>
-    editing ? state.record.recorded_on : todayIso(),
+    editing ? state.record.recorded_on : todayIso(timeZone),
   );
   const [weightError, setWeightError] = useState<string | null>(null);
   const [dateError, setDateError] = useState<string | null>(null);

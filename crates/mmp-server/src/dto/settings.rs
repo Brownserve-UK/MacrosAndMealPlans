@@ -49,6 +49,7 @@ impl From<MissingStockInterpretationDto> for MissingStockInterpretation {
 pub struct HouseholdSettingsDto {
     #[serde(flatten)]
     pub meal_times: MealTimesDto,
+    pub timezone: String,
     pub missing_stock_interpretation: MissingStockInterpretationDto,
     pub default_all_members_participate: bool,
     pub assume_eaten_when_time_passes: bool,
@@ -70,6 +71,7 @@ impl From<HouseholdSettings> for HouseholdSettingsDto {
                 lunch: value.meal_times.lunch,
                 dinner: value.meal_times.dinner,
             },
+            timezone: value.timezone,
             missing_stock_interpretation: value.missing_stock_interpretation.into(),
             default_all_members_participate: value.default_all_members_participate,
             assume_eaten_when_time_passes: value.assume_eaten_when_time_passes,
@@ -93,6 +95,8 @@ pub struct UpdateMealTimesRequest {
     #[schema(value_type = Option<String>, example = "18:00")]
     pub dinner: Option<Time>,
     #[serde(default)]
+    pub timezone: Option<String>,
+    #[serde(default)]
     pub missing_stock_interpretation: Option<MissingStockInterpretationDto>,
     #[serde(default)]
     pub default_all_members_participate: Option<bool>,
@@ -108,6 +112,7 @@ impl From<UpdateMealTimesRequest> for HouseholdSettingsPatch {
             breakfast_time: value.breakfast,
             lunch_time: value.lunch,
             dinner_time: value.dinner,
+            timezone: value.timezone,
             missing_stock_interpretation: value.missing_stock_interpretation.map(Into::into),
             default_all_members_participate: value.default_all_members_participate,
             assume_eaten_when_time_passes: value.assume_eaten_when_time_passes,

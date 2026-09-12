@@ -2,7 +2,7 @@ use axum::Json;
 use axum::extract::{Path, Query, State};
 use mmp_core::domain::{HouseholdMemberId, ProductId};
 use mmp_core::ports::{PageRequest, StockQuery};
-use time::{Duration, OffsetDateTime};
+use time::Duration;
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
 use uuid::Uuid;
@@ -252,7 +252,7 @@ async fn availability(
     Query(query): Query<StockAvailabilityQuery>,
 ) -> ApiResult<Json<AvailabilityReportDto>> {
     principal.require(Permission::StockRead)?;
-    let today = OffsetDateTime::now_utc().date();
+    let today = state.stock.today().await?;
     let from = query.from.unwrap_or(today);
     let to = query.to.unwrap_or(today + Duration::days(14));
 

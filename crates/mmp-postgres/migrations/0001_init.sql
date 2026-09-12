@@ -207,6 +207,7 @@ CREATE TABLE household_settings (
     breakfast_time  TIME NOT NULL,
     lunch_time      TIME NOT NULL,
     dinner_time     TIME NOT NULL,
+    timezone        TEXT NOT NULL DEFAULT 'Etc/UTC',
     missing_stock_interpretation TEXT NOT NULL DEFAULT 'unknown',
     default_all_members_participate BOOLEAN NOT NULL DEFAULT TRUE,
     assume_eaten_when_time_passes BOOLEAN NOT NULL DEFAULT TRUE,

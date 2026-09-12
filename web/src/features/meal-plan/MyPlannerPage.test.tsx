@@ -100,6 +100,7 @@ vi.mock('@tanstack/react-router', () => ({ useNavigate: () => mocks.navigate }))
 vi.mock('../../auth/AuthProvider', () => ({ useAuth: () => ({ principal: { member_id: 'me' } }) }));
 vi.mock('../../api/queries', () => ({
   useMealPlanWeek: () => ({ data: week(), isLoading: false, isError: false, refetch: vi.fn() }),
+  useHouseholdSettings: () => ({ data: undefined }),
   useMeta: () => ({ data: { nutrient_directions: {} } }),
   useCooks: () => ({ data: [] }),
   useDeleteMealPlanEntry: () => ({ mutateAsync: mocks.remove, isPending: false }),

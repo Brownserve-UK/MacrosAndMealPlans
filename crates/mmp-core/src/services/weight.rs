@@ -10,7 +10,9 @@ use crate::domain::{
     latest_per_day, project_goal,
 };
 use crate::error::{CoreError, Result};
-use crate::ports::{Clock, WeightGoalRepository, WeightRecordRepository};
+use crate::ports::{
+    Clock, HouseholdSettingsRepository, WeightGoalRepository, WeightRecordRepository,
+};
 
 const WEIGHT_RECORD: &str = "weight record";
 const WEIGHT_GOAL: &str = "weight goal";
@@ -34,6 +36,7 @@ pub struct WeightSummary {
 pub struct WeightService {
     records: Arc<dyn WeightRecordRepository>,
     goals: Arc<dyn WeightGoalRepository>,
+    settings: Arc<dyn HouseholdSettingsRepository>,
     clock: Arc<dyn Clock>,
 }
 
@@ -41,11 +44,13 @@ impl WeightService {
     pub fn new(
         records: Arc<dyn WeightRecordRepository>,
         goals: Arc<dyn WeightGoalRepository>,
+        settings: Arc<dyn HouseholdSettingsRepository>,
         clock: Arc<dyn Clock>,
     ) -> Self {
         Self {
             records,
             goals,
+            settings,
             clock,
         }
     }
@@ -232,7 +237,9 @@ impl WeightService {
             .collect();
         let latest = current_weight(&records).copied();
 
-        let today = self.clock.now().date();
+        let today = super::calendar::household_calendar(&*self.settings, &self.clock)
+            .await?
+            .today();
         let projection = goal
             .as_ref()
             .map(|goal| project_goal(goal, latest.map(|record| record.weight_kg), today));

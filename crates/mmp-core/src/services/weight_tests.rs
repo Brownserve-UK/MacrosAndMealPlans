@@ -4,7 +4,10 @@ use super::*;
 use crate::domain::{Patch, Quantity, Unit, WeightObjective, WeightSource};
 use crate::error::CoreError;
 use crate::ports::FixedClock;
-use crate::testing::{InMemoryWeightGoalRepository, InMemoryWeightRecordRepository};
+use crate::testing::{
+    InMemoryHouseholdSettingsRepository, InMemoryWeightGoalRepository,
+    InMemoryWeightRecordRepository,
+};
 use std::str::FromStr;
 use time::macros::{date, datetime};
 
@@ -20,6 +23,7 @@ fn harness() -> Harness {
     let service = WeightService::new(
         Arc::new(records.clone()),
         Arc::new(goals.clone()),
+        Arc::new(InMemoryHouseholdSettingsRepository::new()),
         Arc::new(FixedClock::new(datetime!(2026-09-03 09:00 UTC))),
     );
     Harness {

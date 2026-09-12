@@ -17,6 +17,8 @@ import {
 import { useClearWeightGoal, useSetWeightGoal, useUpdateWeightGoal } from '../../api/queries';
 import { ConflictDialog } from '../../components/ConflictDialog';
 import { FormDialog } from '../../components/FormDialog';
+import { useHouseholdTimeZone } from '../../hooks/useHouseholdTimeZone';
+import { todayIso } from '../meal-plan/date';
 import {
   EMPTY_INPUT,
   parseRateInput,
@@ -32,10 +34,6 @@ const OBJECTIVES: { value: WeightObjective; label: string }[] = [
   { value: 'maintain', label: 'Stay where I am' },
   { value: 'gain', label: 'Gain weight' },
 ];
-
-function todayIso() {
-  return new Date().toISOString().slice(0, 10);
-}
 
 function WeightFields({
   label,
@@ -119,7 +117,8 @@ export function WeightGoalDialog({
     goal?.target_weight_kg != null ? toInput(goal.target_weight_kg, display) : EMPTY_INPUT,
   );
   const [rate, setRate] = useState(() => rateToInput(goal?.planned_rate_kg_per_week, display));
-  const [startedOn, setStartedOn] = useState(() => goal?.started_on ?? todayIso());
+  const timeZone = useHouseholdTimeZone();
+  const [startedOn, setStartedOn] = useState(() => goal?.started_on ?? todayIso(timeZone));
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [formError, setFormError] = useState<string | null>(null);
   const [conflict, setConflict] = useState<ApiError | null>(null);

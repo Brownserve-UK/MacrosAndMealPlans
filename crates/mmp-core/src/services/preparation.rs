@@ -15,8 +15,8 @@ use crate::domain::{
 };
 use crate::error::{CoreError, Result, ValidationErrors};
 use crate::ports::{
-    Clock, IngredientRepository, PreparedBatchRepository, PreparedMealRepository,
-    ProductRepository, RecipeRepository, StockDeduction, StockWrite,
+    Clock, HouseholdSettingsRepository, IngredientRepository, PreparedBatchRepository,
+    PreparedMealRepository, ProductRepository, RecipeRepository, StockDeduction, StockWrite,
 };
 
 const PREPARED_BATCH: &str = "prepared batch";
@@ -47,16 +47,19 @@ pub struct PreparationService {
     products: Arc<dyn ProductRepository>,
     ingredients: Arc<dyn IngredientRepository>,
     prepared_meals: Arc<dyn PreparedMealRepository>,
+    settings: Arc<dyn HouseholdSettingsRepository>,
     clock: Arc<dyn Clock>,
 }
 
 impl PreparationService {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         batches: Arc<dyn PreparedBatchRepository>,
         recipes: Arc<dyn RecipeRepository>,
         products: Arc<dyn ProductRepository>,
         ingredients: Arc<dyn IngredientRepository>,
         prepared_meals: Arc<dyn PreparedMealRepository>,
+        settings: Arc<dyn HouseholdSettingsRepository>,
         clock: Arc<dyn Clock>,
     ) -> Self {
         Self {
@@ -65,6 +68,7 @@ impl PreparationService {
             products,
             ingredients,
             prepared_meals,
+            settings,
             clock,
         }
     }
@@ -230,7 +234,10 @@ impl PreparationService {
         }
 
         let now = self.clock.now();
-        let deadline = cooked_deadline(input.to, now.date());
+        let today = super::calendar::household_calendar(&*self.settings, &self.clock)
+            .await?
+            .today();
+        let deadline = cooked_deadline(input.to, today);
         let mut wanted = input.servings;
         let mut writes: Vec<(StockItem, NewStockEvent)> = Vec::new();
         let mut archive: Vec<StockItemId> = Vec::new();

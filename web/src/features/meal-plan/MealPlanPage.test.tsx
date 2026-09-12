@@ -157,6 +157,7 @@ vi.mock('../../auth/AuthProvider', () => ({
 
 vi.mock('../../api/queries', () => ({
   useMealPlanWeek: () => ({ data: week(), isLoading: false, isError: false, refetch: vi.fn() }),
+  useHouseholdSettings: () => ({ data: undefined }),
   useMeta: () => ({ data: { nutrient_directions: {} } }),
   useMarkMealPlanEaten: () => ({ mutateAsync: mocks.markEaten }),
   useMarkMealPlanComponentEaten: () => ({ mutateAsync: mocks.markComponentEaten }),

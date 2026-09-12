@@ -14,6 +14,7 @@ import { ApiError, type MealSlot, type PlannerMeal } from '../../api/client';
 import { useDeleteMealPlanEntry, useHouseholdPlannerWeek } from '../../api/queries';
 import { PageHeader } from '../../components/PageHeader';
 import { ErrorState, Loading } from '../../components/States';
+import { useHouseholdTimeZone } from '../../hooks/useHouseholdTimeZone';
 import { addDays, defaultDayFor, parseIsoDate, startOfWeekIso, todayIso } from './date';
 import { MealRow, plannerMealRow, type MealAction } from './MealRow';
 import { PlannerLens } from './PlannerLens';
@@ -93,13 +94,17 @@ export function HouseholdPlannerPage({ weekStart, day }: { weekStart: string; da
   const [cookingSomething, setCookingSomething] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const timeZone = useHouseholdTimeZone();
   const activeDate = day >= weekStart && day <= addDays(weekStart, 6) ? day : weekStart;
   const days = Array.from({ length: 7 }, (_, index) => addDays(weekStart, index));
   const meals = week.data?.meals.filter((meal) => meal.planned_on === activeDate) ?? [];
-  const canPlan = activeDate >= addDays(todayIso(), -1);
+  const canPlan = activeDate >= addDays(todayIso(timeZone), -1);
 
   function goToWeek(start: string) {
-    void navigate({ to: '/household/planner/$weekStart/$day', params: { weekStart: start, day: defaultDayFor(start) } });
+    void navigate({
+      to: '/household/planner/$weekStart/$day',
+      params: { weekStart: start, day: defaultDayFor(start, timeZone) },
+    });
   }
 
   function goToDay(date: string) {
@@ -145,14 +150,14 @@ export function HouseholdPlannerPage({ weekStart, day }: { weekStart: string; da
               .reduce((sum, meal) => sum + meal.foods.length, 0),
           }))}
           selectedDate={activeDate}
-          currentMonday={startOfWeekIso(todayIso())}
+          currentMonday={startOfWeekIso(todayIso(timeZone))}
           onWeekChange={goToWeek}
           onDayChange={goToDay}
         />
       ) : null}
 
       <UseItUp
-        today={todayIso()}
+        today={todayIso(timeZone)}
         onPlan={(dish, slot) => setEditing({ key: crypto.randomUUID(), meal: null, slot, dish })}
       />
 

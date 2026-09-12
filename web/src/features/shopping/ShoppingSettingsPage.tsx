@@ -18,6 +18,7 @@ import {
 import { ConflictDialog } from '../../components/ConflictDialog';
 import { PageHeader } from '../../components/PageHeader';
 import { ErrorState, Loading } from '../../components/States';
+import { useHouseholdTimeZone } from '../../hooks/useHouseholdTimeZone';
 import { startOfWeekIso, todayIso } from '../meal-plan/date';
 import { AisleOrder } from './AisleOrder';
 
@@ -57,6 +58,7 @@ function EditCadence({
 }) {
   const save = useSetShoppingCadence();
   const clear = useClearShoppingCadence();
+  const timeZone = useHouseholdTimeZone();
 
   const [interval, setInterval] = useState(cadence?.interval_weeks ?? 1);
   const [days, setDays] = useState<number[]>(cadence?.days ?? [6]);
@@ -77,7 +79,7 @@ function EditCadence({
         revision: cadence?.revision ?? 0,
         interval_weeks: interval,
         days: [...days].sort((a, b) => a - b),
-        anchor: startOfWeekIso(todayIso()),
+        anchor: startOfWeekIso(todayIso(timeZone)),
       });
       setSaved(true);
     } catch (caught) {

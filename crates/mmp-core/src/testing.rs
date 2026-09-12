@@ -1956,6 +1956,7 @@ impl InMemoryHouseholdSettingsRepository {
                     lunch: time::macros::time!(12:30),
                     dinner: time::macros::time!(18:00),
                 },
+                timezone: crate::ports::DEFAULT_TIMEZONE.to_owned(),
                 missing_stock_interpretation: MissingStockInterpretation::Unknown,
                 default_all_members_participate: false,
                 assume_eaten_when_time_passes: false,
@@ -1999,7 +2000,7 @@ impl Default for InMemoryHouseholdSettingsRepository {
 #[async_trait]
 impl HouseholdSettingsRepository for InMemoryHouseholdSettingsRepository {
     async fn get(&self) -> Result<HouseholdSettings> {
-        Ok(*self.row.lock().unwrap())
+        Ok(self.row.lock().unwrap().clone())
     }
 
     async fn update(
@@ -2013,7 +2014,7 @@ impl HouseholdSettingsRepository for InMemoryHouseholdSettingsRepository {
                 actual: row.revision,
             });
         }
-        *row = *settings;
+        *row = settings.clone();
         Ok(UpdateOutcome::Updated)
     }
 }

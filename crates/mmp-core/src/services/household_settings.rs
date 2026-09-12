@@ -34,9 +34,13 @@ impl HouseholdSettingsService {
         if patch.is_empty() {
             return Ok(current);
         }
+        patch.validate()?;
 
         if let Some(order) = &patch.section_order {
             current.section_order = crate::domain::SectionOrder::from_slice(order)?;
+        }
+        if let Some(timezone) = &patch.timezone {
+            current.timezone = timezone.clone();
         }
         current.meal_times = patch.clone().apply(current.meal_times);
         if let Some(interpretation) = patch.missing_stock_interpretation {

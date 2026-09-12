@@ -191,8 +191,9 @@ impl MealPlanService {
 
     async fn assumption_rules(&self) -> Result<AssumptionRules> {
         let settings = self.settings.get().await?;
+        let calendar = crate::ports::HouseholdCalendar::new(self.clock.clone(), &settings.timezone);
         Ok(AssumptionRules {
-            now: self.clock.now(),
+            now: calendar.now(),
             meal_times: settings.meal_times,
             enabled: settings.assume_eaten_when_time_passes,
         })
@@ -203,8 +204,17 @@ impl MealPlanService {
     }
 }
 
-fn ensure_not_past(clock: &dyn Clock, planned_on: Date) -> Result<()> {
-    let earliest = clock.now().date() - Duration::days(1);
+const PLANNING_GRACE_DAYS: i64 = 1;
+
+async fn ensure_not_past(
+    clock: &Arc<dyn Clock>,
+    settings: &dyn HouseholdSettingsRepository,
+    planned_on: Date,
+) -> Result<()> {
+    let today = super::calendar::household_calendar(settings, clock)
+        .await?
+        .today();
+    let earliest = today - Duration::days(PLANNING_GRACE_DAYS);
     if planned_on < earliest {
         let mut errors = ValidationErrors::new();
         errors.push("planned_on", "Plans cannot be dated in the past");
@@ -213,8 +223,15 @@ fn ensure_not_past(clock: &dyn Clock, planned_on: Date) -> Result<()> {
     Ok(())
 }
 
-fn ensure_due(clock: &dyn Clock, planned_on: Date) -> Result<()> {
-    let latest = clock.now().date() + Duration::days(1);
+async fn ensure_due(
+    clock: &Arc<dyn Clock>,
+    settings: &dyn HouseholdSettingsRepository,
+    planned_on: Date,
+) -> Result<()> {
+    let today = super::calendar::household_calendar(settings, clock)
+        .await?
+        .today();
+    let latest = today + Duration::days(PLANNING_GRACE_DAYS);
     if planned_on > latest {
         return Err(CoreError::conflict("This meal is not due yet."));
     }

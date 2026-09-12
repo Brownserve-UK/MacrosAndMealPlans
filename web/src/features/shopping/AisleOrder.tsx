@@ -5,12 +5,12 @@ import Paper from '@mui/material/Paper';
 import Stack from '@mui/material/Stack';
 import Typography from '@mui/material/Typography';
 import type { ShoppingSection } from '../../api/client';
-import { useMealTimes, useUpdateMealTimes } from '../../api/queries';
+import { useHouseholdSettings, useUpdateHouseholdSettings } from '../../api/queries';
 import { sectionLabel } from './sections';
 
 export function AisleOrder() {
-  const settings = useMealTimes();
-  const save = useUpdateMealTimes();
+  const settings = useHouseholdSettings();
+  const save = useUpdateHouseholdSettings();
 
   const order = settings.data?.shopping_section_order;
   if (!order) return null;
