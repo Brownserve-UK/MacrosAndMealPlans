@@ -6,22 +6,23 @@ use anyhow::{Context, bail};
 use mmp_core::CoreError;
 use mmp_core::domain::{
     AccessScope, ActualMealPlanComponent, Assumption, ConfirmMealPlanComponent,
-    ConfirmMealPlanEntry, ConsumedAmount, ConsumptionRecordId, HouseholdMember, HouseholdMemberId,
-    HouseholdSettingsPatch, IngredientId, MealCategory, MealItemRef, MealPlanEntryId,
-    MealPlanScope, MealPlanStatus, MealSlot, MealTemplateId, NewConsumptionRecord,
+    ConfirmMealPlanEntry, ConsumedAmount, ConsumptionRecordId, HabitualActivity, HouseholdMember,
+    HouseholdMemberId, HouseholdSettingsPatch, IngredientId, MealCategory, MealItemRef,
+    MealPlanEntryId, MealPlanScope, MealPlanStatus, MealSlot, MealTemplateId, NewConsumptionRecord,
     NewHouseholdMember, NewMealGuestAllocation, NewMealGuestGroup, NewMealParticipant,
     NewMealParticipantAllocation, NewMealPlanComponent, NewMealPlanEntry, NewMealTemplate,
     NewMealTemplateComponent, NewNutritionTarget, NewProduct, NewPurchase, NewRecipe,
     NewRecipeComponent, NewRecipeInstruction, NewShoppingCadence, NewShoppingListItem,
     NewStockItem, NewUser, NewWeightGoal, NewWeightRecord, NutritionFacts, NutritionGoals,
-    OutcomeActor, Patch, PreparedMealId, ProductId, Provenance, Quantity, RecipeId, RecipePatch,
-    RecipeRequirement, Revision, Role, SectionOrder, ShoppingSection, SourceDate, SourceDateKind,
-    StockLevel, StockSubject, StorageLocation, Unit, UsabilityDeadline, User, UserId,
-    WeightObjective, WeightSource,
+    OutcomeActor, Pace, Patch, PreparedMealId, ProductId, Provenance, Quantity, RecipeId,
+    RecipePatch, RecipeRequirement, Revision, Role, SectionOrder, Sex, ShoppingSection, SourceDate,
+    SourceDateKind, StockLevel, StockSubject, StorageLocation, Unit, UsabilityDeadline, User,
+    UserId, WeightObjective, WeightSource,
 };
+use mmp_core::services::NutritionPlanAnswers;
 use mmp_server::state::AppState;
 use rust_decimal::Decimal;
-use time::macros::time;
+use time::macros::{date, time};
 use time::{Date, Duration, PrimitiveDateTime, Time, Weekday};
 use uuid::Uuid;
 
@@ -62,6 +63,8 @@ pub struct Report {
     pub products_created: usize,
     pub recipes_created: usize,
     pub targets_created: usize,
+    pub body_profiles_created: usize,
+    pub calculations_created: usize,
     pub weigh_ins_created: usize,
     pub weight_goals_created: usize,
     pub stock_items_created: usize,
@@ -137,12 +140,14 @@ pub async fn load(
         report: Report::default(),
     };
 
-    loader.load_accounts().await?;
+    let manager = loader.load_accounts().await?;
     loader.load_products().await?;
     loader.load_prepared_meal_products().await?;
     loader.load_recipes().await?;
     loader.load_targets().await?;
     loader.load_weight().await?;
+    loader.load_guided_nutrition_plan().await?;
+    loader.load_manager_nutrition_target(manager.id).await?;
     loader.load_stock().await?;
 
     match scenario {
@@ -154,7 +159,7 @@ pub async fn load(
 }
 
 impl Loader<'_> {
-    async fn load_accounts(&mut self) -> anyhow::Result<()> {
+    async fn load_accounts(&mut self) -> anyhow::Result<HouseholdMember> {
         let manager = self
             .ensure_user(
                 "manager",
@@ -163,7 +168,8 @@ impl Loader<'_> {
                 vec![Role::HouseholdManager],
             )
             .await?;
-        self.ensure_member("manager", "Morgan Sample", manager.id)
+        let manager_member = self
+            .ensure_member("manager", "Morgan Sample", manager.id)
             .await?;
 
         let basic = self
@@ -194,7 +200,7 @@ impl Loader<'_> {
                 Some(self.actor.id),
             )
             .await?;
-        Ok(())
+        Ok(manager_member)
     }
 
     async fn ensure_user(
@@ -492,6 +498,79 @@ impl Loader<'_> {
         }
 
         self.ensure_weight_goal().await
+    }
+
+    async fn load_guided_nutrition_plan(&mut self) -> anyhow::Result<()> {
+        let existing_targets = self.state.nutrition_targets.list(self.member.id).await?;
+        let profile_exists = self
+            .state
+            .nutrition_plan
+            .body_profile(self.member.id)
+            .await?
+            .is_some();
+        let calculation_exists = self
+            .state
+            .nutrition_plan
+            .current(self.member.id)
+            .await?
+            .calculation
+            .is_some();
+        if profile_exists && calculation_exists {
+            return Ok(());
+        }
+
+        let guided = self
+            .state
+            .nutrition_plan
+            .set_guided(NutritionPlanAnswers {
+                member_id: self.member.id,
+                date_of_birth: date!(1985 - 01 - 01),
+                sex: Sex::Male,
+                height_cm: Decimal::from(178),
+                current_weight: Quantity::new(Decimal::from_str("79.8")?, Unit::Kilogram),
+                habitual_activity: HabitualActivity::LightlyActive,
+                objective: WeightObjective::Lose,
+                target_weight: Some(quantity(76, Unit::Kilogram)),
+                pace: Some(Pace::Standard),
+                recorded_by: Some(self.actor.id),
+            })
+            .await?;
+        if !existing_targets
+            .iter()
+            .any(|target| target.id == guided.target.id)
+        {
+            self.report.targets_created += 1;
+        }
+        if !profile_exists {
+            self.report.body_profiles_created += 1;
+        }
+        if !calculation_exists {
+            self.report.calculations_created += 1;
+        }
+        Ok(())
+    }
+
+    async fn load_manager_nutrition_target(
+        &mut self,
+        manager_id: HouseholdMemberId,
+    ) -> anyhow::Result<()> {
+        if self
+            .state
+            .nutrition_plan
+            .current(manager_id)
+            .await?
+            .target
+            .is_some()
+        {
+            return Ok(());
+        }
+
+        self.state
+            .nutrition_plan
+            .set_manual(manager_id, Decimal::from(2_200))
+            .await?;
+        self.report.targets_created += 1;
+        Ok(())
     }
 
     async fn ensure_weigh_in(
