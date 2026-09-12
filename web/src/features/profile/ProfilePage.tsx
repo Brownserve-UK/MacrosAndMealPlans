@@ -14,7 +14,6 @@ import { InitialsAvatar } from '../../components/InitialsAvatar';
 import { PageHeader } from '../../components/PageHeader';
 import { ErrorState, Loading } from '../../components/States';
 import { roleLabel } from '../administration/roles';
-import { NutritionTargetsPanel } from './NutritionTargetsPanel';
 
 export function ProfilePage() {
   const { principal } = useAuth();
@@ -45,10 +44,7 @@ export function ProfilePage() {
         </Paper>
 
         {principal.member_id ? (
-          <>
-            <NamePanel memberId={principal.member_id} />
-            <NutritionTargetsPanel memberId={principal.member_id} />
-          </>
+          <NamePanel memberId={principal.member_id} />
         ) : (
           <Paper sx={{ p: 3 }}>
             <Typography variant="h3" sx={{ mb: 1 }}>

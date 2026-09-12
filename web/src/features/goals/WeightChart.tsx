@@ -18,6 +18,7 @@ function dayNumber(iso: string): number {
   return Math.round(new Date(`${iso}T00:00:00Z`).getTime() / 86_400_000);
 }
 
+
 function formatDate(iso: string): string {
   return new Date(`${iso}T00:00:00`).toLocaleDateString('en-GB', {
     day: 'numeric',

@@ -6,6 +6,7 @@ export * from './consumption';
 export * from './mealPlan';
 export * from './mealTemplates';
 export * from './nutritionTargets';
+export * from './nutritionPlan';
 export * from './weight';
 export * from './recipes';
 export * from './stock';

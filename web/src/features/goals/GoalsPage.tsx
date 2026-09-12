@@ -13,34 +13,33 @@ import Typography from '@mui/material/Typography';
 import DeleteIcon from '@mui/icons-material/DeleteOutlineOutlined';
 import EditIcon from '@mui/icons-material/EditOutlined';
 import { useState } from 'react';
+import type { NutritionPlan, WeightDisplay, WeightRecord, WeightSummary } from '../../api/client';
+import { useAuth } from '../../auth/AuthProvider';
 import {
-  type GoalProjection,
-  type WeightDisplay,
-  type WeightGoal,
-  type WeightRecord,
-  type WeightSummary,
-} from '../../api/client';
-import {
+  useBodyProfile,
   useDeleteWeighIn,
   useMember,
+  useNutritionPlan,
   useUpdateMember,
   useWeightRecords,
   useWeightSummary,
 } from '../../api/queries';
-import { useAuth } from '../../auth/AuthProvider';
 import { FormDialog } from '../../components/FormDialog';
 import { PageHeader } from '../../components/PageHeader';
-import { EmptyState, ErrorState, Loading } from '../../components/States';
+import { ErrorState, Loading } from '../../components/States';
+import { GuidedSetupDialog } from './GuidedSetupDialog';
+import { ManualTargetDialog } from './ManualTargetDialog';
 import { WeighInDialog, type WeighInDialogState } from './WeighInDialog';
 import { WeightChart } from './WeightChart';
-import { WeightGoalDialog } from './WeightGoalDialog';
-import { formatRate, formatWeight, formatWeightChange } from './weightFormat';
+import { formatWeight } from './weightFormat';
 
 const DISPLAYS: { value: WeightDisplay; label: string }[] = [
   { value: 'kilograms', label: 'kg' },
   { value: 'stones_pounds', label: 'st + lb' },
   { value: 'pounds', label: 'lb' },
 ];
+
+type DialogState = 'guided' | 'manual' | null;
 
 function formatDate(iso: string) {
   return new Date(`${iso}T00:00:00`).toLocaleDateString('en-GB', {
@@ -50,71 +49,78 @@ function formatDate(iso: string) {
   });
 }
 
-export function WeightPage() {
+function formatCalories(value: number) {
+  return `${value.toLocaleString('en-GB')} kcal`;
+}
+
+export function GoalsPage() {
   const { principal } = useAuth();
   const memberId = principal?.member_id ?? '';
   const member = useMember(memberId);
+  const plan = useNutritionPlan(memberId);
   const summary = useWeightSummary(memberId);
   const records = useWeightRecords(memberId);
+  const profile = useBodyProfile(memberId);
 
   if (!principal) return null;
   if (!memberId) {
     return (
       <>
-        <PageHeader title="Weight" />
-        <Paper sx={{ p: 3 }}>
-          <Typography variant="body2" color="text.secondary">
-            Your account isn't linked to a household member yet, so there is nowhere to keep your
-            weight.
-          </Typography>
-        </Paper>
+        <PageHeader title="Goals" />
+        <Typography variant="body2" color="text.secondary">
+          Your account is not linked to a household member yet.
+        </Typography>
       </>
     );
   }
-
-  if (summary.isLoading || member.isLoading) return <Loading label="Loading weight" />;
-  if (summary.isError) return <ErrorState error={summary.error} onRetry={() => summary.refetch()} />;
+  if (member.isLoading || plan.isLoading || summary.isLoading) return <Loading label="Loading goals" />;
   if (member.isError) return <ErrorState error={member.error} onRetry={() => member.refetch()} />;
+  if (plan.isError) return <ErrorState error={plan.error} onRetry={() => plan.refetch()} />;
+  if (summary.isError) return <ErrorState error={summary.error} onRetry={() => summary.refetch()} />;
 
   return (
-    <WeightView
+    <GoalsView
       memberId={memberId}
       display={member.data?.weight_display ?? 'kilograms'}
       memberRevision={member.data?.revision ?? 0}
+      plan={plan.data as NutritionPlan}
       summary={summary.data as WeightSummary}
       records={records.data ?? []}
+      profile={profile.data}
     />
   );
 }
 
-function WeightView({
+function GoalsView({
   memberId,
   display,
   memberRevision,
+  plan,
   summary,
   records,
+  profile,
 }: {
   memberId: string;
   display: WeightDisplay;
   memberRevision: number;
+  plan: NutritionPlan;
   summary: WeightSummary;
   records: WeightRecord[];
+  profile: ReturnType<typeof useBodyProfile>['data'];
 }) {
   const updateMember = useUpdateMember();
+  const [dialog, setDialog] = useState<DialogState>(null);
   const [weighIn, setWeighIn] = useState<WeighInDialogState | null>(null);
-  const [goalOpen, setGoalOpen] = useState(false);
   const [removing, setRemoving] = useState<WeightRecord | null>(null);
-
-  const latest = summary.latest ?? null;
-  const goal = summary.goal ?? null;
+  const target = plan.target?.energy_kcal ?? null;
+  const calculation = plan.calculation ?? null;
 
   return (
     <>
       <PageHeader
-        title="Weight"
-        subtitle="Your weigh-ins and how they are tracking against your goal."
+        title="Goals"
         actions={
-          <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
+          <Stack direction="row" spacing={1}>
             <ToggleButtonGroup
               size="small"
               exclusive
@@ -143,32 +149,96 @@ function WeightView({
       />
 
       <Stack spacing={3}>
-        <Paper sx={{ p: 3 }}>
-          <Headline summary={summary} display={display} onSetGoal={() => setGoalOpen(true)} />
-        </Paper>
+        {target == null ? (
+          <Paper sx={{ p: 3 }}>
+            <Stack spacing={2}>
+              <Typography variant="body2" color="text.secondary">
+                We can work out a daily calorie target by asking a few questions.
+              </Typography>
+              <Stack direction="row" spacing={1}>
+                <Button variant="contained" onClick={() => setDialog('guided')}>
+                  Start
+                </Button>
+                <Button onClick={() => setDialog('manual')}>Set my own target</Button>
+              </Stack>
+            </Stack>
+          </Paper>
+        ) : (
+          <>
+            <Paper sx={{ p: 3 }}>
+              <Stack spacing={1.5}>
+                <Typography variant="caption" color="text.secondary">
+                  Your daily target
+                </Typography>
+                <Typography className="numeral" variant="h2">
+                  {formatCalories(target)}
+                </Typography>
+                <Stack direction="row" spacing={1}>
+                  <Button variant="contained" onClick={() => setDialog('guided')}>
+                    Review my plan
+                  </Button>
+                  <Button onClick={() => setDialog('manual')}>Set a different number</Button>
+                </Stack>
+              </Stack>
+            </Paper>
+
+            {calculation ? (
+              <Paper sx={{ p: 3 }}>
+                <Stack spacing={1}>
+                  <Typography variant="h3">How this was worked out</Typography>
+                  <Typography className="numeral" variant="body2">
+                    Worked out {formatDate(calculation.calculated_on)} from{' '}
+                    {formatWeight(calculation.weight_kg, display)}
+                  </Typography>
+                  <Typography className="numeral" variant="body2" color="text.secondary">
+                    Maintenance {formatCalories(calculation.maintenance_kcal)} ·{' '}
+                    {Math.abs(calculation.adjustment_kcal).toLocaleString('en-GB')} kcal{' '}
+                    {calculation.adjustment_kcal < 0
+                      ? 'less'
+                      : calculation.adjustment_kcal > 0
+                        ? 'more'
+                        : 'adjustment'}{' '}
+                    a day
+                  </Typography>
+                  {calculation.eased ? (
+                    <Alert severity="warning">
+                      Your pace was eased to the safety floor of{' '}
+                      <span className="numeral">{formatCalories(calculation.floor_kcal)}</span>.
+                    </Alert>
+                  ) : null}
+                </Stack>
+              </Paper>
+            ) : null}
+          </>
+        )}
+
+        {summary.projection?.status === 'projected' ? (
+          <Paper sx={{ p: 3 }}>
+            <Typography variant="h3">Estimated goal date</Typography>
+            <Typography className="numeral" variant="body1" sx={{ mt: 1 }}>
+              {formatDate(summary.projection.on)}
+            </Typography>
+          </Paper>
+        ) : null}
 
         {summary.series.length > 0 ? (
           <Paper sx={{ p: 3 }}>
             <Typography variant="h3" sx={{ mb: 2 }}>
               Trend
             </Typography>
-            <WeightChart
-              points={summary.series}
-              goalKg={goal?.target_weight_kg ?? null}
-              display={display}
-            />
+            <WeightChart points={summary.series} goalKg={summary.goal?.target_weight_kg} display={display} />
           </Paper>
         ) : null}
 
         <Paper sx={{ p: 3 }}>
-          <Typography variant="h3" sx={{ mb: 2 }}>
-            Weigh-ins
-          </Typography>
+          <Stack direction="row" sx={{ alignItems: 'center', justifyContent: 'space-between', mb: 2 }}>
+            <Typography variant="h3">Weigh-ins</Typography>
+            <Button onClick={() => setWeighIn({ mode: 'create' })}>Add weigh-in</Button>
+          </Stack>
           {records.length === 0 ? (
-            <EmptyState
-              title="Nothing recorded yet"
-              description="Add your first weigh-in and your trend will build from there."
-            />
+            <Typography variant="body2" color="text.secondary">
+              Add your first weigh-in to see your trend.
+            </Typography>
           ) : (
             <Stack divider={<Divider />}>
               {records.map((record) => (
@@ -177,11 +247,11 @@ function WeightView({
                   direction="row"
                   sx={{ alignItems: 'center', justifyContent: 'space-between', py: 1, gap: 1 }}
                 >
-                  <Stack sx={{ minWidth: 0 }}>
+                  <Stack>
                     <Typography className="numeral" variant="body2">
                       {formatWeight(record.weight_kg, display)}
                     </Typography>
-                    <Typography variant="caption" color="text.secondary">
+                    <Typography className="numeral" variant="caption" color="text.secondary">
                       {formatDate(record.recorded_on)}
                     </Typography>
                   </Stack>
@@ -208,25 +278,25 @@ function WeightView({
         </Paper>
       </Stack>
 
+      {dialog === 'guided' ? (
+        <GuidedSetupDialog
+          memberId={memberId}
+          profile={profile}
+          summary={summary}
+          onClose={() => setDialog(null)}
+          onManual={() => setDialog('manual')}
+        />
+      ) : null}
+      {dialog === 'manual' ? (
+        <ManualTargetDialog
+          memberId={memberId}
+          floorKcal={calculation?.floor_kcal ?? (profile?.sex === 'male' ? 1500 : profile?.sex === 'female' ? 1200 : null)}
+          onClose={() => setDialog(null)}
+        />
+      ) : null}
       {weighIn ? (
-        <WeighInDialog
-          memberId={memberId}
-          display={display}
-          state={weighIn}
-          onClose={() => setWeighIn(null)}
-        />
+        <WeighInDialog memberId={memberId} display={display} state={weighIn} onClose={() => setWeighIn(null)} />
       ) : null}
-
-      {goalOpen ? (
-        <WeightGoalDialog
-          memberId={memberId}
-          display={display}
-          goal={goal}
-          currentWeightKg={latest?.weight_kg ?? null}
-          onClose={() => setGoalOpen(false)}
-        />
-      ) : null}
-
       {removing ? (
         <DeleteWeighInDialog
           memberId={memberId}
@@ -236,106 +306,6 @@ function WeightView({
         />
       ) : null}
     </>
-  );
-}
-
-function Fact({ label, value }: { label: string; value: string }) {
-  return (
-    <Stack spacing={0.25} sx={{ minWidth: 0 }}>
-      <Typography variant="caption" color="text.secondary">
-        {label}
-      </Typography>
-      <Typography className="numeral" variant="body1">
-        {value}
-      </Typography>
-    </Stack>
-  );
-}
-
-function projectionText(
-  projection: GoalProjection | null | undefined,
-  goal: WeightGoal | null,
-): string {
-  if (!projection || !goal) return '—';
-  if (projection.status === 'reached') return 'Reached';
-  if (projection.status === 'steady') return 'No end date';
-  return formatDate(projection.on);
-}
-
-function Headline({
-  summary,
-  display,
-  onSetGoal,
-}: {
-  summary: WeightSummary;
-  display: WeightDisplay;
-  onSetGoal: () => void;
-}) {
-  const latest = summary.latest ?? null;
-  const goal = summary.goal ?? null;
-
-  if (!latest && !goal) {
-    return (
-      <EmptyState
-        title="No weight recorded"
-        description="Add a weigh-in to start, then set a goal to see when you would reach it."
-        action={
-          <Button variant="outlined" onClick={onSetGoal}>
-            Set a goal
-          </Button>
-        }
-      />
-    );
-  }
-
-  return (
-    <Stack spacing={2}>
-      <Stack
-        direction="row"
-        sx={{ alignItems: 'flex-start', justifyContent: 'space-between', gap: 1 }}
-      >
-        <Stack spacing={0.25}>
-          <Typography variant="caption" color="text.secondary">
-            {latest ? `Weighed ${formatDate(latest.recorded_on)}` : 'No weigh-ins yet'}
-          </Typography>
-          <Typography className="numeral" variant="h2">
-            {latest ? formatWeight(latest.weight_kg, display) : '—'}
-          </Typography>
-        </Stack>
-        <Button variant="outlined" onClick={onSetGoal}>
-          {goal ? 'Edit goal' : 'Set a goal'}
-        </Button>
-      </Stack>
-
-      {goal ? (
-        <Stack direction="row" spacing={4} sx={{ flexWrap: 'wrap', gap: 2 }}>
-          <Fact
-            label="Target"
-            value={
-              goal.target_weight_kg != null
-                ? formatWeight(goal.target_weight_kg, display)
-                : formatWeight(goal.starting_weight_kg, display)
-            }
-          />
-          <Fact
-            label="Since you started"
-            value={
-              summary.change_since_start_kg != null
-                ? formatWeightChange(summary.change_since_start_kg, display)
-                : '—'
-            }
-          />
-          <Fact label="At this rate" value={projectionText(summary.projection, goal)} />
-          {goal.planned_rate_kg_per_week != null ? (
-            <Fact label="Planned" value={formatRate(goal.planned_rate_kg_per_week, display)} />
-          ) : null}
-        </Stack>
-      ) : (
-        <Typography variant="body2" color="text.secondary">
-          Set a goal to see when you would reach it.
-        </Typography>
-      )}
-    </Stack>
   );
 }
 
@@ -369,16 +339,16 @@ function DeleteWeighInDialog({
       <DialogContent dividers>
         <Stack spacing={2}>
           <Typography variant="body2">
-            {formatWeight(record.weight_kg, display)} on {formatDate(record.recorded_on)} will be
-            removed from your trend.
+            <span className="numeral">{formatWeight(record.weight_kg, display)}</span> on{' '}
+            <span className="numeral">{formatDate(record.recorded_on)}</span> will be removed from your trend.
           </Typography>
           {error ? <Alert severity="error">{error}</Alert> : null}
         </Stack>
       </DialogContent>
       <DialogActions>
         <Button onClick={onClose}>Cancel</Button>
-        <Button color="error" variant="contained" onClick={onConfirm} disabled={remove.isPending}>
-          {remove.isPending ? 'Deleting…' : 'Delete'}
+        <Button color="error" onClick={() => void onConfirm()} disabled={remove.isPending}>
+          Delete
         </Button>
       </DialogActions>
     </FormDialog>

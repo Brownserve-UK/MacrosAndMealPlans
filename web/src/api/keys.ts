@@ -81,6 +81,7 @@ const entry = ['mealPlanEntry'] as const;
 const needsReview = ['mealPlanNeedsReview'] as const;
 const slotAttendance = ['householdSlotAttendance'] as const;
 const nutritionTargets = ['nutritionTargets'] as const;
+const nutritionPlan = ['nutritionPlan'] as const;
 const weight = ['weight'] as const;
 const recipes = ['recipes'] as const;
 const recipe = ['recipe'] as const;
@@ -145,6 +146,12 @@ export const mealPlanKeys = {
 export const nutritionTargetKeys = {
   all: () => nutritionTargets,
   forMember: (memberId: string) => [...nutritionTargets, memberId] as const,
+};
+
+export const nutritionPlanKeys = {
+  all: () => nutritionPlan,
+  plan: (memberId: string) => [...nutritionPlan, 'plan', memberId] as const,
+  profile: (memberId: string) => [...nutritionPlan, 'profile', memberId] as const,
 };
 
 export const weightKeys = {

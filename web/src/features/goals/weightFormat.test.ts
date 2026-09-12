@@ -32,6 +32,7 @@ describe('formatWeight', () => {
   });
 });
 
+
 describe('formatWeightChange', () => {
   it('always carries a sign so a gain and a loss cannot be confused', () => {
     expect(formatWeightChange(-2.6, 'kilograms')).toBe('−2.6 kg');
