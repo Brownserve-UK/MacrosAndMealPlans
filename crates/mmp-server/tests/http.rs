@@ -3712,3 +3712,622 @@ async fn saving_a_meal_from_an_entry_creates_a_saved_meal() {
     assert_eq!(created["name"], "Milk on its own");
     assert_eq!(created["components"].as_array().unwrap().len(), 1);
 }
+
+async fn create_weight_record(app: &Router, member: &str) -> Value {
+    let (status, body, _) = send(
+        app,
+        Call::new("POST", format!("/api/v1/members/{member}/weight-records")).body(json!({
+            "weight": {"amount": 80.0, "unit": "kg"},
+            "recorded_on": "2026-08-25",
+            "recorded_at": "2026-08-25T07:30:00Z",
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    body
+}
+
+async fn create_weight_goal(app: &Router, member: &str) -> Value {
+    let (status, body, _) = send(
+        app,
+        Call::new("POST", format!("/api/v1/members/{member}/weight-goal")).body(json!({
+            "objective": "lose",
+            "starting_weight": {"amount": 80.0, "unit": "kg"},
+            "target_weight": {"amount": 72.0, "unit": "kg"},
+            "planned_rate": {"amount": 0.5, "unit": "kg"},
+            "started_on": "2026-08-01",
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    body
+}
+
+async fn create_prepared_meal(app: &Router, name: &str) -> Value {
+    let (status, body, _) = send(
+        app,
+        Call::new("POST", "/api/v1/prepared-meals").body(json!({
+            "name": name,
+            "default_unit": "serving",
+            "shopping_section": "frozen",
+            "track_stock": true,
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    body
+}
+
+async fn create_preparation(app: &Router) -> (Value, Value) {
+    let product = create_milk_product(app).await;
+    let recipe = create_recipe(app, "Rice pudding", &product["id"]).await;
+    let (status, body, headers) = send(
+        app,
+        Call::new("POST", "/api/v1/preparations").body(json!({
+            "recipe_id": recipe["id"],
+            "servings_produced": 4.0,
+            "placements": [{
+                "storage_location": "chilled",
+                "servings": 4.0,
+                "note": "Cooked today",
+            }],
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    assert_eq!(etag(&headers), "1");
+    (recipe, body)
+}
+
+#[tokio::test]
+async fn weight_records_round_trip_through_http() {
+    let app = app().await;
+    let member = my_member_id(&app).await;
+    let created = create_weight_record(&app, &member).await;
+    let id = created["id"].as_str().unwrap();
+
+    assert_eq!(created["member_id"], member);
+    assert_eq!(created["weight_kg"], 80.0);
+    assert_eq!(created["source"], "manual");
+
+    let (status, listed, _) = send(
+        &app,
+        Call::new("GET", format!("/api/v1/members/{member}/weight-records")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    assert_eq!(listed.as_array().unwrap().len(), 1);
+    assert_eq!(listed[0]["id"], id);
+
+    let (status, fetched, headers) = send(
+        &app,
+        Call::new("GET", format!("/api/v1/weight-records/{id}")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{fetched}");
+    assert_eq!(fetched, created);
+    assert_eq!(etag(&headers), "1");
+
+    let (status, updated, headers) = send(
+        &app,
+        Call::new("PATCH", format!("/api/v1/weight-records/{id}"))
+            .if_match(etag(&headers))
+            .body(json!({
+                "weight": {"amount": 79.5, "unit": "kg"},
+                "recorded_on": "2026-08-26",
+                "recorded_at": null,
+            })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{updated}");
+    assert_eq!(updated["weight_kg"], 79.5);
+    assert_eq!(updated["recorded_on"], "2026-08-26");
+    assert!(updated["recorded_at"].is_null());
+    assert_eq!(etag(&headers), "2");
+
+    let (status, body, _) = send(
+        &app,
+        Call::new("DELETE", format!("/api/v1/weight-records/{id}")).if_match(etag(&headers)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+
+    let (status, body, _) = send(
+        &app,
+        Call::new("GET", format!("/api/v1/weight-records/{id}")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+}
+
+#[tokio::test]
+async fn weight_record_mutations_enforce_if_match() {
+    let app = app().await;
+    let member = my_member_id(&app).await;
+    let created = create_weight_record(&app, &member).await;
+    let id = created["id"].as_str().unwrap();
+
+    let (status, body, _) = send(
+        &app,
+        Call::new("PATCH", format!("/api/v1/weight-records/{id}"))
+            .body(json!({"weight": {"amount": 79.0, "unit": "kg"}})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::PRECONDITION_REQUIRED, "{body}");
+
+    let (status, body, _) = send(
+        &app,
+        Call::new("PATCH", format!("/api/v1/weight-records/{id}"))
+            .if_match(99)
+            .body(json!({"weight": {"amount": 79.0, "unit": "kg"}})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["actual_revision"], 1);
+
+    let (_, updated, _) = send(
+        &app,
+        Call::new("PATCH", format!("/api/v1/weight-records/{id}"))
+            .if_match(1)
+            .body(json!({"weight": {"amount": 79.0, "unit": "kg"}})),
+    )
+    .await;
+
+    let (status, body, _) = send(
+        &app,
+        Call::new("DELETE", format!("/api/v1/weight-records/{id}")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::PRECONDITION_REQUIRED, "{body}");
+
+    let (status, body, _) = send(
+        &app,
+        Call::new("DELETE", format!("/api/v1/weight-records/{id}")).if_match(1),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["actual_revision"], updated["revision"]);
+}
+
+#[tokio::test]
+async fn unknown_weight_record_ids_return_not_found() {
+    let app = app().await;
+    let id = "00000000-0000-0000-0000-0000000000ff";
+
+    let (status, body, _) = send(
+        &app,
+        Call::new("GET", format!("/api/v1/weight-records/{id}")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+
+    let (status, body, _) = send(
+        &app,
+        Call::new("PATCH", format!("/api/v1/weight-records/{id}"))
+            .if_match(1)
+            .body(json!({"weight": {"amount": 79.0, "unit": "kg"}})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+
+    let (status, body, _) = send(
+        &app,
+        Call::new("DELETE", format!("/api/v1/weight-records/{id}")).if_match(1),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+}
+
+#[tokio::test]
+async fn weight_goals_and_summary_round_trip_through_http() {
+    let app = app().await;
+    let member = my_member_id(&app).await;
+    let goal = create_weight_goal(&app, &member).await;
+    let id = goal["id"].as_str().unwrap();
+
+    let (status, fetched, headers) = send(
+        &app,
+        Call::new("GET", format!("/api/v1/members/{member}/weight-goal")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{fetched}");
+    assert_eq!(fetched, goal);
+    assert_eq!(etag(&headers), "1");
+
+    let (status, updated, headers) = send(
+        &app,
+        Call::new("PATCH", format!("/api/v1/weight-goals/{id}"))
+            .if_match(etag(&headers))
+            .body(json!({
+                "target_weight": {"amount": 70.0, "unit": "kg"},
+                "planned_rate": {"amount": 0.25, "unit": "kg"},
+            })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{updated}");
+    assert_eq!(updated["target_weight_kg"], 70.0);
+    assert_eq!(updated["planned_rate_kg_per_week"], 0.25);
+    assert_eq!(etag(&headers), "2");
+
+    create_weight_record(&app, &member).await;
+    let (status, summary, _) = send(
+        &app,
+        Call::new("GET", format!("/api/v1/members/{member}/weight-summary")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{summary}");
+    assert_eq!(summary["latest"]["weight_kg"], 80.0);
+    assert_eq!(summary["goal"]["id"], id);
+    assert_eq!(summary["projection"]["status"], "projected");
+    assert_eq!(summary["change_since_start_kg"], 0.0);
+    assert_eq!(summary["series"].as_array().unwrap().len(), 1);
+
+    let (status, body, _) = send(
+        &app,
+        Call::new("DELETE", format!("/api/v1/weight-goals/{id}")).if_match(etag(&headers)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+
+    let (status, body, _) = send(
+        &app,
+        Call::new("GET", format!("/api/v1/members/{member}/weight-goal")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+}
+
+#[tokio::test]
+async fn weight_goal_mutations_enforce_if_match() {
+    let app = app().await;
+    let member = my_member_id(&app).await;
+    let goal = create_weight_goal(&app, &member).await;
+    let id = goal["id"].as_str().unwrap();
+
+    let (status, body, _) = send(
+        &app,
+        Call::new("PATCH", format!("/api/v1/weight-goals/{id}"))
+            .body(json!({"target_weight": {"amount": 70.0, "unit": "kg"}})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::PRECONDITION_REQUIRED, "{body}");
+
+    let (status, body, _) = send(
+        &app,
+        Call::new("PATCH", format!("/api/v1/weight-goals/{id}"))
+            .if_match(99)
+            .body(json!({"target_weight": {"amount": 70.0, "unit": "kg"}})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["actual_revision"], 1);
+
+    let (_, updated, _) = send(
+        &app,
+        Call::new("PATCH", format!("/api/v1/weight-goals/{id}"))
+            .if_match(1)
+            .body(json!({"target_weight": {"amount": 70.0, "unit": "kg"}})),
+    )
+    .await;
+
+    let (status, body, _) = send(
+        &app,
+        Call::new("DELETE", format!("/api/v1/weight-goals/{id}")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::PRECONDITION_REQUIRED, "{body}");
+
+    let (status, body, _) = send(
+        &app,
+        Call::new("DELETE", format!("/api/v1/weight-goals/{id}")).if_match(1),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["actual_revision"], updated["revision"]);
+}
+
+#[tokio::test]
+async fn unknown_weight_goal_ids_return_not_found() {
+    let app = app().await;
+    let member = my_member_id(&app).await;
+    let id = "00000000-0000-0000-0000-0000000000ff";
+
+    let (status, body, _) = send(
+        &app,
+        Call::new("GET", format!("/api/v1/members/{member}/weight-goal")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+
+    let (status, body, _) = send(
+        &app,
+        Call::new("PATCH", format!("/api/v1/weight-goals/{id}"))
+            .if_match(1)
+            .body(json!({"target_weight": {"amount": 70.0, "unit": "kg"}})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+
+    let (status, body, _) = send(
+        &app,
+        Call::new("DELETE", format!("/api/v1/weight-goals/{id}")).if_match(1),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+}
+
+#[tokio::test]
+async fn preparations_round_trip_without_if_match() {
+    let app = app().await;
+    let (recipe, created) = create_preparation(&app).await;
+    let id = created["id"].as_str().unwrap();
+
+    assert_eq!(created["recipe_id"], recipe["id"]);
+    assert_eq!(created["item_name"], "Rice pudding");
+    assert_eq!(created["servings_produced"], 4.0);
+
+    let (status, listed, _) = send(
+        &app,
+        Call::new("GET", "/api/v1/preparations?from=2026-08-25&to=2026-08-27"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    assert_eq!(listed.as_array().unwrap().len(), 1);
+    assert_eq!(listed[0]["id"], id);
+
+    let (status, fetched, headers) =
+        send(&app, Call::new("GET", format!("/api/v1/preparations/{id}"))).await;
+    assert_eq!(status, StatusCode::OK, "{fetched}");
+    assert_eq!(fetched["id"], id);
+    assert!(!headers.contains_key(header::ETAG));
+
+    let (status, placed, _) = send(
+        &app,
+        Call::new("PUT", format!("/api/v1/preparations/{id}/placements")).body(json!({
+            "placements": [{
+                "storage_location": "frozen",
+                "servings": 4.0,
+                "note": "For later",
+            }],
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{placed}");
+    assert_eq!(placed["id"], id);
+
+    let recipe_id = recipe["id"].as_str().unwrap();
+    let (status, moved, _) = send(
+        &app,
+        Call::new("POST", format!("/api/v1/cooked-food/{recipe_id}/move")).body(json!({
+            "from": "frozen",
+            "to": "chilled",
+            "servings": 1.0,
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{moved}");
+    assert_eq!(moved.as_array().unwrap().len(), 1);
+    assert_eq!(moved[0]["prepared_batch_id"], id);
+    assert_eq!(moved[0]["storage_location"], "chilled");
+    assert_eq!(moved[0]["level"]["quantity"]["amount"], 1.0);
+}
+
+#[tokio::test]
+async fn unknown_preparation_ids_return_not_found() {
+    let app = app().await;
+    let id = "00000000-0000-0000-0000-0000000000ff";
+
+    let (status, body, _) = send(
+        &app,
+        Call::new("POST", "/api/v1/preparations").body(json!({
+            "recipe_id": id,
+            "servings_produced": 1.0,
+            "placements": [{"storage_location": "chilled", "servings": 1.0}],
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+
+    let (status, body, _) =
+        send(&app, Call::new("GET", format!("/api/v1/preparations/{id}"))).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+
+    let (status, body, _) = send(
+        &app,
+        Call::new("PUT", format!("/api/v1/preparations/{id}/placements")).body(json!({
+            "placements": [{"storage_location": "frozen", "servings": 1.0}],
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+}
+
+#[tokio::test]
+async fn prepared_meals_and_their_products_round_trip_through_http() {
+    let app = app().await;
+    let created = create_prepared_meal(&app, "Vegetable lasagne").await;
+    let id = created["id"].as_str().unwrap();
+
+    assert_eq!(created["default_unit"], "serving");
+    assert_eq!(created["shopping_section"], "frozen");
+    assert_eq!(created["track_stock"], true);
+
+    let (status, fetched, headers) = send(
+        &app,
+        Call::new("GET", format!("/api/v1/prepared-meals/{id}")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{fetched}");
+    assert_eq!(fetched, created);
+    assert_eq!(etag(&headers), "1");
+
+    let (status, updated, headers) = send(
+        &app,
+        Call::new("PATCH", format!("/api/v1/prepared-meals/{id}"))
+            .if_match(etag(&headers))
+            .body(json!({
+                "name": "Roasted vegetable lasagne",
+                "shopping_section": "dairy",
+                "track_stock": false,
+            })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{updated}");
+    assert_eq!(updated["name"], "Roasted vegetable lasagne");
+    assert_eq!(updated["shopping_section"], "dairy");
+    assert_eq!(updated["track_stock"], false);
+    assert_eq!(etag(&headers), "2");
+
+    let (status, archived, headers) = send(
+        &app,
+        Call::new("POST", format!("/api/v1/prepared-meals/{id}/archive")).if_match(etag(&headers)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{archived}");
+    assert!(!archived["archived_at"].is_null());
+    assert_eq!(etag(&headers), "3");
+
+    let (status, restored, _) = send(
+        &app,
+        Call::new("POST", format!("/api/v1/prepared-meals/{id}/unarchive"))
+            .if_match(etag(&headers)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{restored}");
+    assert!(restored["archived_at"].is_null());
+
+    let product_id = create_product(&app, "Family vegetable lasagne").await;
+    let (status, product, _) = send(
+        &app,
+        Call::new(
+            "PUT",
+            format!("/api/v1/products/{product_id}/prepared-meal"),
+        )
+        .if_match(1)
+        .body(json!({"prepared_meal_id": id})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{product}");
+
+    let (status, products, _) = send(
+        &app,
+        Call::new("GET", format!("/api/v1/prepared-meals/{id}/products")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{products}");
+    assert_eq!(products["total"], 1);
+    assert_eq!(products["items"][0]["id"], product_id);
+}
+
+#[tokio::test]
+async fn prepared_meal_mutations_enforce_if_match() {
+    let app = app().await;
+    let created = create_prepared_meal(&app, "Vegetable lasagne").await;
+    let id = created["id"].as_str().unwrap();
+
+    let (status, body, _) = send(
+        &app,
+        Call::new("PATCH", format!("/api/v1/prepared-meals/{id}"))
+            .body(json!({"name": "Spinach lasagne"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::PRECONDITION_REQUIRED, "{body}");
+
+    let (status, body, _) = send(
+        &app,
+        Call::new("PATCH", format!("/api/v1/prepared-meals/{id}"))
+            .if_match(99)
+            .body(json!({"name": "Spinach lasagne"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+
+    let (_, updated, _) = send(
+        &app,
+        Call::new("PATCH", format!("/api/v1/prepared-meals/{id}"))
+            .if_match(1)
+            .body(json!({"name": "Spinach lasagne"})),
+    )
+    .await;
+
+    let (status, body, _) = send(
+        &app,
+        Call::new("POST", format!("/api/v1/prepared-meals/{id}/archive")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::PRECONDITION_REQUIRED, "{body}");
+
+    let (status, body, _) = send(
+        &app,
+        Call::new("POST", format!("/api/v1/prepared-meals/{id}/archive")).if_match(1),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+
+    let (_, archived, _) = send(
+        &app,
+        Call::new("POST", format!("/api/v1/prepared-meals/{id}/archive"))
+            .if_match(updated["revision"].as_i64().unwrap()),
+    )
+    .await;
+
+    let (status, body, _) = send(
+        &app,
+        Call::new("POST", format!("/api/v1/prepared-meals/{id}/unarchive")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::PRECONDITION_REQUIRED, "{body}");
+
+    let (status, body, _) = send(
+        &app,
+        Call::new("POST", format!("/api/v1/prepared-meals/{id}/unarchive")).if_match(2),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+
+    let (status, restored, _) = send(
+        &app,
+        Call::new("POST", format!("/api/v1/prepared-meals/{id}/unarchive"))
+            .if_match(archived["revision"].as_i64().unwrap()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{restored}");
+}
+
+#[tokio::test]
+async fn unknown_prepared_meal_ids_return_not_found() {
+    let app = app().await;
+    let id = "00000000-0000-0000-0000-0000000000ff";
+
+    let (status, body, _) = send(
+        &app,
+        Call::new("GET", format!("/api/v1/prepared-meals/{id}")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+
+    let (status, body, _) = send(
+        &app,
+        Call::new("PATCH", format!("/api/v1/prepared-meals/{id}"))
+            .if_match(1)
+            .body(json!({"name": "Missing meal"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+
+    for action in ["archive", "unarchive"] {
+        let (status, body, _) = send(
+            &app,
+            Call::new("POST", format!("/api/v1/prepared-meals/{id}/{action}")).if_match(1),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    }
+
+    let (status, body, _) = send(
+        &app,
+        Call::new("GET", format!("/api/v1/prepared-meals/{id}/products")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+}
