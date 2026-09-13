@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { client, ifMatch, unwrap } from '../client';
 import type { components } from '../schema';
 import { weightKeys } from '../keys';
@@ -12,27 +12,28 @@ function useWeightInvalidation() {
   };
 }
 
-export function useWeightSummary(memberId: string) {
+export function useWeightSummary(memberId: string, from?: string) {
   return useQuery({
-    queryKey: weightKeys.summary(memberId),
+    queryKey: [...weightKeys.summary(memberId), from],
     enabled: Boolean(memberId),
+    placeholderData: keepPreviousData,
     queryFn: async () =>
       unwrap(
         await client.GET('/api/v1/members/{member_id}/weight-summary', {
-          params: { path: { member_id: memberId } },
+          params: { path: { member_id: memberId }, query: { from } },
         }),
       ),
   });
 }
 
-export function useWeightRecords(memberId: string) {
+export function useWeightRecords(memberId: string, limit?: number, enabled = true) {
   return useQuery({
-    queryKey: weightKeys.records(memberId),
-    enabled: Boolean(memberId),
+    queryKey: [...weightKeys.records(memberId), limit],
+    enabled: Boolean(memberId) && enabled,
     queryFn: async () =>
       unwrap(
         await client.GET('/api/v1/members/{member_id}/weight-records', {
-          params: { path: { member_id: memberId } },
+          params: { path: { member_id: memberId }, query: { limit } },
         }),
       ),
   });

@@ -7,6 +7,7 @@ mod household;
 mod household_settings;
 mod ids;
 mod ingredient;
+mod macro_target;
 mod meal_item;
 mod meal_plan;
 mod meal_template;
@@ -60,6 +61,9 @@ pub use ids::{
 };
 pub use ingredient::{
     Ingredient, IngredientPatch, IngredientSummary, MAX_NAME_LEN, NewIngredient, validate_name,
+};
+pub use macro_target::{
+    MacroTargets, NutritionEmphasis, UnknownNutritionEmphasis, suggest_macro_targets,
 };
 pub use meal_item::{MealItemRef, UnknownMealItemRef};
 pub use meal_plan::{

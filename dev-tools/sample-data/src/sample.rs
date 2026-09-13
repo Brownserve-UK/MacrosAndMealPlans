@@ -7,17 +7,17 @@ use mmp_core::CoreError;
 use mmp_core::domain::{
     AccessScope, ActualMealPlanComponent, Assumption, ConfirmMealPlanComponent,
     ConfirmMealPlanEntry, ConsumedAmount, ConsumptionRecordId, HabitualActivity, HouseholdMember,
-    HouseholdMemberId, HouseholdSettingsPatch, IngredientId, MealCategory, MealItemRef,
-    MealPlanEntryId, MealPlanScope, MealPlanStatus, MealSlot, MealTemplateId, NewConsumptionRecord,
-    NewHouseholdMember, NewMealGuestAllocation, NewMealGuestGroup, NewMealParticipant,
-    NewMealParticipantAllocation, NewMealPlanComponent, NewMealPlanEntry, NewMealTemplate,
-    NewMealTemplateComponent, NewNutritionTarget, NewProduct, NewPurchase, NewRecipe,
-    NewRecipeComponent, NewRecipeInstruction, NewShoppingCadence, NewShoppingListItem,
-    NewStockItem, NewUser, NewWeightGoal, NewWeightRecord, NutritionFacts, NutritionGoals,
-    OutcomeActor, Pace, Patch, PreparedMealId, ProductId, Provenance, Quantity, RecipeId,
-    RecipePatch, RecipeRequirement, Revision, Role, SectionOrder, Sex, ShoppingSection, SourceDate,
-    SourceDateKind, StockLevel, StockSubject, StorageLocation, Unit, UsabilityDeadline, User,
-    UserId, WeightObjective, WeightSource,
+    HouseholdMemberId, HouseholdSettingsPatch, IngredientId, MacroTargets, MealCategory,
+    MealItemRef, MealPlanEntryId, MealPlanScope, MealPlanStatus, MealSlot, MealTemplateId,
+    NewConsumptionRecord, NewHouseholdMember, NewMealGuestAllocation, NewMealGuestGroup,
+    NewMealParticipant, NewMealParticipantAllocation, NewMealPlanComponent, NewMealPlanEntry,
+    NewMealTemplate, NewMealTemplateComponent, NewNutritionTarget, NewProduct, NewPurchase,
+    NewRecipe, NewRecipeComponent, NewRecipeInstruction, NewShoppingCadence, NewShoppingListItem,
+    NewStockItem, NewUser, NewWeightGoal, NewWeightRecord, NutritionEmphasis, NutritionFacts,
+    NutritionGoals, OutcomeActor, Pace, Patch, PreparedMealId, ProductId, Provenance, Quantity,
+    RecipeId, RecipePatch, RecipeRequirement, Revision, Role, SectionOrder, Sex, ShoppingSection,
+    SourceDate, SourceDateKind, StockLevel, StockSubject, StorageLocation, Unit, UsabilityDeadline,
+    User, UserId, WeightObjective, WeightSource,
 };
 use mmp_core::services::NutritionPlanAnswers;
 use mmp_server::state::AppState;
@@ -140,13 +140,14 @@ pub async fn load(
         report: Report::default(),
     };
 
-    let manager = loader.load_accounts().await?;
+    let (manager, basic) = loader.load_accounts().await?;
     loader.load_products().await?;
     loader.load_prepared_meal_products().await?;
     loader.load_recipes().await?;
     loader.load_targets().await?;
     loader.load_weight().await?;
     loader.load_guided_nutrition_plan().await?;
+    loader.load_basic_guided_nutrition_plan(basic.id).await?;
     loader.load_manager_nutrition_target(manager.id).await?;
     loader.load_stock().await?;
 
@@ -159,7 +160,7 @@ pub async fn load(
 }
 
 impl Loader<'_> {
-    async fn load_accounts(&mut self) -> anyhow::Result<HouseholdMember> {
+    async fn load_accounts(&mut self) -> anyhow::Result<(HouseholdMember, HouseholdMember)> {
         let manager = self
             .ensure_user(
                 "manager",
@@ -180,7 +181,8 @@ impl Loader<'_> {
                 vec![Role::BasicUser],
             )
             .await?;
-        self.ensure_member("basic-user", "Taylor Sample", basic.id)
+        let basic_member = self
+            .ensure_member("basic-user", "Taylor Sample", basic.id)
             .await?;
 
         let nutritionist = self
@@ -200,7 +202,7 @@ impl Loader<'_> {
                 Some(self.actor.id),
             )
             .await?;
-        Ok(manager_member)
+        Ok((manager_member, basic_member))
     }
 
     async fn ensure_user(
@@ -530,6 +532,7 @@ impl Loader<'_> {
                 current_weight: Quantity::new(Decimal::from_str("79.8")?, Unit::Kilogram),
                 habitual_activity: HabitualActivity::LightlyActive,
                 objective: WeightObjective::Lose,
+                emphasis: NutritionEmphasis::Muscle,
                 target_weight: Some(quantity(76, Unit::Kilogram)),
                 pace: Some(Pace::Standard),
                 recorded_by: Some(self.actor.id),
@@ -550,6 +553,44 @@ impl Loader<'_> {
         Ok(())
     }
 
+    async fn load_basic_guided_nutrition_plan(
+        &mut self,
+        member_id: HouseholdMemberId,
+    ) -> anyhow::Result<()> {
+        if self
+            .state
+            .nutrition_plan
+            .current(member_id)
+            .await?
+            .target
+            .is_some()
+        {
+            return Ok(());
+        }
+        self.state
+            .nutrition_plan
+            .set_guided(NutritionPlanAnswers {
+                member_id,
+                date_of_birth: date!(1992 - 06 - 15),
+                sex: Sex::Female,
+                height_cm: Decimal::from(168),
+                current_weight: quantity(62, Unit::Kilogram),
+                habitual_activity: HabitualActivity::Active,
+                objective: WeightObjective::Gain,
+                emphasis: NutritionEmphasis::Endurance,
+                target_weight: Some(quantity(66, Unit::Kilogram)),
+                pace: Some(Pace::Steady),
+                recorded_by: Some(self.actor.id),
+            })
+            .await?;
+        self.report.targets_created += 1;
+        self.report.body_profiles_created += 1;
+        self.report.calculations_created += 1;
+        self.report.weigh_ins_created += 1;
+        self.report.weight_goals_created += 1;
+        Ok(())
+    }
+
     async fn load_manager_nutrition_target(
         &mut self,
         manager_id: HouseholdMemberId,
@@ -567,7 +608,15 @@ impl Loader<'_> {
 
         self.state
             .nutrition_plan
-            .set_manual(manager_id, Decimal::from(2_200))
+            .set_manual(
+                manager_id,
+                Decimal::from(2_200),
+                MacroTargets {
+                    protein_g: Decimal::from(135),
+                    carbohydrate_g: Decimal::from(275),
+                    fat_g: Decimal::from(65),
+                },
+            )
             .await?;
         self.report.targets_created += 1;
         Ok(())

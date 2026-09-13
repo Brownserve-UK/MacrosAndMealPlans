@@ -19,6 +19,7 @@ fn input(
         weight_kg: Decimal::from(80),
         habitual_activity: activity,
         objective,
+        emphasis: NutritionEmphasis::General,
         pace,
         revision: Revision::INITIAL,
         created_at: now,

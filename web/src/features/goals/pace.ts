@@ -8,7 +8,7 @@ const RATES: Record<Pace, number> = {
 };
 
 export const PACE_OPTIONS: { value: Pace; label: string }[] = [
-  { value: 'steady', label: 'Steady' },
+  { value: 'steady', label: 'Gradual' },
   { value: 'standard', label: 'Standard' },
   { value: 'faster', label: 'Faster' },
   { value: 'fastest', label: 'Fastest' },
@@ -22,7 +22,10 @@ export function paceRate(pace: Pace): number {
   return RATES[pace];
 }
 
-export function paceAdjustment(pace: Pace, objective: WeightObjective): string {
-  const calories = paceRate(pace) * 1100;
-  return `${objective === 'lose' ? '−' : '+'}${calories.toLocaleString('en-GB')} kcal a day`;
+export function paceLabel(pace: Pace): string {
+  return `${paceRate(pace).toLocaleString('en-GB')} kg/week`;
+}
+
+export function pacePoundsLabel(pace: Pace): string {
+  return `${(paceRate(pace) * 2.20462).toFixed(1)} lb/week`;
 }

@@ -7,7 +7,7 @@ import Stack from '@mui/material/Stack';
 import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
 import { useState, type FormEvent } from 'react';
-import { ApiError } from '../../api/client';
+import { ApiError, type NutritionTarget } from '../../api/client';
 import { useSetManualCalorieTarget } from '../../api/queries';
 import { ConflictDialog } from '../../components/ConflictDialog';
 import { FormDialog } from '../../components/FormDialog';
@@ -15,30 +15,52 @@ import { FormDialog } from '../../components/FormDialog';
 export function ManualTargetDialog({
   memberId,
   floorKcal,
+  target,
   onClose,
 }: {
   memberId: string;
   floorKcal?: number | null;
+  target?: NutritionTarget | null;
   onClose: () => void;
 }) {
   const save = useSetManualCalorieTarget();
-  const [energyKcal, setEnergyKcal] = useState('');
+  const [values, setValues] = useState({
+    energy_kcal: target?.energy_kcal == null ? '' : String(target.energy_kcal),
+    protein_g: target?.protein_g == null ? '' : String(target.protein_g),
+    carbohydrate_g: target?.carbohydrate_g == null ? '' : String(target.carbohydrate_g),
+    fat_g: target?.fat_g == null ? '' : String(target.fat_g),
+  });
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [formError, setFormError] = useState<string | null>(null);
   const [conflict, setConflict] = useState<ApiError | null>(null);
-  const parsed = Number(energyKcal);
+  const parsed = Number(values.energy_kcal);
   const belowFloor = Number.isFinite(parsed) && parsed > 0 && floorKcal != null && parsed < floorKcal;
 
   async function onSubmit(event: FormEvent) {
     event.preventDefault();
     const next: Record<string, string> = {};
-    if (!Number.isFinite(parsed) || parsed <= 0) next.energy_kcal = 'Enter a daily calorie target';
+    for (const [field, label] of [
+      ['energy_kcal', 'Enter a daily calorie target'],
+      ['protein_g', 'Enter a protein target'],
+      ['carbohydrate_g', 'Enter a carbohydrate target'],
+      ['fat_g', 'Enter a fat target'],
+    ] as const) {
+      if (!Number.isFinite(Number(values[field])) || Number(values[field]) <= 0) next[field] = label;
+    }
     setErrors(next);
     setFormError(null);
     if (Object.keys(next).length > 0) return;
 
     try {
-      await save.mutateAsync({ id: memberId, body: { energy_kcal: parsed } });
+      await save.mutateAsync({
+        id: memberId,
+        body: {
+          energy_kcal: parsed,
+          protein_g: Number(values.protein_g),
+          carbohydrate_g: Number(values.carbohydrate_g),
+          fat_g: Number(values.fat_g),
+        },
+      });
       onClose();
     } catch (caught) {
       if (caught instanceof ApiError) {
@@ -59,25 +81,25 @@ export function ManualTargetDialog({
             <Typography variant="body2" color="text.secondary">
               Use a target from a nutrition professional or one you already know.
             </Typography>
-            <TextField
-              autoFocus
-              label="Daily calories"
-              value={energyKcal}
-              onChange={(event) => setEnergyKcal(event.target.value)}
-              error={Boolean(errors.energy_kcal)}
-              helperText={errors.energy_kcal}
-              inputMode="numeric"
-              slotProps={{
-                input: {
-                  endAdornment: (
-                    <Typography variant="caption" color="text.secondary">
-                      kcal
-                    </Typography>
-                  ),
-                },
-              }}
-              fullWidth
-            />
+            {([
+              ['energy_kcal', 'Daily calories', 'kcal'],
+              ['protein_g', 'Protein', 'g'],
+              ['carbohydrate_g', 'Carbs', 'g'],
+              ['fat_g', 'Fat', 'g'],
+            ] as const).map(([field, label, unit], index) => (
+              <TextField
+                key={field}
+                autoFocus={index === 0}
+                label={label}
+                value={values[field]}
+                onChange={(event) => setValues((current) => ({ ...current, [field]: event.target.value }))}
+                error={Boolean(errors[field])}
+                helperText={errors[field]}
+                inputMode="decimal"
+                slotProps={{ input: { endAdornment: <Typography variant="caption" color="text.secondary">{unit}</Typography> } }}
+                fullWidth
+              />
+            ))}
             {belowFloor ? (
               <Alert severity="warning">
                 This is below the usual safety floor of{' '}
@@ -90,7 +112,7 @@ export function ManualTargetDialog({
         <DialogActions>
           <Button onClick={onClose}>Cancel</Button>
           <Button type="submit" variant="contained" disabled={save.isPending}>
-            {save.isPending ? 'Saving…' : 'Use this target'}
+            {save.isPending ? 'Saving…' : 'Use these targets'}
           </Button>
         </DialogActions>
       </form>

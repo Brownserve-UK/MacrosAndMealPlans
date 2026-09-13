@@ -2821,6 +2821,7 @@ fn guided_calorie_target_answers() -> Value {
         "current_weight": {"amount": 80.0, "unit": "kg"},
         "habitual_activity": "lightly_active",
         "objective": "lose",
+        "emphasis": "general",
         "target_weight": {"amount": 75.0, "unit": "kg"},
         "pace": "standard",
     })
@@ -2841,7 +2842,9 @@ async fn guided_calorie_target_routes_round_trip_through_http() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{preview}");
-    assert_eq!(preview["recommended_kcal"], 2130.0);
+    assert_eq!(preview["calculation"]["recommended_kcal"], 2130.0);
+    assert_eq!(preview["macros"]["protein_g"], 130.0);
+    assert_eq!(preview["estimated_goal_date"], "2026-11-04");
 
     let (status, empty_plan, _) = send(
         &app,
@@ -2864,6 +2867,8 @@ async fn guided_calorie_target_routes_round_trip_through_http() {
     assert_eq!(status, StatusCode::OK, "{guided}");
     assert_eq!(guided["target"]["source"], "calculated");
     assert_eq!(guided["calculation"]["recommended_kcal"], 2130.0);
+    assert_eq!(guided["calculation"]["emphasis"], "general");
+    assert_eq!(guided["target"]["protein_g"], 130.0);
     assert_eq!(etag(&headers), "1");
 
     let (status, profile, headers) = send(
@@ -2910,12 +2915,18 @@ async fn guided_calorie_target_routes_round_trip_through_http() {
             "PUT",
             format!("/api/v1/members/{member}/calorie-target/manual"),
         )
-        .body(json!({"energy_kcal": 1800.0})),
+        .body(json!({
+            "energy_kcal": 1800.0,
+            "protein_g": 140.0,
+            "carbohydrate_g": 190.0,
+            "fat_g": 55.0
+        })),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{manual}");
     assert_eq!(manual["source"], "user_defined");
     assert_eq!(manual["energy_kcal"], 1800.0);
+    assert_eq!(manual["protein_g"], 140.0);
     assert_eq!(etag(&headers), "2");
 
     let (status, plan, _) = send(

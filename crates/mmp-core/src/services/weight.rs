@@ -59,6 +59,17 @@ impl WeightService {
         self.records.list_for_member(member_id).await
     }
 
+    pub async fn list_records_filtered(
+        &self,
+        member_id: HouseholdMemberId,
+        from: Option<Date>,
+        limit: Option<u32>,
+    ) -> Result<Vec<WeightRecord>> {
+        self.records
+            .list_for_member_filtered(member_id, from, limit)
+            .await
+    }
+
     pub async fn get_record(&self, id: WeightRecordId) -> Result<WeightRecord> {
         self.records
             .get(id)
@@ -225,7 +236,27 @@ impl WeightService {
     }
 
     pub async fn summary(&self, member_id: HouseholdMemberId) -> Result<WeightSummary> {
-        let records = self.records.list_for_member(member_id).await?;
+        self.summary_since(member_id, None).await
+    }
+
+    pub async fn summary_since(
+        &self,
+        member_id: HouseholdMemberId,
+        from: Option<Date>,
+    ) -> Result<WeightSummary> {
+        let records = self
+            .records
+            .list_for_member_filtered(member_id, from, None)
+            .await?;
+        let latest = if from.is_some() {
+            self.records
+                .list_for_member_filtered(member_id, None, Some(1))
+                .await?
+                .into_iter()
+                .next()
+        } else {
+            current_weight(&records).copied()
+        };
         let goal = self.goals.for_member(member_id).await?;
 
         let series: Vec<WeightPoint> = latest_per_day(&records)
@@ -235,8 +266,6 @@ impl WeightService {
                 weight_kg: record.weight_kg,
             })
             .collect();
-        let latest = current_weight(&records).copied();
-
         let today = super::calendar::household_calendar(&*self.settings, &self.clock)
             .await?
             .today();

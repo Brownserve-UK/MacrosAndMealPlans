@@ -76,6 +76,27 @@ impl WeightRecordRepository for PgWeightRecordRepository {
         rows.into_iter().map(TryInto::try_into).collect()
     }
 
+    async fn list_for_member_filtered(
+        &self,
+        member_id: HouseholdMemberId,
+        from: Option<time::Date>,
+        limit: Option<u32>,
+    ) -> Result<Vec<WeightRecord>> {
+        let rows: Vec<WeightRecordRow> = sqlx::query_as(concat!(
+            "SELECT ",
+            record_columns!(),
+            " FROM weight_record WHERE member_id = $1 AND ($2::date IS NULL OR recorded_on >= $2) \
+             ORDER BY recorded_on DESC, recorded_at DESC NULLS LAST, created_at DESC LIMIT $3"
+        ))
+        .bind(member_id.as_uuid())
+        .bind(from)
+        .bind(i64::from(limit.unwrap_or(u32::MAX)))
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| repository_error("listing filtered weight records", e))?;
+        rows.into_iter().map(TryInto::try_into).collect()
+    }
+
     async fn insert(&self, record: &WeightRecord) -> Result<()> {
         sqlx::query(
             "INSERT INTO weight_record (

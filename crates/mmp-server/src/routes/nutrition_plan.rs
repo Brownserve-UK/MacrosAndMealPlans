@@ -7,9 +7,9 @@ use uuid::Uuid;
 use super::require_member_access;
 use crate::auth::Principal;
 use crate::dto::{
-    CalorieCalculationDto, GuidedNutritionPlanDto, ManualCalorieTargetRequest,
-    MemberBodyProfileDto, NutritionPlanAnswersRequest, NutritionPlanDto, UpdateBodyProfileRequest,
-    member_id,
+    GuidedNutritionPlanDto, ManualCalorieTargetRequest, MemberBodyProfileDto,
+    NutritionPlanAnswersRequest, NutritionPlanDto, NutritionPlanRecommendationDto,
+    UpdateBodyProfileRequest, member_id,
 };
 use crate::error::ApiResult;
 use crate::http::{IfMatch, Tagged};
@@ -119,7 +119,7 @@ async fn get_nutrition_plan(
     params(("member_id" = Uuid, Path, description = "Household member id")),
     request_body = NutritionPlanAnswersRequest,
     responses(
-        (status = 200, description = "The calculated recommendation without saving it", body = CalorieCalculationDto),
+        (status = 200, description = "The calculated recommendation without saving it", body = NutritionPlanRecommendationDto),
         (status = 403, description = "Not permitted", body = crate::error::Problem),
         (status = 422, description = "Validation failed", body = crate::error::Problem),
     ),
@@ -131,7 +131,7 @@ async fn preview_calorie_target(
     principal: Principal,
     Path(member): Path<Uuid>,
     Json(body): Json<NutritionPlanAnswersRequest>,
-) -> ApiResult<Json<CalorieCalculationDto>> {
+) -> ApiResult<Json<NutritionPlanRecommendationDto>> {
     let member = member_id(member);
     require_member_access(&state, &principal, member).await?;
     let calculation = state
@@ -194,9 +194,11 @@ async fn set_manual_calorie_target(
 ) -> ApiResult<Tagged<crate::dto::NutritionTargetDto>> {
     let member = member_id(member);
     require_member_access(&state, &principal, member).await?;
+    let energy_kcal = body.energy_kcal;
+    let macros = body.macros();
     let target = state
         .nutrition_plan
-        .set_manual(member, body.energy_kcal)
+        .set_manual(member, energy_kcal, macros)
         .await?;
     Ok(Tagged(target.revision, target.into()))
 }

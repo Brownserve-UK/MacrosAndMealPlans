@@ -1675,6 +1675,7 @@ export interface components {
             /** Format: date-time */
             created_at: string;
             eased: boolean;
+            emphasis: components["schemas"]["NutritionEmphasisDto"];
             /**
              * Format: double
              * @example 1500
@@ -2181,12 +2182,44 @@ export interface components {
             /** Format: uuid */
             user_id: string;
         };
+        MacroTargetsDto: {
+            /**
+             * Format: double
+             * @example 220
+             */
+            carbohydrate_g: number;
+            /**
+             * Format: double
+             * @example 65
+             */
+            fat_g: number;
+            /**
+             * Format: double
+             * @example 140
+             */
+            protein_g: number;
+        };
         ManualCalorieTargetRequest: {
+            /**
+             * Format: double
+             * @example 220
+             */
+            carbohydrate_g: number;
             /**
              * Format: double
              * @example 1800
              */
             energy_kcal: number;
+            /**
+             * Format: double
+             * @example 65
+             */
+            fat_g: number;
+            /**
+             * Format: double
+             * @example 140
+             */
+            protein_g: number;
         };
         MarkMealPlanComponentEatenRequest: {
             amount: components["schemas"]["AmountDto"];
@@ -2534,6 +2567,8 @@ export interface components {
             sugar_g?: number | null;
         };
         /** @enum {string} */
+        NutritionEmphasisDto: "general" | "muscle" | "endurance";
+        /** @enum {string} */
         NutritionGapReasonDto: "unmatched" | "no_data" | "incomplete";
         NutritionGoalsDto: {
             /** Format: double */
@@ -2562,6 +2597,7 @@ export interface components {
              * @example 1986-01-01
              */
             date_of_birth: string;
+            emphasis: components["schemas"]["NutritionEmphasisDto"];
             habitual_activity: components["schemas"]["HabitualActivityDto"];
             /**
              * Format: double
@@ -2577,6 +2613,12 @@ export interface components {
             calculation?: null | components["schemas"]["CalorieCalculationDto"];
             calorie_direction?: null | components["schemas"]["TargetDirectionDto"];
             target?: null | components["schemas"]["NutritionTargetDto"];
+        };
+        NutritionPlanRecommendationDto: {
+            calculation: components["schemas"]["CalorieCalculationDto"];
+            /** Format: date */
+            estimated_goal_date?: string | null;
+            macros: components["schemas"]["MacroTargetsDto"];
         };
         /** @enum {string} */
         NutritionQuality: "known" | "estimated" | "partial" | "unknown";
@@ -5577,7 +5619,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["CalorieCalculationDto"];
+                    "application/json": components["schemas"]["NutritionPlanRecommendationDto"];
                 };
             };
             /** @description Not permitted */
@@ -5817,7 +5859,10 @@ export interface operations {
     };
     listWeightRecords: {
         parameters: {
-            query?: never;
+            query?: {
+                from?: string | null;
+                limit?: number | null;
+            };
             header?: never;
             path: {
                 /** @description Household member id */
@@ -5894,7 +5939,9 @@ export interface operations {
     };
     getWeightSummary: {
         parameters: {
-            query?: never;
+            query?: {
+                from?: string | null;
+            };
             header?: never;
             path: {
                 /** @description Household member id */

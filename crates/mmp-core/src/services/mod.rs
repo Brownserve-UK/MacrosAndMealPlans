@@ -27,7 +27,8 @@ pub use meal_plan::{
 };
 pub use meal_template::MealTemplateService;
 pub use nutrition_plan::{
-    GuidedNutritionPlan, NutritionPlan, NutritionPlanAnswers, NutritionPlanService,
+    GuidedNutritionPlan, NutritionPlan, NutritionPlanAnswers, NutritionPlanRecommendation,
+    NutritionPlanService,
 };
 pub use nutrition_target::NutritionTargetService;
 pub use preparation::{MoveCookedFood, PreparationService, RecordPreparation};

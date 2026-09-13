@@ -1125,6 +1125,7 @@ CREATE TABLE calorie_target_calculation (
     height_cm                   NUMERIC(5, 1) NOT NULL,
     weight_kg                   NUMERIC(6, 3) NOT NULL,
     objective                   TEXT NOT NULL,
+    emphasis                    TEXT NOT NULL DEFAULT 'general',
     requested_rate_kg_per_week  NUMERIC(5, 3),
     applied_rate_kg_per_week    NUMERIC(5, 3),
     maintenance_kcal            NUMERIC(12, 3) NOT NULL,
@@ -1134,7 +1135,9 @@ CREATE TABLE calorie_target_calculation (
     eased                       BOOLEAN NOT NULL DEFAULT false,
     revision                    BIGINT NOT NULL DEFAULT 1,
     created_at                  TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at                  TIMESTAMPTZ NOT NULL DEFAULT now()
+    updated_at                  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT calorie_target_calculation_emphasis_known
+        CHECK (emphasis IN ('general', 'muscle', 'endurance'))
 );
 
 CREATE UNIQUE INDEX calorie_target_calculation_target_unique

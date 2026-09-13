@@ -625,6 +625,22 @@ pub trait WeightRecordRepository: Send + Sync + 'static {
 
     async fn list_for_member(&self, member_id: HouseholdMemberId) -> Result<Vec<WeightRecord>>;
 
+    async fn list_for_member_filtered(
+        &self,
+        member_id: HouseholdMemberId,
+        from: Option<Date>,
+        limit: Option<u32>,
+    ) -> Result<Vec<WeightRecord>> {
+        let mut records = self.list_for_member(member_id).await?;
+        if let Some(from) = from {
+            records.retain(|record| record.recorded_on >= from);
+        }
+        if let Some(limit) = limit {
+            records.truncate(limit as usize);
+        }
+        Ok(records)
+    }
+
     async fn insert(&self, record: &WeightRecord) -> Result<()>;
 
     async fn update(&self, record: &WeightRecord, expected: Revision) -> Result<UpdateOutcome>;

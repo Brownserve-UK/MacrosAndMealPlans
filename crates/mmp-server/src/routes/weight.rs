@@ -1,6 +1,9 @@
 use axum::Json;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
+use serde::Deserialize;
+use time::Date;
+use utoipa::IntoParams;
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
 use uuid::Uuid;
@@ -25,11 +28,25 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(summary))
 }
 
+#[derive(Debug, Default, Deserialize, IntoParams)]
+struct WeightRecordQuery {
+    #[param(value_type = Option<String>, format = Date)]
+    from: Option<Date>,
+    #[param(maximum = 1000)]
+    limit: Option<u32>,
+}
+
+#[derive(Debug, Default, Deserialize, IntoParams)]
+struct WeightSummaryQuery {
+    #[param(value_type = Option<String>, format = Date)]
+    from: Option<Date>,
+}
+
 #[utoipa::path(
     get,
     path = "/api/v1/members/{member_id}/weight-records",
     operation_id = "listWeightRecords",
-    params(("member_id" = Uuid, Path, description = "Household member id")),
+    params(("member_id" = Uuid, Path, description = "Household member id"), WeightRecordQuery),
     responses(
         (status = 200, description = "The member's weigh-ins, newest first",
          body = Vec<WeightRecordDto>),
@@ -42,10 +59,14 @@ async fn list_records(
     State(state): State<AppState>,
     principal: Principal,
     Path(member): Path<Uuid>,
+    Query(query): Query<WeightRecordQuery>,
 ) -> ApiResult<Json<Vec<WeightRecordDto>>> {
     let member = member_id(member);
     require_member_access(&state, &principal, member).await?;
-    let records = state.weight.list_records(member).await?;
+    let records = state
+        .weight
+        .list_records_filtered(member, query.from, query.limit.map(|limit| limit.min(1000)))
+        .await?;
     Ok(Json(records.into_iter().map(Into::into).collect()))
 }
 
@@ -289,7 +310,7 @@ async fn delete_goal(
     get,
     path = "/api/v1/members/{member_id}/weight-summary",
     operation_id = "getWeightSummary",
-    params(("member_id" = Uuid, Path, description = "Household member id")),
+    params(("member_id" = Uuid, Path, description = "Household member id"), WeightSummaryQuery),
     responses(
         (status = 200, description = "Current weight, goal, projection and trend",
          body = WeightSummaryDto),
@@ -302,9 +323,10 @@ async fn summary(
     State(state): State<AppState>,
     principal: Principal,
     Path(member): Path<Uuid>,
+    Query(query): Query<WeightSummaryQuery>,
 ) -> ApiResult<Json<WeightSummaryDto>> {
     let member = member_id(member);
     require_member_access(&state, &principal, member).await?;
-    let summary = state.weight.summary(member).await?;
+    let summary = state.weight.summary_since(member, query.from).await?;
     Ok(Json(summary.into()))
 }

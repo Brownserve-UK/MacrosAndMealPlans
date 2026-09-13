@@ -5,11 +5,12 @@ use rust_decimal::Decimal;
 use super::revision::{commit_outcome, require_revision};
 use super::{NutritionTargetService, WeightService};
 use crate::domain::{
-    CalorieCalculation, CalorieCalculationId, CalorieCalculationInput, HabitualActivity,
-    HouseholdMemberId, MemberBodyProfile, MemberBodyProfilePatch, NewNutritionTarget,
-    NewWeightGoal, NewWeightRecord, NutritionGoals, NutritionTarget, NutritionTargetId, Pace,
-    Patch, Quantity, Revision, Sex, TargetSource, Unit, UserId, WeightGoal, WeightObjective,
-    WeightRecord, WeightSource, calculate, current_weight, resolve_on,
+    CalorieCalculation, CalorieCalculationId, CalorieCalculationInput, GoalProjection,
+    HabitualActivity, HouseholdMemberId, MacroTargets, MemberBodyProfile, MemberBodyProfilePatch,
+    NewNutritionTarget, NewWeightGoal, NewWeightRecord, NutritionEmphasis, NutritionGoals,
+    NutritionTarget, NutritionTargetId, Pace, Patch, Quantity, Revision, Sex, TargetSource, Unit,
+    UserId, WeightGoal, WeightGoalId, WeightObjective, WeightRecord, WeightSource, calculate,
+    current_weight, project_goal, resolve_on, suggest_macro_targets,
 };
 use crate::error::{CoreError, Result};
 use crate::ports::{
@@ -28,6 +29,7 @@ pub struct NutritionPlanAnswers {
     pub current_weight: Quantity,
     pub habitual_activity: HabitualActivity,
     pub objective: WeightObjective,
+    pub emphasis: NutritionEmphasis,
     pub target_weight: Option<Quantity>,
     pub pace: Option<Pace>,
     pub recorded_by: Option<UserId>,
@@ -40,6 +42,13 @@ pub struct GuidedNutritionPlan {
     pub goal: WeightGoal,
     pub target: NutritionTarget,
     pub calculation: CalorieCalculation,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NutritionPlanRecommendation {
+    pub calculation: CalorieCalculation,
+    pub macros: MacroTargets,
+    pub estimated_goal_date: Option<time::Date>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -149,10 +158,13 @@ impl NutritionPlanService {
         })
     }
 
-    pub async fn preview(&self, answers: NutritionPlanAnswers) -> Result<CalorieCalculation> {
+    pub async fn preview(
+        &self,
+        answers: NutritionPlanAnswers,
+    ) -> Result<NutritionPlanRecommendation> {
         let today = self.today().await?;
         let now = self.clock.now();
-        self.calculate_answers(
+        self.recommendation(
             answers,
             CalculationRecord {
                 target_id: NutritionTargetId::new(),
@@ -162,13 +174,14 @@ impl NutritionPlanService {
                 updated_at: now,
             },
             today,
+            now,
         )
     }
 
     pub async fn set_guided(&self, answers: NutritionPlanAnswers) -> Result<GuidedNutritionPlan> {
         let today = self.today().await?;
         let now = self.clock.now();
-        let preview = self.calculate_answers(
+        let preview = self.recommendation(
             answers,
             CalculationRecord {
                 target_id: NutritionTargetId::new(),
@@ -178,15 +191,21 @@ impl NutritionPlanService {
                 updated_at: now,
             },
             today,
+            now,
         )?;
 
         let profile = self.set_profile(answers, today, now).await?;
         let weight_record = self.record_changed_weight(answers, today).await?;
         let goal = self
-            .set_goal(answers, preview.applied_rate_kg_per_week, today)
+            .set_goal(answers, preview.calculation.applied_rate_kg_per_week, today)
             .await?;
         let goals = self
-            .goals_with_energy(answers.member_id, today, preview.recommended_kcal)
+            .goals_with_targets(
+                answers.member_id,
+                today,
+                preview.calculation.recommended_kcal,
+                preview.macros,
+            )
             .await?;
         let target = self
             .targets
@@ -214,10 +233,12 @@ impl NutritionPlanService {
         &self,
         member_id: HouseholdMemberId,
         energy_kcal: Decimal,
+        macros: MacroTargets,
     ) -> Result<NutritionTarget> {
+        macros.validate()?;
         let today = self.today().await?;
         let goals = self
-            .goals_with_energy(member_id, today, energy_kcal)
+            .goals_with_targets(member_id, today, energy_kcal, macros)
             .await?;
         let target = self
             .targets
@@ -243,11 +264,12 @@ impl NutritionPlanService {
         Ok(target)
     }
 
-    async fn goals_with_energy(
+    async fn goals_with_targets(
         &self,
         member_id: HouseholdMemberId,
         today: time::Date,
         energy_kcal: Decimal,
+        macros: MacroTargets,
     ) -> Result<NutritionGoals> {
         let mut goals = self
             .targets
@@ -257,7 +279,59 @@ impl NutritionPlanService {
             .find(|target| target.effective_from == today)
             .map_or_else(NutritionGoals::default, |target| target.goals);
         goals.energy_kcal = Some(energy_kcal);
+        goals.protein_g = Some(macros.protein_g);
+        goals.carbohydrate_g = Some(macros.carbohydrate_g);
+        goals.fat_g = Some(macros.fat_g);
         Ok(goals)
+    }
+
+    fn recommendation(
+        &self,
+        answers: NutritionPlanAnswers,
+        record: CalculationRecord,
+        today: time::Date,
+        now: time::OffsetDateTime,
+    ) -> Result<NutritionPlanRecommendation> {
+        let calculation = self.calculate_answers(answers, record, today)?;
+        let macros = suggest_macro_targets(
+            calculation.weight_kg,
+            calculation.recommended_kcal,
+            answers.emphasis,
+        )?;
+        let goal = WeightGoal {
+            id: WeightGoalId::new(),
+            member_id: answers.member_id,
+            objective: answers.objective,
+            starting_weight_kg: calculation.weight_kg,
+            target_weight_kg: answers
+                .target_weight
+                .map(|target| {
+                    NewWeightRecord {
+                        member_id: answers.member_id,
+                        weight: target,
+                        recorded_on: today,
+                        recorded_at: None,
+                        source: WeightSource::Manual,
+                        recorded_by: answers.recorded_by,
+                    }
+                    .weight_kg()
+                })
+                .transpose()?,
+            planned_rate_kg_per_week: calculation.applied_rate_kg_per_week,
+            started_on: today,
+            revision: Revision::INITIAL,
+            created_at: now,
+            updated_at: now,
+        };
+        let estimated_goal_date = match project_goal(&goal, Some(calculation.weight_kg), today) {
+            GoalProjection::Projected { on, .. } => Some(on),
+            GoalProjection::Reached | GoalProjection::Steady => None,
+        };
+        Ok(NutritionPlanRecommendation {
+            calculation,
+            macros,
+            estimated_goal_date,
+        })
     }
 
     async fn today(&self) -> Result<time::Date> {
@@ -308,6 +382,7 @@ impl NutritionPlanService {
             weight_kg,
             habitual_activity: answers.habitual_activity,
             objective: answers.objective,
+            emphasis: answers.emphasis,
             pace: answers.pace,
             revision: record.revision,
             created_at: record.created_at,

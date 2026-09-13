@@ -338,6 +338,34 @@ async fn a_summary_collapses_each_day_to_one_point() {
 }
 
 #[tokio::test]
+async fn a_ranged_summary_limits_the_series_but_projects_from_the_latest_reading() {
+    let h = harness();
+    losing_goal(&h).await;
+    weigh_in(&h, date!(2026 - 08 - 01), "80").await;
+    weigh_in(&h, date!(2026 - 09 - 02), "78").await;
+
+    let summary = h
+        .service
+        .summary_since(member(), Some(date!(2026 - 09 - 01)))
+        .await
+        .unwrap();
+
+    assert_eq!(summary.series.len(), 1);
+    assert_eq!(summary.series[0].on, date!(2026 - 09 - 02));
+    assert_eq!(
+        summary.latest.unwrap().weight_kg,
+        Decimal::from_str("78").unwrap()
+    );
+    assert_eq!(
+        summary.projection,
+        Some(GoalProjection::Projected {
+            on: date!(2026 - 10 - 01),
+            remaining_kg: Decimal::from(2),
+        })
+    );
+}
+
+#[tokio::test]
 async fn a_summary_projects_against_the_latest_reading() {
     let h = harness();
     losing_goal(&h).await;

@@ -9,7 +9,7 @@ use crate::rows::CalorieCalculationRow;
 
 macro_rules! columns {
     () => {
-        "id, member_id, nutrition_target_id, calculated_on, formula, activity_source, habitual_activity, age_years, sex, height_cm, weight_kg, objective, requested_rate_kg_per_week, applied_rate_kg_per_week, maintenance_kcal, adjustment_kcal, recommended_kcal, floor_kcal, eased, revision, created_at, updated_at"
+        "id, member_id, nutrition_target_id, calculated_on, formula, activity_source, habitual_activity, age_years, sex, height_cm, weight_kg, objective, emphasis, requested_rate_kg_per_week, applied_rate_kg_per_week, maintenance_kcal, adjustment_kcal, recommended_kcal, floor_kcal, eased, revision, created_at, updated_at"
     };
 }
 
@@ -59,13 +59,13 @@ impl CalorieCalculationRepository for PgCalorieCalculationRepository {
         sqlx::query(
             "INSERT INTO calorie_target_calculation (
                  id, member_id, nutrition_target_id, calculated_on, formula, activity_source,
-                 habitual_activity, age_years, sex, height_cm, weight_kg, objective,
+                 habitual_activity, age_years, sex, height_cm, weight_kg, objective, emphasis,
                  requested_rate_kg_per_week, applied_rate_kg_per_week, maintenance_kcal,
                  adjustment_kcal, recommended_kcal, floor_kcal, eased,
                  revision, created_at, updated_at
              ) VALUES (
                  $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
-                 $13, $14, $15, $16, $17, $18, $19, $20, $21, $22
+                 $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23
              )",
         )
         .bind(calculation.id.as_uuid())
@@ -80,6 +80,7 @@ impl CalorieCalculationRepository for PgCalorieCalculationRepository {
         .bind(calculation.height_cm)
         .bind(calculation.weight_kg)
         .bind(calculation.objective.code())
+        .bind(calculation.emphasis.code())
         .bind(calculation.requested_rate_kg_per_week)
         .bind(calculation.applied_rate_kg_per_week)
         .bind(calculation.maintenance_kcal)
@@ -105,11 +106,11 @@ impl CalorieCalculationRepository for PgCalorieCalculationRepository {
             "UPDATE calorie_target_calculation SET
                  member_id = $2, nutrition_target_id = $3, calculated_on = $4, formula = $5,
                  activity_source = $6, habitual_activity = $7, age_years = $8, sex = $9,
-                 height_cm = $10, weight_kg = $11, objective = $12,
-                 requested_rate_kg_per_week = $13, applied_rate_kg_per_week = $14,
-                 maintenance_kcal = $15, adjustment_kcal = $16, recommended_kcal = $17,
-                 floor_kcal = $18, eased = $19, revision = $20, updated_at = $21
-             WHERE id = $1 AND revision = $22",
+                 height_cm = $10, weight_kg = $11, objective = $12, emphasis = $13,
+                 requested_rate_kg_per_week = $14, applied_rate_kg_per_week = $15,
+                 maintenance_kcal = $16, adjustment_kcal = $17, recommended_kcal = $18,
+                 floor_kcal = $19, eased = $20, revision = $21, updated_at = $22
+             WHERE id = $1 AND revision = $23",
         )
         .bind(calculation.id.as_uuid())
         .bind(calculation.member_id.as_uuid())
@@ -123,6 +124,7 @@ impl CalorieCalculationRepository for PgCalorieCalculationRepository {
         .bind(calculation.height_cm)
         .bind(calculation.weight_kg)
         .bind(calculation.objective.code())
+        .bind(calculation.emphasis.code())
         .bind(calculation.requested_rate_kg_per_week)
         .bind(calculation.applied_rate_kg_per_week)
         .bind(calculation.maintenance_kcal)

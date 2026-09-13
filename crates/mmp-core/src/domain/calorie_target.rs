@@ -4,8 +4,8 @@ use rust_decimal::Decimal;
 use time::{Date, OffsetDateTime};
 
 use super::{
-    CalorieCalculationId, HabitualActivity, HouseholdMemberId, NutritionTargetId, Revision, Sex,
-    WeightObjective, age_on,
+    CalorieCalculationId, HabitualActivity, HouseholdMemberId, NutritionEmphasis,
+    NutritionTargetId, Revision, Sex, WeightObjective, age_on,
 };
 use crate::error::{Result, ValidationErrors};
 
@@ -58,6 +58,7 @@ pub struct CalorieCalculationInput {
     pub weight_kg: Decimal,
     pub habitual_activity: HabitualActivity,
     pub objective: WeightObjective,
+    pub emphasis: NutritionEmphasis,
     pub pace: Option<Pace>,
     pub revision: Revision,
     pub created_at: OffsetDateTime,
@@ -78,6 +79,7 @@ pub struct CalorieCalculation {
     pub height_cm: Decimal,
     pub weight_kg: Decimal,
     pub objective: WeightObjective,
+    pub emphasis: NutritionEmphasis,
     pub requested_rate_kg_per_week: Option<Decimal>,
     pub applied_rate_kg_per_week: Option<Decimal>,
     pub maintenance_kcal: Decimal,
@@ -159,6 +161,7 @@ pub fn calculate(input: CalorieCalculationInput) -> Result<CalorieCalculation> {
         height_cm,
         weight_kg: input.weight_kg,
         objective: input.objective,
+        emphasis: input.emphasis,
         requested_rate_kg_per_week: requested_rate,
         applied_rate_kg_per_week: applied_rate,
         maintenance_kcal,

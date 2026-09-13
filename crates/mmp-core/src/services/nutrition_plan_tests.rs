@@ -62,6 +62,7 @@ fn answers() -> NutritionPlanAnswers {
         current_weight: Quantity::new(Decimal::from(80), Unit::Kilogram),
         habitual_activity: HabitualActivity::LightlyActive,
         objective: WeightObjective::Lose,
+        emphasis: NutritionEmphasis::General,
         target_weight: Some(Quantity::new(Decimal::from(75), Unit::Kilogram)),
         pace: Some(Pace::Standard),
         recorded_by: None,
@@ -74,7 +75,11 @@ async fn preview_calculates_without_writing() {
 
     let preview = h.service.preview(answers()).await.unwrap();
 
-    assert_eq!(preview.recommended_kcal, Decimal::from(2130));
+    assert_eq!(preview.calculation.recommended_kcal, Decimal::from(2130));
+    assert_eq!(preview.macros.protein_g, Decimal::from(130));
+    assert_eq!(preview.macros.carbohydrate_g, Decimal::from(255));
+    assert_eq!(preview.macros.fat_g, Decimal::from(65));
+    assert_eq!(preview.estimated_goal_date, Some(date!(2026 - 11 - 21)));
     assert_eq!(h.profiles.count(), 0);
     assert_eq!(h.calculations.count(), 0);
     assert_eq!(h.targets.count(), 0);
@@ -91,6 +96,8 @@ async fn guided_setup_writes_the_profile_weight_goal_target_and_provenance() {
     assert_eq!(plan.target.source, TargetSource::Calculated);
     assert_eq!(plan.target.effective_from, date!(2026 - 09 - 12));
     assert_eq!(plan.calculation.nutrition_target_id, plan.target.id);
+    assert_eq!(plan.calculation.emphasis, NutritionEmphasis::General);
+    assert_eq!(plan.target.goals.protein_g, Some(Decimal::from(130)));
     assert_eq!(plan.goal.planned_rate_kg_per_week, Some(Decimal::new(5, 1)));
     assert!(plan.weight_record.is_some());
     assert_eq!(h.profiles.count(), 1);
@@ -160,7 +167,7 @@ async fn a_manual_target_replaces_calculated_provenance_for_today() {
 
     let manual = h
         .service
-        .set_manual(answers().member_id, Decimal::from(900))
+        .set_manual(answers().member_id, Decimal::from(900), manual_macros())
         .await
         .unwrap();
 
@@ -171,7 +178,7 @@ async fn a_manual_target_replaces_calculated_provenance_for_today() {
 }
 
 #[tokio::test]
-async fn changing_calories_preserves_other_targets_for_today() {
+async fn changing_targets_preserves_unrelated_targets_for_today() {
     let h = harness();
     h.targets.seed(NutritionTarget {
         id: NutritionTargetId::seeded("existing-target"),
@@ -190,12 +197,20 @@ async fn changing_calories_preserves_other_targets_for_today() {
 
     let target = h
         .service
-        .set_manual(answers().member_id, Decimal::from(1800))
+        .set_manual(answers().member_id, Decimal::from(1800), manual_macros())
         .await
         .unwrap();
 
     assert_eq!(target.goals.energy_kcal, Some(Decimal::from(1800)));
-    assert_eq!(target.goals.protein_g, Some(Decimal::from(120)));
+    assert_eq!(target.goals.protein_g, Some(Decimal::from(140)));
+}
+
+fn manual_macros() -> MacroTargets {
+    MacroTargets {
+        protein_g: Decimal::from(140),
+        carbohydrate_g: Decimal::from(200),
+        fat_g: Decimal::from(60),
+    }
 }
 
 #[tokio::test]

@@ -1,5 +1,9 @@
-use mmp_core::domain::{CalorieCalculation, Pace, Quantity, direction_for};
-use mmp_core::services::{GuidedNutritionPlan, NutritionPlan, NutritionPlanAnswers};
+use mmp_core::domain::{
+    CalorieCalculation, MacroTargets, NutritionEmphasis, Pace, Quantity, direction_for,
+};
+use mmp_core::services::{
+    GuidedNutritionPlan, NutritionPlan, NutritionPlanAnswers, NutritionPlanRecommendation,
+};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use time::{Date, OffsetDateTime};
@@ -19,6 +23,34 @@ pub enum PaceDto {
     Standard,
     Faster,
     Fastest,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum NutritionEmphasisDto {
+    General,
+    Muscle,
+    Endurance,
+}
+
+impl From<NutritionEmphasis> for NutritionEmphasisDto {
+    fn from(value: NutritionEmphasis) -> Self {
+        match value {
+            NutritionEmphasis::General => Self::General,
+            NutritionEmphasis::Muscle => Self::Muscle,
+            NutritionEmphasis::Endurance => Self::Endurance,
+        }
+    }
+}
+
+impl From<NutritionEmphasisDto> for NutritionEmphasis {
+    fn from(value: NutritionEmphasisDto) -> Self {
+        match value {
+            NutritionEmphasisDto::General => Self::General,
+            NutritionEmphasisDto::Muscle => Self::Muscle,
+            NutritionEmphasisDto::Endurance => Self::Endurance,
+        }
+    }
 }
 
 impl From<Pace> for PaceDto {
@@ -63,6 +95,7 @@ pub struct CalorieCalculationDto {
     #[schema(value_type = f64, example = 80.0)]
     pub weight_kg: Decimal,
     pub objective: WeightObjectiveDto,
+    pub emphasis: NutritionEmphasisDto,
     #[serde(
         with = "rust_decimal::serde::float_option",
         skip_serializing_if = "Option::is_none"
@@ -112,6 +145,7 @@ impl From<CalorieCalculation> for CalorieCalculationDto {
             height_cm: value.height_cm,
             weight_kg: value.weight_kg,
             objective: value.objective.into(),
+            emphasis: value.emphasis.into(),
             requested_rate_kg_per_week: value.requested_rate_kg_per_week,
             applied_rate_kg_per_week: value.applied_rate_kg_per_week,
             maintenance_kcal: value.maintenance_kcal,
@@ -138,6 +172,7 @@ pub struct NutritionPlanAnswersRequest {
     pub current_weight: QuantityDto,
     pub habitual_activity: HabitualActivityDto,
     pub objective: WeightObjectiveDto,
+    pub emphasis: NutritionEmphasisDto,
     #[serde(default)]
     pub target_weight: Option<QuantityDto>,
     #[serde(default)]
@@ -158,6 +193,7 @@ impl NutritionPlanAnswersRequest {
             current_weight: Quantity::from(self.current_weight),
             habitual_activity: self.habitual_activity.into(),
             objective: self.objective.into(),
+            emphasis: self.emphasis.into(),
             target_weight: self.target_weight.map(Quantity::from),
             pace: self.pace.map(Into::into),
             recorded_by: Some(recorded_by),
@@ -170,6 +206,67 @@ pub struct ManualCalorieTargetRequest {
     #[serde(with = "rust_decimal::serde::float")]
     #[schema(value_type = f64, example = 1800.0)]
     pub energy_kcal: Decimal,
+    #[serde(with = "rust_decimal::serde::float")]
+    #[schema(value_type = f64, example = 140.0)]
+    pub protein_g: Decimal,
+    #[serde(with = "rust_decimal::serde::float")]
+    #[schema(value_type = f64, example = 220.0)]
+    pub carbohydrate_g: Decimal,
+    #[serde(with = "rust_decimal::serde::float")]
+    #[schema(value_type = f64, example = 65.0)]
+    pub fat_g: Decimal,
+}
+
+impl ManualCalorieTargetRequest {
+    pub fn macros(self) -> MacroTargets {
+        MacroTargets {
+            protein_g: self.protein_g,
+            carbohydrate_g: self.carbohydrate_g,
+            fat_g: self.fat_g,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, ToSchema)]
+pub struct MacroTargetsDto {
+    #[serde(with = "rust_decimal::serde::float")]
+    #[schema(value_type = f64, example = 140.0)]
+    pub protein_g: Decimal,
+    #[serde(with = "rust_decimal::serde::float")]
+    #[schema(value_type = f64, example = 220.0)]
+    pub carbohydrate_g: Decimal,
+    #[serde(with = "rust_decimal::serde::float")]
+    #[schema(value_type = f64, example = 65.0)]
+    pub fat_g: Decimal,
+}
+
+impl From<MacroTargets> for MacroTargetsDto {
+    fn from(value: MacroTargets) -> Self {
+        Self {
+            protein_g: value.protein_g,
+            carbohydrate_g: value.carbohydrate_g,
+            fat_g: value.fat_g,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct NutritionPlanRecommendationDto {
+    pub calculation: CalorieCalculationDto,
+    pub macros: MacroTargetsDto,
+    #[serde(with = "iso_date::option", skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = Option<String>, format = Date)]
+    pub estimated_goal_date: Option<Date>,
+}
+
+impl From<NutritionPlanRecommendation> for NutritionPlanRecommendationDto {
+    fn from(value: NutritionPlanRecommendation) -> Self {
+        Self {
+            calculation: value.calculation.into(),
+            macros: value.macros.into(),
+            estimated_goal_date: value.estimated_goal_date,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
