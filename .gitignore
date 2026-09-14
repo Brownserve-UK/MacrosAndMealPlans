@@ -12,8 +12,7 @@
 /coverage
 **/coverage
 
-# AI Stuff
-.ai/plans
-.ai/scratchpad
-.ai/mockups
-.ai/screenshots
+# Ignore AI stuff
+.ai/*
+# But keep deferred.md commited
+!.ai/deferred.md
