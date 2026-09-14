@@ -35,11 +35,14 @@ const withManual = {
 vi.mock('../../api/queries', () => ({
   useShoppingList: () => ({ isLoading: false, isError: false, data: withManual }),
   useStartShop: () => ({ isPending: false, mutateAsync: vi.fn() }),
+  useAbandonShop: () => ({ isPending: false, mutateAsync: vi.fn() }),
   useFinishShop: () => ({ isPending: false, mutateAsync: vi.fn() }),
   useRecordPurchase: () => ({ isPending: false, mutate: vi.fn(), mutateAsync: vi.fn() }),
   useUpdatePurchase: () => ({ isPending: false, mutate: vi.fn(), mutateAsync: vi.fn() }),
   useAddShoppingListItem: () => ({ isPending: false, mutate: vi.fn() }),
   useRemoveShoppingListItem: () => ({ isPending: false, mutate: vi.fn() }),
+  useUpdateShoppingListItem: () => ({ isPending: false, mutateAsync: vi.fn() }),
+  useDismissShoppingSuggestion: () => ({ isPending: false, mutate: vi.fn() }),
   useProducts: () => ({ data: { items: [], total: 0 } }),
   useUnits: () => ({ data: ['g', 'ml'] }),
 }));

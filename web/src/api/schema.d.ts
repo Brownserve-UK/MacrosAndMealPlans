@@ -1284,6 +1284,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/shopping/opportunities/{date}/exception": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete: operations["restoreShoppingOpportunity"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/shopping/opportunities/{date}/finish": {
         parameters: {
             query?: never;
@@ -1310,7 +1326,23 @@ export interface paths {
         get?: never;
         put?: never;
         post: operations["startShop"];
-        delete?: never;
+        delete: operations["abandonShop"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/shopping/opportunities/{date}/suggestions/{kind}/{id}/dismissal": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["dismissShoppingSuggestion"];
+        delete: operations["restoreShoppingSuggestion"];
         options?: never;
         head?: never;
         patch?: never;
@@ -3205,7 +3237,9 @@ export interface components {
             manual: components["schemas"]["ShoppingListItemDto"][];
             opportunities: components["schemas"]["ShoppingOpportunityDto"][];
             requirements: components["schemas"]["ShoppingRequirementDto"][];
+            section_order: components["schemas"]["ShoppingSection"][];
             trip?: null | components["schemas"]["ShoppingTripDto"];
+            unfinished: components["schemas"]["UnfinishedShopDto"][];
             unplanned: components["schemas"]["PurchaseDto"][];
         };
         ShoppingListItemDto: {
@@ -3408,6 +3442,12 @@ export interface components {
         TrackingModeDto: "exact" | "estimated" | "not_tracked";
         /** @enum {string} */
         TripStateDto: "shopping" | "finished";
+        UnfinishedShopDto: {
+            /** Format: date */
+            date: string;
+            /** Format: int64 */
+            purchases: number;
+        };
         /** @enum {string} */
         Unit: "mg" | "g" | "kg" | "oz" | "lb" | "ml" | "l" | "tsp" | "tbsp" | "fl_oz" | "cup" | "item" | "piece" | "slice" | "clove" | "can" | "pack" | "bunch" | "serving";
         UnitDto: {
@@ -7784,7 +7824,10 @@ export interface operations {
     updateShoppingListItem: {
         parameters: {
             query?: never;
-            header?: never;
+            header: {
+                /** @description The revision you loaded */
+                "If-Match": string;
+            };
             path: {
                 /** @description The item */
                 id: string;
@@ -7843,7 +7886,10 @@ export interface operations {
     createShoppingOpportunity: {
         parameters: {
             query?: never;
-            header?: never;
+            header: {
+                /** @description Use 0 when adding a new one-off shop */
+                "If-Match": string;
+            };
             path?: never;
             cookie?: never;
         };
@@ -7977,6 +8023,57 @@ export interface operations {
             };
         };
     };
+    restoreShoppingOpportunity: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The exception revision you loaded */
+                "If-Match": string;
+            };
+            path: {
+                /** @description The changed shop, as YYYY-MM-DD */
+                date: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The one-off change was removed */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No change exists for that date */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Someone else changed it first */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description If-Match is required */
+            428: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     finishShop: {
         parameters: {
             query?: never;
@@ -8053,6 +8150,125 @@ export interface operations {
             };
             /** @description The date could not be read */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    abandonShop: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The trip revision you loaded */
+                "If-Match": string;
+            };
+            path: {
+                /** @description The shop being abandoned, as YYYY-MM-DD */
+                date: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The trip baseline was discarded */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No such trip */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Someone else changed it first */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description If-Match is required */
+            428: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    dismissShoppingSuggestion: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The shop, as YYYY-MM-DD */
+                date: string;
+                /** @description ingredient, prepared_meal, or product */
+                kind: string;
+                /** @description The suggested subject */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The suggestion was dismissed for this shop */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No such suggestion */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    restoreShoppingSuggestion: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The shop, as YYYY-MM-DD */
+                date: string;
+                /** @description ingredient, prepared_meal, or product */
+                kind: string;
+                /** @description The suggested subject */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The suggestion is visible again */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No such dismissal */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

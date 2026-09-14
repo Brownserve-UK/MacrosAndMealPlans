@@ -1,13 +1,15 @@
 use async_trait::async_trait;
 use mmp_core::Result;
 use mmp_core::domain::{
-    OpportunityException, Purchase, PurchaseId, Revision, ShoppingCadence, ShoppingListItem,
-    ShoppingListItemId, ShoppingOpportunityId, ShoppingTrip, ShoppingTripRow,
+    DemandSubject, IngredientId, OpportunityException, PreparedMealId, ProductId, Purchase,
+    PurchaseId, Revision, ShoppingCadence, ShoppingListItem, ShoppingListItemId,
+    ShoppingOpportunityId, ShoppingTrip, ShoppingTripRow,
 };
 use mmp_core::ports::{
-    FinishedPurchase, NewStockFromPurchase, Paginated, PurchaseQuery, PurchaseRepository,
-    ShoppingCadenceRepository, ShoppingListItemRepository, ShoppingOpportunityRepository,
-    ShoppingTripRepository, SortDirection, UpdateOutcome,
+    FinishShopRepository, FinishedPurchase, FinishedShoppingTrip, NewStockFromPurchase, Paginated,
+    PurchaseQuery, PurchaseRepository, ShoppingCadenceRepository, ShoppingListItemRepository,
+    ShoppingOpportunityRepository, ShoppingSuggestionDismissalRepository, ShoppingTripRepository,
+    SortDirection, UpdateOutcome,
 };
 use sqlx::PgPool;
 use time::Date;
@@ -253,18 +255,120 @@ impl ShoppingOpportunityRepository for PgShoppingOpportunityRepository {
         }
     }
 
-    async fn delete(&self, id: ShoppingOpportunityId) -> Result<UpdateOutcome> {
-        let affected = sqlx::query("DELETE FROM shopping_opportunity WHERE id = $1")
-            .bind(id.as_uuid())
-            .execute(&self.pool)
+    async fn delete(&self, id: ShoppingOpportunityId, expected: Revision) -> Result<UpdateOutcome> {
+        let affected =
+            sqlx::query("DELETE FROM shopping_opportunity WHERE id = $1 AND revision = $2")
+                .bind(id.as_uuid())
+                .bind(expected.get())
+                .execute(&self.pool)
+                .await
+                .map_err(|e| map_db_error(e, "deleting a shopping opportunity"))?
+                .rows_affected();
+        if affected == 1 {
+            return Ok(UpdateOutcome::Updated);
+        }
+        match self.get(id).await? {
+            Some(current) => Ok(UpdateOutcome::RevisionMismatch {
+                actual: current.revision,
+            }),
+            None => Ok(UpdateOutcome::NotFound),
+        }
+    }
+}
+
+pub struct PgShoppingSuggestionDismissalRepository {
+    pool: PgPool,
+}
+
+impl PgShoppingSuggestionDismissalRepository {
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+}
+
+#[async_trait]
+impl ShoppingSuggestionDismissalRepository for PgShoppingSuggestionDismissalRepository {
+    async fn list_for_date(&self, date: Date) -> Result<Vec<DemandSubject>> {
+        let rows: Vec<(Option<uuid::Uuid>, Option<uuid::Uuid>, Option<uuid::Uuid>)> =
+            sqlx::query_as(
+                "SELECT ingredient_id, prepared_meal_id, product_id
+                 FROM shopping_suggestion_dismissal WHERE opportunity_date = $1",
+            )
+            .bind(date)
+            .fetch_all(&self.pool)
             .await
-            .map_err(|e| map_db_error(e, "deleting a shopping opportunity"))?
-            .rows_affected();
+            .map_err(|e| repository_error("listing dismissed shopping suggestions", e))?;
+        rows.into_iter()
+            .map(|(ingredient_id, prepared_meal_id, product_id)| {
+                match (ingredient_id, prepared_meal_id, product_id) {
+                    (Some(id), None, None) => Ok(DemandSubject::ingredient(IngredientId::from(id))),
+                    (None, Some(id), None) => {
+                        Ok(DemandSubject::prepared_meal(PreparedMealId::from(id)))
+                    }
+                    (None, None, Some(id)) => Ok(DemandSubject::product(ProductId::from(id))),
+                    _ => Err(mmp_core::CoreError::conflict(
+                        "A dismissed shopping suggestion has an invalid subject.",
+                    )),
+                }
+            })
+            .collect()
+    }
+
+    async fn insert(&self, date: Date, subject: DemandSubject) -> Result<()> {
+        let (ingredient_id, prepared_meal_id, product_id) = dismissal_subject(subject)?;
+        sqlx::query(
+            "INSERT INTO shopping_suggestion_dismissal
+             (opportunity_date, ingredient_id, prepared_meal_id, product_id)
+             VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING",
+        )
+        .bind(date)
+        .bind(ingredient_id)
+        .bind(prepared_meal_id)
+        .bind(product_id)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| map_db_error(e, "dismissing a shopping suggestion"))?;
+        Ok(())
+    }
+
+    async fn delete(&self, date: Date, subject: DemandSubject) -> Result<UpdateOutcome> {
+        let (ingredient_id, prepared_meal_id, product_id) = dismissal_subject(subject)?;
+        let affected = sqlx::query(
+            "DELETE FROM shopping_suggestion_dismissal WHERE opportunity_date = $1
+             AND ingredient_id IS NOT DISTINCT FROM $2
+             AND prepared_meal_id IS NOT DISTINCT FROM $3
+             AND product_id IS NOT DISTINCT FROM $4",
+        )
+        .bind(date)
+        .bind(ingredient_id)
+        .bind(prepared_meal_id)
+        .bind(product_id)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| repository_error("restoring a shopping suggestion", e))?
+        .rows_affected();
         Ok(if affected == 1 {
             UpdateOutcome::Updated
         } else {
             UpdateOutcome::NotFound
         })
+    }
+}
+
+fn dismissal_subject(
+    subject: DemandSubject,
+) -> Result<(Option<uuid::Uuid>, Option<uuid::Uuid>, Option<uuid::Uuid>)> {
+    match subject {
+        DemandSubject::Ingredient { ingredient_id } => {
+            Ok((Some(ingredient_id.as_uuid()), None, None))
+        }
+        DemandSubject::PreparedMeal { prepared_meal_id } => {
+            Ok((None, Some(prepared_meal_id.as_uuid()), None))
+        }
+        DemandSubject::Product { product_id } => Ok((None, None, Some(product_id.as_uuid()))),
+        _ => Err(mmp_core::CoreError::conflict(
+            "That kind of shopping suggestion cannot be dismissed.",
+        )),
     }
 }
 
@@ -475,8 +579,26 @@ impl PurchaseRepository for PgPurchaseRepository {
             .map_err(|e| repository_error("committing a purchase update", e))?;
         Ok(UpdateOutcome::Updated)
     }
+}
 
-    async fn finish(&self, finished: &[FinishedPurchase]) -> Result<UpdateOutcome> {
+pub struct PgFinishShopRepository {
+    pool: PgPool,
+}
+
+impl PgFinishShopRepository {
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+}
+
+#[async_trait]
+impl FinishShopRepository for PgFinishShopRepository {
+    async fn finish_shop(
+        &self,
+        date: Date,
+        finished: &[FinishedPurchase],
+        trip: Option<&FinishedShoppingTrip>,
+    ) -> Result<UpdateOutcome> {
         let mut tx = self
             .pool
             .begin()
@@ -509,6 +631,44 @@ impl PurchaseRepository for PgPurchaseRepository {
                         .fetch_optional(&mut *tx)
                         .await
                         .map_err(|e| repository_error("checking a purchase revision", e))?;
+                return Ok(match current {
+                    Some((actual,)) => UpdateOutcome::RevisionMismatch {
+                        actual: Revision::new(actual),
+                    },
+                    None => UpdateOutcome::NotFound,
+                });
+            }
+        }
+
+        sqlx::query("DELETE FROM shopping_list_item WHERE opportunity_date = $1")
+            .bind(date)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| repository_error("clearing shopping list items", e))?;
+
+        if let Some(held) = trip {
+            let trip = &held.trip;
+            let affected = sqlx::query(
+                "UPDATE shopping_trip SET state = $2, finished_at = $3, revision = $4, \
+                 updated_at = $5 WHERE id = $1 AND revision = $6",
+            )
+            .bind(trip.id.as_uuid())
+            .bind(trip.state.code())
+            .bind(trip.finished_at)
+            .bind(trip.revision.get())
+            .bind(trip.updated_at)
+            .bind(held.expected.get())
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| map_db_error(e, "finishing a shopping trip"))?
+            .rows_affected();
+            if affected != 1 {
+                let current: Option<(i64,)> =
+                    sqlx::query_as("SELECT revision FROM shopping_trip WHERE id = $1")
+                        .bind(trip.id.as_uuid())
+                        .fetch_optional(&mut *tx)
+                        .await
+                        .map_err(|e| repository_error("checking a shopping trip revision", e))?;
                 return Ok(match current {
                     Some((actual,)) => UpdateOutcome::RevisionMismatch {
                         actual: Revision::new(actual),
@@ -641,6 +801,35 @@ impl ShoppingTripRepository for PgShoppingTripRepository {
         let current: Option<(i64,)> =
             sqlx::query_as("SELECT revision FROM shopping_trip WHERE id = $1")
                 .bind(trip.id.as_uuid())
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(|e| repository_error("checking a shopping trip revision", e))?;
+        Ok(match current {
+            Some((actual,)) => UpdateOutcome::RevisionMismatch {
+                actual: Revision::new(actual),
+            },
+            None => UpdateOutcome::NotFound,
+        })
+    }
+
+    async fn delete(
+        &self,
+        id: mmp_core::domain::ShoppingTripId,
+        expected: Revision,
+    ) -> Result<UpdateOutcome> {
+        let affected = sqlx::query("DELETE FROM shopping_trip WHERE id = $1 AND revision = $2")
+            .bind(id.as_uuid())
+            .bind(expected.get())
+            .execute(&self.pool)
+            .await
+            .map_err(|e| repository_error("abandoning a shopping trip", e))?
+            .rows_affected();
+        if affected == 1 {
+            return Ok(UpdateOutcome::Updated);
+        }
+        let current: Option<(i64,)> =
+            sqlx::query_as("SELECT revision FROM shopping_trip WHERE id = $1")
+                .bind(id.as_uuid())
                 .fetch_optional(&self.pool)
                 .await
                 .map_err(|e| repository_error("checking a shopping trip revision", e))?;

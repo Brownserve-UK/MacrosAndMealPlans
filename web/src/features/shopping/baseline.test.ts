@@ -24,6 +24,8 @@ function list(trip: ShoppingTrip | undefined, requirements: ShoppingRequirement[
     opportunities: [],
     focus: '2026-09-09',
     cadence_configured: true,
+    unfinished: [],
+    section_order: ['fresh_produce', 'meat_fish', 'dairy', 'bakery', 'frozen', 'ambient', 'drinks', 'household', 'other'],
     manual: [],
     unplanned: [],
     counts: [],
@@ -107,5 +109,54 @@ describe('pinnedList', () => {
 
     expect(pinned?.rows.map((row) => row.requirement.name)).toEqual(['Chicken']);
     expect(pinned?.added.map((row) => row.name)).toEqual(['Salmon']);
+  });
+
+  it('merges purchases when one subject has more than one live requirement', () => {
+    const earlier = {
+      ...requirement('chicken', 'Chicken', 100),
+      assignment: { kind: 'needs_earlier_opportunity' as const },
+      purchases: [
+        { id: 'p1', ingredient_id: 'chicken', state: 'pending' as const, purchased_at: '2026-09-09T09:00:00Z', revision: 1 },
+      ],
+    };
+    const focused = {
+      ...requirement('chicken', 'Chicken', 300),
+      purchases: [
+        { id: 'p2', ingredient_id: 'chicken', state: 'pending' as const, purchased_at: '2026-09-09T09:01:00Z', revision: 1 },
+      ],
+    };
+    const pinned = pinnedList(
+      list(
+        trip('shopping', [
+          { id: 'r1', ingredient_id: 'chicken', name: 'Chicken', section: 'meat_fish' },
+        ]),
+        [earlier, focused],
+      ),
+    );
+
+    expect(pinned?.rows[0]?.requirement.purchases?.map((purchase) => purchase.id)).toEqual([
+      'p1',
+      'p2',
+    ]);
+  });
+
+  it('carries a matching unplanned purchase onto a pinned row', () => {
+    const held = list(
+      trip('shopping', [
+        { id: 'r1', ingredient_id: 'chicken', name: 'Chicken', section: 'meat_fish' },
+      ]),
+      [],
+    );
+    held.unplanned = [
+      {
+        id: 'p1',
+        ingredient_id: 'chicken',
+        state: 'pending',
+        purchased_at: '2026-09-09T09:00:00Z',
+        revision: 1,
+      },
+    ];
+
+    expect(pinnedList(held)?.rows[0]?.requirement.purchases?.[0]?.id).toBe('p1');
   });
 });

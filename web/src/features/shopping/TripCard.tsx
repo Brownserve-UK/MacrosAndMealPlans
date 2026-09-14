@@ -25,7 +25,9 @@ export function TripCard({
   const beneath = [
     imminent ? formatFullDate(opportunity.date) : null,
     count == null ? null : count === 1 ? '1 thing' : `${count} things`,
-    opportunity.state === 'moved' ? 'Moved from Saturday' : null,
+    opportunity.state === 'moved' && opportunity.generated_for
+      ? `Moved from ${formatDayLabel(opportunity.generated_for)}`
+      : null,
     opportunity.state === 'one_off' ? 'An extra trip' : null,
   ].filter((part) => part != null);
 

@@ -17,10 +17,11 @@ use crate::domain::{
 };
 use crate::error::{CoreError, Result};
 use crate::ports::{
-    Clock, FinishedPurchase, HouseholdSettingsRepository, IngredientRepository,
-    NewStockFromPurchase, Paginated, PreparedMealRepository, ProductRepository, PurchaseQuery,
-    PurchaseRepository, ShoppingCadenceRepository, ShoppingListItemRepository,
-    ShoppingOpportunityRepository, ShoppingTripRepository, UpdateOutcome,
+    Clock, FinishShopRepository, FinishedPurchase, FinishedShoppingTrip,
+    HouseholdSettingsRepository, IngredientRepository, NewStockFromPurchase, Paginated,
+    PreparedMealRepository, ProductRepository, PurchaseQuery, PurchaseRepository,
+    ShoppingCadenceRepository, ShoppingListItemRepository, ShoppingOpportunityRepository,
+    ShoppingSuggestionDismissalRepository, ShoppingTripRepository, UpdateOutcome,
 };
 use crate::services::StockService;
 
@@ -49,12 +50,20 @@ pub struct ShoppingList {
     pub trip: Option<ShoppingTrip>,
     pub counts: Vec<ShopCount>,
     pub cadence_configured: bool,
+    pub unfinished: Vec<UnfinishedShop>,
+    pub section_order: Vec<ShoppingSection>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ShopCount {
     pub date: Date,
     pub items: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UnfinishedShop {
+    pub date: Date,
+    pub purchases: usize,
 }
 
 #[derive(Clone)]
@@ -64,6 +73,8 @@ pub struct ShoppingService {
     purchases: Arc<dyn PurchaseRepository>,
     list_items: Arc<dyn ShoppingListItemRepository>,
     trips: Arc<dyn ShoppingTripRepository>,
+    finish_shop: Arc<dyn FinishShopRepository>,
+    dismissals: Arc<dyn ShoppingSuggestionDismissalRepository>,
     ingredients: Arc<dyn IngredientRepository>,
     prepared_meals: Arc<dyn PreparedMealRepository>,
     products: Arc<dyn ProductRepository>,
@@ -80,6 +91,8 @@ impl ShoppingService {
         purchases: Arc<dyn PurchaseRepository>,
         list_items: Arc<dyn ShoppingListItemRepository>,
         trips: Arc<dyn ShoppingTripRepository>,
+        finish_shop: Arc<dyn FinishShopRepository>,
+        dismissals: Arc<dyn ShoppingSuggestionDismissalRepository>,
         ingredients: Arc<dyn IngredientRepository>,
         prepared_meals: Arc<dyn PreparedMealRepository>,
         products: Arc<dyn ProductRepository>,
@@ -93,6 +106,8 @@ impl ShoppingService {
             purchases,
             list_items,
             trips,
+            finish_shop,
+            dismissals,
             ingredients,
             prepared_meals,
             products,
@@ -158,6 +173,17 @@ impl ShoppingService {
         };
         self.trips.insert(&trip).await?;
         Ok(trip)
+    }
+
+    pub async fn abandon_shop(&self, date: Date, expected: Revision) -> Result<()> {
+        let Some(trip) = self.trips.for_date(date).await? else {
+            return Err(CoreError::not_found("shopping trip", date.to_string()));
+        };
+        if trip.is_finished() {
+            return Err(CoreError::conflict("That shop is already finished."));
+        }
+        let outcome = self.trips.delete(trip.id, expected).await?;
+        commit_outcome("shopping trip", date, expected, outcome)
     }
 
     pub async fn list_items(&self) -> Result<Vec<ShoppingListItem>> {
@@ -263,14 +289,6 @@ impl ShoppingService {
         ))
     }
 
-    pub async fn upcoming(&self) -> Result<Vec<ShoppingOpportunity>> {
-        let today = super::calendar::household_calendar(&*self.settings, &self.clock)
-            .await?
-            .today();
-        self.opportunities(today, today + Duration::days(OPPORTUNITY_LOOKAHEAD_DAYS))
-            .await
-    }
-
     pub async fn move_opportunity(
         &self,
         occurrence: Date,
@@ -298,26 +316,37 @@ impl ShoppingService {
         .await
     }
 
-    pub async fn add_one_off(&self, date: Date, note: Option<String>) -> Result<()> {
-        self.record_exception(ExceptionState::OneOff, None, Some(date), note, None)
-            .await
+    pub async fn add_one_off(
+        &self,
+        date: Date,
+        note: Option<String>,
+        expected: Revision,
+    ) -> Result<()> {
+        self.record_exception(
+            ExceptionState::OneOff,
+            None,
+            Some(date),
+            note,
+            Some(expected),
+        )
+        .await
     }
 
-    pub async fn restore_opportunity(&self, occurrence: Date) -> Result<()> {
-        let Some(existing) = self.opportunities.find_for_occurrence(occurrence).await? else {
+    pub async fn restore_opportunity(&self, occurrence: Date, expected: Revision) -> Result<()> {
+        let existing = match self.opportunities.find_for_occurrence(occurrence).await? {
+            Some(existing) => Some(existing),
+            None => self
+                .opportunities
+                .list_in_range(occurrence, occurrence)
+                .await?
+                .into_iter()
+                .find(|held| held.effective_date == Some(occurrence)),
+        };
+        let Some(existing) = existing else {
             return Err(CoreError::not_found(OPPORTUNITY, occurrence.to_string()));
         };
-        match self.opportunities.delete(existing.id).await? {
-            UpdateOutcome::Updated => Ok(()),
-            _ => Err(CoreError::not_found(OPPORTUNITY, occurrence.to_string())),
-        }
-    }
-
-    pub async fn delete_opportunity(&self, id: ShoppingOpportunityId) -> Result<()> {
-        match self.opportunities.delete(id).await? {
-            UpdateOutcome::Updated => Ok(()),
-            _ => Err(CoreError::not_found(OPPORTUNITY, id.to_string())),
-        }
+        let outcome = self.opportunities.delete(existing.id, expected).await?;
+        commit_outcome(OPPORTUNITY, occurrence, expected, outcome)
     }
 
     async fn record_exception(
@@ -392,16 +421,49 @@ impl ShoppingService {
         let window_end = today + Duration::days(PLANNING_WINDOW_DAYS);
 
         let snapshot = self.stock.snapshot(today, window_end).await?;
-        let open_purchases: Vec<Purchase> = self
-            .purchases
-            .list_open()
-            .await?
-            .into_iter()
+        let all_open_purchases = self.purchases.list_open().await?;
+        let open_purchases: Vec<Purchase> = all_open_purchases
+            .iter()
             .filter(|purchase| match purchase.opportunity_date {
                 Some(date) => Some(date) == focus,
                 None => purchase.state == PurchaseState::Pending,
             })
+            .cloned()
             .collect();
+
+        let mut unfinished = Vec::new();
+        for purchase in all_open_purchases
+            .iter()
+            .filter(|purchase| purchase.state == PurchaseState::Pending)
+        {
+            let Some(date) = purchase.opportunity_date else {
+                continue;
+            };
+            if unfinished
+                .iter()
+                .any(|held: &UnfinishedShop| held.date == date)
+            {
+                continue;
+            }
+            if self
+                .trips
+                .for_date(date)
+                .await?
+                .is_some_and(|trip| !trip.is_finished())
+            {
+                unfinished.push(UnfinishedShop {
+                    date,
+                    purchases: all_open_purchases
+                        .iter()
+                        .filter(|held| {
+                            held.state == PurchaseState::Pending
+                                && held.opportunity_date == Some(date)
+                        })
+                        .count(),
+                });
+            }
+        }
+        unfinished.sort_by_key(|shop| shop.date);
 
         let mut requirements = Vec::new();
 
@@ -430,6 +492,7 @@ impl ShoppingService {
                 &opportunities,
                 &open_purchases,
                 &row.demand_gaps,
+                focus,
             ));
         }
 
@@ -460,6 +523,7 @@ impl ShoppingService {
                 &opportunities,
                 &open_purchases,
                 &row.demand_gaps,
+                focus,
             ));
         }
 
@@ -511,10 +575,18 @@ impl ShoppingService {
                 &opportunities,
                 &open_purchases,
                 &row.demand_gaps,
+                focus,
             ));
         }
 
         let order = self.settings.get().await?.section_order;
+        if let Some(focus) = focus {
+            let dismissed = self.dismissals.list_for_date(focus).await?;
+            requirements.retain(|requirement| {
+                !matches!(requirement.certainty, Certainty::Suggested { .. })
+                    || !dismissed.contains(&requirement.subject)
+            });
+        }
         requirements.sort_by(|a, b| {
             order
                 .rank(a.section)
@@ -601,6 +673,8 @@ impl ShoppingService {
             trip,
             counts,
             cadence_configured: cadence.is_some(),
+            unfinished,
+            section_order: order.sections().to_vec(),
         })
     }
 
@@ -642,6 +716,30 @@ impl ShoppingService {
 
     pub async fn purchases(&self, query: &PurchaseQuery) -> Result<Paginated<Purchase>> {
         self.purchases.list(query).await
+    }
+
+    pub async fn dismiss_suggestion(&self, date: Date, subject: DemandSubject) -> Result<()> {
+        let list = self.requirements(Some(date)).await?;
+        if !list.requirements.iter().any(|requirement| {
+            requirement.subject == subject
+                && matches!(requirement.certainty, Certainty::Suggested { .. })
+        }) {
+            return Err(CoreError::not_found(
+                "shopping suggestion",
+                date.to_string(),
+            ));
+        }
+        self.dismissals.insert(date, subject).await
+    }
+
+    pub async fn restore_suggestion(&self, date: Date, subject: DemandSubject) -> Result<()> {
+        match self.dismissals.delete(date, subject).await? {
+            UpdateOutcome::Updated => Ok(()),
+            _ => Err(CoreError::not_found(
+                "shopping suggestion",
+                date.to_string(),
+            )),
+        }
     }
 
     pub async fn pending_purchases(&self) -> Result<Vec<Purchase>> {
@@ -829,28 +927,7 @@ impl ShoppingService {
             });
         }
 
-        if !ready.is_empty() {
-            match self.purchases.finish(&ready).await? {
-                UpdateOutcome::Updated => finished.stocked = ready.len(),
-                UpdateOutcome::NotFound => {
-                    let id = ready[0].purchase.id;
-                    return Err(CoreError::not_found(PURCHASE, id.to_string()));
-                }
-                UpdateOutcome::RevisionMismatch { actual } => {
-                    let held = &ready[0];
-                    return Err(CoreError::RevisionMismatch {
-                        resource: PURCHASE,
-                        id: held.purchase.id.to_string(),
-                        expected: held.expected,
-                        actual,
-                    });
-                }
-            }
-        }
-
-        self.list_items.delete_for_opportunity(date).await?;
-
-        if let Some(mut trip) = trip
+        let finished_trip = if let Some(mut trip) = trip
             && !trip.is_finished()
         {
             let expected = trip.revision;
@@ -858,7 +935,36 @@ impl ShoppingService {
             trip.finished_at = Some(self.clock.now());
             trip.updated_at = self.clock.now();
             trip.revision = expected.next();
-            self.trips.update(&trip, expected).await?;
+            Some(FinishedShoppingTrip { trip, expected })
+        } else {
+            None
+        };
+
+        match self
+            .finish_shop
+            .finish_shop(date, &ready, finished_trip.as_ref())
+            .await?
+        {
+            UpdateOutcome::Updated => finished.stocked = ready.len(),
+            UpdateOutcome::NotFound => {
+                let id = ready
+                    .first()
+                    .map(|held| held.purchase.id.to_string())
+                    .unwrap_or_else(|| date.to_string());
+                return Err(CoreError::not_found("shop", id));
+            }
+            UpdateOutcome::RevisionMismatch { actual } => {
+                let (resource, id, expected) = ready.first().map_or_else(
+                    || ("shopping trip", date.to_string(), expected_trip),
+                    |held| (PURCHASE, held.purchase.id.to_string(), held.expected),
+                );
+                return Err(CoreError::RevisionMismatch {
+                    resource,
+                    id,
+                    expected,
+                    actual,
+                });
+            }
         }
 
         Ok(finished)
@@ -977,7 +1083,11 @@ fn assignment_order(assignment: &Assignment) -> (u8, Option<Date>) {
     }
 }
 
-fn bucket_for_purchase(purchase: &Purchase, assignments: &[Assignment]) -> Option<usize> {
+fn bucket_for_purchase(
+    purchase: &Purchase,
+    assignments: &[Assignment],
+    focus: Option<Date>,
+) -> Option<usize> {
     if let Some(date) = purchase.opportunity_date
         && let Some(index) = assignments.iter().position(
             |assignment| matches!(assignment, Assignment::Opportunity { date: on } if *on == date),
@@ -985,7 +1095,18 @@ fn bucket_for_purchase(purchase: &Purchase, assignments: &[Assignment]) -> Optio
     {
         return Some(index);
     }
-    (!assignments.is_empty()).then_some(0)
+    focus
+        .and_then(|focus| {
+            assignments.iter().position(
+                |assignment| matches!(assignment, Assignment::Opportunity { date } if *date == focus),
+            )
+        })
+        .or_else(|| {
+            assignments
+                .iter()
+                .position(|assignment| *assignment == Assignment::NeedsEarlierOpportunity)
+        })
+        .or_else(|| (!assignments.is_empty()).then_some(0))
 }
 
 fn bucket_quantity(held: &[UncoveredClaim], gaps: &mut Vec<DemandGap>) -> Option<Quantity> {
@@ -1001,6 +1122,7 @@ fn bucket_quantity(held: &[UncoveredClaim], gaps: &mut Vec<DemandGap>) -> Option
                     if !gaps.contains(&DemandGap::IncompatibleUnits) {
                         gaps.push(DemandGap::IncompatibleUnits);
                     }
+                    return None;
                 }
             },
         }
@@ -1020,6 +1142,7 @@ fn build(
     opportunities: &[ShoppingOpportunity],
     open_purchases: &[Purchase],
     row_gaps: &[DemandGap],
+    focus: Option<Date>,
 ) -> Vec<ShoppingRequirement> {
     if matches!(availability, Availability::AssumedAvailable) {
         return Vec::new();
@@ -1077,7 +1200,9 @@ fn build(
             let use_by_at_least = held.iter().map(|held| held.claim.planned_on).max();
             let purchases: Vec<Purchase> = matching
                 .iter()
-                .filter(|purchase| bucket_for_purchase(purchase, &assignments) == Some(index))
+                .filter(|purchase| {
+                    bucket_for_purchase(purchase, &assignments, focus) == Some(index)
+                })
                 .map(|purchase| (*purchase).clone())
                 .collect();
 

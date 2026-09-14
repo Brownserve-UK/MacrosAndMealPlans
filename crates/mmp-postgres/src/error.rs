@@ -41,7 +41,7 @@ pub fn map_db_error(error: sqlx::Error, context: &str) -> CoreError {
     }
 }
 
-const UNIQUE_CONSTRAINTS: [(&str, &str, &str); 40] = [
+const UNIQUE_CONSTRAINTS: [(&str, &str, &str); 43] = [
     ("ingredient_name_unique", "ingredient", "name"),
     ("ingredient_seed_key_unique", "ingredient", "seed_key"),
     ("ingredient_pkey", "ingredient", "id"),
@@ -138,6 +138,21 @@ const UNIQUE_CONSTRAINTS: [(&str, &str, &str); 40] = [
     ("shopping_trip_row_pkey", "shopping trip row", "id"),
     ("shopping_list_item_pkey", "shopping list item", "id"),
     ("purchase_pkey", "purchase", "id"),
+    (
+        "shopping_suggestion_dismissal_ingredient",
+        "shopping suggestion dismissal",
+        "ingredient",
+    ),
+    (
+        "shopping_suggestion_dismissal_product",
+        "shopping suggestion dismissal",
+        "product",
+    ),
+    (
+        "shopping_suggestion_dismissal_prepared_meal",
+        "shopping suggestion dismissal",
+        "prepared meal",
+    ),
 ];
 
 fn unique_violation(constraint: &str) -> Option<(&'static str, &'static str)> {

@@ -13,12 +13,13 @@ use crate::domain::{
 };
 use crate::ports::{Clock, FixedClock, MealPlanRepository};
 use crate::testing::{
-    InMemoryHouseholdMemberRepository, InMemoryHouseholdSettingsRepository,
-    InMemoryIngredientRepository, InMemoryMealPlanRepository, InMemoryPreparedBatchRepository,
-    InMemoryPreparedMealRepository, InMemoryProductRepository, InMemoryPurchaseRepository,
-    InMemoryRecipeRepository, InMemoryShoppingCadenceRepository,
+    InMemoryFinishShopRepository, InMemoryHouseholdMemberRepository,
+    InMemoryHouseholdSettingsRepository, InMemoryIngredientRepository, InMemoryMealPlanRepository,
+    InMemoryPreparedBatchRepository, InMemoryPreparedMealRepository, InMemoryProductRepository,
+    InMemoryPurchaseRepository, InMemoryRecipeRepository, InMemoryShoppingCadenceRepository,
     InMemoryShoppingListItemRepository, InMemoryShoppingOpportunityRepository,
-    InMemoryShoppingTripRepository, InMemoryStockRepository,
+    InMemoryShoppingSuggestionDismissalRepository, InMemoryShoppingTripRepository,
+    InMemoryStockRepository,
 };
 use time::Weekday;
 
@@ -49,6 +50,7 @@ fn harness() -> Harness {
     let opportunities = InMemoryShoppingOpportunityRepository::new();
     let purchases = InMemoryPurchaseRepository::new();
     let list_items = InMemoryShoppingListItemRepository::new();
+    let trips = InMemoryShoppingTripRepository::new();
     let member_id = HouseholdMemberId::new();
     let now = OffsetDateTime::UNIX_EPOCH;
     members.seed(HouseholdMember {
@@ -79,7 +81,13 @@ fn harness() -> Harness {
         Arc::new(opportunities),
         Arc::new(purchases.clone()),
         Arc::new(list_items.clone()),
-        Arc::new(InMemoryShoppingTripRepository::new()),
+        Arc::new(trips.clone()),
+        Arc::new(InMemoryFinishShopRepository::new(
+            purchases.clone(),
+            list_items.clone(),
+            trips,
+        )),
+        Arc::new(InMemoryShoppingSuggestionDismissalRepository::new()),
         Arc::new(ingredients.clone()),
         Arc::new(InMemoryPreparedMealRepository::new()),
         Arc::new(products.clone()),
@@ -500,6 +508,166 @@ async fn setting_off_twice_keeps_the_first_trip() {
 }
 
 #[tokio::test]
+async fn abandoning_a_shop_discards_the_baseline_and_keeps_purchases() {
+    let h = harness();
+    weekly_saturdays(&h).await;
+    let trip = h
+        .shopping
+        .start_shop(date!(2026 - 09 - 05), h.actor_id)
+        .await
+        .unwrap();
+    let purchase = h
+        .shopping
+        .record_purchase(
+            NewPurchase {
+                ingredient_id: None,
+                prepared_meal_id: None,
+                product_id: None,
+                name: Some("Kitchen roll".to_owned()),
+                quantity: None,
+                opportunity_date: Some(date!(2026 - 09 - 05)),
+                note: None,
+            },
+            h.actor_id,
+        )
+        .await
+        .unwrap();
+
+    h.shopping
+        .abandon_shop(date!(2026 - 09 - 05), trip.revision)
+        .await
+        .unwrap();
+
+    assert_eq!(h.shopping.trip(date!(2026 - 09 - 05)).await.unwrap(), None);
+    assert_eq!(
+        h.purchases.get(purchase.id).await.unwrap().unwrap().state,
+        PurchaseState::Pending
+    );
+}
+
+#[tokio::test]
+async fn pending_purchases_without_a_shop_are_ready_to_put_away() {
+    let h = harness();
+    let purchase = h
+        .shopping
+        .record_purchase(
+            NewPurchase {
+                ingredient_id: None,
+                prepared_meal_id: None,
+                product_id: None,
+                name: Some("Kitchen roll".to_owned()),
+                quantity: None,
+                opportunity_date: None,
+                note: None,
+            },
+            h.actor_id,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        h.shopping.awaiting_put_away().await.unwrap(),
+        vec![purchase]
+    );
+}
+
+#[tokio::test]
+async fn pending_purchases_from_a_past_shop_are_ready_to_put_away() {
+    let h = harness();
+    let purchase = h
+        .shopping
+        .record_purchase(
+            NewPurchase {
+                ingredient_id: None,
+                prepared_meal_id: None,
+                product_id: None,
+                name: Some("Kitchen roll".to_owned()),
+                quantity: None,
+                opportunity_date: Some(date!(2026 - 08 - 30)),
+                note: None,
+            },
+            h.actor_id,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        h.shopping.awaiting_put_away().await.unwrap(),
+        vec![purchase]
+    );
+}
+
+#[tokio::test]
+async fn pending_purchases_from_a_finished_shop_are_ready_to_put_away() {
+    let h = harness();
+    let trip = h
+        .shopping
+        .start_shop(date!(2026 - 09 - 05), h.actor_id)
+        .await
+        .unwrap();
+    let purchase = h
+        .shopping
+        .record_purchase(
+            NewPurchase {
+                ingredient_id: None,
+                prepared_meal_id: None,
+                product_id: None,
+                name: Some("Kitchen roll".to_owned()),
+                quantity: None,
+                opportunity_date: Some(date!(2026 - 09 - 05)),
+                note: None,
+            },
+            h.actor_id,
+        )
+        .await
+        .unwrap();
+    h.shopping
+        .finish_shop(date!(2026 - 09 - 05), h.actor_id, trip.revision)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        h.shopping.awaiting_put_away().await.unwrap(),
+        vec![purchase]
+    );
+}
+
+#[tokio::test]
+async fn an_unfinished_shop_with_purchases_is_reachable_from_the_hub() {
+    let h = harness();
+    h.shopping
+        .start_shop(date!(2026 - 09 - 05), h.actor_id)
+        .await
+        .unwrap();
+    h.shopping
+        .record_purchase(
+            NewPurchase {
+                ingredient_id: None,
+                prepared_meal_id: None,
+                product_id: None,
+                name: Some("Kitchen roll".to_owned()),
+                quantity: None,
+                opportunity_date: Some(date!(2026 - 09 - 05)),
+                note: None,
+            },
+            h.actor_id,
+        )
+        .await
+        .unwrap();
+
+    let list = h.shopping.requirements(None).await.unwrap();
+
+    assert_eq!(
+        list.unfinished,
+        vec![UnfinishedShop {
+            date: date!(2026 - 09 - 05),
+            purchases: 1,
+        }]
+    );
+    assert!(h.shopping.awaiting_put_away().await.unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn finishing_closes_the_trip_it_was_started_as() {
     let h = harness();
     weekly_saturdays(&h).await;
@@ -800,6 +968,73 @@ async fn a_shop_only_buys_what_is_needed_before_the_next_one() {
     assert_eq!(
         second.requirements[0].use_by_at_least,
         Some(date!(2026 - 09 - 15))
+    );
+}
+
+#[tokio::test]
+async fn a_purchase_on_the_focused_shop_binds_to_its_surviving_requirement() {
+    let h = harness();
+    weekly_saturdays(&h).await;
+    let milk = IngredientId::new();
+    seed_ingredient(&h, milk, "Whole Milk");
+    let bottle = mapped("Sample Whole Milk", milk);
+    h.products.seed(bottle.clone());
+    plan_product(&h, bottle.id, ml(400), date!(2026 - 09 - 08)).await;
+    plan_product(&h, bottle.id, ml(400), date!(2026 - 09 - 15)).await;
+
+    let purchase = h
+        .shopping
+        .record_purchase(
+            NewPurchase {
+                ingredient_id: Some(milk),
+                prepared_meal_id: None,
+                product_id: None,
+                name: None,
+                quantity: None,
+                opportunity_date: Some(date!(2026 - 09 - 12)),
+                note: None,
+            },
+            h.actor_id,
+        )
+        .await
+        .unwrap();
+
+    let list = h
+        .shopping
+        .requirements(Some(date!(2026 - 09 - 12)))
+        .await
+        .unwrap();
+
+    assert_eq!(list.requirements.len(), 1);
+    assert_eq!(list.requirements[0].purchases, vec![purchase]);
+    assert!(list.unplanned.is_empty());
+}
+
+#[tokio::test]
+async fn incompatible_amounts_make_the_requirement_total_unknown() {
+    let h = harness();
+    weekly_saturdays(&h).await;
+    let milk = IngredientId::new();
+    seed_ingredient(&h, milk, "Whole Milk");
+    h.ingredients.set_track_stock(milk, Some(true));
+    h.products.seed(mapped("Sample Whole Milk", milk));
+    plan_ingredient(&h, milk, ml(400), date!(2026 - 09 - 02)).await;
+    plan_ingredient(
+        &h,
+        milk,
+        Quantity::new(Decimal::new(200, 0), Unit::Gram),
+        date!(2026 - 09 - 03),
+    )
+    .await;
+
+    let list = h.shopping.requirements(None).await.unwrap();
+
+    assert_eq!(list.requirements.len(), 1);
+    assert_eq!(list.requirements[0].quantity, None);
+    assert!(
+        list.requirements[0]
+            .gaps
+            .contains(&DemandGap::IncompatibleUnits)
     );
 }
 
@@ -1122,6 +1357,78 @@ async fn skipping_the_next_shop_moves_the_list_to_the_one_after() {
 
     let after = h.shopping.requirements(None).await.unwrap();
     assert_eq!(after.focus, Some(date!(2026 - 09 - 12)));
+}
+
+#[tokio::test]
+async fn restoring_a_one_off_removes_it_without_changing_the_cadence() {
+    let h = harness();
+    weekly_saturdays(&h).await;
+    h.shopping
+        .add_one_off(
+            date!(2026 - 09 - 02),
+            Some("Extra shop".to_owned()),
+            Revision::UNRECORDED,
+        )
+        .await
+        .unwrap();
+    let one_off = h
+        .shopping
+        .opportunities(TODAY, date!(2026 - 09 - 06))
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|opportunity| opportunity.date == date!(2026 - 09 - 02))
+        .unwrap();
+
+    h.shopping
+        .restore_opportunity(one_off.date, one_off.revision)
+        .await
+        .unwrap();
+
+    let dates: Vec<_> = h
+        .shopping
+        .opportunities(TODAY, date!(2026 - 09 - 13))
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|opportunity| opportunity.date)
+        .collect();
+    assert_eq!(dates, vec![date!(2026 - 09 - 05), date!(2026 - 09 - 12)]);
+}
+
+#[tokio::test]
+async fn dismissing_a_suggestion_only_hides_it_for_that_shop() {
+    let h = harness();
+    weekly_saturdays(&h).await;
+    let milk = IngredientId::new();
+    seed_ingredient(&h, milk, "Whole Milk");
+    let bottle = mapped("Sample Whole Milk", milk);
+    h.products.seed(bottle.clone());
+    plan_product(&h, bottle.id, ml(400), date!(2026 - 09 - 08)).await;
+    plan_product(&h, bottle.id, ml(400), date!(2026 - 09 - 15)).await;
+
+    h.shopping
+        .dismiss_suggestion(date!(2026 - 09 - 05), DemandSubject::ingredient(milk))
+        .await
+        .unwrap();
+
+    assert!(
+        h.shopping
+            .requirements(Some(date!(2026 - 09 - 05)))
+            .await
+            .unwrap()
+            .requirements
+            .is_empty()
+    );
+    assert_eq!(
+        h.shopping
+            .requirements(Some(date!(2026 - 09 - 12)))
+            .await
+            .unwrap()
+            .requirements
+            .len(),
+        1
+    );
 }
 
 #[tokio::test]

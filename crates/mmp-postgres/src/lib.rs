@@ -34,8 +34,9 @@ pub use prepared_meal::PgPreparedMealRepository;
 pub use product::PgProductRepository;
 pub use recipe::PgRecipeRepository;
 pub use shopping::{
-    PgPurchaseRepository, PgShoppingCadenceRepository, PgShoppingListItemRepository,
-    PgShoppingOpportunityRepository, PgShoppingTripRepository,
+    PgFinishShopRepository, PgPurchaseRepository, PgShoppingCadenceRepository,
+    PgShoppingListItemRepository, PgShoppingOpportunityRepository,
+    PgShoppingSuggestionDismissalRepository, PgShoppingTripRepository,
 };
 pub use stock::PgStockRepository;
 pub use user::PgUserRepository;

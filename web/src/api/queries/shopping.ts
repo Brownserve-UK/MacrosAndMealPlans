@@ -16,13 +16,6 @@ export function useShoppingList(opportunityDate?: string, options?: { enabled?: 
   });
 }
 
-export function useShoppingOpportunities() {
-  return useQuery({
-    queryKey: shoppingKeys.opportunities(),
-    queryFn: async () => unwrap(await client.GET('/api/v1/shopping/opportunities', {})),
-  });
-}
-
 export function useShoppingCadence() {
   return useQuery({
     queryKey: shoppingKeys.cadence(),
@@ -34,14 +27,6 @@ export function useShoppingCadence() {
         throw error;
       }
     },
-  });
-}
-
-export function usePurchases(state?: 'pending' | 'reconciled' | 'cancelled') {
-  return useQuery({
-    queryKey: shoppingKeys.purchases(state),
-    queryFn: async () =>
-      unwrap(await client.GET('/api/v1/purchases', { params: { query: { state } } })),
   });
 }
 
@@ -136,13 +121,6 @@ export function usePutAway() {
   });
 }
 
-export function useShoppingListItems() {
-  return useQuery({
-    queryKey: shoppingKeys.items(),
-    queryFn: async () => unwrap(await client.GET('/api/v1/shopping/items', {})),
-  });
-}
-
 export function useAddShoppingListItem() {
   const invalidate = useShoppingInvalidation();
   return useMutation({
@@ -171,6 +149,20 @@ export function useRemoveShoppingListItem() {
   });
 }
 
+export function useUpdateShoppingListItem() {
+  const invalidate = useShoppingInvalidation();
+  return useMutation({
+    mutationFn: async (input: { id: string; revision: number; name: string }) =>
+      unwrap(
+        await client.PATCH('/api/v1/shopping/items/{id}', {
+          params: { path: { id: input.id }, header: ifMatch(input.revision) },
+          body: { name: input.name },
+        }),
+      ),
+    onSuccess: invalidate,
+  });
+}
+
 export function useStartShop() {
   const invalidate = useShoppingInvalidation();
   return useMutation({
@@ -178,6 +170,19 @@ export function useStartShop() {
       unwrap(
         await client.POST('/api/v1/shopping/opportunities/{date}/start', {
           params: { path: { date } },
+        }),
+      ),
+    onSuccess: invalidate,
+  });
+}
+
+export function useAbandonShop() {
+  const invalidate = useShoppingInvalidation();
+  return useMutation({
+    mutationFn: async (input: { date: string; revision: number }) =>
+      unwrap(
+        await client.DELETE('/api/v1/shopping/opportunities/{date}/start', {
+          params: { path: { date: input.date }, header: ifMatch(input.revision) },
         }),
       ),
     onSuccess: invalidate,
@@ -214,7 +219,43 @@ export function useAddShoppingOpportunity() {
   const invalidate = useShoppingInvalidation();
   return useMutation({
     mutationFn: async (input: { date: string; note?: string }) =>
-      unwrap(await client.POST('/api/v1/shopping/opportunities', { body: input })),
+      unwrap(
+        await client.POST('/api/v1/shopping/opportunities', {
+          params: { header: ifMatch(0) },
+          body: input,
+        }),
+      ),
+    onSuccess: invalidate,
+  });
+}
+
+export function useRestoreShoppingOpportunity() {
+  const invalidate = useShoppingInvalidation();
+  return useMutation({
+    mutationFn: async (input: { date: string; revision: number }) =>
+      unwrap(
+        await client.DELETE('/api/v1/shopping/opportunities/{date}/exception', {
+          params: { path: { date: input.date }, header: ifMatch(input.revision) },
+        }),
+      ),
+    onSuccess: invalidate,
+  });
+}
+
+export function useDismissShoppingSuggestion() {
+  const invalidate = useShoppingInvalidation();
+  return useMutation({
+    mutationFn: async (input: {
+      date: string;
+      kind: 'ingredient' | 'prepared_meal' | 'product';
+      id: string;
+    }) =>
+      unwrap(
+        await client.POST(
+          '/api/v1/shopping/opportunities/{date}/suggestions/{kind}/{id}/dismissal',
+          { params: { path: input } },
+        ),
+      ),
     onSuccess: invalidate,
   });
 }

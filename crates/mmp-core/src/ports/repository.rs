@@ -6,15 +6,16 @@ use time::{Date, OffsetDateTime};
 use super::{PageRequest, Paginated};
 use crate::domain::{
     AccessScope, CalorieCalculation, CalorieCalculationId, CatalogueOrigin, ConsumptionRecord,
-    ConsumptionRecordId, DeductionTarget, HouseholdMember, HouseholdMemberId, HouseholdSettings,
-    Ingredient, IngredientId, MealParticipant, MealPlanComponentId, MealPlanComponentSnapshot,
-    MealPlanEntry, MealPlanEntryId, MealTemplate, MealTemplateId, MemberAccessGrant,
-    MemberBodyProfile, NewStockEvent, NutritionTarget, NutritionTargetId, OpportunityException,
-    PreparedBatch, PreparedBatchId, PreparedMeal, PreparedMealId, Product, ProductId, Purchase,
-    PurchaseId, PurchaseState, Quantity, Recipe, RecipeId, RecipePhoto, RecipeSummary, Revision,
-    Role, ShoppingCadence, ShoppingListItem, ShoppingListItemId, ShoppingOpportunityId,
-    ShoppingTrip, StockEffect, StockEffectSource, StockEvent, StockItem, StockItemId, StockOutcome,
-    User, UserId, WeightGoal, WeightGoalId, WeightRecord, WeightRecordId,
+    ConsumptionRecordId, DeductionTarget, DemandSubject, HouseholdMember, HouseholdMemberId,
+    HouseholdSettings, Ingredient, IngredientId, MealParticipant, MealPlanComponentId,
+    MealPlanComponentSnapshot, MealPlanEntry, MealPlanEntryId, MealTemplate, MealTemplateId,
+    MemberAccessGrant, MemberBodyProfile, NewStockEvent, NutritionTarget, NutritionTargetId,
+    OpportunityException, PreparedBatch, PreparedBatchId, PreparedMeal, PreparedMealId, Product,
+    ProductId, Purchase, PurchaseId, PurchaseState, Quantity, Recipe, RecipeId, RecipePhoto,
+    RecipeSummary, Revision, Role, ShoppingCadence, ShoppingListItem, ShoppingListItemId,
+    ShoppingOpportunityId, ShoppingTrip, ShoppingTripId, StockEffect, StockEffectSource,
+    StockEvent, StockItem, StockItemId, StockOutcome, User, UserId, WeightGoal, WeightGoalId,
+    WeightRecord, WeightRecordId,
 };
 use crate::error::Result;
 
@@ -687,7 +688,16 @@ pub trait ShoppingOpportunityRepository: Send + Sync + 'static {
         expected: Revision,
     ) -> Result<UpdateOutcome>;
 
-    async fn delete(&self, id: ShoppingOpportunityId) -> Result<UpdateOutcome>;
+    async fn delete(&self, id: ShoppingOpportunityId, expected: Revision) -> Result<UpdateOutcome>;
+}
+
+#[async_trait]
+pub trait ShoppingSuggestionDismissalRepository: Send + Sync + 'static {
+    async fn list_for_date(&self, date: Date) -> Result<Vec<DemandSubject>>;
+
+    async fn insert(&self, date: Date, subject: DemandSubject) -> Result<()>;
+
+    async fn delete(&self, date: Date, subject: DemandSubject) -> Result<UpdateOutcome>;
 }
 
 #[derive(Debug, Clone, Default)]
@@ -715,8 +725,6 @@ pub trait PurchaseRepository: Send + Sync + 'static {
         expected: Revision,
         stock: Option<&NewStockFromPurchase>,
     ) -> Result<UpdateOutcome>;
-
-    async fn finish(&self, finished: &[FinishedPurchase]) -> Result<UpdateOutcome>;
 }
 
 #[derive(Debug, Clone)]
@@ -732,6 +740,22 @@ pub struct FinishedPurchase {
     pub stock: NewStockFromPurchase,
 }
 
+#[derive(Debug, Clone)]
+pub struct FinishedShoppingTrip {
+    pub trip: ShoppingTrip,
+    pub expected: Revision,
+}
+
+#[async_trait]
+pub trait FinishShopRepository: Send + Sync + 'static {
+    async fn finish_shop(
+        &self,
+        date: Date,
+        purchases: &[FinishedPurchase],
+        trip: Option<&FinishedShoppingTrip>,
+    ) -> Result<UpdateOutcome>;
+}
+
 #[async_trait]
 pub trait ShoppingTripRepository: Send + Sync + 'static {
     async fn for_date(&self, date: Date) -> Result<Option<ShoppingTrip>>;
@@ -739,6 +763,8 @@ pub trait ShoppingTripRepository: Send + Sync + 'static {
     async fn insert(&self, trip: &ShoppingTrip) -> Result<()>;
 
     async fn update(&self, trip: &ShoppingTrip, expected: Revision) -> Result<UpdateOutcome>;
+
+    async fn delete(&self, id: ShoppingTripId, expected: Revision) -> Result<UpdateOutcome>;
 }
 
 #[async_trait]

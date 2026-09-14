@@ -22,6 +22,8 @@ function list(requirements: ShoppingList['requirements']): ShoppingList {
     unplanned: [],
     counts: [],
     cadence_configured: true,
+    unfinished: [],
+    section_order: ['fresh_produce', 'meat_fish', 'dairy', 'bakery', 'frozen', 'ambient', 'drinks', 'household', 'other'],
   };
 }
 

@@ -1037,6 +1037,27 @@ CREATE TABLE shopping_trip_row (
         CHECK ((quantity_value IS NULL) = (quantity_unit IS NULL))
 );
 
+CREATE TABLE shopping_suggestion_dismissal (
+    opportunity_date  DATE NOT NULL,
+    ingredient_id     UUID REFERENCES ingredient (id) ON DELETE CASCADE,
+    product_id        UUID REFERENCES product (id) ON DELETE CASCADE,
+    prepared_meal_id  UUID REFERENCES prepared_meal (id) ON DELETE CASCADE,
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    CONSTRAINT shopping_suggestion_dismissal_one_subject
+        CHECK (num_nonnulls(ingredient_id, prepared_meal_id, product_id) = 1)
+);
+
+CREATE UNIQUE INDEX shopping_suggestion_dismissal_ingredient
+    ON shopping_suggestion_dismissal (opportunity_date, ingredient_id)
+    WHERE ingredient_id IS NOT NULL;
+CREATE UNIQUE INDEX shopping_suggestion_dismissal_product
+    ON shopping_suggestion_dismissal (opportunity_date, product_id)
+    WHERE product_id IS NOT NULL;
+CREATE UNIQUE INDEX shopping_suggestion_dismissal_prepared_meal
+    ON shopping_suggestion_dismissal (opportunity_date, prepared_meal_id)
+    WHERE prepared_meal_id IS NOT NULL;
+
 CREATE TABLE weight_record (
     id           UUID PRIMARY KEY,
     member_id    UUID NOT NULL REFERENCES household_member (id) ON DELETE CASCADE,

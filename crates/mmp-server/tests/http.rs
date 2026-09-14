@@ -16,15 +16,16 @@ use mmp_core::services::{
 };
 use mmp_core::testing::{
     InMemoryAccessGrantRepository, InMemoryCalorieCalculationRepository,
-    InMemoryConsumptionRecordRepository, InMemoryHouseholdMemberRepository,
-    InMemoryHouseholdSettingsRepository, InMemoryIngredientRepository, InMemoryMealPlanRepository,
-    InMemoryMealTemplateRepository, InMemoryMemberBodyProfileRepository,
-    InMemoryNutritionTargetRepository, InMemoryPreparedBatchRepository,
-    InMemoryPreparedMealRepository, InMemoryProductRepository, InMemoryPurchaseRepository,
-    InMemoryRecipeRepository, InMemoryShoppingCadenceRepository,
+    InMemoryConsumptionRecordRepository, InMemoryFinishShopRepository,
+    InMemoryHouseholdMemberRepository, InMemoryHouseholdSettingsRepository,
+    InMemoryIngredientRepository, InMemoryMealPlanRepository, InMemoryMealTemplateRepository,
+    InMemoryMemberBodyProfileRepository, InMemoryNutritionTargetRepository,
+    InMemoryPreparedBatchRepository, InMemoryPreparedMealRepository, InMemoryProductRepository,
+    InMemoryPurchaseRepository, InMemoryRecipeRepository, InMemoryShoppingCadenceRepository,
     InMemoryShoppingListItemRepository, InMemoryShoppingOpportunityRepository,
-    InMemoryShoppingTripRepository, InMemoryStockRepository, InMemoryUserRepository,
-    InMemoryWeightGoalRepository, InMemoryWeightRecordRepository,
+    InMemoryShoppingSuggestionDismissalRepository, InMemoryShoppingTripRepository,
+    InMemoryStockRepository, InMemoryUserRepository, InMemoryWeightGoalRepository,
+    InMemoryWeightRecordRepository,
 };
 use mmp_server::AppState;
 use mmp_server::auth::DevBasicAuthProvider;
@@ -61,6 +62,7 @@ async fn app() -> Router {
     let opportunities = InMemoryShoppingOpportunityRepository::new();
     let purchases = InMemoryPurchaseRepository::new();
     let list_items = InMemoryShoppingListItemRepository::new();
+    let trips = InMemoryShoppingTripRepository::new();
     let products_for_shopping = products.clone();
     let batches = Arc::new(InMemoryPreparedBatchRepository::with_stock(
         stock_repo.clone(),
@@ -165,9 +167,13 @@ async fn app() -> Router {
         ShoppingService::new(
             Arc::new(cadence),
             Arc::new(opportunities),
-            Arc::new(purchases),
-            Arc::new(list_items),
-            Arc::new(InMemoryShoppingTripRepository::new()),
+            Arc::new(purchases.clone()),
+            Arc::new(list_items.clone()),
+            Arc::new(trips.clone()),
+            Arc::new(InMemoryFinishShopRepository::new(
+                purchases, list_items, trips,
+            )),
+            Arc::new(InMemoryShoppingSuggestionDismissalRepository::new()),
             ingredients,
             prepared_meals,
             Arc::new(products_for_shopping),
@@ -3762,6 +3768,178 @@ async fn something_put_on_the_list_by_hand_comes_back_on_it() {
 
     let (_, listed, _) = send(&app, Call::new("GET", "/api/v1/shopping/items")).await;
     assert!(listed.as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn shopping_opportunity_changes_round_trip_through_http() {
+    let app = app().await;
+    send(
+        &app,
+        Call::new("PUT", "/api/v1/shopping/cadence")
+            .if_match(0)
+            .body(json!({
+                "interval_weeks": 1,
+                "days": [6],
+                "anchor": "2026-08-31"
+            })),
+    )
+    .await;
+
+    let (status, _, _) = send(
+        &app,
+        Call::new("PUT", "/api/v1/shopping/opportunities/2026-09-05")
+            .if_match(0)
+            .body(json!({ "to": "2026-09-04" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, _, _) = send(
+        &app,
+        Call::new(
+            "DELETE",
+            "/api/v1/shopping/opportunities/2026-09-05/exception",
+        )
+        .if_match(1),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let (status, _, _) = send(
+        &app,
+        Call::new("DELETE", "/api/v1/shopping/opportunities/2026-09-05").if_match(0),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, _, _) = send(
+        &app,
+        Call::new(
+            "DELETE",
+            "/api/v1/shopping/opportunities/2026-09-05/exception",
+        )
+        .if_match(1),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let (status, _, _) = send(
+        &app,
+        Call::new("POST", "/api/v1/shopping/opportunities")
+            .if_match(0)
+            .body(json!({ "date": "2026-09-03", "note": "Extra trip" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, _, _) = send(
+        &app,
+        Call::new(
+            "DELETE",
+            "/api/v1/shopping/opportunities/2026-09-03/exception",
+        )
+        .if_match(1),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+}
+
+#[tokio::test]
+async fn a_started_shop_can_be_abandoned_without_losing_its_purchase() {
+    let app = app().await;
+    let (_, trip, _) = send(
+        &app,
+        Call::new("POST", "/api/v1/shopping/opportunities/2026-09-05/start"),
+    )
+    .await;
+    let (_, purchase, _) = send(
+        &app,
+        Call::new("POST", "/api/v1/purchases").body(json!({
+            "name": "Kitchen roll",
+            "opportunity_date": "2026-09-05"
+        })),
+    )
+    .await;
+
+    let (status, _, _) = send(
+        &app,
+        Call::new("DELETE", "/api/v1/shopping/opportunities/2026-09-05/start")
+            .if_match(trip["revision"].as_i64().unwrap()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let (_, list, _) = send(
+        &app,
+        Call::new(
+            "GET",
+            "/api/v1/shopping/requirements?opportunity_date=2026-09-05",
+        ),
+    )
+    .await;
+    assert!(list["trip"].is_null());
+    assert_eq!(list["unplanned"][0]["id"], purchase["id"]);
+}
+
+#[tokio::test]
+async fn purchases_put_away_and_manual_item_edits_round_trip_through_http() {
+    let app = app().await;
+    let product_id = create_product(&app, "Kitchen roll").await;
+    let (_, purchase, _) = send(
+        &app,
+        Call::new("POST", "/api/v1/purchases").body(json!({
+            "product_id": product_id,
+            "quantity": { "amount": 1, "unit": "item" }
+        })),
+    )
+    .await;
+    let (status, changed, _) = send(
+        &app,
+        Call::new(
+            "PATCH",
+            format!("/api/v1/purchases/{}", purchase["id"].as_str().unwrap()),
+        )
+        .if_match(1)
+        .body(json!({ "quantity": { "amount": 2, "unit": "item" } })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(changed["quantity"]["amount"], json!(2.0));
+
+    let (status, put_away, _) = send(
+        &app,
+        Call::new(
+            "POST",
+            format!(
+                "/api/v1/shopping/put-away/{}",
+                purchase["id"].as_str().unwrap()
+            ),
+        )
+        .if_match(2)
+        .body(json!({
+            "product_id": product_id,
+            "quantity": { "amount": 2, "unit": "item" },
+            "storage_location": "ambient"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(put_away["state"], "reconciled");
+
+    let (_, item, _) = send(
+        &app,
+        Call::new("POST", "/api/v1/shopping/items").body(json!({ "name": "Onion Salt" })),
+    )
+    .await;
+    let (status, renamed, _) = send(
+        &app,
+        Call::new(
+            "PATCH",
+            format!("/api/v1/shopping/items/{}", item["id"].as_str().unwrap()),
+        )
+        .if_match(1)
+        .body(json!({ "name": "Garlic Salt" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(renamed["name"], "Garlic Salt");
 }
 
 #[tokio::test]

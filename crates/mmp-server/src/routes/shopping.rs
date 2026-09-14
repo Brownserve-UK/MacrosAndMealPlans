@@ -1,6 +1,7 @@
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
+use mmp_core::domain::{DemandSubject, IngredientId, PreparedMealId, ProductId};
 use mmp_core::ports::{PageRequest, PurchaseQuery};
 use time::{Date, Duration};
 use utoipa_axum::router::OpenApiRouter;
@@ -24,7 +25,10 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(requirements))
         .routes(routes!(opportunities, create_opportunity))
         .routes(routes!(move_opportunity, skip_opportunity))
+        .routes(routes!(restore_opportunity))
+        .routes(routes!(dismiss_suggestion, restore_suggestion))
         .routes(routes!(start_shop))
+        .routes(routes!(abandon_shop))
         .routes(routes!(finish_shop))
         .routes(routes!(put_away))
         .routes(routes!(put_one_away))
@@ -81,6 +85,8 @@ async fn opportunities(
 #[utoipa::path(
     post,
     path = "/api/v1/shopping/opportunities",
+    params(("If-Match" = String, Header,
+        description = "Use 0 when adding a new one-off shop")),
     request_body = CreateOpportunityRequest,
     operation_id = "createShoppingOpportunity",
     responses(
@@ -93,10 +99,103 @@ async fn opportunities(
 async fn create_opportunity(
     State(state): State<AppState>,
     principal: Principal,
+    IfMatch(expected): IfMatch,
     Json(body): Json<CreateOpportunityRequest>,
 ) -> ApiResult<StatusCode> {
     principal.require(Permission::ShoppingWrite)?;
-    state.shopping.add_one_off(body.date, body.note).await?;
+    state
+        .shopping
+        .add_one_off(body.date, body.note, expected)
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[utoipa::path(
+    delete,
+    path = "/api/v1/shopping/opportunities/{date}/exception",
+    params(
+        ("date" = String, Path, description = "The changed shop, as YYYY-MM-DD"),
+        ("If-Match" = String, Header, description = "The exception revision you loaded"),
+    ),
+    operation_id = "restoreShoppingOpportunity",
+    responses(
+        (status = 204, description = "The one-off change was removed"),
+        (status = 404, description = "No change exists for that date", body = crate::error::Problem),
+        (status = 409, description = "Someone else changed it first", body = crate::error::Problem),
+        (status = 428, description = "If-Match is required", body = crate::error::Problem),
+    ),
+    tag = "shopping",
+    security(("basic" = []))
+)]
+async fn restore_opportunity(
+    State(state): State<AppState>,
+    principal: Principal,
+    Path(date): Path<String>,
+    IfMatch(expected): IfMatch,
+) -> ApiResult<StatusCode> {
+    principal.require(Permission::ShoppingWrite)?;
+    state
+        .shopping
+        .restore_opportunity(parse_date(&date)?, expected)
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/shopping/opportunities/{date}/suggestions/{kind}/{id}/dismissal",
+    params(
+        ("date" = String, Path, description = "The shop, as YYYY-MM-DD"),
+        ("kind" = String, Path, description = "ingredient, prepared_meal, or product"),
+        ("id" = Uuid, Path, description = "The suggested subject"),
+    ),
+    operation_id = "dismissShoppingSuggestion",
+    responses(
+        (status = 204, description = "The suggestion was dismissed for this shop"),
+        (status = 404, description = "No such suggestion", body = crate::error::Problem),
+    ),
+    tag = "shopping",
+    security(("basic" = []))
+)]
+async fn dismiss_suggestion(
+    State(state): State<AppState>,
+    principal: Principal,
+    Path((date, kind, id)): Path<(String, String, Uuid)>,
+) -> ApiResult<StatusCode> {
+    principal.require(Permission::ShoppingWrite)?;
+    state
+        .shopping
+        .dismiss_suggestion(parse_date(&date)?, parse_subject(&kind, id)?)
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[utoipa::path(
+    delete,
+    path = "/api/v1/shopping/opportunities/{date}/suggestions/{kind}/{id}/dismissal",
+    params(
+        ("date" = String, Path, description = "The shop, as YYYY-MM-DD"),
+        ("kind" = String, Path, description = "ingredient, prepared_meal, or product"),
+        ("id" = Uuid, Path, description = "The suggested subject"),
+    ),
+    operation_id = "restoreShoppingSuggestion",
+    responses(
+        (status = 204, description = "The suggestion is visible again"),
+        (status = 404, description = "No such dismissal", body = crate::error::Problem),
+    ),
+    tag = "shopping",
+    security(("basic" = []))
+)]
+async fn restore_suggestion(
+    State(state): State<AppState>,
+    principal: Principal,
+    Path((date, kind, id)): Path<(String, String, Uuid)>,
+) -> ApiResult<StatusCode> {
+    principal.require(Permission::ShoppingWrite)?;
+    state
+        .shopping
+        .restore_suggestion(parse_date(&date)?, parse_subject(&kind, id)?)
+        .await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -395,6 +494,37 @@ async fn start_shop(
 }
 
 #[utoipa::path(
+    delete,
+    path = "/api/v1/shopping/opportunities/{date}/start",
+    params(
+        ("date" = String, Path, description = "The shop being abandoned, as YYYY-MM-DD"),
+        ("If-Match" = String, Header, description = "The trip revision you loaded"),
+    ),
+    operation_id = "abandonShop",
+    responses(
+        (status = 204, description = "The trip baseline was discarded"),
+        (status = 404, description = "No such trip", body = crate::error::Problem),
+        (status = 409, description = "Someone else changed it first", body = crate::error::Problem),
+        (status = 428, description = "If-Match is required", body = crate::error::Problem),
+    ),
+    tag = "shopping",
+    security(("basic" = []))
+)]
+async fn abandon_shop(
+    State(state): State<AppState>,
+    principal: Principal,
+    Path(date): Path<String>,
+    IfMatch(expected): IfMatch,
+) -> ApiResult<StatusCode> {
+    principal.require(Permission::ShoppingWrite)?;
+    state
+        .shopping
+        .abandon_shop(parse_date(&date)?, expected)
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[utoipa::path(
     get,
     path = "/api/v1/shopping/put-away",
     operation_id = "listPutAway",
@@ -496,7 +626,10 @@ async fn create_list_item(
 #[utoipa::path(
     patch,
     path = "/api/v1/shopping/items/{id}",
-    params(("id" = Uuid, Path, description = "The item")),
+    params(
+        ("id" = Uuid, Path, description = "The item"),
+        ("If-Match" = String, Header, description = "The revision you loaded"),
+    ),
     request_body = UpdateShoppingListItemRequest,
     operation_id = "updateShoppingListItem",
     responses(
@@ -558,4 +691,17 @@ fn parse_date(raw: &str) -> Result<Date, crate::error::ApiError> {
         errors.push("date", "Use a date like 2026-09-05.");
         mmp_core::CoreError::Validation(errors).into()
     })
+}
+
+fn parse_subject(kind: &str, id: Uuid) -> Result<DemandSubject, crate::error::ApiError> {
+    match kind {
+        "ingredient" => Ok(DemandSubject::ingredient(IngredientId::from(id))),
+        "prepared_meal" => Ok(DemandSubject::prepared_meal(PreparedMealId::from(id))),
+        "product" => Ok(DemandSubject::product(ProductId::from(id))),
+        _ => {
+            let mut errors = mmp_core::error::ValidationErrors::new();
+            errors.push("kind", "Use ingredient, prepared_meal, or product.");
+            Err(mmp_core::CoreError::Validation(errors).into())
+        }
+    }
 }

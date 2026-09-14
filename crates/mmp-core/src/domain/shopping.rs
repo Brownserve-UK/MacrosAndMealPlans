@@ -405,10 +405,6 @@ pub struct Purchase {
 }
 
 impl Purchase {
-    pub fn is_complete(&self) -> bool {
-        self.product_id.is_some() && self.quantity.is_some()
-    }
-
     pub fn matches(&self, subject: &DemandSubject, pool: &[ProductId]) -> bool {
         match subject {
             DemandSubject::Ingredient { ingredient_id } => {
@@ -511,19 +507,6 @@ pub struct ShoppingTrip {
 impl ShoppingTrip {
     pub fn is_finished(&self) -> bool {
         self.state == TripState::Finished
-    }
-
-    pub fn holds(&self, subject: &DemandSubject) -> bool {
-        self.rows.iter().any(|row| match subject {
-            DemandSubject::Ingredient { ingredient_id } => {
-                row.ingredient_id == Some(*ingredient_id)
-            }
-            DemandSubject::PreparedMeal { prepared_meal_id } => {
-                row.prepared_meal_id == Some(*prepared_meal_id)
-            }
-            DemandSubject::Product { product_id } => row.product_id == Some(*product_id),
-            DemandSubject::PreparedPortion { .. } | DemandSubject::CookedFood { .. } => false,
-        })
     }
 }
 

@@ -25,6 +25,7 @@ vi.mock('../../api/queries', () => ({
   useHouseholdSettings: () => ({ data: undefined }),
   useMoveShoppingOpportunity: () => ({ isPending: false, mutateAsync: vi.fn() }),
   useSkipShoppingOpportunity: () => ({ isPending: false, mutateAsync: vi.fn() }),
+  useRestoreShoppingOpportunity: () => ({ isPending: false, mutateAsync: vi.fn() }),
   useAddShoppingOpportunity: () => ({ isPending: false, mutateAsync: vi.fn() }),
 }));
 

@@ -5,7 +5,7 @@ use mmp_core::domain::{
     ShoppingSection, ShoppingTrip, ShoppingTripRow, SuggestionReason, TripState,
     week_day_from_number, week_day_number,
 };
-use mmp_core::services::{FinishedShop, ShopCount, ShoppingList};
+use mmp_core::services::{FinishedShop, ShopCount, ShoppingList, UnfinishedShop};
 use serde::{Deserialize, Serialize};
 use time::{Date, OffsetDateTime, Time};
 use utoipa::ToSchema;
@@ -271,6 +271,25 @@ pub struct ShoppingListDto {
     pub trip: Option<ShoppingTripDto>,
     pub counts: Vec<ShopCountDto>,
     pub cadence_configured: bool,
+    pub unfinished: Vec<UnfinishedShopDto>,
+    pub section_order: Vec<ShoppingSection>,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct UnfinishedShopDto {
+    #[serde(with = "iso_date")]
+    #[schema(value_type = String, format = Date)]
+    pub date: Date,
+    pub purchases: i64,
+}
+
+impl From<UnfinishedShop> for UnfinishedShopDto {
+    fn from(value: UnfinishedShop) -> Self {
+        Self {
+            date: value.date,
+            purchases: value.purchases as i64,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, ToSchema)]
@@ -489,6 +508,8 @@ impl From<ShoppingList> for ShoppingListDto {
             trip: value.trip.map(Into::into),
             counts: value.counts.into_iter().map(Into::into).collect(),
             cadence_configured: value.cadence_configured,
+            unfinished: value.unfinished.into_iter().map(Into::into).collect(),
+            section_order: value.section_order,
         }
     }
 }

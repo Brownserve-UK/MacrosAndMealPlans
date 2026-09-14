@@ -37,7 +37,7 @@ pub use recipe::{
     RecipeService, ResolveRequirement,
 };
 pub use seed::{SeedIngredient, SeedPreparedMeal, SeedReport};
-pub use shopping::{FinishedShop, ShopCount, ShoppingList, ShoppingService};
+pub use shopping::{FinishedShop, ShopCount, ShoppingList, ShoppingService, UnfinishedShop};
 pub use stock::StockService;
 pub use stock_effects::{StockAffected, StockOutcomeView};
 pub use weight::{WeightPoint, WeightService, WeightSummary};

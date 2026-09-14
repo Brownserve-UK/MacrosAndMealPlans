@@ -15,23 +15,23 @@ use crate::domain::{
     OpportunityException, PreparedBatch, PreparedBatchId, PreparedMeal, PreparedMealId, Product,
     ProductId, Purchase, PurchaseId, PurchaseState, Quantity, Recipe, RecipeId, RecipePhoto,
     RecipeSummary, RecipeVisibility, Revision, Role, SectionOrder, ShoppingCadence,
-    ShoppingListItem, ShoppingListItemId, ShoppingOpportunityId, ShoppingTrip, StockEffect,
-    StockEffectSource, StockEvent, StockEventId, StockItem, StockItemId, StockOutcome,
+    ShoppingListItem, ShoppingListItemId, ShoppingOpportunityId, ShoppingTrip, ShoppingTripId,
+    StockEffect, StockEffectSource, StockEvent, StockEventId, StockItem, StockItemId, StockOutcome,
     StockSubject, Unit, User, UserId, WeightGoal, WeightGoalId, WeightRecord, WeightRecordId,
 };
 use crate::error::{CoreError, Result};
 use crate::ports::{
     AccessGrantRepository, CalorieCalculationRepository, ConsumptionQuery,
-    ConsumptionRecordRepository, FinishedPurchase, HouseholdMemberRepository,
-    HouseholdSettingsRepository, IngredientQuery, IngredientRepository, IngredientSort,
-    MealPlanComponentUpdate, MealPlanQuery, MealPlanRepository, MealTemplateQuery,
+    ConsumptionRecordRepository, FinishShopRepository, FinishedPurchase, FinishedShoppingTrip,
+    HouseholdMemberRepository, HouseholdSettingsRepository, IngredientQuery, IngredientRepository,
+    IngredientSort, MealPlanComponentUpdate, MealPlanQuery, MealPlanRepository, MealTemplateQuery,
     MealTemplateRepository, MemberBodyProfileRepository, MemberQuery, NewStockFromPurchase,
     NutritionTargetRepository, Paginated, PreparedMealQuery, PreparedMealRepository,
     PreparedMealSort, ProductQuery, ProductRepository, PurchaseQuery, PurchaseRepository,
     RecipeQuery, RecipeRepository, ShoppingCadenceRepository, ShoppingListItemRepository,
-    ShoppingOpportunityRepository, ShoppingTripRepository, SnapshotOp, SortDirection, StockQuery,
-    StockRepository, StockWrite, UpdateOutcome, UserQuery, UserRepository, WeightGoalRepository,
-    WeightRecordRepository,
+    ShoppingOpportunityRepository, ShoppingSuggestionDismissalRepository, ShoppingTripRepository,
+    SnapshotOp, SortDirection, StockQuery, StockRepository, StockWrite, UpdateOutcome, UserQuery,
+    UserRepository, WeightGoalRepository, WeightRecordRepository,
 };
 
 // This _should_ reflect the indexes that a real database would enforce
@@ -2855,15 +2855,58 @@ impl ShoppingOpportunityRepository for InMemoryShoppingOpportunityRepository {
         }
     }
 
-    async fn delete(&self, id: ShoppingOpportunityId) -> Result<UpdateOutcome> {
+    async fn delete(&self, id: ShoppingOpportunityId, expected: Revision) -> Result<UpdateOutcome> {
         let mut rows = self.rows.lock().unwrap();
         match rows.iter().position(|row| row.id == id) {
+            Some(index) if rows[index].revision != expected => {
+                Ok(UpdateOutcome::RevisionMismatch {
+                    actual: rows[index].revision,
+                })
+            }
             Some(index) => {
                 rows.remove(index);
                 Ok(UpdateOutcome::Updated)
             }
             None => Ok(UpdateOutcome::NotFound),
         }
+    }
+}
+
+#[derive(Clone, Default)]
+pub struct InMemoryShoppingSuggestionDismissalRepository {
+    rows: Arc<Mutex<HashSet<(Date, DemandSubject)>>>,
+}
+
+impl InMemoryShoppingSuggestionDismissalRepository {
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+#[async_trait]
+impl ShoppingSuggestionDismissalRepository for InMemoryShoppingSuggestionDismissalRepository {
+    async fn list_for_date(&self, date: Date) -> Result<Vec<DemandSubject>> {
+        Ok(self
+            .rows
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(on, _)| *on == date)
+            .map(|(_, subject)| *subject)
+            .collect())
+    }
+
+    async fn insert(&self, date: Date, subject: DemandSubject) -> Result<()> {
+        self.rows.lock().unwrap().insert((date, subject));
+        Ok(())
+    }
+
+    async fn delete(&self, date: Date, subject: DemandSubject) -> Result<UpdateOutcome> {
+        Ok(if self.rows.lock().unwrap().remove(&(date, subject)) {
+            UpdateOutcome::Updated
+        } else {
+            UpdateOutcome::NotFound
+        })
     }
 }
 
@@ -2972,11 +3015,44 @@ impl PurchaseRepository for InMemoryPurchaseRepository {
         *existing = purchase.clone();
         Ok(UpdateOutcome::Updated)
     }
+}
 
-    async fn finish(&self, finished: &[FinishedPurchase]) -> Result<UpdateOutcome> {
-        let mut rows = self.rows.lock().unwrap();
-        for held in finished {
-            let Some(existing) = rows.iter().find(|row| row.id == held.purchase.id) else {
+#[derive(Clone)]
+pub struct InMemoryFinishShopRepository {
+    purchases: InMemoryPurchaseRepository,
+    list_items: InMemoryShoppingListItemRepository,
+    trips: InMemoryShoppingTripRepository,
+}
+
+impl InMemoryFinishShopRepository {
+    pub fn new(
+        purchases: InMemoryPurchaseRepository,
+        list_items: InMemoryShoppingListItemRepository,
+        trips: InMemoryShoppingTripRepository,
+    ) -> Self {
+        Self {
+            purchases,
+            list_items,
+            trips,
+        }
+    }
+}
+
+#[async_trait]
+impl FinishShopRepository for InMemoryFinishShopRepository {
+    async fn finish_shop(
+        &self,
+        date: Date,
+        purchases: &[FinishedPurchase],
+        trip: Option<&FinishedShoppingTrip>,
+    ) -> Result<UpdateOutcome> {
+        let mut purchase_rows = self.purchases.rows.lock().unwrap();
+        let mut list_items = self.list_items.rows.lock().unwrap();
+        let mut trips = self.trips.rows.lock().unwrap();
+        let mut stock = self.purchases.stock.lock().unwrap();
+
+        for held in purchases {
+            let Some(existing) = purchase_rows.iter().find(|row| row.id == held.purchase.id) else {
                 return Ok(UpdateOutcome::NotFound);
             };
             if existing.revision != held.expected {
@@ -2985,11 +3061,31 @@ impl PurchaseRepository for InMemoryPurchaseRepository {
                 });
             }
         }
-        for held in finished {
-            if let Some(existing) = rows.iter_mut().find(|row| row.id == held.purchase.id) {
+        if let Some(held) = trip {
+            let Some(existing) = trips.iter().find(|row| row.id == held.trip.id) else {
+                return Ok(UpdateOutcome::NotFound);
+            };
+            if existing.revision != held.expected {
+                return Ok(UpdateOutcome::RevisionMismatch {
+                    actual: existing.revision,
+                });
+            }
+        }
+
+        for held in purchases {
+            if let Some(existing) = purchase_rows
+                .iter_mut()
+                .find(|row| row.id == held.purchase.id)
+            {
                 *existing = held.purchase.clone();
             }
-            self.stock.lock().unwrap().push(held.stock.item.clone());
+            stock.push(held.stock.item.clone());
+        }
+        list_items.retain(|item| item.opportunity_date != Some(date));
+        if let Some(held) = trip
+            && let Some(existing) = trips.iter_mut().find(|row| row.id == held.trip.id)
+        {
+            *existing = held.trip.clone();
         }
         Ok(UpdateOutcome::Updated)
     }
@@ -3035,6 +3131,22 @@ impl ShoppingTripRepository for InMemoryShoppingTripRepository {
         }
         *existing = trip.clone();
         Ok(UpdateOutcome::Updated)
+    }
+
+    async fn delete(&self, id: ShoppingTripId, expected: Revision) -> Result<UpdateOutcome> {
+        let mut rows = self.rows.lock().unwrap();
+        match rows.iter().position(|row| row.id == id) {
+            None => Ok(UpdateOutcome::NotFound),
+            Some(index) if rows[index].revision != expected => {
+                Ok(UpdateOutcome::RevisionMismatch {
+                    actual: rows[index].revision,
+                })
+            }
+            Some(index) => {
+                rows.remove(index);
+                Ok(UpdateOutcome::Updated)
+            }
+        }
     }
 }
 

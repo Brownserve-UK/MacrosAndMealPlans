@@ -6,18 +6,22 @@ import DialogTitle from '@mui/material/DialogTitle';
 import Paper from '@mui/material/Paper';
 import Stack from '@mui/material/Stack';
 import Typography from '@mui/material/Typography';
+import TextField from '@mui/material/TextField';
 import { useNavigate, useParams } from '@tanstack/react-router';
 import { useMemo, useState } from 'react';
 import { ApiError } from '../../api/client';
 import type { ShoppingListItem, ShoppingRequirement } from '../../api/client';
 import {
   useAddShoppingListItem,
+  useAbandonShop,
   useFinishShop,
+  useDismissShoppingSuggestion,
   useRecordPurchase,
   useRemoveShoppingListItem,
   useShoppingList,
   useStartShop,
   useUpdatePurchase,
+  useUpdateShoppingListItem,
 } from '../../api/queries';
 import { Link } from '@tanstack/react-router';
 import { BackLabel } from '../../components/BackLink';
@@ -40,16 +44,21 @@ export function TripPage() {
   const { date } = useParams({ from: '/shopping/$date' });
   const list = useShoppingList(date);
   const start = useStartShop();
+  const abandon = useAbandonShop();
   const finish = useFinishShop();
   const record = useRecordPurchase();
   const update = useUpdatePurchase();
+  const updateItem = useUpdateShoppingListItem();
+  const dismiss = useDismissShoppingSuggestion();
   const removeItem = useRemoveShoppingListItem();
   const addItem = useAddShoppingListItem();
   const navigate = useNavigate();
 
   const [showingKey, setShowingKey] = useState<string | null>(null);
   const [finishing, setFinishing] = useState(false);
-  const [dismissed, setDismissed] = useState<string[]>([]);
+  const [abandoning, setAbandoning] = useState(false);
+  const [editing, setEditing] = useState<ShoppingListItem | null>(null);
+  const [editName, setEditName] = useState('');
   const [conflict, setConflict] = useState<ApiError | null>(null);
 
   const pinned = useMemo(() => (list.data ? pinnedList(list.data) : null), [list.data]);
@@ -63,16 +72,18 @@ export function TripPage() {
             key: requirementKey(requirement),
             requirement,
           }))
-        ).filter((entry) => !dismissed.includes(requirementKey(entry.requirement))),
+        ),
         list.data?.manual ?? [],
+        list.data?.section_order,
       ),
-    [list.data, pinned, dismissed],
+    [list.data, pinned],
   );
 
   if (list.isLoading) return <Loading label="Fetching your list" />;
   if (list.isError) return <ErrorState error={list.error} onRetry={() => list.refetch()} />;
 
-  const data = list.data!;
+  if (!list.data) return <Loading label="Fetching your list" />;
+  const data = list.data;
   const listed = pinned
     ? [...pinned.rows.map((row) => row.requirement), ...pinned.added]
     : data.requirements;
@@ -139,7 +150,29 @@ export function TripPage() {
   }
 
   function onDismiss(requirement: ShoppingRequirement) {
-    setDismissed((held) => [...held, requirementKey(requirement)]);
+    const subject = requirement.subject;
+    if (subject.kind === 'ingredient') {
+      dismiss.mutate({ date, kind: subject.kind, id: subject.ingredient_id });
+    } else if (subject.kind === 'prepared_meal') {
+      dismiss.mutate({ date, kind: subject.kind, id: subject.prepared_meal_id });
+    } else if (subject.kind === 'product') {
+      dismiss.mutate({ date, kind: subject.kind, id: subject.product_id });
+    }
+  }
+
+  function beginEdit(item: ShoppingListItem) {
+    setEditing(item);
+    setEditName(item.name);
+  }
+
+  async function saveEdit() {
+    if (!editing || !editName.trim()) return;
+    await updateItem.mutateAsync({
+      id: editing.id,
+      revision: editing.revision,
+      name: editName.trim(),
+    });
+    setEditing(null);
   }
 
   async function onFinish() {
@@ -150,6 +183,19 @@ export function TripPage() {
     } catch (caught) {
       if (caught instanceof ApiError && caught.isConflict) {
         setFinishing(false);
+        setConflict(caught);
+      }
+    }
+  }
+
+  async function onAbandon() {
+    try {
+      await abandon.mutateAsync({ date, revision: data.trip?.revision ?? 0 });
+      setAbandoning(false);
+      void list.refetch();
+    } catch (caught) {
+      if (caught instanceof ApiError && caught.isConflict) {
+        setAbandoning(false);
         setConflict(caught);
       }
     }
@@ -166,7 +212,9 @@ export function TripPage() {
         title={formatDayLabel(date)}
         subtitle={formatFullDate(date)}
         actions={
-          underway ? null : (
+          underway ? (
+            <Button onClick={() => setAbandoning(true)}>Abandon trip</Button>
+          ) : (
             <Button variant="contained" onClick={() => void start.mutateAsync(date)}>
               Start shopping
             </Button>
@@ -200,7 +248,7 @@ export function TripPage() {
                     item={item}
                     bought={boughtManually(item).length > 0}
                     onToggle={(next) => tickManual(item, next)}
-                    onRemove={() => removeItem.mutate({ id: item.id, revision: item.revision })}
+                    onEdit={() => beginEdit(item)}
                   />
                 );
               }
@@ -318,6 +366,58 @@ export function TripPage() {
         </DialogActions>
       </FormDialog>
 
+      <FormDialog open={abandoning} onClose={() => setAbandoning(false)} maxWidth="xs" fullWidth>
+        <DialogTitle>Abandon trip</DialogTitle>
+        <DialogContent>
+          <Typography variant="body1">
+            Your list will go live again. Anything already in the trolley stays bought and can be
+            put away or cancelled here.
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setAbandoning(false)}>Keep shopping</Button>
+          <Button disabled={abandon.isPending} onClick={() => void onAbandon()}>
+            {abandon.isPending ? 'Saving…' : 'Abandon trip'}
+          </Button>
+        </DialogActions>
+      </FormDialog>
+
+      <FormDialog open={editing != null} onClose={() => setEditing(null)} maxWidth="xs" fullWidth>
+        <DialogTitle>Edit item</DialogTitle>
+        <DialogContent>
+          <TextField
+            autoFocus
+            fullWidth
+            label="Item"
+            value={editName}
+            onChange={(event) => setEditName(event.target.value)}
+          />
+        </DialogContent>
+        <DialogActions sx={{ justifyContent: 'space-between' }}>
+          <Button
+            disabled={removeItem.isPending}
+            onClick={() => {
+              if (editing) {
+                removeItem.mutate({ id: editing.id, revision: editing.revision });
+                setEditing(null);
+              }
+            }}
+          >
+            Remove
+          </Button>
+          <Stack direction="row" spacing={1}>
+            <Button onClick={() => setEditing(null)}>Cancel</Button>
+            <Button
+              variant="contained"
+              disabled={updateItem.isPending || !editName.trim()}
+              onClick={() => void saveEdit()}
+            >
+              Save
+            </Button>
+          </Stack>
+        </DialogActions>
+      </FormDialog>
+
       <RequirementDialog
         open={showing != null}
         requirement={showing}
@@ -334,8 +434,6 @@ export function TripPage() {
         }}
         onDismiss={() => setConflict(null)}
       />
-
-      <Box />
     </>
   );
 }

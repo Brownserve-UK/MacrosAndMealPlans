@@ -1,4 +1,6 @@
 import type { ShoppingListItem, ShoppingRequirement } from '../../api/client';
+import type { ShoppingSection } from '../../api/client';
+import { SECTION_ORDER } from './sections';
 
 export type Listed = { key: string; requirement: ShoppingRequirement };
 
@@ -17,6 +19,7 @@ function suggested(row: Row): boolean {
 export function groupBySection(
   listed: Listed[],
   manual: ShoppingListItem[] = [],
+  order: ShoppingSection[] = SECTION_ORDER,
 ): Array<[string, Row[]]> {
   const sections = new Map<string, Row[]>();
 
@@ -36,5 +39,8 @@ export function groupBySection(
   for (const bucket of sections.values()) {
     bucket.sort((a, b) => Number(suggested(a)) - Number(suggested(b)));
   }
-  return [...sections.entries()];
+  return [...sections.entries()].sort(
+    ([left], [right]) =>
+      order.indexOf(left as ShoppingSection) - order.indexOf(right as ShoppingSection),
+  );
 }

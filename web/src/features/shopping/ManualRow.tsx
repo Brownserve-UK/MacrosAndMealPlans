@@ -1,7 +1,7 @@
 import Box from '@mui/material/Box';
 import Checkbox from '@mui/material/Checkbox';
 import IconButton from '@mui/material/IconButton';
-import CloseIcon from '@mui/icons-material/Close';
+import EditIcon from '@mui/icons-material/EditOutlined';
 import Stack from '@mui/material/Stack';
 import Typography from '@mui/material/Typography';
 import type { ShoppingListItem } from '../../api/client';
@@ -11,12 +11,12 @@ export function ManualRow({
   item,
   bought,
   onToggle,
-  onRemove,
+  onEdit,
 }: {
   item: ShoppingListItem;
   bought: boolean;
   onToggle: (next: boolean) => void;
-  onRemove: () => void;
+  onEdit: () => void;
 }) {
   const amount = item.quantity ? formatQuantity(item.quantity) : null;
 
@@ -57,8 +57,8 @@ export function ManualRow({
         ) : null}
       </Box>
 
-      <IconButton size="small" aria-label={`Remove ${item.name}`} onClick={onRemove}>
-        <CloseIcon fontSize="small" />
+      <IconButton size="small" aria-label={`Edit ${item.name}`} onClick={onEdit}>
+        <EditIcon fontSize="small" />
       </IconButton>
     </Stack>
   );

@@ -25,15 +25,16 @@ use mmp_core::domain::{
 use mmp_core::domain::{DeductionTarget, StockEffectSource, StockEventSource};
 use mmp_core::ports::{
     AccessGrantRepository, CalorieCalculationRepository, ConsumptionQuery,
-    ConsumptionRecordRepository, HouseholdMemberRepository, HouseholdSettingsRepository,
-    IngredientQuery, IngredientRepository, IngredientSort, MealPlanComponentUpdate, MealPlanQuery,
-    MealPlanRepository, MealTemplateQuery, MealTemplateRepository, MemberBodyProfileRepository,
-    MemberQuery, NewStockFromPurchase, NutritionTargetRepository, PageRequest,
-    PreparedBatchRepository, PreparedMealRepository, ProductQuery, ProductRepository,
-    PurchaseRepository, RecipeQuery, RecipeRepository, ShoppingCadenceRepository,
-    ShoppingListItemRepository, ShoppingOpportunityRepository, ShoppingTripRepository, SnapshotOp,
-    SortDirection, StockDeduction, StockQuery, StockRepository, StockWrite, UpdateOutcome,
-    UserRepository, WeightGoalRepository, WeightRecordRepository,
+    ConsumptionRecordRepository, FinishShopRepository, FinishedPurchase, FinishedShoppingTrip,
+    HouseholdMemberRepository, HouseholdSettingsRepository, IngredientQuery, IngredientRepository,
+    IngredientSort, MealPlanComponentUpdate, MealPlanQuery, MealPlanRepository, MealTemplateQuery,
+    MealTemplateRepository, MemberBodyProfileRepository, MemberQuery, NewStockFromPurchase,
+    NutritionTargetRepository, PageRequest, PreparedBatchRepository, PreparedMealRepository,
+    ProductQuery, ProductRepository, PurchaseRepository, RecipeQuery, RecipeRepository,
+    ShoppingCadenceRepository, ShoppingListItemRepository, ShoppingOpportunityRepository,
+    ShoppingSuggestionDismissalRepository, ShoppingTripRepository, SnapshotOp, SortDirection,
+    StockDeduction, StockQuery, StockRepository, StockWrite, UpdateOutcome, UserRepository,
+    WeightGoalRepository, WeightRecordRepository,
 };
 
 fn no_stock() -> StockWrite {
@@ -41,12 +42,13 @@ fn no_stock() -> StockWrite {
 }
 use mmp_postgres::{
     PgAccessGrantRepository, PgCalorieCalculationRepository, PgConsumptionRecordRepository,
-    PgHouseholdMemberRepository, PgHouseholdSettingsRepository, PgIngredientRepository,
-    PgMealPlanRepository, PgMealTemplateRepository, PgMemberBodyProfileRepository,
-    PgNutritionTargetRepository, PgPreparedBatchRepository, PgPreparedMealRepository,
-    PgProductRepository, PgPurchaseRepository, PgRecipeRepository, PgShoppingCadenceRepository,
-    PgShoppingListItemRepository, PgShoppingOpportunityRepository, PgShoppingTripRepository,
-    PgStockRepository, PgUserRepository, PgWeightGoalRepository, PgWeightRecordRepository,
+    PgFinishShopRepository, PgHouseholdMemberRepository, PgHouseholdSettingsRepository,
+    PgIngredientRepository, PgMealPlanRepository, PgMealTemplateRepository,
+    PgMemberBodyProfileRepository, PgNutritionTargetRepository, PgPreparedBatchRepository,
+    PgPreparedMealRepository, PgProductRepository, PgPurchaseRepository, PgRecipeRepository,
+    PgShoppingCadenceRepository, PgShoppingListItemRepository, PgShoppingOpportunityRepository,
+    PgShoppingSuggestionDismissalRepository, PgShoppingTripRepository, PgStockRepository,
+    PgUserRepository, PgWeightGoalRepository, PgWeightRecordRepository,
 };
 use rust_decimal::Decimal;
 use sqlx::PgPool;
@@ -3790,6 +3792,174 @@ async fn a_pending_purchase_creates_no_stock_at_all(pool: PgPool) {
     assert_eq!(open.len(), 1);
     assert_eq!(open[0].state, PurchaseState::Pending);
     assert_eq!(open[0].quantity, None);
+}
+
+#[sqlx::test]
+async fn finishing_a_shop_rolls_every_change_back_when_the_trip_is_stale(pool: PgPool) {
+    let users = PgUserRepository::new(pool.clone());
+    let products = PgProductRepository::new(pool.clone());
+    let purchases = PgPurchaseRepository::new(pool.clone());
+    let items = PgShoppingListItemRepository::new(pool.clone());
+    let trips = PgShoppingTripRepository::new(pool.clone());
+    let stock = PgStockRepository::new(pool.clone());
+    let finish = PgFinishShopRepository::new(pool);
+    let actor = user("buyer", vec![Role::Admin]);
+    users.insert(&actor).await.unwrap();
+    let bottle = product("Sample Milk");
+    products.insert(&bottle).await.unwrap();
+    let now = OffsetDateTime::now_utc();
+    let date = date!(2026 - 09 - 05);
+    let purchase = Purchase {
+        id: PurchaseId::new(),
+        ingredient_id: None,
+        prepared_meal_id: None,
+        product_id: Some(bottle.id),
+        name: None,
+        quantity: Some(Quantity::new(Decimal::new(1, 0), Unit::Litre)),
+        opportunity_date: Some(date),
+        state: PurchaseState::Pending,
+        stock_item_id: None,
+        purchased_at: now,
+        actor_user_id: actor.id,
+        note: None,
+        revision: Revision::INITIAL,
+        created_at: now,
+        updated_at: now,
+    };
+    purchases.insert(&purchase, None).await.unwrap();
+    let manual = ShoppingListItem {
+        id: ShoppingListItemId::new(),
+        ingredient_id: None,
+        prepared_meal_id: None,
+        product_id: None,
+        name: "Kitchen roll".to_owned(),
+        quantity: None,
+        section: Some(ShoppingSection::Household),
+        opportunity_date: Some(date),
+        created_by: actor.id,
+        revision: Revision::INITIAL,
+        created_at: now,
+        updated_at: now,
+    };
+    items.insert(&manual).await.unwrap();
+    let trip = ShoppingTrip {
+        id: ShoppingTripId::new(),
+        opportunity_date: date,
+        state: TripState::Shopping,
+        started_at: now,
+        finished_at: None,
+        started_by: actor.id,
+        rows: Vec::new(),
+        revision: Revision::INITIAL,
+        created_at: now,
+        updated_at: now,
+    };
+    trips.insert(&trip).await.unwrap();
+
+    let stock_item = StockItem {
+        id: StockItemId::new(),
+        subject: StockSubject::product(bottle.id),
+        level: StockLevel::Exact {
+            quantity: purchase.quantity.unwrap(),
+        },
+        storage_location: StorageLocation::Chilled,
+        source_date: None,
+        usability_deadline: None,
+        note: None,
+        revision: Revision::INITIAL,
+        created_at: now,
+        updated_at: now,
+        archived_at: None,
+    };
+    let mut reconciled = purchase.clone();
+    reconciled.state = PurchaseState::Reconciled;
+    reconciled.stock_item_id = Some(stock_item.id);
+    reconciled.revision = purchase.revision.next();
+    let held_purchase = FinishedPurchase {
+        purchase: reconciled,
+        expected: purchase.revision,
+        stock: NewStockFromPurchase {
+            item: stock_item.clone(),
+            event: NewStockEvent {
+                kind: StockEventKind::Added,
+                quantity_delta: stock_item.level.conservative_quantity(),
+                actor_user_id: Some(actor.id),
+                subject_member_id: None,
+                source: Some(StockEventSource {
+                    kind: StockEffectSource::Purchase,
+                    id: purchase.id.as_uuid(),
+                    label: "Purchase".to_owned(),
+                }),
+                reverses_event_id: None,
+                note: None,
+            },
+        },
+    };
+    let mut closed = trip.clone();
+    closed.state = TripState::Finished;
+    closed.finished_at = Some(now);
+    closed.revision = trip.revision.next();
+    let stale_trip = FinishedShoppingTrip {
+        trip: closed,
+        expected: Revision::UNRECORDED,
+    };
+
+    assert!(matches!(
+        finish
+            .finish_shop(date, &[held_purchase], Some(&stale_trip))
+            .await
+            .unwrap(),
+        UpdateOutcome::RevisionMismatch { .. }
+    ));
+    assert_eq!(
+        purchases.get(purchase.id).await.unwrap().unwrap().state,
+        PurchaseState::Pending
+    );
+    assert!(stock.get(stock_item.id).await.unwrap().is_none());
+    let remaining_items = items.list().await.unwrap();
+    assert_eq!(remaining_items.len(), 1);
+    assert_eq!(remaining_items[0].id, manual.id);
+    assert_eq!(remaining_items[0].revision, manual.revision);
+    let untouched_trip = trips
+        .for_date(date)
+        .await
+        .unwrap()
+        .expect("trip still exists");
+    assert_eq!(untouched_trip.id, trip.id);
+    assert_eq!(untouched_trip.state, trip.state);
+    assert_eq!(untouched_trip.revision, trip.revision);
+}
+
+#[sqlx::test]
+async fn a_dismissed_suggestion_is_scoped_to_one_shop(pool: PgPool) {
+    let ingredients = PgIngredientRepository::new(pool.clone());
+    let dismissals = PgShoppingSuggestionDismissalRepository::new(pool);
+    let milk = ingredient("Whole Milk");
+    ingredients.insert(&milk).await.unwrap();
+    let first = date!(2026 - 09 - 05);
+    let second = date!(2026 - 09 - 12);
+
+    dismissals
+        .insert(first, mmp_core::domain::DemandSubject::ingredient(milk.id))
+        .await
+        .unwrap();
+    dismissals
+        .insert(first, mmp_core::domain::DemandSubject::ingredient(milk.id))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        dismissals.list_for_date(first).await.unwrap(),
+        vec![mmp_core::domain::DemandSubject::ingredient(milk.id)]
+    );
+    assert!(dismissals.list_for_date(second).await.unwrap().is_empty());
+    assert_eq!(
+        dismissals
+            .delete(first, mmp_core::domain::DemandSubject::ingredient(milk.id))
+            .await
+            .unwrap(),
+        UpdateOutcome::Updated
+    );
 }
 
 #[sqlx::test]

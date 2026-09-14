@@ -1465,6 +1465,25 @@ impl Loader<'_> {
         )
         .await?;
 
+        self.ensure_product_meal(
+            self.today + Duration::days(8),
+            "shopping-split-salmon-first",
+            MealSlot::Snacks,
+            Time::from_hms(17, 0, 0).unwrap(),
+            "salmon-fillet",
+            measured(150, Unit::Gram),
+        )
+        .await?;
+        self.ensure_product_meal(
+            self.today + Duration::days(15),
+            "shopping-split-salmon-second",
+            MealSlot::Snacks,
+            Time::from_hms(17, 0, 0).unwrap(),
+            "salmon-fillet",
+            measured(150, Unit::Gram),
+        )
+        .await?;
+
         if self.state.shopping.pending_purchases().await?.is_empty()
             && let Some(focus) = self.state.shopping.requirements(None).await?.focus
         {
@@ -1568,6 +1587,58 @@ impl Loader<'_> {
                     .await?;
                 self.report.shopping_seeded += 1;
             }
+        }
+
+        if self.state.shopping.trip(self.today).await?.is_none() {
+            let has_one_off = self
+                .state
+                .shopping
+                .opportunities(self.today, self.today)
+                .await?
+                .iter()
+                .any(|opportunity| opportunity.state == mmp_core::domain::OpportunityState::OneOff);
+            if !has_one_off {
+                self.state
+                    .shopping
+                    .add_one_off(
+                        self.today,
+                        Some("Unfinished extra trip".to_owned()),
+                        Revision::UNRECORDED,
+                    )
+                    .await?;
+            }
+            self.state
+                .shopping
+                .start_shop(self.today, self.actor.id)
+                .await?;
+        }
+        let pending = self.state.shopping.pending_purchases().await?;
+        for (ingredient, note) in [
+            ("salmon-fillet", "unfinished extra trip: salmon"),
+            ("broccoli", "unfinished extra trip: broccoli"),
+        ] {
+            if pending
+                .iter()
+                .any(|purchase| purchase.note.as_deref() == Some(note))
+            {
+                continue;
+            }
+            self.state
+                .shopping
+                .record_purchase(
+                    NewPurchase {
+                        ingredient_id: Some(IngredientId::seeded(ingredient)),
+                        prepared_meal_id: None,
+                        product_id: None,
+                        name: None,
+                        quantity: None,
+                        opportunity_date: Some(self.today),
+                        note: Some(note.to_owned()),
+                    },
+                    self.actor.id,
+                )
+                .await?;
+            self.report.shopping_seeded += 1;
         }
 
         Ok(())

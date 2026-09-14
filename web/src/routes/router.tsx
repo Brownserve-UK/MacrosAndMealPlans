@@ -320,19 +320,37 @@ const mealTimesRoute = createRoute({
 const shoppingRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/shopping',
-  component: ShoppingPage,
+  component: function Shopping() {
+    return (
+      <RequirePermission permission="shopping:read">
+        <ShoppingPage />
+      </RequirePermission>
+    );
+  },
 });
 
 const putAwayRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/shopping/put-away',
-  component: PutAwayPage,
+  component: function PutAway() {
+    return (
+      <RequirePermission permission="shopping:read">
+        <PutAwayPage />
+      </RequirePermission>
+    );
+  },
 });
 
 const tripRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/shopping/$date',
-  component: TripPage,
+  component: function Trip() {
+    return (
+      <RequirePermission permission="shopping:read">
+        <TripPage />
+      </RequirePermission>
+    );
+  },
 });
 
 const shoppingSettingsRoute = createRoute({

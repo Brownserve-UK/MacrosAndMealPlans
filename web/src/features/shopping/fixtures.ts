@@ -21,6 +21,18 @@ export const shoppingList: ShoppingList = {
   ],
   focus: '2026-09-05',
   cadence_configured: true,
+  unfinished: [],
+  section_order: [
+    'fresh_produce',
+    'meat_fish',
+    'dairy',
+    'bakery',
+    'frozen',
+    'ambient',
+    'drinks',
+    'household',
+    'other',
+  ],
   manual: [],
   unplanned: [],
   counts: [

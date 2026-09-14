@@ -7,7 +7,11 @@ import Stack from '@mui/material/Stack';
 import TextField from '@mui/material/TextField';
 import { useState, type FormEvent } from 'react';
 import { ApiError } from '../../api/client';
-import { useMoveShoppingOpportunity, useSkipShoppingOpportunity } from '../../api/queries';
+import {
+  useMoveShoppingOpportunity,
+  useRestoreShoppingOpportunity,
+  useSkipShoppingOpportunity,
+} from '../../api/queries';
 import { ConflictDialog } from '../../components/ConflictDialog';
 import { FormDialog } from '../../components/FormDialog';
 
@@ -15,30 +19,49 @@ export function ChangeShopDialog({
   date,
   revision,
   earliest,
+  changed,
+  oneOff,
   onClose,
 }: {
   date: string | null;
   revision: number;
   earliest: string;
+  changed: boolean;
+  oneOff: boolean;
   onClose: () => void;
 }) {
   if (!date) return null;
-  return <Body key={date} date={date} revision={revision} earliest={earliest} onClose={onClose} />;
+  return (
+    <Body
+      key={date}
+      date={date}
+      revision={revision}
+      earliest={earliest}
+      changed={changed}
+      oneOff={oneOff}
+      onClose={onClose}
+    />
+  );
 }
 
 function Body({
   date,
   revision,
   earliest,
+  changed,
+  oneOff,
   onClose,
 }: {
   date: string;
   revision: number;
   earliest: string;
+  changed: boolean;
+  oneOff: boolean;
   onClose: () => void;
 }) {
   const move = useMoveShoppingOpportunity();
   const skip = useSkipShoppingOpportunity();
+  const restore = useRestoreShoppingOpportunity();
   const [to, setTo] = useState(date);
   const [failure, setFailure] = useState<string | null>(null);
   const [conflict, setConflict] = useState<ApiError | null>(null);
@@ -66,6 +89,17 @@ function Body({
     }
   }
 
+  async function onRestore() {
+    setFailure(null);
+    try {
+      await restore.mutateAsync({ date, revision });
+      onClose();
+    } catch (caught) {
+      if (caught instanceof ApiError && caught.isConflict) setConflict(caught);
+      else setFailure(caught instanceof ApiError ? caught.message : 'Could not restore that shop.');
+    }
+  }
+
   return (
     <FormDialog open onClose={onClose} maxWidth="xs" fullWidth>
       <form onSubmit={onSubmit}>
@@ -84,9 +118,15 @@ function Body({
           </Stack>
         </DialogContent>
         <DialogActions sx={{ justifyContent: 'space-between' }}>
-          <Button color="inherit" disabled={skip.isPending} onClick={() => void onSkip()}>
-            Skip it
-          </Button>
+          {changed ? (
+            <Button disabled={restore.isPending} onClick={() => void onRestore()}>
+              {oneOff ? 'Remove extra trip' : 'Restore shop'}
+            </Button>
+          ) : (
+            <Button color="inherit" disabled={skip.isPending} onClick={() => void onSkip()}>
+              Skip it
+            </Button>
+          )}
           <Stack direction="row" spacing={1}>
             <Button onClick={onClose}>Cancel</Button>
             <Button type="submit" variant="contained" disabled={move.isPending || to === date}>

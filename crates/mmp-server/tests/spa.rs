@@ -11,15 +11,16 @@ use mmp_core::services::{
 };
 use mmp_core::testing::{
     InMemoryAccessGrantRepository, InMemoryCalorieCalculationRepository,
-    InMemoryConsumptionRecordRepository, InMemoryHouseholdMemberRepository,
-    InMemoryHouseholdSettingsRepository, InMemoryIngredientRepository, InMemoryMealPlanRepository,
-    InMemoryMealTemplateRepository, InMemoryMemberBodyProfileRepository,
-    InMemoryNutritionTargetRepository, InMemoryPreparedBatchRepository,
-    InMemoryPreparedMealRepository, InMemoryProductRepository, InMemoryPurchaseRepository,
-    InMemoryRecipeRepository, InMemoryShoppingCadenceRepository,
+    InMemoryConsumptionRecordRepository, InMemoryFinishShopRepository,
+    InMemoryHouseholdMemberRepository, InMemoryHouseholdSettingsRepository,
+    InMemoryIngredientRepository, InMemoryMealPlanRepository, InMemoryMealTemplateRepository,
+    InMemoryMemberBodyProfileRepository, InMemoryNutritionTargetRepository,
+    InMemoryPreparedBatchRepository, InMemoryPreparedMealRepository, InMemoryProductRepository,
+    InMemoryPurchaseRepository, InMemoryRecipeRepository, InMemoryShoppingCadenceRepository,
     InMemoryShoppingListItemRepository, InMemoryShoppingOpportunityRepository,
-    InMemoryShoppingTripRepository, InMemoryStockRepository, InMemoryUserRepository,
-    InMemoryWeightGoalRepository, InMemoryWeightRecordRepository,
+    InMemoryShoppingSuggestionDismissalRepository, InMemoryShoppingTripRepository,
+    InMemoryStockRepository, InMemoryUserRepository, InMemoryWeightGoalRepository,
+    InMemoryWeightRecordRepository,
 };
 use mmp_server::auth::DevBasicAuthProvider;
 use mmp_server::{AppState, app};
@@ -35,6 +36,14 @@ fn web_dist() -> std::path::PathBuf {
     .unwrap();
     std::fs::write(dir.join("assets/app.js"), "console.log('bundle');").unwrap();
     dir
+}
+
+fn finish_shop_repository() -> Arc<InMemoryFinishShopRepository> {
+    Arc::new(InMemoryFinishShopRepository::new(
+        InMemoryPurchaseRepository::new(),
+        InMemoryShoppingListItemRepository::new(),
+        InMemoryShoppingTripRepository::new(),
+    ))
 }
 
 fn app_with_web(dist: &std::path::Path) -> axum::Router {
@@ -142,6 +151,8 @@ fn app_with_web(dist: &std::path::Path) -> axum::Router {
             Arc::new(InMemoryPurchaseRepository::new()),
             Arc::new(InMemoryShoppingListItemRepository::new()),
             Arc::new(InMemoryShoppingTripRepository::new()),
+            finish_shop_repository(),
+            Arc::new(InMemoryShoppingSuggestionDismissalRepository::new()),
             Arc::new(InMemoryIngredientRepository::new()),
             Arc::new(InMemoryPreparedMealRepository::new()),
             Arc::new(InMemoryProductRepository::new()),
@@ -359,6 +370,8 @@ async fn without_a_web_build_the_api_still_works() {
             Arc::new(InMemoryPurchaseRepository::new()),
             Arc::new(InMemoryShoppingListItemRepository::new()),
             Arc::new(InMemoryShoppingTripRepository::new()),
+            finish_shop_repository(),
+            Arc::new(InMemoryShoppingSuggestionDismissalRepository::new()),
             Arc::new(InMemoryIngredientRepository::new()),
             Arc::new(InMemoryPreparedMealRepository::new()),
             Arc::new(InMemoryProductRepository::new()),

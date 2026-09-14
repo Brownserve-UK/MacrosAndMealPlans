@@ -12,12 +12,13 @@ use mmp_core::services::{
 use mmp_postgres::PgPool;
 use mmp_postgres::{
     PgAccessGrantRepository, PgCalorieCalculationRepository, PgConsumptionRecordRepository,
-    PgHouseholdMemberRepository, PgHouseholdSettingsRepository, PgIngredientRepository,
-    PgMealPlanRepository, PgMealTemplateRepository, PgMemberBodyProfileRepository,
-    PgNutritionTargetRepository, PgPreparedBatchRepository, PgPreparedMealRepository,
-    PgProductRepository, PgPurchaseRepository, PgRecipeRepository, PgShoppingCadenceRepository,
-    PgShoppingListItemRepository, PgShoppingOpportunityRepository, PgShoppingTripRepository,
-    PgStockRepository, PgUserRepository, PgWeightGoalRepository, PgWeightRecordRepository,
+    PgFinishShopRepository, PgHouseholdMemberRepository, PgHouseholdSettingsRepository,
+    PgIngredientRepository, PgMealPlanRepository, PgMealTemplateRepository,
+    PgMemberBodyProfileRepository, PgNutritionTargetRepository, PgPreparedBatchRepository,
+    PgPreparedMealRepository, PgProductRepository, PgPurchaseRepository, PgRecipeRepository,
+    PgShoppingCadenceRepository, PgShoppingListItemRepository, PgShoppingOpportunityRepository,
+    PgShoppingSuggestionDismissalRepository, PgShoppingTripRepository, PgStockRepository,
+    PgUserRepository, PgWeightGoalRepository, PgWeightRecordRepository,
 };
 
 use crate::auth::DevBasicAuthProvider;
@@ -174,6 +175,8 @@ pub fn app_state(config: &Config, pool: &PgPool) -> AppState {
         Arc::new(PgPurchaseRepository::new(pool.clone())),
         Arc::new(PgShoppingListItemRepository::new(pool.clone())),
         Arc::new(PgShoppingTripRepository::new(pool.clone())),
+        Arc::new(PgFinishShopRepository::new(pool.clone())),
+        Arc::new(PgShoppingSuggestionDismissalRepository::new(pool.clone())),
         Arc::new(PgIngredientRepository::new(pool.clone())),
         prepared_meals.clone(),
         Arc::new(PgProductRepository::new(pool.clone())),

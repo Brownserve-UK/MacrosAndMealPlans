@@ -12,6 +12,13 @@ export function AisleOrder() {
   const settings = useHouseholdSettings();
   const save = useUpdateHouseholdSettings();
 
+  if (settings.isLoading) {
+    return (
+      <Typography variant="body2" color="text.secondary">
+        Loading aisle order…
+      </Typography>
+    );
+  }
   const order = settings.data?.shopping_section_order;
   if (!order) return null;
 

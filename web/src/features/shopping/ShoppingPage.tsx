@@ -10,7 +10,7 @@ import { usePendingPutAway, useShoppingList } from '../../api/queries';
 import { PageHeader } from '../../components/PageHeader';
 import { ErrorState, Loading } from '../../components/States';
 import { useHouseholdTimeZone } from '../../hooks/useHouseholdTimeZone';
-import { todayIso } from '../meal-plan/date';
+import { formatFullDate, todayIso } from '../meal-plan/date';
 import { ChangeShopDialog } from './ChangeShopDialog';
 import { GapCard } from './GapCard';
 import { TripCard } from './TripCard';
@@ -24,7 +24,8 @@ export function ShoppingPage() {
   if (list.isLoading) return <Loading label="Working out what you need" />;
   if (list.isError) return <ErrorState error={list.error} onRetry={() => list.refetch()} />;
 
-  const data = list.data!;
+  if (!list.data) return <Loading label="Working out what you need" />;
+  const data = list.data;
   const unpacked = waiting.data ?? [];
   const countFor = (date: string) =>
     data.counts.find((count) => count.date === date)?.items ?? 0;
@@ -45,6 +46,25 @@ export function ShoppingPage() {
       <PageHeader title="Shopping" />
 
       <Stack spacing={2}>
+        {data.unfinished.map((shop) => (
+          <Paper key={shop.date} variant="outlined" sx={{ p: 2.5 }}>
+            <Stack direction="row" spacing={2} sx={{ alignItems: 'center' }}>
+              <Box sx={{ flexGrow: 1, minWidth: 0 }}>
+                <Typography variant="h3">Shopping in progress</Typography>
+                <Typography variant="body2" color="text.secondary" className="numeral">
+                  {formatFullDate(shop.date)} ·{' '}
+                  {shop.purchases === 1
+                    ? '1 thing in the trolley'
+                    : `${shop.purchases} things in the trolley`}
+                </Typography>
+              </Box>
+              <Link to="/shopping/$date" params={{ date: shop.date }} className="app-link">
+                <Button component="span">Open trip</Button>
+              </Link>
+            </Stack>
+          </Paper>
+        ))}
+
         {unpacked.length > 0 ? (
           <Paper variant="outlined" sx={{ p: 2.5 }}>
             <Stack
@@ -111,6 +131,8 @@ export function ShoppingPage() {
         date={changing ? (changing.generated_for ?? changing.date) : null}
         revision={changing?.revision ?? 0}
         earliest={todayIso(timeZone)}
+        changed={changing?.state !== 'normal'}
+        oneOff={changing?.state === 'one_off'}
         onClose={() => setChanging(null)}
       />
     </>
