@@ -1,3 +1,6 @@
 {
-  "plansDirectory": "./.claude/plans"
+  "plansDirectory": "./.ai/plans",
+  "env": {
+    "CLAUDE_CODE_TMPDIR": "./.ai/scratchpad"
+  }
 }

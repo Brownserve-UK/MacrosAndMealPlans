@@ -13,7 +13,7 @@
 **/coverage
 
 # AI Stuff
-.claude/design
+.ai/plans
 .ai/scratchpad
 .ai/mockups
 .ai/screenshots
