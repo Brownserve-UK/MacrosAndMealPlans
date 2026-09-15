@@ -105,14 +105,6 @@ specification or ADRs.
 - [ ] Foreign-key violations in `mmp-postgres/src/error.rs` map to 404 with the literal id string
       `"referenced here"` rather than a validation error against the offending field.
 
-## Documentation and tooling
-
-- [ ] `docs/CONTRIBUTING.md` tells contributors to start a new migration file and names the Rust test
-      convention `.tests`; both contradict `AGENTS.md` and the code, which keep one migration file
-      and `_tests.rs` siblings.
-- [ ] There is no CI. `cargo fmt`, `clippy -D warnings`, the workspace test suite, the `db-tests`
-      feature, and the web `lint`/`typecheck`/`test` scripts are only ever run by hand.
-
 ## Web interface and design
 
 - [ ] Move the hard-coded recipe and stock colours into the theme so dark mode works correctly.
