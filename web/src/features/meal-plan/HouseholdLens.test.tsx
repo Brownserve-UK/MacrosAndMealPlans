@@ -2,7 +2,7 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PlannerMeal, PlannerWeek } from '../../api/client';
-import { HouseholdPlannerPage } from './HouseholdPlannerPage';
+import { HouseholdLens } from './HouseholdLens';
 
 const mocks = vi.hoisted(() => ({
   navigate: vi.fn(),
@@ -54,11 +54,11 @@ vi.mock('../../api/queries', () => ({
 vi.mock('./MealEditorDialog', () => ({ MealEditorDialog: () => <div>Meal editor</div> }));
 vi.mock('./MealOutcomeDialog', () => ({ MealOutcomeDialog: () => <div>Outcome review</div> }));
 
-describe('HouseholdPlannerPage', () => {
+describe('HouseholdLens', () => {
   beforeEach(() => vi.clearAllMocks());
 
   it('shows a household meal with attendance, an opted-out chip and a shortage warning', () => {
-    render(<HouseholdPlannerPage weekStart={WEEK_START} day={DAY} />);
+    render(<HouseholdLens weekStart={WEEK_START} day={DAY} />);
     expect(screen.getByText('Vegetable curry')).toBeInTheDocument();
     expect(screen.getByText('Alex')).toBeInTheDocument();
     expect(screen.getByText('Opted out')).toBeInTheDocument();
@@ -67,13 +67,13 @@ describe('HouseholdPlannerPage', () => {
   });
 
   it('never shows the Snacks section', () => {
-    render(<HouseholdPlannerPage weekStart={WEEK_START} day={DAY} />);
+    render(<HouseholdLens weekStart={WEEK_START} day={DAY} />);
     expect(screen.queryByRole('heading', { name: 'Snacks' })).not.toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Dinner' })).toBeInTheDocument();
   });
 
   it('opens bulk outcome review', async () => {
-    render(<HouseholdPlannerPage weekStart={WEEK_START} day={DAY} />);
+    render(<HouseholdLens weekStart={WEEK_START} day={DAY} />);
     await userEvent.setup().click(screen.getByRole('button', { name: 'Record meal' }));
     expect(screen.getByText('Outcome review')).toBeInTheDocument();
   });

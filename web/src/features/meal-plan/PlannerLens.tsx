@@ -1,32 +1,22 @@
 import Box from '@mui/material/Box';
 import ToggleButton from '@mui/material/ToggleButton';
 import ToggleButtonGroup from '@mui/material/ToggleButtonGroup';
-import { useNavigate } from '@tanstack/react-router';
-import { defaultDayFor } from './date';
-
 export type Lens = 'mine' | 'household';
 
 export function PlannerLens({
   lens,
-  weekStart,
-  day,
+  onChange,
   show,
 }: {
   lens: Lens;
-  weekStart: string;
-  day: string;
+  onChange: (lens: Lens) => void;
   show: boolean;
 }) {
-  const navigate = useNavigate();
   if (!show) return null;
 
   function change(next: Lens | null) {
     if (!next || next === lens) return;
-    const params = { weekStart, day: day || defaultDayFor(weekStart) };
-    void navigate({
-      to: next === 'mine' ? '/planner/$weekStart/$day' : '/household/planner/$weekStart/$day',
-      params,
-    });
+    onChange(next);
   }
 
   return (

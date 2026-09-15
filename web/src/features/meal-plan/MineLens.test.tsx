@@ -2,7 +2,7 @@ import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MealPlanEntry, MealPlanWeek } from '../../api/client';
-import { MyPlannerPage } from './MyPlannerPage';
+import { MineLens } from './MineLens';
 
 const mocks = vi.hoisted(() => ({
   navigate: vi.fn(),
@@ -115,7 +115,7 @@ function dinnerSection() {
   return screen.getByRole('heading', { name: 'Dinner' }).closest('section') as HTMLElement;
 }
 
-describe('MyPlannerPage', () => {
+describe('MineLens', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     entries = [];
@@ -123,7 +123,7 @@ describe('MyPlannerPage', () => {
 
   it('offers Add food on a filled personal slot, never Add meal', async () => {
     entries = [baseEntry({ id: 'mine', scope: 'member' })];
-    render(<MyPlannerPage weekStart={WEEK_START} day={DAY} />);
+    render(<MineLens weekStart={WEEK_START} day={DAY} />);
     const dinner = within(dinnerSection());
     expect(dinner.getByText('Pasta bake')).toBeInTheDocument();
     expect(dinner.getByRole('button', { name: 'Add food' })).toBeInTheDocument();
@@ -136,7 +136,7 @@ describe('MyPlannerPage', () => {
   });
 
   it('shows an empty slot as a single Plan action', () => {
-    render(<MyPlannerPage weekStart={WEEK_START} day={DAY} />);
+    render(<MineLens weekStart={WEEK_START} day={DAY} />);
     const lunch = within(screen.getByRole('heading', { name: 'Lunch' }).closest('section') as HTMLElement);
     expect(lunch.getByRole('button', { name: 'Plan lunch' })).toBeInTheDocument();
   });
@@ -154,13 +154,28 @@ describe('MyPlannerPage', () => {
         nutrition,
       }],
     })];
-    render(<MyPlannerPage weekStart={WEEK_START} day={DAY} />);
+    render(<MineLens weekStart={WEEK_START} day={DAY} />);
     const dinner = within(dinnerSection());
     expect(dinner.getByText('Household meal')).toBeInTheDocument();
     expect(dinner.queryByRole('button', { name: 'Edit meal' })).not.toBeInTheDocument();
     expect(dinner.queryByRole('button', { name: /Plan dinner/ })).not.toBeInTheDocument();
     await userEvent.setup().click(dinner.getByRole('button', { name: 'Opt out to plan your own' }));
     expect(mocks.optOut).toHaveBeenCalledWith({ id: 'shared', revision: 2 });
+  });
+
+  it('warns when a meal has fewer prepared servings than required', () => {
+    const entry = baseEntry({ id: 'short', scope: 'member' });
+    const component = entry.components[0];
+    if (!component) throw new Error('Expected a meal component');
+    entry.components = [{
+      ...component,
+      preparation: { ...component.preparation, shortage: true },
+    }];
+    entries = [entry];
+
+    render(<MineLens weekStart={WEEK_START} day={DAY} />);
+
+    expect(screen.getByText('Not enough servings for Pasta bake')).toBeInTheDocument();
   });
 
   it('frees the slot with Join and Plan once a household meal is opted out of', async () => {
@@ -170,7 +185,7 @@ describe('MyPlannerPage', () => {
       member_id: null,
       opted_out: [{ member_id: 'me', created_by: 'u', created_at: '2026-08-24T10:00:00Z' }],
     })];
-    render(<MyPlannerPage weekStart={WEEK_START} day={DAY} />);
+    render(<MineLens weekStart={WEEK_START} day={DAY} />);
     const dinner = within(dinnerSection());
     expect(dinner.getByText('Opted out')).toBeInTheDocument();
     expect(dinner.queryByText('Pasta bake')).not.toBeInTheDocument();
@@ -185,7 +200,7 @@ describe('MyPlannerPage', () => {
       snackEntry('s-none', null, 'Anytime apple'),
       snackEntry('s-early', '10:00', 'Morning banana'),
     ];
-    render(<MyPlannerPage weekStart={WEEK_START} day={DAY} />);
+    render(<MineLens weekStart={WEEK_START} day={DAY} />);
     const snacks = within(screen.getByRole('heading', { name: 'Snacks' }).closest('section') as HTMLElement);
     const foods = snacks.getAllByText(/banana|crackers|apple/i).map((node) => node.textContent);
     expect(foods).toEqual(['Morning banana', 'Afternoon crackers', 'Anytime apple']);
@@ -202,7 +217,7 @@ describe('MyPlannerPage', () => {
     ];
     entries = [snack];
 
-    render(<MyPlannerPage weekStart={WEEK_START} day={DAY} />);
+    render(<MineLens weekStart={WEEK_START} day={DAY} />);
 
     const occurrence = within(screen.getByRole('group', { name: 'Untimed snack' }));
     expect(occurrence.getByText('Greek yoghurt')).toBeInTheDocument();
@@ -213,7 +228,7 @@ describe('MyPlannerPage', () => {
 
   it('offers only free main meals plus a snack from the page action', async () => {
     entries = [baseEntry({ id: 'mine', scope: 'member', slot: 'dinner' })];
-    render(<MyPlannerPage weekStart={WEEK_START} day={DAY} />);
+    render(<MineLens weekStart={WEEK_START} day={DAY} />);
 
     await userEvent.setup().click(screen.getByRole('button', { name: 'Plan meal' }));
 

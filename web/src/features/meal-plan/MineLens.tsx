@@ -1,15 +1,7 @@
-import Alert from '@mui/material/Alert';
-import Box from '@mui/material/Box';
-import Button from '@mui/material/Button';
-import Dialog from '@mui/material/Dialog';
-import DialogActions from '@mui/material/DialogActions';
-import DialogContent from '@mui/material/DialogContent';
-import DialogTitle from '@mui/material/DialogTitle';
 import Stack from '@mui/material/Stack';
 import Typography from '@mui/material/Typography';
-import { useNavigate } from '@tanstack/react-router';
 import { useState, type ReactNode } from 'react';
-import { ApiError, type MealPlanEntry, type MealSlot, type PlannerMeal } from '../../api/client';
+import { ApiError, type MealPlanEntry, type MealSlot } from '../../api/client';
 import {
   useDeleteMealPlanEntry,
   useMealPlanWeek,
@@ -18,26 +10,22 @@ import {
   useRejoinMeal,
 } from '../../api/queries';
 import { useAuth } from '../../auth/AuthProvider';
-import { PageHeader } from '../../components/PageHeader';
 import { ErrorState, Loading } from '../../components/States';
 import { useHouseholdTimeZone } from '../../hooks/useHouseholdTimeZone';
-import { addDays, defaultDayFor, parseIsoDate, startOfWeekIso, todayIso } from './date';
+import { addDays, todayIso } from './date';
+import { DeleteMealDialog } from './DeleteMealDialog';
 import { MealRow } from './MealRow';
 import { MealEditorDialog } from './MealEditorDialog';
 import { MealSlotMenu } from './MealSlotMenu';
-import { PlannerLens } from './PlannerLens';
+import { PlannerShell } from './PlannerShell';
+import { entryToPlannerMeal } from './plannerMeal';
 import { SaveForReuseDialog } from './SaveForReuseDialog';
 import { DayWeekNutrition } from './NutritionSummary';
 import { EmptySlot, SlotSection } from './SlotSection';
 import { SnackSection } from './SnackSection';
 import { labelForSlot, MAIN_SLOTS } from './slots';
-import { WeekNavigator } from './WeekNavigator';
 
 type EditSelection = { key: string; entry: MealPlanEntry | null; slot: MealSlot };
-
-function fullDayLabel(date: string) {
-  return parseIsoDate(date).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' });
-}
 
 function iParticipateIn(entry: MealPlanEntry, memberId: string | null | undefined) {
   return entry.participants.some((person) => person.member_id === memberId);
@@ -51,6 +39,13 @@ function myPortionResolved(entry: MealPlanEntry, memberId: string | null | undef
   return entry.participants
     .find((person) => person.member_id === memberId)
     ?.allocations.some((allocation) => allocation.status !== 'planned') ?? false;
+}
+
+function shortageWarning(entry: MealPlanEntry) {
+  const shortages = entry.components.filter((component) => component.preparation.shortage);
+  return shortages.length > 0
+    ? `Not enough servings for ${shortages.map((component) => component.item_name).join(', ')}`
+    : null;
 }
 
 function OwnMealCard({
@@ -94,7 +89,7 @@ function OwnMealCard({
         { label: 'Delete meal', onClick: onDelete },
         ...(canSave ? [{ label: 'Save for reuse', onClick: onSaveForReuse }] : []),
       ] : []}
-      warning={entry.needs_attention ? 'Some items need attention' : null}
+      warning={shortageWarning(entry) ?? (entry.needs_attention ? 'Some items need attention' : null)}
     />
   );
 }
@@ -123,6 +118,7 @@ function HouseholdHeldCard({
         tag: null,
       }}
       secondary={canOptOut && !busy ? { label: 'Opt out to plan your own', onClick: onOptOut } : null}
+      warning={shortageWarning(entry)}
     />
   );
 }
@@ -150,11 +146,22 @@ function OptedOutCard({
   );
 }
 
-export function MyPlannerPage({ weekStart, day }: { weekStart: string; day: string }) {
-  const navigate = useNavigate();
+export function MineLens({
+  weekStart,
+  day,
+  showLens = false,
+  onLensChange = () => undefined,
+  enabled = true,
+}: {
+  weekStart: string;
+  day: string;
+  showLens?: boolean;
+  onLensChange?: (lens: 'mine' | 'household') => void;
+  enabled?: boolean;
+}) {
   const { principal } = useAuth();
   const memberId = principal?.member_id;
-  const week = useMealPlanWeek(weekStart);
+  const week = useMealPlanWeek(weekStart, enabled);
   const meta = useMeta();
   const directions = meta.data?.nutrient_directions ?? {};
   const remove = useDeleteMealPlanEntry();
@@ -170,17 +177,6 @@ export function MyPlannerPage({ weekStart, day }: { weekStart: string; day: stri
   const days = Array.from({ length: 7 }, (_, index) => addDays(weekStart, index));
   const canPlan = activeDate >= addDays(todayIso(timeZone), -1);
   const busy = optOut.isPending || rejoin.isPending;
-
-  function goToWeek(start: string) {
-    void navigate({
-      to: '/planner/$weekStart/$day',
-      params: { weekStart: start, day: defaultDayFor(start, timeZone) },
-    });
-  }
-
-  function goToDay(date: string) {
-    void navigate({ to: '/planner/$weekStart/$day', params: { weekStart, day: date } });
-  }
 
   async function changeAttendance(entry: MealPlanEntry, join: boolean) {
     try {
@@ -217,41 +213,24 @@ export function MyPlannerPage({ weekStart, day }: { weekStart: string; day: stri
   ];
 
   return (
-    <Box>
-      <PageHeader
-        title="Planner"
-        actions={
-          <>
-            <PlannerLens
-              lens="mine"
-              weekStart={weekStart}
-              day={activeDate}
-              show={principal?.permissions?.includes('household:write') ?? false}
-            />
-            {canPlan ? <MealSlotMenu choices={headerChoices} onSelect={(slot) => openEditor(null, slot)} /> : null}
-          </>
-        }
-      />
-      {error ? <Alert severity="error" onClose={() => setError(null)} sx={{ mb: 2 }}>{error}</Alert> : null}
-      {week.data ? (
-        <WeekNavigator
-          weekStart={weekStart}
-          days={days.map((date) => ({
+    <PlannerShell
+      lens="mine"
+      showLens={showLens}
+      onLensChange={onLensChange}
+      weekStart={weekStart}
+      activeDate={activeDate}
+      dayCounts={week.data ? days.map((date) => ({
             date,
             itemCount:
               week.data?.days.find((candidate) => candidate.date === date)?.entries.reduce(
                 (sum, entry) => sum + entry.components.length,
                 0,
               ) ?? 0,
-          }))}
-          selectedDate={activeDate}
-          currentMonday={startOfWeekIso(todayIso(timeZone))}
-          onWeekChange={goToWeek}
-          onDayChange={goToDay}
-        />
-      ) : null}
-
-      <Typography variant="h2" sx={{ mb: 2 }}>{fullDayLabel(activeDate)}</Typography>
+          })) : null}
+      headerActions={canPlan ? <MealSlotMenu choices={headerChoices} onSelect={(slot) => openEditor(null, slot)} /> : null}
+      error={error}
+      onDismissError={() => setError(null)}
+    >
       {week.isLoading ? <Loading label="Loading planner" /> : null}
       {week.data && selectedDay ? (
         <Stack spacing={3}>
@@ -346,63 +325,22 @@ export function MyPlannerPage({ weekStart, day }: { weekStart: string; day: stri
           onClose={() => setEditing(null)}
           date={activeDate}
           slot={editing.slot}
-          meal={editing.entry ? entryToPlannerMeal(editing.entry) : null}
+          meal={editing.entry ? entryToPlannerMeal(editing.entry, {
+            canRecord: false,
+            capabilities: { can_edit: true, can_delete: true, can_record_guests: false },
+          }) : null}
         />
       ) : null}
-      <Dialog open={Boolean(deleting)} onClose={remove.isPending ? undefined : () => setDeleting(null)}>
-        <DialogTitle>Delete this meal?</DialogTitle>
-        <DialogContent><Typography>The meal and its planned food will be removed.</Typography></DialogContent>
-        <DialogActions>
-          <Button onClick={() => setDeleting(null)} disabled={remove.isPending}>Cancel</Button>
-          <Button color="error" variant="contained" onClick={() => void deleteMeal()} disabled={remove.isPending}>Delete meal</Button>
-        </DialogActions>
-      </Dialog>
+      <DeleteMealDialog
+        open={Boolean(deleting)}
+        description="The meal and its planned food will be removed."
+        busy={remove.isPending}
+        onCancel={() => setDeleting(null)}
+        onDelete={() => void deleteMeal()}
+      />
       {saving ? (
         <SaveForReuseDialog open onClose={() => setSaving(null)} entry={saving} />
       ) : null}
-    </Box>
+    </PlannerShell>
   );
-}
-
-function entryToPlannerMeal(entry: MealPlanEntry): PlannerMeal {
-  return {
-    id: entry.id,
-    scope: entry.scope,
-    member_id: entry.member_id ?? undefined,
-    owner_name: undefined,
-    planned_on: entry.planned_on,
-    planned_time: entry.planned_time ?? undefined,
-    slot: entry.slot,
-    status: entry.status,
-    foods: entry.components.map((component) => ({
-      id: component.id,
-      ...(component.item_kind === 'recipe'
-        ? { item_kind: 'recipe' as const, recipe_id: component.recipe_id }
-        : component.item_kind === 'dish'
-          ? { item_kind: 'dish' as const, dish_recipe_id: component.dish_recipe_id }
-          : component.item_kind === 'ingredient'
-            ? { item_kind: 'ingredient' as const, ingredient_id: component.ingredient_id }
-            : component.item_kind === 'prepared_meal'
-              ? { item_kind: 'prepared_meal' as const, prepared_meal_id: component.prepared_meal_id }
-              : { item_kind: 'product' as const, product_id: component.product_id }),
-      item_name: component.item_name,
-      amount: component.amount,
-      shortage: component.preparation.shortage,
-      needs_cooking: component.needs_cooking,
-      cooked: component.cooked,
-    })),
-    people: entry.participants.map((person) => ({
-      member_id: person.member_id,
-      display_name: person.display_name,
-      status: person.status,
-      allocations: person.allocations,
-      can_record: false,
-    })),
-    guest_groups: entry.guest_groups,
-    opted_out: entry.opted_out ?? [],
-    can_opt_out: false,
-    can_join: false,
-    capabilities: { can_edit: true, can_delete: true, can_record_guests: false },
-    revision: entry.revision,
-  };
 }

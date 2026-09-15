@@ -41,7 +41,7 @@ specification or ADRs.
       conversion.
 - [ ] Populate `get_planner_week` values for `can_opt_out`, `can_join`, and `owner_name` when the web
       client has a consumer for them.
-- [ ] `MyPlannerPage` maps `preparation.shortage` into its meal shape but never renders it, so only
+- [x] `MyPlannerPage` maps `preparation.shortage` into its meal shape but never renders it, so only
       the household planner warns that fewer servings were cooked than people are due.
 - [ ] Work out where cooking actually belongs. Both the Cooked section and the "Cooked something"
       entry point have been pulled off the Planner entirely (neither earned its place there), with no
@@ -114,7 +114,7 @@ specification or ADRs.
 
 - [ ] Move the hard-coded recipe and stock colours into the theme so dark mode works correctly.
 - [ ] Consolidate the repeated `Fact` components where their behaviour matches.
-- [ ] Add a shared confirmation dialog for the planner delete flows.
+- [x] Add a shared confirmation dialog for the planner delete flows.
 - [ ] Standardise mutation-error state names and alert placement.
 - [ ] Review whether `SearchField` and `RouteStates` still justify shared abstractions.
 - [ ] Move cross-feature quantity, amount, and date formatters into a shared formatting module, and

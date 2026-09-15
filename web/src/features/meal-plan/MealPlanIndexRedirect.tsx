@@ -4,31 +4,45 @@ import { useAuth } from '../../auth/AuthProvider';
 import { EmptyState, Loading } from '../../components/States';
 import { useHouseholdTimeZone } from '../../hooks/useHouseholdTimeZone';
 import { defaultDayFor, startOfWeekIso, todayIso } from './date';
+import { usePlannerLens } from './usePlannerLens';
 
-type IndexTarget = '/food-log' | '/planner' | '/household/planner';
+type IndexTarget = '/food-log' | '/planner';
 
 const LABELS: Record<IndexTarget, { loading: string; unavailable: string }> = {
   '/food-log': { loading: 'Loading food log', unavailable: 'Food log unavailable' },
   '/planner': { loading: 'Loading planner', unavailable: 'Meal planner unavailable' },
-  '/household/planner': { loading: 'Loading household planner', unavailable: 'Household planner unavailable' },
 };
 
-export function MealPlanIndexRedirect({ to }: { to: IndexTarget }) {
+export function MealPlanIndexRedirect({ to, lens }: { to: IndexTarget; lens?: 'mine' | 'household' }) {
   const { principal } = useAuth();
   const navigate = useNavigate();
-  const needsMember = to !== '/household/planner';
+  const { read: readPlannerLens } = usePlannerLens();
+  const canUseHousehold = principal?.permissions?.includes('household:write') ?? false;
+  const needsMember = to === '/food-log' || (to === '/planner' && !principal?.member_id && !canUseHousehold);
   const timeZone = useHouseholdTimeZone();
 
   useEffect(() => {
     if (needsMember && !principal?.member_id) return;
     if (!principal) return;
     const weekStart = startOfWeekIso(todayIso(timeZone));
-    void navigate({
-      to: `${to}/$weekStart/$day` as `${IndexTarget}/$weekStart/$day`,
-      params: { weekStart, day: defaultDayFor(weekStart, timeZone) },
-      replace: true,
-    });
-  }, [navigate, needsMember, principal, timeZone, to]);
+    const day = defaultDayFor(weekStart, timeZone);
+    if (to === '/planner') {
+      const defaultLens = principal.member_id ? readPlannerLens(canUseHousehold) : 'household';
+      const targetLens = lens ?? defaultLens;
+      void navigate({
+        to: '/planner/$weekStart/$day',
+        params: { weekStart, day },
+        search: { lens: targetLens },
+        replace: true,
+      });
+    } else {
+      void navigate({
+        to: '/food-log/$weekStart/$day',
+        params: { weekStart, day },
+        replace: true,
+      });
+    }
+  }, [canUseHousehold, lens, navigate, needsMember, principal, readPlannerLens, timeZone, to]);
 
   if (needsMember && !principal?.member_id) {
     return (

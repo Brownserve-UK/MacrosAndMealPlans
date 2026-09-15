@@ -1,23 +1,16 @@
 import AddIcon from '@mui/icons-material/AddOutlined';
-import Alert from '@mui/material/Alert';
-import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
-import Dialog from '@mui/material/Dialog';
-import DialogActions from '@mui/material/DialogActions';
-import DialogContent from '@mui/material/DialogContent';
-import DialogTitle from '@mui/material/DialogTitle';
 import Stack from '@mui/material/Stack';
 import Typography from '@mui/material/Typography';
-import { useNavigate } from '@tanstack/react-router';
 import { useState } from 'react';
 import { ApiError, type MealSlot, type PlannerMeal } from '../../api/client';
 import { useDeleteMealPlanEntry, useHouseholdPlannerWeek } from '../../api/queries';
-import { PageHeader } from '../../components/PageHeader';
 import { ErrorState, Loading } from '../../components/States';
 import { useHouseholdTimeZone } from '../../hooks/useHouseholdTimeZone';
-import { addDays, defaultDayFor, parseIsoDate, startOfWeekIso, todayIso } from './date';
+import { addDays, todayIso } from './date';
+import { DeleteMealDialog } from './DeleteMealDialog';
 import { MealRow, plannerMealRow, type MealAction } from './MealRow';
-import { PlannerLens } from './PlannerLens';
+import { PlannerShell } from './PlannerShell';
 import { UseItUp, type PlannableDish } from './UseItUp';
 import { CookDialog } from './CookDialog';
 import { MealEditorDialog } from './MealEditorDialog';
@@ -25,7 +18,6 @@ import { MealOutcomeDialog } from './MealOutcomeDialog';
 import { MealSlotMenu } from './MealSlotMenu';
 import { EmptySlot, SlotSection } from './SlotSection';
 import { labelForSlot, MAIN_SLOTS } from './slots';
-import { WeekNavigator } from './WeekNavigator';
 
 type EditSelection = {
   key: string;
@@ -33,10 +25,6 @@ type EditSelection = {
   slot: MealSlot;
   dish?: PlannableDish;
 };
-
-function fullDayLabel(date: string) {
-  return parseIsoDate(date).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' });
-}
 
 function HouseholdMealCard({
   meal,
@@ -81,9 +69,20 @@ function HouseholdMealCard({
   );
 }
 
-export function HouseholdPlannerPage({ weekStart, day }: { weekStart: string; day: string }) {
-  const navigate = useNavigate();
-  const week = useHouseholdPlannerWeek(weekStart);
+export function HouseholdLens({
+  weekStart,
+  day,
+  showLens = true,
+  onLensChange = () => undefined,
+  enabled = true,
+}: {
+  weekStart: string;
+  day: string;
+  showLens?: boolean;
+  onLensChange?: (lens: 'mine' | 'household') => void;
+  enabled?: boolean;
+}) {
+  const week = useHouseholdPlannerWeek(weekStart, enabled);
   const remove = useDeleteMealPlanEntry();
   const [editing, setEditing] = useState<EditSelection | null>(null);
   const [outcome, setOutcome] = useState<PlannerMeal | null>(null);
@@ -96,17 +95,6 @@ export function HouseholdPlannerPage({ weekStart, day }: { weekStart: string; da
   const days = Array.from({ length: 7 }, (_, index) => addDays(weekStart, index));
   const meals = week.data?.meals.filter((meal) => meal.planned_on === activeDate) ?? [];
   const canPlan = activeDate >= addDays(todayIso(timeZone), -1);
-
-  function goToWeek(start: string) {
-    void navigate({
-      to: '/household/planner/$weekStart/$day',
-      params: { weekStart: start, day: defaultDayFor(start, timeZone) },
-    });
-  }
-
-  function goToDay(date: string) {
-    void navigate({ to: '/household/planner/$weekStart/$day', params: { weekStart, day: date } });
-  }
 
   function openEditor(meal: PlannerMeal | null, slot: MealSlot) {
     setEditing({ key: crypto.randomUUID(), meal, slot });
@@ -125,39 +113,28 @@ export function HouseholdPlannerPage({ weekStart, day }: { weekStart: string; da
   if (week.isError) return <ErrorState error={week.error} onRetry={() => week.refetch()} />;
 
   return (
-    <Box>
-      <PageHeader
-        title="Planner"
-        actions={
-          <>
-            <PlannerLens lens="household" weekStart={weekStart} day={activeDate} show />
-            {canPlan ? <MealSlotMenu choices={MAIN_SLOTS} onSelect={(slot) => openEditor(null, slot)} /> : null}
-          </>
-        }
-      />
-      {error ? <Alert severity="error" onClose={() => setError(null)} sx={{ mb: 2 }}>{error}</Alert> : null}
-      {week.data ? (
-        <WeekNavigator
-          weekStart={weekStart}
-          days={days.map((date) => ({
+    <PlannerShell
+      lens="household"
+      showLens={showLens}
+      onLensChange={onLensChange}
+      weekStart={weekStart}
+      activeDate={activeDate}
+      dayCounts={week.data ? days.map((date) => ({
             date,
             itemCount: (week.data?.meals ?? [])
               .filter((meal) => meal.planned_on === date)
               .reduce((sum, meal) => sum + meal.foods.length, 0),
-          }))}
-          selectedDate={activeDate}
-          currentMonday={startOfWeekIso(todayIso(timeZone))}
-          onWeekChange={goToWeek}
-          onDayChange={goToDay}
-        />
-      ) : null}
+          })) : null}
+      headerActions={canPlan ? <MealSlotMenu choices={MAIN_SLOTS} onSelect={(slot) => openEditor(null, slot)} /> : null}
+      error={error}
+      onDismissError={() => setError(null)}
+    >
 
       <UseItUp
         today={todayIso(timeZone)}
         onPlan={(dish, slot) => setEditing({ key: crypto.randomUUID(), meal: null, slot, dish })}
       />
 
-      <Typography variant="h2" sx={{ mb: 2 }}>{fullDayLabel(activeDate)}</Typography>
       {week.isLoading ? <Loading label="Loading household planner" /> : null}
       {week.data ? (
         <Stack spacing={3}>
@@ -201,14 +178,13 @@ export function HouseholdPlannerPage({ weekStart, day }: { weekStart: string; da
       {editing ? <MealEditorDialog key={editing.key} open mode="household" onClose={() => setEditing(null)} date={activeDate} slot={editing.slot} meal={editing.meal} startWith={editing.dish} /> : null}
       {outcome ? <MealOutcomeDialog meal={outcome} onClose={() => setOutcome(null)} /> : null}
       {cooking ? <CookDialog meal={cooking} onClose={() => setCooking(null)} /> : null}
-      <Dialog open={Boolean(deleting)} onClose={remove.isPending ? undefined : () => setDeleting(null)}>
-        <DialogTitle>Delete this meal?</DialogTitle>
-        <DialogContent><Typography>The meal and its attendance plan will be removed.</Typography></DialogContent>
-        <DialogActions>
-          <Button onClick={() => setDeleting(null)} disabled={remove.isPending}>Cancel</Button>
-          <Button color="error" variant="contained" onClick={() => void deleteMeal()} disabled={remove.isPending}>Delete meal</Button>
-        </DialogActions>
-      </Dialog>
-    </Box>
+      <DeleteMealDialog
+        open={Boolean(deleting)}
+        description="The meal and its attendance plan will be removed."
+        busy={remove.isPending}
+        onCancel={() => setDeleting(null)}
+        onDelete={() => void deleteMeal()}
+      />
+    </PlannerShell>
   );
 }

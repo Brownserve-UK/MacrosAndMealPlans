@@ -10,10 +10,10 @@ export function useNeedsReview() {
   });
 }
 
-export function useMealPlanWeek(weekStart: string) {
+export function useMealPlanWeek(weekStart: string, enabled = true) {
   return useQuery({
     queryKey: mealPlanKeys.myWeek(weekStart),
-    enabled: Boolean(weekStart),
+    enabled: Boolean(weekStart) && enabled,
     queryFn: async () =>
       unwrap(
         await client.GET('/api/v1/meal-plan/{week_start}', {
@@ -23,10 +23,10 @@ export function useMealPlanWeek(weekStart: string) {
   });
 }
 
-export function useHouseholdPlannerWeek(weekStart: string) {
+export function useHouseholdPlannerWeek(weekStart: string, enabled = true) {
   return useQuery({
     queryKey: mealPlanKeys.householdWeek(weekStart),
-    enabled: Boolean(weekStart),
+    enabled: Boolean(weekStart) && enabled,
     queryFn: async () =>
       unwrap(
         await client.GET('/api/v1/planner/{week_start}', {
