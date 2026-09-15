@@ -1,0 +1,17 @@
+[package]
+name = "sample-data"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+anyhow = "1.0.104"
+mmp-core = { path = "../../crates/mmp-core" }
+mmp-server = { path = "../../crates/mmp-server" }
+rust_decimal = "1.42.1"
+time = { version = "0.3.55", features = ["formatting", "macros", "parsing"] }
+tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread"] }
+tracing = "0.1.44"
+uuid = { version = "1.25.0", features = ["v5"] }

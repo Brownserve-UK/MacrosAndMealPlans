@@ -1,0 +1,1287 @@
+use std::collections::BTreeMap;
+use std::str::FromStr;
+
+use mmp_core::domain::{
+    AccessScope, CalorieCalculation, CalorieCalculationId, CatalogueOrigin, ConsumedAmount,
+    ConsumedNutrition, ConsumptionRecord, ConsumptionRecordId, ExceptionState, HabitualActivity,
+    HouseholdMember, HouseholdMemberId, HouseholdSettings, Ingredient, IngredientId, MealItemRef,
+    MealPlanComponentId, MealPlanEntryId, MealSlot, MealTimes, MemberAccessGrant,
+    MemberBodyProfile, MissingStockInterpretation, NutritionEmphasis, NutritionFacts,
+    NutritionGoals, NutritionQuality, NutritionTarget, NutritionTargetId, OpportunityException,
+    PreparationSource, PreparedBatch, PreparedBatchId, PreparedMeal, PreparedMealId, Product,
+    ProductId, Provenance, Purchase, PurchaseId, PurchaseState, Quantity, RecipeId, Revision, Role,
+    SectionOrder, Sex, ShoppingCadence, ShoppingListItem, ShoppingListItemId,
+    ShoppingOpportunityId, ShoppingSection, ShoppingTrip, ShoppingTripId, ShoppingTripRow,
+    ShoppingTripRowId, SourceDate, SourceDateKind, StockEffect, StockEffectId, StockEffectSource,
+    StockEffectState, StockEvent, StockEventId, StockEventKind, StockEventSource, StockItem,
+    StockItemId, StockLevel, StockSubject, StorageLocation, TargetSource, TrackingMode, TripState,
+    Unit, UsabilityDeadline, User, UserId, WeightDisplay, WeightGoal, WeightGoalId,
+    WeightObjective, WeightRecord, WeightRecordId, WeightSource, week_day_from_number,
+};
+use mmp_core::{CoreError, RepositoryError};
+use rust_decimal::Decimal;
+use sqlx::types::Json;
+use time::{Date, OffsetDateTime, Time};
+use uuid::Uuid;
+
+type Extra = Json<BTreeMap<String, Decimal>>;
+
+pub(crate) fn bad_value(column: &str, value: &str) -> CoreError {
+    CoreError::Repository(RepositoryError::new(format!(
+        "column `{column}` holds `{value}`, which this build does not understand"
+    )))
+}
+
+#[derive(Debug, sqlx::FromRow)]
+pub struct IngredientRow {
+    pub id: Uuid,
+    pub name: String,
+    pub default_unit: String,
+    pub origin: String,
+    pub seed_key: Option<String>,
+    pub source_provider: Option<String>,
+    pub source_external_id: Option<String>,
+    pub locally_modified: bool,
+    pub shopping_section: Option<String>,
+    pub track_stock: Option<bool>,
+    pub revision: i64,
+    pub created_at: OffsetDateTime,
+    pub updated_at: OffsetDateTime,
+    pub archived_at: Option<OffsetDateTime>,
+}
+
+impl TryFrom<IngredientRow> for Ingredient {
+    type Error = CoreError;
+
+    fn try_from(row: IngredientRow) -> Result<Self, Self::Error> {
+        Ok(Ingredient {
+            id: IngredientId::from(row.id),
+            name: row.name,
+            default_unit: Unit::from_str(&row.default_unit)
+                .map_err(|_| bad_value("default_unit", &row.default_unit))?,
+            shopping_section: row
+                .shopping_section
+                .as_deref()
+                .map(|section| {
+                    ShoppingSection::from_str(section)
+                        .map_err(|_| bad_value("shopping_section", section))
+                })
+                .transpose()?,
+            track_stock: row.track_stock,
+            provenance: Provenance {
+                origin: CatalogueOrigin::from_str(&row.origin)
+                    .map_err(|_| bad_value("origin", &row.origin))?,
+                seed_key: row.seed_key,
+                source_provider: row.source_provider,
+                source_external_id: row.source_external_id,
+                locally_modified: row.locally_modified,
+            },
+            revision: Revision::new(row.revision),
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+            archived_at: row.archived_at,
+        })
+    }
+}
+
+#[derive(Debug, sqlx::FromRow)]
+pub struct PreparedMealRow {
+    pub id: Uuid,
+    pub name: String,
+    pub default_unit: String,
+    pub origin: String,
+    pub seed_key: Option<String>,
+    pub source_provider: Option<String>,
+    pub source_external_id: Option<String>,
+    pub locally_modified: bool,
+    pub shopping_section: Option<String>,
+    pub track_stock: Option<bool>,
+    pub revision: i64,
+    pub created_at: OffsetDateTime,
+    pub updated_at: OffsetDateTime,
+    pub archived_at: Option<OffsetDateTime>,
+}
+
+impl TryFrom<PreparedMealRow> for PreparedMeal {
+    type Error = CoreError;
+
+    fn try_from(row: PreparedMealRow) -> Result<Self, Self::Error> {
+        Ok(PreparedMeal {
+            id: PreparedMealId::from(row.id),
+            name: row.name,
+            default_unit: Unit::from_str(&row.default_unit)
+                .map_err(|_| bad_value("default_unit", &row.default_unit))?,
+            shopping_section: row
+                .shopping_section
+                .as_deref()
+                .map(|section| {
+                    ShoppingSection::from_str(section)
+                        .map_err(|_| bad_value("shopping_section", section))
+                })
+                .transpose()?,
+            track_stock: row.track_stock,
+            provenance: Provenance {
+                origin: CatalogueOrigin::from_str(&row.origin)
+                    .map_err(|_| bad_value("origin", &row.origin))?,
+                seed_key: row.seed_key,
+                source_provider: row.source_provider,
+                source_external_id: row.source_external_id,
+                locally_modified: row.locally_modified,
+            },
+            revision: Revision::new(row.revision),
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+            archived_at: row.archived_at,
+        })
+    }
+}
+
+#[derive(Debug, sqlx::FromRow)]
+pub struct ProductRow {
+    pub id: Uuid,
+    pub name: String,
+    pub brand: Option<String>,
+    pub barcode: Option<String>,
+    pub retailer: Option<String>,
+    pub shopping_section: Option<String>,
+    pub package_quantity_amount: Option<Decimal>,
+    pub package_quantity_unit: Option<String>,
+    pub servings_per_pack: Option<i32>,
+    pub mapped_ingredient_id: Option<Uuid>,
+    pub mapped_prepared_meal_id: Option<Uuid>,
+    pub nutrition_basis_amount: Option<Decimal>,
+    pub nutrition_basis_unit: Option<String>,
+    pub energy_kcal: Option<Decimal>,
+    pub protein_g: Option<Decimal>,
+    pub carbohydrate_g: Option<Decimal>,
+    pub sugar_g: Option<Decimal>,
+    pub fat_g: Option<Decimal>,
+    pub saturated_fat_g: Option<Decimal>,
+    pub fibre_g: Option<Decimal>,
+    pub salt_g: Option<Decimal>,
+    pub cholesterol_mg: Option<Decimal>,
+    pub nutrition_extra: Extra,
+    pub origin: String,
+    pub seed_key: Option<String>,
+    pub source_provider: Option<String>,
+    pub source_external_id: Option<String>,
+    pub locally_modified: bool,
+    pub track_stock: Option<bool>,
+    pub revision: i64,
+    pub created_at: OffsetDateTime,
+    pub updated_at: OffsetDateTime,
+    pub archived_at: Option<OffsetDateTime>,
+}
+
+impl TryFrom<ProductRow> for Product {
+    type Error = CoreError;
+
+    fn try_from(row: ProductRow) -> Result<Self, Self::Error> {
+        let package_quantity = match (row.package_quantity_amount, row.package_quantity_unit) {
+            (Some(amount), Some(unit)) => Some(Quantity::new(
+                amount,
+                Unit::from_str(&unit).map_err(|_| bad_value("package_quantity_unit", &unit))?,
+            )),
+            _ => None,
+        };
+
+        Ok(Product {
+            id: ProductId::from(row.id),
+            name: row.name,
+            brand: row.brand,
+            barcode: row.barcode,
+            retailer: row.retailer,
+            shopping_section: row
+                .shopping_section
+                .as_deref()
+                .map(|section| {
+                    ShoppingSection::from_str(section)
+                        .map_err(|_| bad_value("shopping_section", section))
+                })
+                .transpose()?,
+            track_stock: row.track_stock,
+            package_quantity,
+            servings_per_pack: row.servings_per_pack,
+            mapped_ingredient_id: row.mapped_ingredient_id.map(IngredientId::from),
+            mapped_prepared_meal_id: row.mapped_prepared_meal_id.map(PreparedMealId::from),
+            nutrition: NutritionFacts {
+                basis: parse_basis(row.nutrition_basis_amount, row.nutrition_basis_unit)?,
+                energy_kcal: row.energy_kcal,
+                protein_g: row.protein_g,
+                carbohydrate_g: row.carbohydrate_g,
+                sugar_g: row.sugar_g,
+                fat_g: row.fat_g,
+                saturated_fat_g: row.saturated_fat_g,
+                fibre_g: row.fibre_g,
+                salt_g: row.salt_g,
+                cholesterol_mg: row.cholesterol_mg,
+                extra: row.nutrition_extra.0,
+            },
+            provenance: Provenance {
+                origin: CatalogueOrigin::from_str(&row.origin)
+                    .map_err(|_| bad_value("origin", &row.origin))?,
+                seed_key: row.seed_key,
+                source_provider: row.source_provider,
+                source_external_id: row.source_external_id,
+                locally_modified: row.locally_modified,
+            },
+            revision: Revision::new(row.revision),
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+            archived_at: row.archived_at,
+        })
+    }
+}
+
+pub(crate) fn parse_basis(
+    amount: Option<Decimal>,
+    unit: Option<String>,
+) -> Result<Option<Quantity>, CoreError> {
+    match (amount, unit) {
+        (Some(amount), Some(unit)) => {
+            let unit =
+                Unit::from_str(&unit).map_err(|_| bad_value("nutrition_basis_unit", &unit))?;
+            Ok(Some(Quantity::new(amount, unit)))
+        }
+        _ => Ok(None),
+    }
+}
+
+pub fn nutrition_bindings(facts: &NutritionFacts) -> NutritionBindings<'_> {
+    NutritionBindings {
+        basis_amount: facts.basis.map(|b| b.amount),
+        basis_unit: facts.basis.map(|b| b.unit.code()),
+        energy_kcal: facts.energy_kcal,
+        protein_g: facts.protein_g,
+        carbohydrate_g: facts.carbohydrate_g,
+        sugar_g: facts.sugar_g,
+        fat_g: facts.fat_g,
+        saturated_fat_g: facts.saturated_fat_g,
+        fibre_g: facts.fibre_g,
+        salt_g: facts.salt_g,
+        cholesterol_mg: facts.cholesterol_mg,
+        extra: Json(&facts.extra),
+    }
+}
+
+pub struct NutritionBindings<'a> {
+    pub basis_amount: Option<Decimal>,
+    pub basis_unit: Option<&'static str>,
+    pub energy_kcal: Option<Decimal>,
+    pub protein_g: Option<Decimal>,
+    pub carbohydrate_g: Option<Decimal>,
+    pub sugar_g: Option<Decimal>,
+    pub fat_g: Option<Decimal>,
+    pub saturated_fat_g: Option<Decimal>,
+    pub fibre_g: Option<Decimal>,
+    pub salt_g: Option<Decimal>,
+    pub cholesterol_mg: Option<Decimal>,
+    pub extra: Json<&'a BTreeMap<String, Decimal>>,
+}
+
+#[derive(Debug, sqlx::FromRow)]
+pub struct HouseholdMemberRow {
+    pub id: Uuid,
+    pub display_name: String,
+    pub linked_user_id: Option<Uuid>,
+    pub weight_display: String,
+    pub revision: i64,
+    pub created_at: OffsetDateTime,
+    pub updated_at: OffsetDateTime,
+    pub archived_at: Option<OffsetDateTime>,
+}
+
+impl TryFrom<HouseholdMemberRow> for HouseholdMember {
+    type Error = CoreError;
+
+    fn try_from(row: HouseholdMemberRow) -> Result<Self, Self::Error> {
+        Ok(HouseholdMember {
+            id: HouseholdMemberId::from(row.id),
+            display_name: row.display_name,
+            linked_user_id: row.linked_user_id.map(UserId::from),
+            weight_display: WeightDisplay::from_str(&row.weight_display)
+                .map_err(|_| bad_value("weight_display", &row.weight_display))?,
+            revision: Revision::new(row.revision),
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+            archived_at: row.archived_at,
+        })
+    }
+}
+
+#[derive(Debug, sqlx::FromRow)]
+pub struct WeightRecordRow {
+    pub id: Uuid,
+    pub member_id: Uuid,
+    pub weight_kg: Decimal,
+    pub recorded_on: Date,
+    pub recorded_at: Option<OffsetDateTime>,
+    pub source: String,
+    pub recorded_by: Option<Uuid>,
+    pub revision: i64,
+    pub created_at: OffsetDateTime,
+    pub updated_at: OffsetDateTime,
+}
+
+impl TryFrom<WeightRecordRow> for WeightRecord {
+    type Error = CoreError;
+
+    fn try_from(row: WeightRecordRow) -> Result<Self, Self::Error> {
+        Ok(WeightRecord {
+            id: WeightRecordId::from(row.id),
+            member_id: HouseholdMemberId::from(row.member_id),
+            weight_kg: row.weight_kg,
+            recorded_on: row.recorded_on,
+            recorded_at: row.recorded_at,
+            source: WeightSource::from_str(&row.source)
+                .map_err(|_| bad_value("source", &row.source))?,
+            recorded_by: row.recorded_by.map(UserId::from),
+            revision: Revision::new(row.revision),
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+        })
+    }
+}
+
+#[derive(Debug, sqlx::FromRow)]
+pub struct WeightGoalRow {
+    pub id: Uuid,
+    pub member_id: Uuid,
+    pub objective: String,
+    pub starting_weight_kg: Decimal,
+    pub target_weight_kg: Option<Decimal>,
+    pub planned_rate_kg_per_week: Option<Decimal>,
+    pub started_on: Date,
+    pub revision: i64,
+    pub created_at: OffsetDateTime,
+    pub updated_at: OffsetDateTime,
+}
+
+impl TryFrom<WeightGoalRow> for WeightGoal {
+    type Error = CoreError;
+
+    fn try_from(row: WeightGoalRow) -> Result<Self, Self::Error> {
+        Ok(WeightGoal {
+            id: WeightGoalId::from(row.id),
+            member_id: HouseholdMemberId::from(row.member_id),
+            objective: WeightObjective::from_str(&row.objective)
+                .map_err(|_| bad_value("objective", &row.objective))?,
+            starting_weight_kg: row.starting_weight_kg,
+            target_weight_kg: row.target_weight_kg,
+            planned_rate_kg_per_week: row.planned_rate_kg_per_week,
+            started_on: row.started_on,
+            revision: Revision::new(row.revision),
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+        })
+    }
+}
+
+#[derive(Debug, sqlx::FromRow)]
+pub struct UserRow {
+    pub id: Uuid,
+    pub username: String,
+    pub display_name: Option<String>,
+    pub auth_subject: Option<String>,
+    pub roles: Vec<String>,
+    pub revision: i64,
+    pub created_at: OffsetDateTime,
+    pub updated_at: OffsetDateTime,
+    pub archived_at: Option<OffsetDateTime>,
+}
+
+impl TryFrom<UserRow> for User {
+    type Error = CoreError;
+
+    fn try_from(row: UserRow) -> Result<Self, Self::Error> {
+        let mut roles = row
+            .roles
+            .iter()
+            .map(|code| Role::from_str(code).map_err(|_| bad_value("role", code)))
+            .collect::<Result<Vec<Role>, CoreError>>()?;
+        roles.sort_unstable();
+        roles.dedup();
+
+        Ok(User {
+            id: UserId::from(row.id),
+            username: row.username,
+            display_name: row.display_name,
+            auth_subject: row.auth_subject,
+            roles,
+            revision: Revision::new(row.revision),
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+            archived_at: row.archived_at,
+        })
+    }
+}
+
+#[derive(Debug, sqlx::FromRow)]
+pub struct MemberAccessGrantRow {
+    pub grantee_user_id: Uuid,
+    pub subject_member_id: Uuid,
+    pub scope: String,
+    pub granted_at: OffsetDateTime,
+    pub granted_by: Option<Uuid>,
+}
+
+impl TryFrom<MemberAccessGrantRow> for MemberAccessGrant {
+    type Error = CoreError;
+
+    fn try_from(row: MemberAccessGrantRow) -> Result<Self, Self::Error> {
+        Ok(MemberAccessGrant {
+            grantee_user_id: UserId::from(row.grantee_user_id),
+            subject_member_id: HouseholdMemberId::from(row.subject_member_id),
+            scope: AccessScope::from_str(&row.scope).map_err(|_| bad_value("scope", &row.scope))?,
+            granted_at: row.granted_at,
+            granted_by: row.granted_by.map(UserId::from),
+        })
+    }
+}
+
+#[derive(Debug, sqlx::FromRow)]
+pub struct NutritionTargetRow {
+    pub id: Uuid,
+    pub member_id: Uuid,
+    pub effective_from: Date,
+    pub source: String,
+    pub energy_kcal: Option<Decimal>,
+    pub protein_g: Option<Decimal>,
+    pub carbohydrate_g: Option<Decimal>,
+    pub sugar_g: Option<Decimal>,
+    pub fat_g: Option<Decimal>,
+    pub saturated_fat_g: Option<Decimal>,
+    pub fibre_g: Option<Decimal>,
+    pub salt_g: Option<Decimal>,
+    pub cholesterol_mg: Option<Decimal>,
+    pub revision: i64,
+    pub created_at: OffsetDateTime,
+    pub updated_at: OffsetDateTime,
+}
+
+impl TryFrom<NutritionTargetRow> for NutritionTarget {
+    type Error = CoreError;
+
+    fn try_from(row: NutritionTargetRow) -> Result<Self, Self::Error> {
+        Ok(NutritionTarget {
+            id: NutritionTargetId::from(row.id),
+            member_id: HouseholdMemberId::from(row.member_id),
+            effective_from: row.effective_from,
+            source: TargetSource::from_str(&row.source)
+                .map_err(|_| bad_value("source", &row.source))?,
+            goals: NutritionGoals {
+                energy_kcal: row.energy_kcal,
+                protein_g: row.protein_g,
+                carbohydrate_g: row.carbohydrate_g,
+                sugar_g: row.sugar_g,
+                fat_g: row.fat_g,
+                saturated_fat_g: row.saturated_fat_g,
+                fibre_g: row.fibre_g,
+                salt_g: row.salt_g,
+                cholesterol_mg: row.cholesterol_mg,
+            },
+            revision: Revision::new(row.revision),
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+        })
+    }
+}
+
+#[derive(Debug, sqlx::FromRow)]
+pub struct MemberBodyProfileRow {
+    pub member_id: Uuid,
+    pub date_of_birth: Option<Date>,
+    pub sex: Option<String>,
+    pub height_cm: Option<Decimal>,
+    pub habitual_activity: Option<String>,
+    pub revision: i64,
+    pub created_at: OffsetDateTime,
+    pub updated_at: OffsetDateTime,
+}
+
+impl TryFrom<MemberBodyProfileRow> for MemberBodyProfile {
+    type Error = CoreError;
+
+    fn try_from(row: MemberBodyProfileRow) -> Result<Self, Self::Error> {
+        Ok(MemberBodyProfile {
+            member_id: HouseholdMemberId::from(row.member_id),
+            date_of_birth: row.date_of_birth,
+            sex: row
+                .sex
+                .as_deref()
+                .map(|value| Sex::from_str(value).map_err(|_| bad_value("sex", value)))
+                .transpose()?,
+            height_cm: row.height_cm,
+            habitual_activity: row
+                .habitual_activity
+                .as_deref()
+                .map(|value| {
+                    HabitualActivity::from_str(value)
+                        .map_err(|_| bad_value("habitual_activity", value))
+                })
+                .transpose()?,
+            revision: Revision::new(row.revision),
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+        })
+    }
+}
+
+#[derive(Debug, sqlx::FromRow)]
+pub struct CalorieCalculationRow {
+    pub id: Uuid,
+    pub member_id: Uuid,
+    pub nutrition_target_id: Uuid,
+    pub calculated_on: Date,
+    pub formula: String,
+    pub activity_source: String,
+    pub habitual_activity: String,
+    pub age_years: i32,
+    pub sex: String,
+    pub height_cm: Decimal,
+    pub weight_kg: Decimal,
+    pub objective: String,
+    pub emphasis: String,
+    pub requested_rate_kg_per_week: Option<Decimal>,
+    pub applied_rate_kg_per_week: Option<Decimal>,
+    pub maintenance_kcal: Decimal,
+    pub adjustment_kcal: Decimal,
+    pub recommended_kcal: Decimal,
+    pub floor_kcal: Decimal,
+    pub eased: bool,
+    pub revision: i64,
+    pub created_at: OffsetDateTime,
+    pub updated_at: OffsetDateTime,
+}
+
+impl TryFrom<CalorieCalculationRow> for CalorieCalculation {
+    type Error = CoreError;
+
+    fn try_from(row: CalorieCalculationRow) -> Result<Self, Self::Error> {
+        Ok(CalorieCalculation {
+            id: CalorieCalculationId::from(row.id),
+            member_id: HouseholdMemberId::from(row.member_id),
+            nutrition_target_id: NutritionTargetId::from(row.nutrition_target_id),
+            calculated_on: row.calculated_on,
+            formula: row.formula,
+            activity_source: row.activity_source,
+            habitual_activity: HabitualActivity::from_str(&row.habitual_activity)
+                .map_err(|_| bad_value("habitual_activity", &row.habitual_activity))?,
+            age_years: row.age_years,
+            sex: Sex::from_str(&row.sex).map_err(|_| bad_value("sex", &row.sex))?,
+            height_cm: row.height_cm,
+            weight_kg: row.weight_kg,
+            objective: WeightObjective::from_str(&row.objective)
+                .map_err(|_| bad_value("objective", &row.objective))?,
+            emphasis: NutritionEmphasis::from_str(&row.emphasis)
+                .map_err(|_| bad_value("emphasis", &row.emphasis))?,
+            requested_rate_kg_per_week: row.requested_rate_kg_per_week,
+            applied_rate_kg_per_week: row.applied_rate_kg_per_week,
+            maintenance_kcal: row.maintenance_kcal,
+            adjustment_kcal: row.adjustment_kcal,
+            recommended_kcal: row.recommended_kcal,
+            floor_kcal: row.floor_kcal,
+            eased: row.eased,
+            revision: Revision::new(row.revision),
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+        })
+    }
+}
+
+#[derive(Debug, sqlx::FromRow)]
+pub struct HouseholdSettingsRow {
+    pub breakfast_time: Time,
+    pub lunch_time: Time,
+    pub dinner_time: Time,
+    pub timezone: String,
+    pub missing_stock_interpretation: String,
+    pub default_all_members_participate: bool,
+    pub assume_eaten_when_time_passes: bool,
+    pub shopping_section_order: Vec<String>,
+    pub revision: i64,
+    pub created_at: OffsetDateTime,
+    pub updated_at: OffsetDateTime,
+}
+
+fn section_order_from(codes: &[String]) -> Result<SectionOrder, CoreError> {
+    let mut sections = [ShoppingSection::Other; ShoppingSection::ALL.len()];
+    if codes.len() != sections.len() {
+        return Err(bad_value(
+            "shopping_section_order",
+            &codes.len().to_string(),
+        ));
+    }
+    for (slot, code) in sections.iter_mut().zip(codes) {
+        *slot = ShoppingSection::from_str(code)
+            .map_err(|_| bad_value("shopping_section_order", code))?;
+    }
+    SectionOrder::new(sections).map_err(|_| bad_value("shopping_section_order", &codes.join(",")))
+}
+
+impl TryFrom<HouseholdSettingsRow> for HouseholdSettings {
+    type Error = CoreError;
+
+    fn try_from(row: HouseholdSettingsRow) -> Result<Self, Self::Error> {
+        Ok(HouseholdSettings {
+            meal_times: MealTimes {
+                breakfast: row.breakfast_time,
+                lunch: row.lunch_time,
+                dinner: row.dinner_time,
+            },
+            timezone: row.timezone,
+            missing_stock_interpretation: MissingStockInterpretation::from_str(
+                &row.missing_stock_interpretation,
+            )
+            .map_err(|_| {
+                bad_value(
+                    "missing_stock_interpretation",
+                    &row.missing_stock_interpretation,
+                )
+            })?,
+            default_all_members_participate: row.default_all_members_participate,
+            assume_eaten_when_time_passes: row.assume_eaten_when_time_passes,
+            section_order: section_order_from(&row.shopping_section_order)?,
+            revision: Revision::new(row.revision),
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+        })
+    }
+}
+
+#[derive(Debug, sqlx::FromRow)]
+pub struct PreparedBatchRow {
+    pub id: Uuid,
+    pub recipe_id: Option<Uuid>,
+    pub meal_plan_entry_id: Option<Uuid>,
+    pub meal_plan_component_id: Option<Uuid>,
+    pub prepared_at: OffsetDateTime,
+    pub servings_produced: Decimal,
+    pub frozen_item_name: String,
+    pub nutrition_basis_amount: Option<Decimal>,
+    pub nutrition_basis_unit: Option<String>,
+    pub energy_kcal: Option<Decimal>,
+    pub protein_g: Option<Decimal>,
+    pub carbohydrate_g: Option<Decimal>,
+    pub sugar_g: Option<Decimal>,
+    pub fat_g: Option<Decimal>,
+    pub saturated_fat_g: Option<Decimal>,
+    pub fibre_g: Option<Decimal>,
+    pub salt_g: Option<Decimal>,
+    pub cholesterol_mg: Option<Decimal>,
+    pub nutrition_extra: Json<BTreeMap<String, Decimal>>,
+    pub nutrition_quality: String,
+    pub created_by: Uuid,
+    pub revision: i64,
+    pub created_at: OffsetDateTime,
+    pub updated_at: OffsetDateTime,
+}
+
+impl TryFrom<PreparedBatchRow> for PreparedBatch {
+    type Error = CoreError;
+
+    fn try_from(row: PreparedBatchRow) -> Result<Self, Self::Error> {
+        let source = match (row.meal_plan_entry_id, row.meal_plan_component_id) {
+            (Some(entry_id), Some(component_id)) => PreparationSource::MealPlanComponent {
+                entry_id: MealPlanEntryId::from(entry_id),
+                component_id: MealPlanComponentId::from(component_id),
+            },
+            _ => PreparationSource::Standalone,
+        };
+        Ok(PreparedBatch {
+            id: PreparedBatchId::from(row.id),
+            recipe_id: row.recipe_id.map(RecipeId::from),
+            source,
+            prepared_at: row.prepared_at,
+            servings_produced: row.servings_produced,
+            item_name: row.frozen_item_name,
+            nutrition: ConsumedNutrition {
+                facts: NutritionFacts {
+                    basis: parse_basis(row.nutrition_basis_amount, row.nutrition_basis_unit)?,
+                    energy_kcal: row.energy_kcal,
+                    protein_g: row.protein_g,
+                    carbohydrate_g: row.carbohydrate_g,
+                    sugar_g: row.sugar_g,
+                    fat_g: row.fat_g,
+                    saturated_fat_g: row.saturated_fat_g,
+                    fibre_g: row.fibre_g,
+                    salt_g: row.salt_g,
+                    cholesterol_mg: row.cholesterol_mg,
+                    extra: row.nutrition_extra.0,
+                },
+                quality: NutritionQuality::from_str(&row.nutrition_quality)
+                    .map_err(|_| bad_value("nutrition_quality", &row.nutrition_quality))?,
+            },
+            created_by: UserId::from(row.created_by),
+            revision: Revision::new(row.revision),
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+        })
+    }
+}
+
+fn stock_subject(
+    product_id: Option<Uuid>,
+    prepared_batch_id: Option<Uuid>,
+) -> Result<StockSubject, CoreError> {
+    match (product_id, prepared_batch_id) {
+        (Some(product_id), None) => Ok(StockSubject::product(ProductId::from(product_id))),
+        (None, Some(batch_id)) => Ok(StockSubject::prepared_portion(PreparedBatchId::from(
+            batch_id,
+        ))),
+        _ => Err(bad_value(
+            "product_id",
+            "expected exactly one stock subject",
+        )),
+    }
+}
+
+#[derive(Debug, sqlx::FromRow)]
+pub struct StockItemRow {
+    pub id: Uuid,
+    pub product_id: Option<Uuid>,
+    pub prepared_batch_id: Option<Uuid>,
+    pub tracking_mode: String,
+    pub quantity_value: Option<Decimal>,
+    pub quantity_unit: Option<String>,
+    pub storage_location: String,
+    pub source_date: Option<Date>,
+    pub source_date_kind: Option<String>,
+    pub usability_deadline: Option<Date>,
+    pub usability_deadline_basis: Option<String>,
+    pub note: Option<String>,
+    pub revision: i64,
+    pub created_at: OffsetDateTime,
+    pub updated_at: OffsetDateTime,
+    pub archived_at: Option<OffsetDateTime>,
+}
+
+impl TryFrom<StockItemRow> for StockItem {
+    type Error = CoreError;
+
+    fn try_from(row: StockItemRow) -> Result<Self, Self::Error> {
+        let mode = TrackingMode::from_str(&row.tracking_mode)
+            .map_err(|_| bad_value("tracking_mode", &row.tracking_mode))?;
+        let unit = match &row.quantity_unit {
+            Some(code) => Some(Unit::from_str(code).map_err(|_| bad_value("quantity_unit", code))?),
+            None => None,
+        };
+        let level = match mode {
+            TrackingMode::Exact | TrackingMode::Estimated => {
+                let quantity = Quantity::new(
+                    row.quantity_value
+                        .ok_or_else(|| bad_value("quantity_value", "null"))?,
+                    unit.ok_or_else(|| bad_value("quantity_unit", "null"))?,
+                );
+                match mode {
+                    TrackingMode::Exact => StockLevel::Exact { quantity },
+                    _ => StockLevel::Estimated { quantity },
+                }
+            }
+            TrackingMode::NotTracked => StockLevel::NotTracked,
+        };
+
+        let source_date = match (row.source_date, row.source_date_kind) {
+            (Some(date), Some(kind)) => Some(SourceDate {
+                date,
+                kind: SourceDateKind::from_str(&kind)
+                    .map_err(|_| bad_value("source_date_kind", &kind))?,
+            }),
+            _ => None,
+        };
+        let usability_deadline = row.usability_deadline.map(|date| UsabilityDeadline {
+            date,
+            basis: row.usability_deadline_basis,
+        });
+
+        Ok(StockItem {
+            id: StockItemId::from(row.id),
+            subject: stock_subject(row.product_id, row.prepared_batch_id)?,
+            level,
+            storage_location: StorageLocation::from_str(&row.storage_location)
+                .map_err(|_| bad_value("storage_location", &row.storage_location))?,
+            source_date,
+            usability_deadline,
+            note: row.note,
+            revision: Revision::new(row.revision),
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+            archived_at: row.archived_at,
+        })
+    }
+}
+
+#[derive(Debug, sqlx::FromRow)]
+pub struct StockEventRow {
+    pub id: Uuid,
+    pub stock_item_id: Uuid,
+    pub event_kind: String,
+    pub quantity_delta: Option<Decimal>,
+    pub quantity_unit: Option<String>,
+    pub actor_user_id: Option<Uuid>,
+    pub subject_member_id: Option<Uuid>,
+    pub source_kind: Option<String>,
+    pub source_id: Option<Uuid>,
+    pub source_label: Option<String>,
+    pub reverses_event_id: Option<Uuid>,
+    pub note: Option<String>,
+    pub occurred_at: OffsetDateTime,
+}
+
+impl TryFrom<StockEventRow> for StockEvent {
+    type Error = CoreError;
+
+    fn try_from(row: StockEventRow) -> Result<Self, Self::Error> {
+        let quantity_delta = match (row.quantity_delta, row.quantity_unit) {
+            (Some(amount), Some(unit)) => Some(Quantity::new(
+                amount,
+                Unit::from_str(&unit).map_err(|_| bad_value("quantity_unit", &unit))?,
+            )),
+            _ => None,
+        };
+        let source = match (row.source_kind, row.source_id, row.source_label) {
+            (Some(kind), Some(id), label) => Some(StockEventSource {
+                kind: StockEffectSource::from_str(&kind)
+                    .map_err(|_| bad_value("source_kind", &kind))?,
+                id,
+                label: label.unwrap_or_default(),
+            }),
+            _ => None,
+        };
+        Ok(StockEvent {
+            id: StockEventId::from(row.id),
+            stock_item_id: StockItemId::from(row.stock_item_id),
+            kind: StockEventKind::from_str(&row.event_kind)
+                .map_err(|_| bad_value("event_kind", &row.event_kind))?,
+            quantity_delta,
+            actor_user_id: row.actor_user_id.map(UserId::from),
+            subject_member_id: row.subject_member_id.map(HouseholdMemberId::from),
+            source,
+            reverses_event_id: row.reverses_event_id.map(StockEventId::from),
+            note: row.note,
+            occurred_at: row.occurred_at,
+        })
+    }
+}
+
+#[derive(Debug, sqlx::FromRow)]
+pub struct StockEffectRow {
+    pub id: Uuid,
+    pub source_kind: String,
+    pub source_id: Uuid,
+    pub source_detail_id: Option<Uuid>,
+    pub stock_item_id: Uuid,
+    pub product_id: Option<Uuid>,
+    pub prepared_batch_id: Option<Uuid>,
+    pub state: String,
+    pub applied_mode: String,
+    pub applied_unit: String,
+    pub exact_delta: Option<Decimal>,
+    pub estimated_delta: Option<Decimal>,
+    pub requested_value: Decimal,
+    pub apply_event_id: Uuid,
+    pub applied_at: OffsetDateTime,
+    pub released_at: Option<OffsetDateTime>,
+    pub note: Option<String>,
+}
+
+impl TryFrom<StockEffectRow> for StockEffect {
+    type Error = CoreError;
+
+    fn try_from(row: StockEffectRow) -> Result<Self, Self::Error> {
+        Ok(StockEffect {
+            id: StockEffectId::from(row.id),
+            source_kind: StockEffectSource::from_str(&row.source_kind)
+                .map_err(|_| bad_value("source_kind", &row.source_kind))?,
+            source_id: row.source_id,
+            source_detail_id: row.source_detail_id,
+            stock_item_id: StockItemId::from(row.stock_item_id),
+            subject: stock_subject(row.product_id, row.prepared_batch_id)?,
+            state: StockEffectState::from_str(&row.state)
+                .map_err(|_| bad_value("state", &row.state))?,
+            applied_mode: TrackingMode::from_str(&row.applied_mode)
+                .map_err(|_| bad_value("applied_mode", &row.applied_mode))?,
+            applied_unit: Unit::from_str(&row.applied_unit)
+                .map_err(|_| bad_value("applied_unit", &row.applied_unit))?,
+            exact_delta: row.exact_delta,
+            estimated_delta: row.estimated_delta,
+            requested_value: row.requested_value,
+            apply_event_id: StockEventId::from(row.apply_event_id),
+            applied_at: row.applied_at,
+            released_at: row.released_at,
+            note: row.note,
+        })
+    }
+}
+
+pub fn amount_bindings(amount: &ConsumedAmount) -> (&'static str, Decimal, Option<&'static str>) {
+    match amount {
+        ConsumedAmount::Measure(quantity) => (
+            amount.kind_code(),
+            quantity.amount,
+            Some(quantity.unit.code()),
+        ),
+        ConsumedAmount::Servings(value) | ConsumedAmount::Packs(value) => {
+            (amount.kind_code(), *value, None)
+        }
+    }
+}
+
+pub fn item_bindings(
+    item: &MealItemRef,
+) -> (
+    &'static str,
+    Option<Uuid>,
+    Option<Uuid>,
+    Option<Uuid>,
+    Option<Uuid>,
+) {
+    (
+        item.kind_code(),
+        item.product_id().map(|id| id.as_uuid()),
+        item.recipe_id().map(|id| id.as_uuid()),
+        item.ingredient_id().map(|id| id.as_uuid()),
+        item.prepared_meal_id().map(|id| id.as_uuid()),
+    )
+}
+
+pub(crate) fn parse_amount(
+    kind: &str,
+    value: Decimal,
+    unit: Option<String>,
+) -> Result<ConsumedAmount, CoreError> {
+    match kind {
+        "measure" => {
+            let unit = unit.ok_or_else(|| bad_value("amount_unit", "null"))?;
+            let unit = Unit::from_str(&unit).map_err(|_| bad_value("amount_unit", &unit))?;
+            Ok(ConsumedAmount::Measure(Quantity::new(value, unit)))
+        }
+        "servings" => Ok(ConsumedAmount::Servings(value)),
+        "packs" => Ok(ConsumedAmount::Packs(value)),
+        _ => Err(bad_value("amount_kind", kind)),
+    }
+}
+
+#[derive(Debug, sqlx::FromRow)]
+pub struct ConsumptionRecordRow {
+    pub id: Uuid,
+    pub member_id: Uuid,
+    pub item_kind: String,
+    pub product_id: Option<Uuid>,
+    pub recipe_id: Option<Uuid>,
+    pub ingredient_id: Option<Uuid>,
+    pub prepared_meal_id: Option<Uuid>,
+    pub recorded_by: Option<Uuid>,
+    pub meal_plan_entry_id: Option<Uuid>,
+    pub meal_plan_component_id: Option<Uuid>,
+    pub slot: String,
+    pub amount_kind: String,
+    pub amount_value: Decimal,
+    pub amount_unit: Option<String>,
+    pub consumed_on: Date,
+    pub consumed_at: Option<OffsetDateTime>,
+    pub nutrition_basis_amount: Option<Decimal>,
+    pub nutrition_basis_unit: Option<String>,
+    pub energy_kcal: Option<Decimal>,
+    pub protein_g: Option<Decimal>,
+    pub carbohydrate_g: Option<Decimal>,
+    pub sugar_g: Option<Decimal>,
+    pub fat_g: Option<Decimal>,
+    pub saturated_fat_g: Option<Decimal>,
+    pub fibre_g: Option<Decimal>,
+    pub salt_g: Option<Decimal>,
+    pub cholesterol_mg: Option<Decimal>,
+    pub nutrition_extra: Extra,
+    pub nutrition_quality: String,
+    pub revision: i64,
+    pub created_at: OffsetDateTime,
+    pub updated_at: OffsetDateTime,
+}
+
+impl TryFrom<ConsumptionRecordRow> for ConsumptionRecord {
+    type Error = CoreError;
+
+    fn try_from(row: ConsumptionRecordRow) -> Result<Self, Self::Error> {
+        let amount = parse_amount(&row.amount_kind, row.amount_value, row.amount_unit)?;
+
+        Ok(ConsumptionRecord {
+            id: ConsumptionRecordId::from(row.id),
+            member_id: HouseholdMemberId::from(row.member_id),
+            item: MealItemRef::from_parts(
+                &row.item_kind,
+                row.product_id.map(ProductId::from),
+                row.recipe_id.map(RecipeId::from),
+                row.ingredient_id.map(IngredientId::from),
+                row.prepared_meal_id.map(PreparedMealId::from),
+            )
+            .map_err(|_| bad_value("item_kind", &row.item_kind))?,
+            recorded_by: row.recorded_by.map(UserId::from),
+            meal_plan_entry_id: row.meal_plan_entry_id.map(MealPlanEntryId::from),
+            meal_plan_component_id: row.meal_plan_component_id.map(MealPlanComponentId::from),
+            slot: MealSlot::from_str(&row.slot).map_err(|_| bad_value("slot", &row.slot))?,
+            amount,
+            consumed_on: row.consumed_on,
+            consumed_at: row.consumed_at,
+            nutrition: NutritionFacts {
+                basis: parse_basis(row.nutrition_basis_amount, row.nutrition_basis_unit)?,
+                energy_kcal: row.energy_kcal,
+                protein_g: row.protein_g,
+                carbohydrate_g: row.carbohydrate_g,
+                sugar_g: row.sugar_g,
+                fat_g: row.fat_g,
+                saturated_fat_g: row.saturated_fat_g,
+                fibre_g: row.fibre_g,
+                salt_g: row.salt_g,
+                cholesterol_mg: row.cholesterol_mg,
+                extra: row.nutrition_extra.0,
+            },
+            quality: NutritionQuality::from_str(&row.nutrition_quality)
+                .map_err(|_| bad_value("nutrition_quality", &row.nutrition_quality))?,
+            revision: Revision::new(row.revision),
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+        })
+    }
+}
+
+#[derive(Debug, sqlx::FromRow)]
+pub struct ShoppingCadenceRow {
+    pub interval_weeks: i32,
+    pub days_of_week: Vec<i16>,
+    pub anchor_date: Date,
+    pub usual_time: Option<Time>,
+    pub revision: i64,
+    pub created_at: OffsetDateTime,
+    pub updated_at: OffsetDateTime,
+}
+
+impl TryFrom<ShoppingCadenceRow> for ShoppingCadence {
+    type Error = CoreError;
+
+    fn try_from(row: ShoppingCadenceRow) -> Result<Self, Self::Error> {
+        let mut days = Vec::with_capacity(row.days_of_week.len());
+        for number in &row.days_of_week {
+            let day = u8::try_from(*number)
+                .ok()
+                .and_then(week_day_from_number)
+                .ok_or_else(|| bad_value("days_of_week", &number.to_string()))?;
+            days.push(day);
+        }
+        Ok(ShoppingCadence {
+            interval_weeks: u8::try_from(row.interval_weeks)
+                .map_err(|_| bad_value("interval_weeks", &row.interval_weeks.to_string()))?,
+            days,
+            anchor: row.anchor_date,
+            usual_time: row.usual_time,
+            revision: Revision::new(row.revision),
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+        })
+    }
+}
+
+#[derive(Debug, sqlx::FromRow)]
+pub struct OpportunityExceptionRow {
+    pub id: Uuid,
+    pub generated_for: Option<Date>,
+    pub effective_date: Option<Date>,
+    pub usual_time: Option<Time>,
+    pub state: String,
+    pub note: Option<String>,
+    pub revision: i64,
+    pub created_at: OffsetDateTime,
+    pub updated_at: OffsetDateTime,
+}
+
+impl TryFrom<OpportunityExceptionRow> for OpportunityException {
+    type Error = CoreError;
+
+    fn try_from(row: OpportunityExceptionRow) -> Result<Self, Self::Error> {
+        Ok(OpportunityException {
+            id: ShoppingOpportunityId::from(row.id),
+            generated_for: row.generated_for,
+            effective_date: row.effective_date,
+            usual_time: row.usual_time,
+            state: ExceptionState::from_str(&row.state)
+                .map_err(|_| bad_value("state", &row.state))?,
+            note: row.note,
+            revision: Revision::new(row.revision),
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+        })
+    }
+}
+
+#[derive(Debug, sqlx::FromRow)]
+pub struct PurchaseRow {
+    pub id: Uuid,
+    pub ingredient_id: Option<Uuid>,
+    pub prepared_meal_id: Option<Uuid>,
+    pub product_id: Option<Uuid>,
+    pub name: Option<String>,
+    pub quantity_value: Option<Decimal>,
+    pub quantity_unit: Option<String>,
+    pub opportunity_date: Option<Date>,
+    pub state: String,
+    pub stock_item_id: Option<Uuid>,
+    pub purchased_at: OffsetDateTime,
+    pub actor_user_id: Uuid,
+    pub note: Option<String>,
+    pub revision: i64,
+    pub created_at: OffsetDateTime,
+    pub updated_at: OffsetDateTime,
+}
+
+#[derive(sqlx::FromRow)]
+pub struct ShoppingTripRowRow {
+    pub id: Uuid,
+    pub ingredient_id: Option<Uuid>,
+    pub prepared_meal_id: Option<Uuid>,
+    pub product_id: Option<Uuid>,
+    pub name: String,
+    pub quantity_value: Option<Decimal>,
+    pub quantity_unit: Option<String>,
+    pub section: Option<String>,
+}
+
+impl TryFrom<ShoppingTripRowRow> for ShoppingTripRow {
+    type Error = CoreError;
+
+    fn try_from(row: ShoppingTripRowRow) -> Result<Self, Self::Error> {
+        let quantity = match (row.quantity_value, row.quantity_unit.as_deref()) {
+            (Some(amount), Some(unit)) => Some(Quantity::new(
+                amount,
+                Unit::from_str(unit).map_err(|_| bad_value("quantity_unit", unit))?,
+            )),
+            _ => None,
+        };
+        let section = match row.section.as_deref() {
+            Some(code) => {
+                Some(ShoppingSection::from_str(code).map_err(|_| bad_value("section", code))?)
+            }
+            None => None,
+        };
+        Ok(ShoppingTripRow {
+            id: ShoppingTripRowId::from(row.id),
+            ingredient_id: row.ingredient_id.map(IngredientId::from),
+            prepared_meal_id: row.prepared_meal_id.map(PreparedMealId::from),
+            product_id: row.product_id.map(ProductId::from),
+            name: row.name,
+            quantity,
+            section,
+        })
+    }
+}
+
+#[derive(sqlx::FromRow)]
+pub struct ShoppingTripHeadRow {
+    pub id: Uuid,
+    pub opportunity_date: Date,
+    pub state: String,
+    pub started_at: OffsetDateTime,
+    pub finished_at: Option<OffsetDateTime>,
+    pub started_by: Uuid,
+    pub revision: i64,
+    pub created_at: OffsetDateTime,
+    pub updated_at: OffsetDateTime,
+}
+
+impl ShoppingTripHeadRow {
+    pub fn into_trip(self, rows: Vec<ShoppingTripRow>) -> Result<ShoppingTrip, CoreError> {
+        Ok(ShoppingTrip {
+            id: ShoppingTripId::from(self.id),
+            opportunity_date: self.opportunity_date,
+            state: TripState::from_str(&self.state).map_err(|_| bad_value("state", &self.state))?,
+            started_at: self.started_at,
+            finished_at: self.finished_at,
+            started_by: UserId::from(self.started_by),
+            rows,
+            revision: Revision::new(self.revision),
+            created_at: self.created_at,
+            updated_at: self.updated_at,
+        })
+    }
+}
+
+#[derive(sqlx::FromRow)]
+pub struct ShoppingListItemRow {
+    pub id: Uuid,
+    pub ingredient_id: Option<Uuid>,
+    pub prepared_meal_id: Option<Uuid>,
+    pub product_id: Option<Uuid>,
+    pub name: String,
+    pub quantity_value: Option<Decimal>,
+    pub quantity_unit: Option<String>,
+    pub section: Option<String>,
+    pub opportunity_date: Option<Date>,
+    pub created_by: Uuid,
+    pub revision: i64,
+    pub created_at: OffsetDateTime,
+    pub updated_at: OffsetDateTime,
+}
+
+impl TryFrom<ShoppingListItemRow> for ShoppingListItem {
+    type Error = CoreError;
+
+    fn try_from(row: ShoppingListItemRow) -> Result<Self, Self::Error> {
+        let quantity = match (row.quantity_value, row.quantity_unit.as_deref()) {
+            (Some(amount), Some(unit)) => Some(Quantity::new(
+                amount,
+                Unit::from_str(unit).map_err(|_| bad_value("quantity_unit", unit))?,
+            )),
+            _ => None,
+        };
+        let section = match row.section.as_deref() {
+            Some(code) => {
+                Some(ShoppingSection::from_str(code).map_err(|_| bad_value("section", code))?)
+            }
+            None => None,
+        };
+        Ok(ShoppingListItem {
+            id: ShoppingListItemId::from(row.id),
+            ingredient_id: row.ingredient_id.map(IngredientId::from),
+            prepared_meal_id: row.prepared_meal_id.map(PreparedMealId::from),
+            product_id: row.product_id.map(ProductId::from),
+            name: row.name,
+            quantity,
+            section,
+            opportunity_date: row.opportunity_date,
+            created_by: UserId::from(row.created_by),
+            revision: Revision::new(row.revision),
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+        })
+    }
+}
+
+impl TryFrom<PurchaseRow> for Purchase {
+    type Error = CoreError;
+
+    fn try_from(row: PurchaseRow) -> Result<Self, Self::Error> {
+        let quantity = match (row.quantity_value, row.quantity_unit.as_deref()) {
+            (Some(amount), Some(unit)) => Some(Quantity::new(
+                amount,
+                Unit::from_str(unit).map_err(|_| bad_value("quantity_unit", unit))?,
+            )),
+            _ => None,
+        };
+        Ok(Purchase {
+            id: PurchaseId::from(row.id),
+            ingredient_id: row.ingredient_id.map(IngredientId::from),
+            prepared_meal_id: row.prepared_meal_id.map(PreparedMealId::from),
+            product_id: row.product_id.map(ProductId::from),
+            name: row.name,
+            quantity,
+            opportunity_date: row.opportunity_date,
+            state: PurchaseState::from_str(&row.state)
+                .map_err(|_| bad_value("state", &row.state))?,
+            stock_item_id: row.stock_item_id.map(StockItemId::from),
+            purchased_at: row.purchased_at,
+            actor_user_id: UserId::from(row.actor_user_id),
+            note: row.note,
+            revision: Revision::new(row.revision),
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+        })
+    }
+}

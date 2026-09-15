@@ -1,0 +1,128 @@
+use rust_decimal::Decimal;
+use time::{Date, Duration, OffsetDateTime};
+
+use super::{
+    ConsumedNutrition, MealPlanComponentId, MealPlanEntryId, PreparedBatchId, RecipeId, Revision,
+    StorageLocation, UsabilityDeadline, UserId,
+};
+use crate::error::{Result, ValidationErrors};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PreparationSource {
+    Standalone,
+    MealPlanComponent {
+        entry_id: MealPlanEntryId,
+        component_id: MealPlanComponentId,
+    },
+}
+
+impl PreparationSource {
+    pub const fn entry_id(&self) -> Option<MealPlanEntryId> {
+        match self {
+            PreparationSource::MealPlanComponent { entry_id, .. } => Some(*entry_id),
+            PreparationSource::Standalone => None,
+        }
+    }
+
+    pub const fn component_id(&self) -> Option<MealPlanComponentId> {
+        match self {
+            PreparationSource::MealPlanComponent { component_id, .. } => Some(*component_id),
+            PreparationSource::Standalone => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct PortionPlacement {
+    pub storage_location: StorageLocation,
+    pub servings: Decimal,
+    pub usability_deadline: Option<UsabilityDeadline>,
+    pub note: Option<String>,
+}
+
+impl PortionPlacement {
+    pub fn new(storage_location: StorageLocation, servings: Decimal) -> Self {
+        Self {
+            storage_location,
+            servings,
+            usability_deadline: None,
+            note: None,
+        }
+    }
+}
+
+pub const CHILLED_LEFTOVER_DAYS: i64 = 2;
+pub const FROZEN_LEFTOVER_DAYS: i64 = 90;
+
+pub fn cooked_deadline(destination: StorageLocation, on: Date) -> Option<UsabilityDeadline> {
+    let (days, basis) = match destination {
+        StorageLocation::Chilled => (CHILLED_LEFTOVER_DAYS, "In the fridge"),
+        StorageLocation::Frozen => (FROZEN_LEFTOVER_DAYS, "In the freezer"),
+        StorageLocation::Ambient => return None,
+    };
+    Some(UsabilityDeadline {
+        date: on + Duration::days(days),
+        basis: Some(basis.to_owned()),
+    })
+}
+
+pub fn validate_placements(placements: &[PortionPlacement], produced: Decimal) -> Result<()> {
+    let mut errors = ValidationErrors::new();
+    if placements.is_empty() {
+        errors.push("placements", "Say where the food went");
+        return errors.into_result();
+    }
+    if placements
+        .iter()
+        .any(|placement| placement.servings <= Decimal::ZERO)
+    {
+        errors.push("placements", "Every place needs more than zero servings");
+    }
+    let placed: Decimal = placements.iter().map(|placement| placement.servings).sum();
+    if placed != produced {
+        errors.push(
+            "placements",
+            "The servings placed must add up to what was made",
+        );
+    }
+    errors.into_result()
+}
+
+#[derive(Debug, Clone)]
+pub struct PreparedBatch {
+    pub id: PreparedBatchId,
+    pub recipe_id: Option<RecipeId>,
+    pub source: PreparationSource,
+    pub prepared_at: OffsetDateTime,
+    pub servings_produced: Decimal,
+    pub item_name: String,
+    pub nutrition: ConsumedNutrition,
+    pub created_by: UserId,
+    pub revision: Revision,
+    pub created_at: OffsetDateTime,
+    pub updated_at: OffsetDateTime,
+}
+
+#[derive(Debug, Clone)]
+pub struct NewPreparedBatch {
+    pub recipe_id: Option<RecipeId>,
+    pub source: PreparationSource,
+    pub prepared_at: OffsetDateTime,
+    pub servings_produced: Decimal,
+    pub item_name: String,
+    pub nutrition: ConsumedNutrition,
+}
+
+impl NewPreparedBatch {
+    pub fn validate(&self) -> Result<()> {
+        let mut errors = ValidationErrors::new();
+        if self.servings_produced <= Decimal::ZERO {
+            errors.push("servings_produced", "Must be more than zero");
+        }
+        if self.item_name.trim().is_empty() {
+            errors.push("item_name", "Cannot be blank");
+        }
+        errors.into_result()
+    }
+}

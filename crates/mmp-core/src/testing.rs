@@ -1,0 +1,3310 @@
+// In-memory implementations for testing purposes
+// This exists so we can test behaviour without needing to set up a database.
+use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, Mutex};
+
+use async_trait::async_trait;
+use time::Date;
+
+use crate::domain::{
+    AccessScope, CalorieCalculation, CalorieCalculationId, ConsumptionRecord, ConsumptionRecordId,
+    DeductionCandidates, DemandSubject, HouseholdMember, HouseholdMemberId, HouseholdSettings,
+    Ingredient, IngredientId, MealParticipant, MealPlanComponentId, MealPlanEntry, MealPlanEntryId,
+    MealTemplate, MealTemplateId, MealTimes, MemberAccessGrant, MemberBodyProfile,
+    MissingStockInterpretation, NewStockEvent, NutritionTarget, NutritionTargetId,
+    OpportunityException, PreparedBatch, PreparedBatchId, PreparedMeal, PreparedMealId, Product,
+    ProductId, Purchase, PurchaseId, PurchaseState, Quantity, Recipe, RecipeId, RecipePhoto,
+    RecipeSummary, RecipeVisibility, Revision, Role, SectionOrder, ShoppingCadence,
+    ShoppingListItem, ShoppingListItemId, ShoppingOpportunityId, ShoppingTrip, ShoppingTripId,
+    StockEffect, StockEffectSource, StockEvent, StockEventId, StockItem, StockItemId, StockOutcome,
+    StockSubject, Unit, User, UserId, WeightGoal, WeightGoalId, WeightRecord, WeightRecordId,
+};
+use crate::error::{CoreError, Result};
+use crate::ports::{
+    AccessGrantRepository, CalorieCalculationRepository, ConsumptionQuery,
+    ConsumptionRecordRepository, FinishShopRepository, FinishedPurchase, FinishedShoppingTrip,
+    HouseholdMemberRepository, HouseholdSettingsRepository, IngredientQuery, IngredientRepository,
+    IngredientSort, MealPlanComponentUpdate, MealPlanQuery, MealPlanRepository, MealTemplateQuery,
+    MealTemplateRepository, MemberBodyProfileRepository, MemberQuery, NewStockFromPurchase,
+    NutritionTargetRepository, Paginated, PreparedMealQuery, PreparedMealRepository,
+    PreparedMealSort, ProductQuery, ProductRepository, PurchaseQuery, PurchaseRepository,
+    RecipeQuery, RecipeRepository, ShoppingCadenceRepository, ShoppingListItemRepository,
+    ShoppingOpportunityRepository, ShoppingSuggestionDismissalRepository, ShoppingTripRepository,
+    SnapshotOp, SortDirection, StockQuery, StockRepository, StockWrite, UpdateOutcome, UserQuery,
+    UserRepository, WeightGoalRepository, WeightRecordRepository,
+};
+
+// This _should_ reflect the indexes that a real database would enforce
+// So hopefully this should catch any issues in the same way a real database would
+fn enforce_ingredient_uniqueness(
+    rows: &HashMap<IngredientId, Ingredient>,
+    candidate: &Ingredient,
+) -> Result<()> {
+    for existing in rows.values() {
+        if existing.id == candidate.id {
+            continue;
+        }
+        if existing.name.eq_ignore_ascii_case(&candidate.name) {
+            return Err(CoreError::duplicate("ingredient", "name", &candidate.name));
+        }
+        if candidate.provenance.seed_key.is_some()
+            && existing.provenance.seed_key == candidate.provenance.seed_key
+        {
+            return Err(CoreError::duplicate("ingredient", "seed_key", ""));
+        }
+    }
+    Ok(())
+}
+
+fn enforce_prepared_meal_uniqueness(
+    rows: &HashMap<PreparedMealId, PreparedMeal>,
+    candidate: &PreparedMeal,
+) -> Result<()> {
+    for existing in rows.values() {
+        if existing.id == candidate.id {
+            continue;
+        }
+        if existing.name.eq_ignore_ascii_case(&candidate.name) {
+            return Err(CoreError::duplicate(
+                "prepared_meal",
+                "name",
+                &candidate.name,
+            ));
+        }
+        if candidate.provenance.seed_key.is_some()
+            && existing.provenance.seed_key == candidate.provenance.seed_key
+        {
+            return Err(CoreError::duplicate("prepared_meal", "seed_key", ""));
+        }
+    }
+    Ok(())
+}
+
+fn enforce_product_uniqueness(
+    rows: &HashMap<ProductId, Product>,
+    candidate: &Product,
+) -> Result<()> {
+    for existing in rows.values() {
+        if existing.id == candidate.id {
+            continue;
+        }
+        if candidate.barcode.is_some() && existing.barcode == candidate.barcode {
+            return Err(CoreError::duplicate(
+                "product",
+                "barcode",
+                candidate.barcode.clone().unwrap_or_default(),
+            ));
+        }
+        if candidate.provenance.seed_key.is_some()
+            && existing.provenance.seed_key == candidate.provenance.seed_key
+        {
+            return Err(CoreError::duplicate("product", "seed_key", ""));
+        }
+    }
+    Ok(())
+}
+
+fn matches(haystack: &str, needle: &str) -> bool {
+    haystack.to_lowercase().contains(&needle.to_lowercase())
+}
+
+fn paginate<T: Clone>(
+    items: Vec<T>,
+    query_page: crate::ports::PageRequest,
+    sort: SortDirection,
+    key: impl Fn(&T) -> String,
+) -> Paginated<T> {
+    paginate_by(items, query_page, sort, |item| key(item).to_lowercase())
+}
+
+fn paginate_by<T: Clone, K: Ord>(
+    mut items: Vec<T>,
+    query_page: crate::ports::PageRequest,
+    sort: SortDirection,
+    key: impl Fn(&T) -> K,
+) -> Paginated<T> {
+    items.sort_by_cached_key(&key);
+    if sort == SortDirection::Descending {
+        items.reverse();
+    }
+    let total = items.len() as i64;
+    let offset = query_page.offset() as usize;
+    let limit = query_page.limit() as usize;
+    let page: Vec<T> = items.into_iter().skip(offset).take(limit).collect();
+    Paginated::new(page, total, query_page)
+}
+
+#[derive(Default, Clone)]
+pub struct InMemoryIngredientRepository {
+    rows: Arc<Mutex<HashMap<IngredientId, Ingredient>>>,
+    products: Arc<Mutex<Option<InMemoryProductRepository>>>,
+}
+
+impl InMemoryIngredientRepository {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn seed(&self, ingredient: Ingredient) {
+        self.rows.lock().unwrap().insert(ingredient.id, ingredient);
+    }
+
+    pub fn count(&self) -> usize {
+        self.rows.lock().unwrap().len()
+    }
+
+    pub fn set_track_stock(&self, id: IngredientId, value: Option<bool>) {
+        if let Some(ingredient) = self.rows.lock().unwrap().get_mut(&id) {
+            ingredient.track_stock = value;
+        }
+    }
+
+    pub fn link_products(&self, products: &InMemoryProductRepository) {
+        *self.products.lock().unwrap() = Some(products.clone());
+    }
+
+    fn product_counts(&self) -> HashMap<IngredientId, i64> {
+        let guard = self.products.lock().unwrap();
+        let Some(products) = guard.as_ref() else {
+            return HashMap::new();
+        };
+        let rows = products.rows.lock().unwrap();
+        let mut counts: HashMap<IngredientId, i64> = HashMap::new();
+        for product in rows.values().filter(|p| !p.is_archived()) {
+            if let Some(id) = product.mapped_ingredient_id {
+                *counts.entry(id).or_default() += 1;
+            }
+        }
+        counts
+    }
+}
+
+#[async_trait]
+impl IngredientRepository for InMemoryIngredientRepository {
+    async fn get(&self, id: IngredientId) -> Result<Option<Ingredient>> {
+        Ok(self.rows.lock().unwrap().get(&id).cloned())
+    }
+
+    async fn find_by_name(&self, name: &str) -> Result<Option<Ingredient>> {
+        Ok(self
+            .rows
+            .lock()
+            .unwrap()
+            .values()
+            .find(|i| i.name.eq_ignore_ascii_case(name))
+            .cloned())
+    }
+
+    async fn find_by_seed_key(&self, seed_key: &str) -> Result<Option<Ingredient>> {
+        Ok(self
+            .rows
+            .lock()
+            .unwrap()
+            .values()
+            .find(|i| i.provenance.seed_key.as_deref() == Some(seed_key))
+            .cloned())
+    }
+
+    async fn list(&self, query: &IngredientQuery) -> Result<Paginated<Ingredient>> {
+        let with_products: Option<std::collections::HashSet<IngredientId>> =
+            query.needs_products.and_then(|_| {
+                let guard = self.products.lock().unwrap();
+                guard.as_ref().map(|products| {
+                    let product_rows = products.rows.lock().unwrap();
+                    product_rows
+                        .values()
+                        .filter(|p| !p.is_archived())
+                        .filter_map(|p| p.mapped_ingredient_id)
+                        .collect()
+                })
+            });
+
+        let rows = self.rows.lock().unwrap();
+        let items: Vec<Ingredient> = rows
+            .values()
+            .filter(|i| query.include_archived || !i.is_archived())
+            .filter(|i| query.origin.is_none_or(|o| i.provenance.origin == o))
+            .filter(|i| {
+                query
+                    .search
+                    .as_deref()
+                    .is_none_or(|needle| matches(&i.name, needle))
+            })
+            .filter(|i| match (query.needs_products, &with_products) {
+                (Some(needs), Some(mapped)) => mapped.contains(&i.id) != needs,
+                _ => true,
+            })
+            .cloned()
+            .collect();
+        drop(rows);
+
+        Ok(match query.sort_by {
+            IngredientSort::Name => paginate(items, query.page, query.sort, |i| i.name.clone()),
+            IngredientSort::Created => paginate_by(items, query.page, query.sort, |i| {
+                (i.created_at, i.name.to_lowercase())
+            }),
+            IngredientSort::ProductCount => {
+                let counts = self.product_counts();
+                paginate_by(items, query.page, query.sort, |i| {
+                    (
+                        counts.get(&i.id).copied().unwrap_or(0),
+                        std::cmp::Reverse(i.name.to_lowercase()),
+                    )
+                })
+            }
+        })
+    }
+
+    async fn insert(&self, ingredient: &Ingredient) -> Result<()> {
+        let mut rows = self.rows.lock().unwrap();
+        enforce_ingredient_uniqueness(&rows, ingredient)?;
+        rows.insert(ingredient.id, ingredient.clone());
+        Ok(())
+    }
+
+    async fn update(&self, ingredient: &Ingredient, expected: Revision) -> Result<UpdateOutcome> {
+        let mut rows = self.rows.lock().unwrap();
+        match rows.get(&ingredient.id) {
+            None => Ok(UpdateOutcome::NotFound),
+            Some(existing) if existing.revision != expected => {
+                Ok(UpdateOutcome::RevisionMismatch {
+                    actual: existing.revision,
+                })
+            }
+            Some(_) => {
+                enforce_ingredient_uniqueness(&rows, ingredient)?;
+                rows.insert(ingredient.id, ingredient.clone());
+                Ok(UpdateOutcome::Updated)
+            }
+        }
+    }
+}
+
+#[derive(Default, Clone)]
+pub struct InMemoryPreparedMealRepository {
+    rows: Arc<Mutex<HashMap<PreparedMealId, PreparedMeal>>>,
+    products: Arc<Mutex<Option<InMemoryProductRepository>>>,
+}
+
+impl InMemoryPreparedMealRepository {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn seed(&self, prepared_meal: PreparedMeal) {
+        self.rows
+            .lock()
+            .unwrap()
+            .insert(prepared_meal.id, prepared_meal);
+    }
+
+    pub fn count(&self) -> usize {
+        self.rows.lock().unwrap().len()
+    }
+
+    pub fn link_products(&self, products: &InMemoryProductRepository) {
+        *self.products.lock().unwrap() = Some(products.clone());
+    }
+
+    fn product_counts(&self) -> HashMap<PreparedMealId, i64> {
+        let guard = self.products.lock().unwrap();
+        let Some(products) = guard.as_ref() else {
+            return HashMap::new();
+        };
+        let rows = products.rows.lock().unwrap();
+        let mut counts: HashMap<PreparedMealId, i64> = HashMap::new();
+        for product in rows.values().filter(|p| !p.is_archived()) {
+            if let Some(id) = product.mapped_prepared_meal_id {
+                *counts.entry(id).or_default() += 1;
+            }
+        }
+        counts
+    }
+}
+
+#[async_trait]
+impl PreparedMealRepository for InMemoryPreparedMealRepository {
+    async fn get(&self, id: PreparedMealId) -> Result<Option<PreparedMeal>> {
+        Ok(self.rows.lock().unwrap().get(&id).cloned())
+    }
+
+    async fn find_by_name(&self, name: &str) -> Result<Option<PreparedMeal>> {
+        Ok(self
+            .rows
+            .lock()
+            .unwrap()
+            .values()
+            .find(|i| i.name.eq_ignore_ascii_case(name))
+            .cloned())
+    }
+
+    async fn find_by_seed_key(&self, seed_key: &str) -> Result<Option<PreparedMeal>> {
+        Ok(self
+            .rows
+            .lock()
+            .unwrap()
+            .values()
+            .find(|i| i.provenance.seed_key.as_deref() == Some(seed_key))
+            .cloned())
+    }
+
+    async fn list(&self, query: &PreparedMealQuery) -> Result<Paginated<PreparedMeal>> {
+        let with_products: Option<std::collections::HashSet<PreparedMealId>> =
+            query.needs_products.and_then(|_| {
+                let guard = self.products.lock().unwrap();
+                guard.as_ref().map(|products| {
+                    let product_rows = products.rows.lock().unwrap();
+                    product_rows
+                        .values()
+                        .filter(|p| !p.is_archived())
+                        .filter_map(|p| p.mapped_prepared_meal_id)
+                        .collect()
+                })
+            });
+
+        let rows = self.rows.lock().unwrap();
+        let items: Vec<PreparedMeal> = rows
+            .values()
+            .filter(|i| query.include_archived || !i.is_archived())
+            .filter(|i| query.origin.is_none_or(|o| i.provenance.origin == o))
+            .filter(|i| {
+                query
+                    .search
+                    .as_deref()
+                    .is_none_or(|needle| matches(&i.name, needle))
+            })
+            .filter(|i| match (query.needs_products, &with_products) {
+                (Some(needs), Some(mapped)) => mapped.contains(&i.id) != needs,
+                _ => true,
+            })
+            .cloned()
+            .collect();
+        drop(rows);
+
+        Ok(match query.sort_by {
+            PreparedMealSort::Name => paginate(items, query.page, query.sort, |i| i.name.clone()),
+            PreparedMealSort::Created => paginate_by(items, query.page, query.sort, |i| {
+                (i.created_at, i.name.to_lowercase())
+            }),
+            PreparedMealSort::ProductCount => {
+                let counts = self.product_counts();
+                paginate_by(items, query.page, query.sort, |i| {
+                    (
+                        counts.get(&i.id).copied().unwrap_or(0),
+                        std::cmp::Reverse(i.name.to_lowercase()),
+                    )
+                })
+            }
+        })
+    }
+
+    async fn insert(&self, prepared_meal: &PreparedMeal) -> Result<()> {
+        let mut rows = self.rows.lock().unwrap();
+        enforce_prepared_meal_uniqueness(&rows, prepared_meal)?;
+        rows.insert(prepared_meal.id, prepared_meal.clone());
+        Ok(())
+    }
+
+    async fn update(
+        &self,
+        prepared_meal: &PreparedMeal,
+        expected: Revision,
+    ) -> Result<UpdateOutcome> {
+        let mut rows = self.rows.lock().unwrap();
+        match rows.get(&prepared_meal.id) {
+            None => Ok(UpdateOutcome::NotFound),
+            Some(existing) if existing.revision != expected => {
+                Ok(UpdateOutcome::RevisionMismatch {
+                    actual: existing.revision,
+                })
+            }
+            Some(_) => {
+                enforce_prepared_meal_uniqueness(&rows, prepared_meal)?;
+                rows.insert(prepared_meal.id, prepared_meal.clone());
+                Ok(UpdateOutcome::Updated)
+            }
+        }
+    }
+}
+
+#[derive(Default, Clone)]
+pub struct InMemoryProductRepository {
+    rows: Arc<Mutex<HashMap<ProductId, Product>>>,
+}
+
+impl InMemoryProductRepository {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn seed(&self, product: Product) {
+        self.rows.lock().unwrap().insert(product.id, product);
+    }
+
+    pub fn count(&self) -> usize {
+        self.rows.lock().unwrap().len()
+    }
+}
+
+#[async_trait]
+impl ProductRepository for InMemoryProductRepository {
+    async fn get(&self, id: ProductId) -> Result<Option<Product>> {
+        Ok(self.rows.lock().unwrap().get(&id).cloned())
+    }
+
+    async fn find_by_barcode(&self, barcode: &str) -> Result<Option<Product>> {
+        Ok(self
+            .rows
+            .lock()
+            .unwrap()
+            .values()
+            .find(|p| p.barcode.as_deref() == Some(barcode))
+            .cloned())
+    }
+
+    async fn find_by_seed_key(&self, seed_key: &str) -> Result<Option<Product>> {
+        Ok(self
+            .rows
+            .lock()
+            .unwrap()
+            .values()
+            .find(|p| p.provenance.seed_key.as_deref() == Some(seed_key))
+            .cloned())
+    }
+
+    async fn list(&self, query: &ProductQuery) -> Result<Paginated<Product>> {
+        let rows = self.rows.lock().unwrap();
+        let items: Vec<Product> = rows
+            .values()
+            .filter(|p| query.include_archived || !p.is_archived())
+            .filter(|p| query.origin.is_none_or(|o| p.provenance.origin == o))
+            .filter(|p| {
+                query
+                    .barcode
+                    .as_deref()
+                    .is_none_or(|b| p.barcode.as_deref() == Some(b))
+            })
+            .filter(|p| {
+                query
+                    .retailer
+                    .as_deref()
+                    .is_none_or(|r| p.retailer.as_deref().is_some_and(|pr| matches(pr, r)))
+            })
+            .filter(|p| {
+                query
+                    .mapped_ingredient_id
+                    .is_none_or(|id| p.mapped_ingredient_id == Some(id))
+            })
+            .filter(|p| {
+                query
+                    .unmapped
+                    .is_none_or(|unmapped| p.mapped_ingredient_id.is_none() == unmapped)
+            })
+            .filter(|p| {
+                query
+                    .mapped_prepared_meal_id
+                    .is_none_or(|id| p.mapped_prepared_meal_id == Some(id))
+            })
+            .filter(|p| {
+                query
+                    .search
+                    .as_deref()
+                    .is_none_or(|needle| matches(&p.name, needle))
+            })
+            .cloned()
+            .collect();
+        Ok(paginate(items, query.page, query.sort, |p| p.name.clone()))
+    }
+
+    async fn count_by_ingredient(
+        &self,
+        ingredient_ids: &[IngredientId],
+    ) -> Result<std::collections::HashMap<IngredientId, i64>> {
+        let rows = self.rows.lock().unwrap();
+        let mut counts = std::collections::HashMap::new();
+        for id in ingredient_ids {
+            let count = rows
+                .values()
+                .filter(|p| !p.is_archived() && p.mapped_ingredient_id == Some(*id))
+                .count() as i64;
+            counts.insert(*id, count);
+        }
+        Ok(counts)
+    }
+
+    async fn list_by_ingredient(
+        &self,
+        ingredient_ids: &[IngredientId],
+    ) -> Result<std::collections::HashMap<IngredientId, Vec<Product>>> {
+        let rows = self.rows.lock().unwrap();
+        let mut grouped = std::collections::HashMap::new();
+        for id in ingredient_ids {
+            let mut products: Vec<Product> = rows
+                .values()
+                .filter(|p| !p.is_archived() && p.mapped_ingredient_id == Some(*id))
+                .cloned()
+                .collect();
+            products.sort_by_key(|product| product.name.to_lowercase());
+            grouped.insert(*id, products);
+        }
+        Ok(grouped)
+    }
+
+    async fn count_by_prepared_meal(
+        &self,
+        prepared_meal_ids: &[PreparedMealId],
+    ) -> Result<std::collections::HashMap<PreparedMealId, i64>> {
+        let rows = self.rows.lock().unwrap();
+        let mut counts = std::collections::HashMap::new();
+        for id in prepared_meal_ids {
+            let count = rows
+                .values()
+                .filter(|p| !p.is_archived() && p.mapped_prepared_meal_id == Some(*id))
+                .count() as i64;
+            counts.insert(*id, count);
+        }
+        Ok(counts)
+    }
+
+    async fn list_by_prepared_meal(
+        &self,
+        prepared_meal_ids: &[PreparedMealId],
+    ) -> Result<std::collections::HashMap<PreparedMealId, Vec<Product>>> {
+        let rows = self.rows.lock().unwrap();
+        let mut grouped = std::collections::HashMap::new();
+        for id in prepared_meal_ids {
+            let mut products: Vec<Product> = rows
+                .values()
+                .filter(|p| !p.is_archived() && p.mapped_prepared_meal_id == Some(*id))
+                .cloned()
+                .collect();
+            products.sort_by_key(|product| product.name.to_lowercase());
+            grouped.insert(*id, products);
+        }
+        Ok(grouped)
+    }
+
+    async fn insert(&self, product: &Product) -> Result<()> {
+        self.rows
+            .lock()
+            .unwrap()
+            .insert(product.id, product.clone());
+        Ok(())
+    }
+
+    async fn update(&self, product: &Product, expected: Revision) -> Result<UpdateOutcome> {
+        let mut rows = self.rows.lock().unwrap();
+        match rows.get(&product.id) {
+            None => Ok(UpdateOutcome::NotFound),
+            Some(existing) if existing.revision != expected => {
+                Ok(UpdateOutcome::RevisionMismatch {
+                    actual: existing.revision,
+                })
+            }
+            Some(_) => {
+                enforce_product_uniqueness(&rows, product)?;
+                rows.insert(product.id, product.clone());
+                Ok(UpdateOutcome::Updated)
+            }
+        }
+    }
+}
+
+fn enforce_member_uniqueness(
+    rows: &HashMap<HouseholdMemberId, HouseholdMember>,
+    candidate: &HouseholdMember,
+) -> Result<()> {
+    for existing in rows.values() {
+        if existing.id == candidate.id {
+            continue;
+        }
+        if existing
+            .display_name
+            .eq_ignore_ascii_case(&candidate.display_name)
+        {
+            return Err(CoreError::duplicate(
+                "household member",
+                "name",
+                &candidate.display_name,
+            ));
+        }
+        if candidate.linked_user_id.is_some() && existing.linked_user_id == candidate.linked_user_id
+        {
+            return Err(CoreError::duplicate(
+                "household member",
+                "linked_user_id",
+                "",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn enforce_user_uniqueness(rows: &HashMap<UserId, User>, candidate: &User) -> Result<()> {
+    for existing in rows.values() {
+        if existing.id == candidate.id {
+            continue;
+        }
+        if existing.username.eq_ignore_ascii_case(&candidate.username) {
+            return Err(CoreError::duplicate(
+                "user",
+                "username",
+                &candidate.username,
+            ));
+        }
+        if candidate.auth_subject.is_some() && existing.auth_subject == candidate.auth_subject {
+            return Err(CoreError::duplicate("user", "auth_subject", ""));
+        }
+    }
+    Ok(())
+}
+
+#[derive(Default, Clone)]
+pub struct InMemoryHouseholdMemberRepository {
+    rows: Arc<Mutex<HashMap<HouseholdMemberId, HouseholdMember>>>,
+}
+
+impl InMemoryHouseholdMemberRepository {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn seed(&self, member: HouseholdMember) {
+        self.rows.lock().unwrap().insert(member.id, member);
+    }
+
+    pub fn count(&self) -> usize {
+        self.rows.lock().unwrap().len()
+    }
+}
+
+#[async_trait]
+impl HouseholdMemberRepository for InMemoryHouseholdMemberRepository {
+    async fn get(&self, id: HouseholdMemberId) -> Result<Option<HouseholdMember>> {
+        Ok(self.rows.lock().unwrap().get(&id).cloned())
+    }
+
+    async fn find_by_display_name(&self, name: &str) -> Result<Option<HouseholdMember>> {
+        Ok(self
+            .rows
+            .lock()
+            .unwrap()
+            .values()
+            .find(|m| m.display_name.eq_ignore_ascii_case(name))
+            .cloned())
+    }
+
+    async fn find_by_linked_user(&self, user_id: UserId) -> Result<Option<HouseholdMember>> {
+        Ok(self
+            .rows
+            .lock()
+            .unwrap()
+            .values()
+            .find(|m| m.linked_user_id == Some(user_id))
+            .cloned())
+    }
+
+    async fn list(&self, query: &MemberQuery) -> Result<Paginated<HouseholdMember>> {
+        let rows = self.rows.lock().unwrap();
+        let items: Vec<HouseholdMember> = rows
+            .values()
+            .filter(|m| query.include_archived || !m.is_archived())
+            .filter(|m| {
+                query
+                    .with_account
+                    .is_none_or(|want| m.has_account() == want)
+            })
+            .filter(|m| {
+                query
+                    .search
+                    .as_deref()
+                    .is_none_or(|needle| matches(&m.display_name, needle))
+            })
+            .cloned()
+            .collect();
+        Ok(paginate(items, query.page, query.sort, |m| {
+            m.display_name.clone()
+        }))
+    }
+
+    async fn insert(&self, member: &HouseholdMember) -> Result<()> {
+        let mut rows = self.rows.lock().unwrap();
+        enforce_member_uniqueness(&rows, member)?;
+        rows.insert(member.id, member.clone());
+        Ok(())
+    }
+
+    async fn update(&self, member: &HouseholdMember, expected: Revision) -> Result<UpdateOutcome> {
+        let mut rows = self.rows.lock().unwrap();
+        match rows.get(&member.id) {
+            None => Ok(UpdateOutcome::NotFound),
+            Some(existing) if existing.revision != expected => {
+                Ok(UpdateOutcome::RevisionMismatch {
+                    actual: existing.revision,
+                })
+            }
+            Some(_) => {
+                enforce_member_uniqueness(&rows, member)?;
+                rows.insert(member.id, member.clone());
+                Ok(UpdateOutcome::Updated)
+            }
+        }
+    }
+}
+
+#[derive(Default, Clone)]
+pub struct InMemoryUserRepository {
+    rows: Arc<Mutex<HashMap<UserId, User>>>,
+}
+
+impl InMemoryUserRepository {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn seed(&self, user: User) {
+        self.rows.lock().unwrap().insert(user.id, user);
+    }
+
+    pub fn count(&self) -> usize {
+        self.rows.lock().unwrap().len()
+    }
+}
+
+#[async_trait]
+impl UserRepository for InMemoryUserRepository {
+    async fn get(&self, id: UserId) -> Result<Option<User>> {
+        Ok(self.rows.lock().unwrap().get(&id).cloned())
+    }
+
+    async fn find_by_username(&self, username: &str) -> Result<Option<User>> {
+        Ok(self
+            .rows
+            .lock()
+            .unwrap()
+            .values()
+            .find(|u| u.username.eq_ignore_ascii_case(username))
+            .cloned())
+    }
+
+    async fn list(&self, query: &UserQuery) -> Result<Paginated<User>> {
+        let rows = self.rows.lock().unwrap();
+        let items: Vec<User> = rows
+            .values()
+            .filter(|u| query.include_archived || !u.is_archived())
+            .filter(|u| query.role.is_none_or(|role| u.roles.contains(&role)))
+            .filter(|u| {
+                query.search.as_deref().is_none_or(|needle| {
+                    matches(&u.username, needle)
+                        || u.display_name
+                            .as_deref()
+                            .is_some_and(|name| matches(name, needle))
+                })
+            })
+            .cloned()
+            .collect();
+        Ok(paginate(items, query.page, query.sort, |u| {
+            u.username.clone()
+        }))
+    }
+
+    async fn count_with_role(&self, role: Role, include_archived: bool) -> Result<i64> {
+        Ok(self
+            .rows
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|u| include_archived || !u.is_archived())
+            .filter(|u| u.roles.contains(&role))
+            .count() as i64)
+    }
+
+    async fn insert(&self, user: &User) -> Result<()> {
+        let mut rows = self.rows.lock().unwrap();
+        enforce_user_uniqueness(&rows, user)?;
+        rows.insert(user.id, user.clone());
+        Ok(())
+    }
+
+    async fn update(&self, user: &User, expected: Revision) -> Result<UpdateOutcome> {
+        let mut rows = self.rows.lock().unwrap();
+        match rows.get(&user.id) {
+            None => Ok(UpdateOutcome::NotFound),
+            Some(existing) if existing.revision != expected => {
+                Ok(UpdateOutcome::RevisionMismatch {
+                    actual: existing.revision,
+                })
+            }
+            Some(_) => {
+                enforce_user_uniqueness(&rows, user)?;
+                rows.insert(user.id, user.clone());
+                Ok(UpdateOutcome::Updated)
+            }
+        }
+    }
+}
+
+type GrantKey = (UserId, HouseholdMemberId, AccessScope);
+
+#[derive(Default, Clone)]
+pub struct InMemoryAccessGrantRepository {
+    rows: Arc<Mutex<HashMap<GrantKey, MemberAccessGrant>>>,
+}
+
+impl InMemoryAccessGrantRepository {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn count(&self) -> usize {
+        self.rows.lock().unwrap().len()
+    }
+}
+
+#[async_trait]
+impl AccessGrantRepository for InMemoryAccessGrantRepository {
+    async fn list_for_member(
+        &self,
+        member_id: HouseholdMemberId,
+    ) -> Result<Vec<MemberAccessGrant>> {
+        let mut grants: Vec<MemberAccessGrant> = self
+            .rows
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|g| g.subject_member_id == member_id)
+            .cloned()
+            .collect();
+        grants.sort_by_key(|g| (g.grantee_user_id, g.scope));
+        Ok(grants)
+    }
+
+    async fn exists(
+        &self,
+        grantee_user_id: UserId,
+        subject_member_id: HouseholdMemberId,
+        scope: AccessScope,
+    ) -> Result<bool> {
+        Ok(self
+            .rows
+            .lock()
+            .unwrap()
+            .contains_key(&(grantee_user_id, subject_member_id, scope)))
+    }
+
+    async fn upsert(&self, grant: &MemberAccessGrant) -> Result<()> {
+        self.rows.lock().unwrap().insert(
+            (grant.grantee_user_id, grant.subject_member_id, grant.scope),
+            grant.clone(),
+        );
+        Ok(())
+    }
+
+    async fn revoke(
+        &self,
+        grantee_user_id: UserId,
+        subject_member_id: HouseholdMemberId,
+        scope: AccessScope,
+    ) -> Result<bool> {
+        Ok(self
+            .rows
+            .lock()
+            .unwrap()
+            .remove(&(grantee_user_id, subject_member_id, scope))
+            .is_some())
+    }
+}
+
+#[derive(Default, Clone)]
+pub struct InMemoryConsumptionRecordRepository {
+    rows: Arc<Mutex<HashMap<ConsumptionRecordId, ConsumptionRecord>>>,
+    archived: Arc<Mutex<HashSet<ConsumptionRecordId>>>,
+    stock: InMemoryStockRepository,
+}
+
+impl InMemoryConsumptionRecordRepository {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_stock(stock: InMemoryStockRepository) -> Self {
+        Self {
+            rows: Arc::new(Mutex::new(HashMap::new())),
+            archived: Arc::new(Mutex::new(HashSet::new())),
+            stock,
+        }
+    }
+
+    pub fn seed(&self, record: ConsumptionRecord) {
+        self.archived.lock().unwrap().remove(&record.id);
+        self.rows.lock().unwrap().insert(record.id, record);
+    }
+
+    pub fn count(&self) -> usize {
+        let archived = self.archived.lock().unwrap().clone();
+        self.rows
+            .lock()
+            .unwrap()
+            .keys()
+            .filter(|id| !archived.contains(id))
+            .count()
+    }
+}
+
+#[async_trait]
+impl ConsumptionRecordRepository for InMemoryConsumptionRecordRepository {
+    async fn get(&self, id: ConsumptionRecordId) -> Result<Option<ConsumptionRecord>> {
+        if self.archived.lock().unwrap().contains(&id) {
+            return Ok(None);
+        }
+        Ok(self.rows.lock().unwrap().get(&id).cloned())
+    }
+
+    async fn list(&self, query: &ConsumptionQuery) -> Result<Paginated<ConsumptionRecord>> {
+        let archived = self.archived.lock().unwrap().clone();
+        let rows = self.rows.lock().unwrap();
+        let mut items: Vec<ConsumptionRecord> = rows
+            .values()
+            .filter(|r| !archived.contains(&r.id))
+            .filter(|r| query.member_id.is_none_or(|id| r.member_id == id))
+            .filter(|r| query.from.is_none_or(|from| r.consumed_on >= from))
+            .filter(|r| query.to.is_none_or(|to| r.consumed_on <= to))
+            .cloned()
+            .collect();
+        items.sort_by_key(|r| (r.created_at, r.id));
+        if query.sort == SortDirection::Descending {
+            items.reverse();
+        }
+        let total = items.len() as i64;
+        let offset = query.page.offset() as usize;
+        let limit = query.page.limit() as usize;
+        let page: Vec<ConsumptionRecord> = items.into_iter().skip(offset).take(limit).collect();
+        Ok(Paginated::new(page, total, query.page))
+    }
+
+    async fn list_period(
+        &self,
+        member_id: HouseholdMemberId,
+        from: time::Date,
+        to: time::Date,
+    ) -> Result<Vec<ConsumptionRecord>> {
+        let archived = self.archived.lock().unwrap().clone();
+        let mut records: Vec<_> = self
+            .rows
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|record| !archived.contains(&record.id))
+            .filter(|record| record.member_id == member_id)
+            .filter(|record| record.consumed_on >= from && record.consumed_on <= to)
+            .cloned()
+            .collect();
+        records.sort_by_key(|record| (record.created_at, record.id));
+        Ok(records)
+    }
+
+    async fn list_for_meal_plan_entry(
+        &self,
+        entry_id: MealPlanEntryId,
+    ) -> Result<Vec<ConsumptionRecord>> {
+        let archived = self.archived.lock().unwrap().clone();
+        let mut records: Vec<_> = self
+            .rows
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|record| !archived.contains(&record.id))
+            .filter(|record| record.meal_plan_entry_id == Some(entry_id))
+            .cloned()
+            .collect();
+        records.sort_by_key(|record| (record.created_at, record.id));
+        Ok(records)
+    }
+
+    async fn insert(
+        &self,
+        record: &ConsumptionRecord,
+        stock: &StockWrite,
+    ) -> Result<Vec<StockOutcome>> {
+        self.archived.lock().unwrap().remove(&record.id);
+        self.rows.lock().unwrap().insert(record.id, record.clone());
+        Ok(self
+            .stock
+            .apply_write(stock, time::OffsetDateTime::UNIX_EPOCH))
+    }
+
+    async fn update(
+        &self,
+        record: &ConsumptionRecord,
+        expected: Revision,
+        stock: &StockWrite,
+    ) -> Result<(UpdateOutcome, Vec<StockOutcome>)> {
+        let is_archived = self.archived.lock().unwrap().contains(&record.id);
+        let outcome = {
+            let mut rows = self.rows.lock().unwrap();
+            match rows.get(&record.id) {
+                None => UpdateOutcome::NotFound,
+                Some(_) if is_archived => UpdateOutcome::NotFound,
+                Some(existing) if existing.revision != expected => {
+                    UpdateOutcome::RevisionMismatch {
+                        actual: existing.revision,
+                    }
+                }
+                Some(_) => {
+                    rows.insert(record.id, record.clone());
+                    UpdateOutcome::Updated
+                }
+            }
+        };
+        if outcome == UpdateOutcome::Updated {
+            let stock_outcomes = self
+                .stock
+                .apply_write(stock, time::OffsetDateTime::UNIX_EPOCH);
+            Ok((outcome, stock_outcomes))
+        } else {
+            Ok((outcome, Vec::new()))
+        }
+    }
+
+    async fn archive(
+        &self,
+        id: ConsumptionRecordId,
+        expected: Revision,
+        _archived_at: time::OffsetDateTime,
+        stock: &StockWrite,
+    ) -> Result<(UpdateOutcome, Vec<StockOutcome>)> {
+        let is_archived = self.archived.lock().unwrap().contains(&id);
+        let outcome = {
+            let rows = self.rows.lock().unwrap();
+            match rows.get(&id) {
+                None => UpdateOutcome::NotFound,
+                Some(_) if is_archived => UpdateOutcome::NotFound,
+                Some(existing) if existing.revision != expected => {
+                    UpdateOutcome::RevisionMismatch {
+                        actual: existing.revision,
+                    }
+                }
+                Some(_) => {
+                    self.archived.lock().unwrap().insert(id);
+                    UpdateOutcome::Updated
+                }
+            }
+        };
+        if outcome == UpdateOutcome::Updated {
+            let stock_outcomes = self
+                .stock
+                .apply_write(stock, time::OffsetDateTime::UNIX_EPOCH);
+            Ok((outcome, stock_outcomes))
+        } else {
+            Ok((outcome, Vec::new()))
+        }
+    }
+}
+
+#[derive(Clone, Default)]
+pub struct InMemoryPreparedBatchRepository {
+    rows: Arc<Mutex<Vec<PreparedBatch>>>,
+    stock: InMemoryStockRepository,
+}
+
+impl InMemoryPreparedBatchRepository {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_stock(stock: InMemoryStockRepository) -> Self {
+        Self {
+            rows: Arc::new(Mutex::new(Vec::new())),
+            stock,
+        }
+    }
+
+    pub fn count(&self) -> usize {
+        self.rows.lock().unwrap().len()
+    }
+
+    pub fn seed(&self, batch: PreparedBatch) {
+        self.rows.lock().unwrap().push(batch);
+    }
+}
+
+#[async_trait]
+impl crate::ports::PreparedBatchRepository for InMemoryPreparedBatchRepository {
+    async fn get(&self, id: PreparedBatchId) -> Result<Option<PreparedBatch>> {
+        Ok(self
+            .rows
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|b| b.id == id)
+            .cloned())
+    }
+
+    async fn get_many(&self, ids: &[PreparedBatchId]) -> Result<Vec<PreparedBatch>> {
+        Ok(self
+            .rows
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|b| ids.contains(&b.id))
+            .cloned()
+            .collect())
+    }
+
+    async fn for_component(
+        &self,
+        component_id: MealPlanComponentId,
+    ) -> Result<Option<PreparedBatch>> {
+        Ok(self
+            .rows
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|b| b.source.component_id() == Some(component_id))
+            .cloned())
+    }
+
+    async fn for_components(
+        &self,
+        component_ids: &[MealPlanComponentId],
+    ) -> Result<HashMap<MealPlanComponentId, PreparedBatch>> {
+        let mut found = HashMap::new();
+        for batch in self.rows.lock().unwrap().iter() {
+            if let Some(component_id) = batch.source.component_id()
+                && component_ids.contains(&component_id)
+            {
+                found.entry(component_id).or_insert(batch.clone());
+            }
+        }
+        Ok(found)
+    }
+
+    async fn list_in_range(&self, from: time::Date, to: time::Date) -> Result<Vec<PreparedBatch>> {
+        let mut found: Vec<PreparedBatch> = self
+            .rows
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|batch| {
+                let day = batch.prepared_at.to_offset(time::UtcOffset::UTC).date();
+                day >= from && day <= to
+            })
+            .cloned()
+            .collect();
+        found.sort_by(|a, b| b.prepared_at.cmp(&a.prepared_at).then(b.id.cmp(&a.id)));
+        Ok(found)
+    }
+
+    async fn held_for_recipe(
+        &self,
+        recipe_id: crate::domain::RecipeId,
+    ) -> Result<Vec<PreparedBatch>> {
+        let live: Vec<PreparedBatchId> = self
+            .stock
+            .rows
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|item| item.archived_at.is_none())
+            .filter_map(|item| item.prepared_batch_id())
+            .collect();
+        let mut found: Vec<PreparedBatch> = self
+            .rows
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|batch| batch.recipe_id == Some(recipe_id) && live.contains(&batch.id))
+            .cloned()
+            .collect();
+        found.sort_by_key(|batch| batch.prepared_at);
+        Ok(found)
+    }
+
+    async fn portions(&self, batch_id: PreparedBatchId) -> Result<Vec<StockItem>> {
+        let mut found: Vec<StockItem> = self
+            .stock
+            .rows
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|item| item.archived_at.is_none() && item.prepared_batch_id() == Some(batch_id))
+            .cloned()
+            .collect();
+        found.sort_by_key(|item| item.created_at);
+        Ok(found)
+    }
+
+    async fn place_portions(
+        &self,
+        portions: &[(StockItem, NewStockEvent)],
+        archive: &[crate::domain::StockItemId],
+    ) -> Result<Vec<StockOutcome>> {
+        let mut rows = self.stock.rows.lock().unwrap();
+        for id in archive {
+            if let Some(item) = rows.get_mut(id) {
+                item.archived_at = Some(item.updated_at);
+            }
+        }
+        for (item, event) in portions {
+            rows.insert(item.id, item.clone());
+            self.stock.record(item.id, event);
+        }
+        Ok(Vec::new())
+    }
+
+    async fn bump_revision(
+        &self,
+        id: PreparedBatchId,
+        expected: crate::domain::Revision,
+    ) -> Result<crate::ports::UpdateOutcome> {
+        let mut batches = self.rows.lock().unwrap();
+        let Some(batch) = batches.iter_mut().find(|b| b.id == id) else {
+            return Ok(crate::ports::UpdateOutcome::NotFound);
+        };
+        if batch.revision != expected {
+            return Ok(crate::ports::UpdateOutcome::RevisionMismatch {
+                actual: batch.revision,
+            });
+        }
+        batch.revision = batch.revision.next();
+        Ok(crate::ports::UpdateOutcome::Updated)
+    }
+
+    async fn insert(
+        &self,
+        batch: &PreparedBatch,
+        portions: &[(StockItem, NewStockEvent)],
+        stock: &crate::ports::StockWrite,
+    ) -> Result<Vec<StockOutcome>> {
+        self.rows.lock().unwrap().push(batch.clone());
+        if let Some(recipe_id) = batch.recipe_id {
+            self.stock.note_cook(batch.id, recipe_id);
+        }
+        for (portion, event) in portions {
+            self.stock.insert_item(portion, event);
+        }
+        Ok(self.stock.apply_write(stock, batch.prepared_at))
+    }
+}
+
+#[derive(Clone)]
+pub struct InMemoryMealPlanRepository {
+    rows: Arc<Mutex<HashMap<MealPlanEntryId, MealPlanEntry>>>,
+    consumption: InMemoryConsumptionRecordRepository,
+}
+
+impl InMemoryMealPlanRepository {
+    pub fn new(consumption: InMemoryConsumptionRecordRepository) -> Self {
+        Self {
+            rows: Arc::new(Mutex::new(HashMap::new())),
+            consumption,
+        }
+    }
+
+    pub fn count(&self) -> usize {
+        self.rows.lock().unwrap().len()
+    }
+}
+
+impl Default for InMemoryMealPlanRepository {
+    fn default() -> Self {
+        Self::new(InMemoryConsumptionRecordRepository::new())
+    }
+}
+
+#[async_trait]
+impl MealPlanRepository for InMemoryMealPlanRepository {
+    async fn get(&self, id: MealPlanEntryId) -> Result<Option<MealPlanEntry>> {
+        Ok(self.rows.lock().unwrap().get(&id).cloned())
+    }
+
+    async fn list(&self, query: &MealPlanQuery) -> Result<Vec<MealPlanEntry>> {
+        let mut entries: Vec<_> = self
+            .rows
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|entry| {
+                entry.member_id == Some(query.member_id)
+                    || (query.include_participating
+                        && (entry
+                            .participants
+                            .iter()
+                            .any(|participant| participant.member_id == query.member_id)
+                            || entry.has_opted_out(query.member_id)))
+            })
+            .filter(|entry| entry.planned_on >= query.from && entry.planned_on <= query.to)
+            .cloned()
+            .collect();
+        entries.sort_by_key(|entry| {
+            (
+                entry.planned_on,
+                entry.slot.order(),
+                entry.planned_time,
+                entry.created_at,
+                entry.id,
+            )
+        });
+        Ok(entries)
+    }
+
+    async fn list_all(&self, from: Date, to: Date) -> Result<Vec<MealPlanEntry>> {
+        let mut entries: Vec<_> = self
+            .rows
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|entry| entry.planned_on >= from && entry.planned_on <= to)
+            .cloned()
+            .collect();
+        entries.sort_by_key(|entry| {
+            (
+                entry.planned_on,
+                entry.slot.order(),
+                entry.planned_time,
+                entry.created_at,
+                entry.id,
+            )
+        });
+        Ok(entries)
+    }
+
+    async fn list_through(
+        &self,
+        member_id: HouseholdMemberId,
+        to: Date,
+    ) -> Result<Vec<MealPlanEntry>> {
+        let mut entries: Vec<_> = self
+            .rows
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|entry| {
+                entry.member_id == Some(member_id)
+                    || entry
+                        .participants
+                        .iter()
+                        .any(|participant| participant.member_id == member_id)
+            })
+            .filter(|entry| entry.planned_on <= to)
+            .cloned()
+            .collect();
+        entries.sort_by_key(|entry| {
+            (
+                entry.planned_on,
+                entry.slot.order(),
+                entry.planned_time,
+                entry.created_at,
+                entry.id,
+            )
+        });
+        Ok(entries)
+    }
+
+    async fn list_all_through(&self, to: Date) -> Result<Vec<MealPlanEntry>> {
+        let mut entries: Vec<_> = self
+            .rows
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|entry| entry.planned_on <= to)
+            .cloned()
+            .collect();
+        entries.sort_by_key(|entry| {
+            (
+                entry.planned_on,
+                entry.slot.order(),
+                entry.planned_time,
+                entry.created_at,
+                entry.id,
+            )
+        });
+        Ok(entries)
+    }
+
+    async fn insert(&self, entry: &MealPlanEntry) -> Result<()> {
+        self.rows.lock().unwrap().insert(entry.id, entry.clone());
+        Ok(())
+    }
+
+    async fn update(&self, entry: &MealPlanEntry, expected: Revision) -> Result<UpdateOutcome> {
+        let mut rows = self.rows.lock().unwrap();
+        match rows.get(&entry.id) {
+            None => Ok(UpdateOutcome::NotFound),
+            Some(current) if current.revision != expected => Ok(UpdateOutcome::RevisionMismatch {
+                actual: current.revision,
+            }),
+            Some(_) => {
+                rows.insert(entry.id, entry.clone());
+                Ok(UpdateOutcome::Updated)
+            }
+        }
+    }
+
+    async fn delete(&self, id: MealPlanEntryId, expected: Revision) -> Result<UpdateOutcome> {
+        let mut rows = self.rows.lock().unwrap();
+        match rows.get(&id) {
+            None => Ok(UpdateOutcome::NotFound),
+            Some(current) if current.revision != expected => Ok(UpdateOutcome::RevisionMismatch {
+                actual: current.revision,
+            }),
+            Some(_) => {
+                rows.remove(&id);
+                Ok(UpdateOutcome::Updated)
+            }
+        }
+    }
+
+    async fn resolve(
+        &self,
+        entry: &MealPlanEntry,
+        expected: Revision,
+        consumption: &[ConsumptionRecord],
+        stock: &StockWrite,
+    ) -> Result<(UpdateOutcome, Vec<StockOutcome>)> {
+        {
+            let mut rows = self.rows.lock().unwrap();
+            match rows.get(&entry.id) {
+                None => return Ok((UpdateOutcome::NotFound, Vec::new())),
+                Some(current) if current.revision != expected => {
+                    return Ok((
+                        UpdateOutcome::RevisionMismatch {
+                            actual: current.revision,
+                        },
+                        Vec::new(),
+                    ));
+                }
+                Some(_) => {}
+            }
+
+            let mut records = self.consumption.rows.lock().unwrap();
+            if consumption.iter().any(|candidate| {
+                records.values().any(|existing| {
+                    candidate.meal_plan_component_id.is_some()
+                        && existing.meal_plan_component_id == candidate.meal_plan_component_id
+                        && existing.member_id == candidate.member_id
+                })
+            }) {
+                return Err(CoreError::conflict("That meal has already been confirmed."));
+            }
+            for record in consumption {
+                records.insert(record.id, record.clone());
+            }
+            rows.insert(entry.id, entry.clone());
+        }
+        let stock_outcomes = self
+            .consumption
+            .stock
+            .apply_write(stock, time::OffsetDateTime::UNIX_EPOCH);
+        Ok((UpdateOutcome::Updated, stock_outcomes))
+    }
+
+    async fn reopen(
+        &self,
+        entry: &MealPlanEntry,
+        expected: Revision,
+        delete_records: &[ConsumptionRecordId],
+        stock: &StockWrite,
+    ) -> Result<(UpdateOutcome, Vec<StockOutcome>)> {
+        {
+            let mut rows = self.rows.lock().unwrap();
+            match rows.get(&entry.id) {
+                None => return Ok((UpdateOutcome::NotFound, Vec::new())),
+                Some(current) if current.revision != expected => {
+                    return Ok((
+                        UpdateOutcome::RevisionMismatch {
+                            actual: current.revision,
+                        },
+                        Vec::new(),
+                    ));
+                }
+                Some(_) => {}
+            }
+            let mut records = self.consumption.rows.lock().unwrap();
+            for record_id in delete_records {
+                records.remove(record_id);
+            }
+            rows.insert(entry.id, entry.clone());
+        }
+        let stock_outcomes = self
+            .consumption
+            .stock
+            .apply_write(stock, time::OffsetDateTime::UNIX_EPOCH);
+        Ok((UpdateOutcome::Updated, stock_outcomes))
+    }
+
+    async fn set_participants(
+        &self,
+        entry: &MealPlanEntry,
+        expected: Revision,
+    ) -> Result<UpdateOutcome> {
+        let mut rows = self.rows.lock().unwrap();
+        match rows.get(&entry.id) {
+            None => Ok(UpdateOutcome::NotFound),
+            Some(current) if current.revision != expected => Ok(UpdateOutcome::RevisionMismatch {
+                actual: current.revision,
+            }),
+            Some(_) => {
+                rows.insert(entry.id, entry.clone());
+                Ok(UpdateOutcome::Updated)
+            }
+        }
+    }
+
+    async fn resolve_component(
+        &self,
+        entry_id: MealPlanEntryId,
+        component: &MealPlanComponentUpdate<'_>,
+        participants: &[MealParticipant],
+        expected: Revision,
+        consumption: Option<&ConsumptionRecord>,
+        stock: &StockWrite,
+    ) -> Result<(UpdateOutcome, Vec<StockOutcome>)> {
+        {
+            let mut rows = self.rows.lock().unwrap();
+            let Some(entry) = rows.get_mut(&entry_id) else {
+                return Ok((UpdateOutcome::NotFound, Vec::new()));
+            };
+            let Some(current) = entry
+                .components
+                .iter_mut()
+                .find(|candidate| candidate.id == component.id)
+            else {
+                return Ok((UpdateOutcome::NotFound, Vec::new()));
+            };
+            if current.revision != expected {
+                return Ok((
+                    UpdateOutcome::RevisionMismatch {
+                        actual: current.revision,
+                    },
+                    Vec::new(),
+                ));
+            }
+            if let Some(record) = consumption {
+                let mut records = self.consumption.rows.lock().unwrap();
+                if records.values().any(|existing| {
+                    existing.meal_plan_component_id == Some(component.id)
+                        && existing.member_id == record.member_id
+                }) {
+                    return Err(CoreError::conflict("That item has already been confirmed."));
+                }
+                records.insert(record.id, record.clone());
+            }
+            apply_component_update(current, component);
+            entry.participants = participants.to_vec();
+            apply_entry_update(entry, component);
+        }
+        let stock_outcomes = self
+            .consumption
+            .stock
+            .apply_write(stock, time::OffsetDateTime::UNIX_EPOCH);
+        Ok((UpdateOutcome::Updated, stock_outcomes))
+    }
+
+    async fn reopen_component(
+        &self,
+        entry_id: MealPlanEntryId,
+        component: &MealPlanComponentUpdate<'_>,
+        participants: &[MealParticipant],
+        expected: Revision,
+        delete_record: Option<ConsumptionRecordId>,
+        stock: &StockWrite,
+    ) -> Result<(UpdateOutcome, Vec<StockOutcome>)> {
+        {
+            let mut rows = self.rows.lock().unwrap();
+            let Some(entry) = rows.get_mut(&entry_id) else {
+                return Ok((UpdateOutcome::NotFound, Vec::new()));
+            };
+            let Some(current) = entry
+                .components
+                .iter_mut()
+                .find(|candidate| candidate.id == component.id)
+            else {
+                return Ok((UpdateOutcome::NotFound, Vec::new()));
+            };
+            if current.revision != expected {
+                return Ok((
+                    UpdateOutcome::RevisionMismatch {
+                        actual: current.revision,
+                    },
+                    Vec::new(),
+                ));
+            }
+            apply_component_update(current, component);
+            entry.participants = participants.to_vec();
+            apply_entry_update(entry, component);
+            if let Some(record_id) = delete_record {
+                self.consumption.rows.lock().unwrap().remove(&record_id);
+            }
+        }
+        let stock_outcomes = self
+            .consumption
+            .stock
+            .apply_write(stock, time::OffsetDateTime::UNIX_EPOCH);
+        Ok((UpdateOutcome::Updated, stock_outcomes))
+    }
+}
+
+fn apply_component_update(
+    component: &mut crate::domain::MealPlanComponent,
+    update: &MealPlanComponentUpdate<'_>,
+) {
+    component.revision = update.revision;
+    match update.snapshot {
+        SnapshotOp::Keep => {}
+        SnapshotOp::Clear => component.snapshot = None,
+        SnapshotOp::Set(snapshot) => {
+            if component.snapshot.is_none() {
+                component.snapshot = Some(snapshot.clone());
+            }
+        }
+    }
+}
+
+fn apply_entry_update(entry: &mut MealPlanEntry, update: &MealPlanComponentUpdate<'_>) {
+    entry.updated_by = update.actor_id;
+    entry.updated_at = update.now;
+    entry.revision = entry.revision.next();
+}
+
+fn enforce_target_uniqueness(
+    rows: &HashMap<NutritionTargetId, NutritionTarget>,
+    candidate: &NutritionTarget,
+) -> Result<()> {
+    for existing in rows.values() {
+        if existing.id == candidate.id {
+            continue;
+        }
+        if existing.member_id == candidate.member_id
+            && existing.effective_from == candidate.effective_from
+        {
+            return Err(CoreError::duplicate(
+                "nutrition target",
+                "effective_from",
+                candidate.effective_from,
+            ));
+        }
+    }
+    Ok(())
+}
+
+#[derive(Default, Clone)]
+pub struct InMemoryNutritionTargetRepository {
+    rows: Arc<Mutex<HashMap<NutritionTargetId, NutritionTarget>>>,
+}
+
+impl InMemoryNutritionTargetRepository {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn seed(&self, target: NutritionTarget) {
+        self.rows.lock().unwrap().insert(target.id, target);
+    }
+
+    pub fn count(&self) -> usize {
+        self.rows.lock().unwrap().len()
+    }
+}
+
+#[async_trait]
+impl NutritionTargetRepository for InMemoryNutritionTargetRepository {
+    async fn get(&self, id: NutritionTargetId) -> Result<Option<NutritionTarget>> {
+        Ok(self.rows.lock().unwrap().get(&id).cloned())
+    }
+
+    async fn list_for_member(&self, member_id: HouseholdMemberId) -> Result<Vec<NutritionTarget>> {
+        let mut targets: Vec<_> = self
+            .rows
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|target| target.member_id == member_id)
+            .cloned()
+            .collect();
+        targets.sort_by_key(|target| target.effective_from);
+        Ok(targets)
+    }
+
+    async fn insert(&self, target: &NutritionTarget) -> Result<()> {
+        let mut rows = self.rows.lock().unwrap();
+        enforce_target_uniqueness(&rows, target)?;
+        rows.insert(target.id, target.clone());
+        Ok(())
+    }
+
+    async fn set_for_date(&self, target: &NutritionTarget) -> Result<NutritionTarget> {
+        let mut rows = self.rows.lock().unwrap();
+        let existing_id = rows
+            .values()
+            .find(|existing| {
+                existing.member_id == target.member_id
+                    && existing.effective_from == target.effective_from
+            })
+            .map(|existing| existing.id);
+        let stored = if let Some(existing_id) = existing_id {
+            let existing = rows.get(&existing_id).expect("the target still exists");
+            NutritionTarget {
+                id: existing.id,
+                member_id: target.member_id,
+                effective_from: target.effective_from,
+                source: target.source,
+                goals: target.goals.clone(),
+                revision: existing.revision.next(),
+                created_at: existing.created_at,
+                updated_at: target.updated_at,
+            }
+        } else {
+            target.clone()
+        };
+        rows.insert(stored.id, stored.clone());
+        Ok(stored)
+    }
+
+    async fn update(&self, target: &NutritionTarget, expected: Revision) -> Result<UpdateOutcome> {
+        let mut rows = self.rows.lock().unwrap();
+        match rows.get(&target.id) {
+            None => Ok(UpdateOutcome::NotFound),
+            Some(existing) if existing.revision != expected => {
+                Ok(UpdateOutcome::RevisionMismatch {
+                    actual: existing.revision,
+                })
+            }
+            Some(_) => {
+                enforce_target_uniqueness(&rows, target)?;
+                rows.insert(target.id, target.clone());
+                Ok(UpdateOutcome::Updated)
+            }
+        }
+    }
+
+    async fn delete(&self, id: NutritionTargetId, expected: Revision) -> Result<UpdateOutcome> {
+        let mut rows = self.rows.lock().unwrap();
+        match rows.get(&id) {
+            None => Ok(UpdateOutcome::NotFound),
+            Some(existing) if existing.revision != expected => {
+                Ok(UpdateOutcome::RevisionMismatch {
+                    actual: existing.revision,
+                })
+            }
+            Some(_) => {
+                rows.remove(&id);
+                Ok(UpdateOutcome::Updated)
+            }
+        }
+    }
+}
+
+#[derive(Default, Clone)]
+pub struct InMemoryMemberBodyProfileRepository {
+    rows: Arc<Mutex<HashMap<HouseholdMemberId, MemberBodyProfile>>>,
+}
+
+impl InMemoryMemberBodyProfileRepository {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn seed(&self, profile: MemberBodyProfile) {
+        self.rows.lock().unwrap().insert(profile.member_id, profile);
+    }
+
+    pub fn count(&self) -> usize {
+        self.rows.lock().unwrap().len()
+    }
+}
+
+#[async_trait]
+impl MemberBodyProfileRepository for InMemoryMemberBodyProfileRepository {
+    async fn for_member(&self, member_id: HouseholdMemberId) -> Result<Option<MemberBodyProfile>> {
+        Ok(self.rows.lock().unwrap().get(&member_id).cloned())
+    }
+
+    async fn insert(&self, profile: &MemberBodyProfile) -> Result<()> {
+        let mut rows = self.rows.lock().unwrap();
+        if rows.contains_key(&profile.member_id) {
+            return Err(CoreError::duplicate(
+                "member body profile",
+                "member",
+                profile.member_id,
+            ));
+        }
+        rows.insert(profile.member_id, profile.clone());
+        Ok(())
+    }
+
+    async fn update(
+        &self,
+        profile: &MemberBodyProfile,
+        expected: Revision,
+    ) -> Result<UpdateOutcome> {
+        let mut rows = self.rows.lock().unwrap();
+        match rows.get(&profile.member_id) {
+            None => Ok(UpdateOutcome::NotFound),
+            Some(existing) if existing.revision != expected => {
+                Ok(UpdateOutcome::RevisionMismatch {
+                    actual: existing.revision,
+                })
+            }
+            Some(_) => {
+                rows.insert(profile.member_id, profile.clone());
+                Ok(UpdateOutcome::Updated)
+            }
+        }
+    }
+}
+
+#[derive(Default, Clone)]
+pub struct InMemoryCalorieCalculationRepository {
+    rows: Arc<Mutex<HashMap<CalorieCalculationId, CalorieCalculation>>>,
+}
+
+fn enforce_calculation_uniqueness(
+    rows: &HashMap<CalorieCalculationId, CalorieCalculation>,
+    candidate: &CalorieCalculation,
+) -> Result<()> {
+    if rows.values().any(|existing| {
+        existing.id != candidate.id && existing.nutrition_target_id == candidate.nutrition_target_id
+    }) {
+        return Err(CoreError::duplicate(
+            "calorie target calculation",
+            "nutrition target",
+            candidate.nutrition_target_id,
+        ));
+    }
+    Ok(())
+}
+
+impl InMemoryCalorieCalculationRepository {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn seed(&self, calculation: CalorieCalculation) {
+        self.rows
+            .lock()
+            .unwrap()
+            .insert(calculation.id, calculation);
+    }
+
+    pub fn count(&self) -> usize {
+        self.rows.lock().unwrap().len()
+    }
+}
+
+#[async_trait]
+impl CalorieCalculationRepository for InMemoryCalorieCalculationRepository {
+    async fn get(&self, id: CalorieCalculationId) -> Result<Option<CalorieCalculation>> {
+        Ok(self.rows.lock().unwrap().get(&id).cloned())
+    }
+
+    async fn for_target(&self, target_id: NutritionTargetId) -> Result<Option<CalorieCalculation>> {
+        Ok(self
+            .rows
+            .lock()
+            .unwrap()
+            .values()
+            .find(|calculation| calculation.nutrition_target_id == target_id)
+            .cloned())
+    }
+
+    async fn insert(&self, calculation: &CalorieCalculation) -> Result<()> {
+        let mut rows = self.rows.lock().unwrap();
+        enforce_calculation_uniqueness(&rows, calculation)?;
+        rows.insert(calculation.id, calculation.clone());
+        Ok(())
+    }
+
+    async fn update(
+        &self,
+        calculation: &CalorieCalculation,
+        expected: Revision,
+    ) -> Result<UpdateOutcome> {
+        let mut rows = self.rows.lock().unwrap();
+        match rows.get(&calculation.id) {
+            None => Ok(UpdateOutcome::NotFound),
+            Some(existing) if existing.revision != expected => {
+                Ok(UpdateOutcome::RevisionMismatch {
+                    actual: existing.revision,
+                })
+            }
+            Some(_) => {
+                enforce_calculation_uniqueness(&rows, calculation)?;
+                rows.insert(calculation.id, calculation.clone());
+                Ok(UpdateOutcome::Updated)
+            }
+        }
+    }
+
+    async fn delete(&self, id: CalorieCalculationId, expected: Revision) -> Result<UpdateOutcome> {
+        let mut rows = self.rows.lock().unwrap();
+        match rows.get(&id) {
+            None => Ok(UpdateOutcome::NotFound),
+            Some(existing) if existing.revision != expected => {
+                Ok(UpdateOutcome::RevisionMismatch {
+                    actual: existing.revision,
+                })
+            }
+            Some(_) => {
+                rows.remove(&id);
+                Ok(UpdateOutcome::Updated)
+            }
+        }
+    }
+}
+
+#[derive(Default, Clone)]
+pub struct InMemoryWeightRecordRepository {
+    rows: Arc<Mutex<HashMap<WeightRecordId, WeightRecord>>>,
+}
+
+impl InMemoryWeightRecordRepository {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn seed(&self, record: WeightRecord) {
+        self.rows.lock().unwrap().insert(record.id, record);
+    }
+
+    pub fn count(&self) -> usize {
+        self.rows.lock().unwrap().len()
+    }
+}
+
+#[async_trait]
+impl WeightRecordRepository for InMemoryWeightRecordRepository {
+    async fn get(&self, id: WeightRecordId) -> Result<Option<WeightRecord>> {
+        Ok(self.rows.lock().unwrap().get(&id).copied())
+    }
+
+    async fn list_for_member(&self, member_id: HouseholdMemberId) -> Result<Vec<WeightRecord>> {
+        let mut records: Vec<_> = self
+            .rows
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|record| record.member_id == member_id)
+            .copied()
+            .collect();
+        records.sort_by_key(|record| {
+            (
+                std::cmp::Reverse(record.recorded_on),
+                std::cmp::Reverse(record.recorded_at),
+                std::cmp::Reverse(record.created_at),
+            )
+        });
+        Ok(records)
+    }
+
+    async fn insert(&self, record: &WeightRecord) -> Result<()> {
+        self.rows.lock().unwrap().insert(record.id, *record);
+        Ok(())
+    }
+
+    async fn update(&self, record: &WeightRecord, expected: Revision) -> Result<UpdateOutcome> {
+        let mut rows = self.rows.lock().unwrap();
+        match rows.get(&record.id) {
+            None => Ok(UpdateOutcome::NotFound),
+            Some(existing) if existing.revision != expected => {
+                Ok(UpdateOutcome::RevisionMismatch {
+                    actual: existing.revision,
+                })
+            }
+            Some(_) => {
+                rows.insert(record.id, *record);
+                Ok(UpdateOutcome::Updated)
+            }
+        }
+    }
+
+    async fn delete(&self, id: WeightRecordId, expected: Revision) -> Result<UpdateOutcome> {
+        let mut rows = self.rows.lock().unwrap();
+        match rows.get(&id) {
+            None => Ok(UpdateOutcome::NotFound),
+            Some(existing) if existing.revision != expected => {
+                Ok(UpdateOutcome::RevisionMismatch {
+                    actual: existing.revision,
+                })
+            }
+            Some(_) => {
+                rows.remove(&id);
+                Ok(UpdateOutcome::Updated)
+            }
+        }
+    }
+}
+
+fn enforce_goal_uniqueness(
+    rows: &HashMap<WeightGoalId, WeightGoal>,
+    candidate: &WeightGoal,
+) -> Result<()> {
+    for existing in rows.values() {
+        if existing.id == candidate.id {
+            continue;
+        }
+        if existing.member_id == candidate.member_id {
+            return Err(CoreError::duplicate(
+                "weight goal",
+                "member",
+                candidate.member_id,
+            ));
+        }
+    }
+    Ok(())
+}
+
+#[derive(Default, Clone)]
+pub struct InMemoryWeightGoalRepository {
+    rows: Arc<Mutex<HashMap<WeightGoalId, WeightGoal>>>,
+}
+
+impl InMemoryWeightGoalRepository {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn seed(&self, goal: WeightGoal) {
+        self.rows.lock().unwrap().insert(goal.id, goal);
+    }
+
+    pub fn count(&self) -> usize {
+        self.rows.lock().unwrap().len()
+    }
+}
+
+#[async_trait]
+impl WeightGoalRepository for InMemoryWeightGoalRepository {
+    async fn get(&self, id: WeightGoalId) -> Result<Option<WeightGoal>> {
+        Ok(self.rows.lock().unwrap().get(&id).copied())
+    }
+
+    async fn for_member(&self, member_id: HouseholdMemberId) -> Result<Option<WeightGoal>> {
+        Ok(self
+            .rows
+            .lock()
+            .unwrap()
+            .values()
+            .find(|goal| goal.member_id == member_id)
+            .copied())
+    }
+
+    async fn insert(&self, goal: &WeightGoal) -> Result<()> {
+        let mut rows = self.rows.lock().unwrap();
+        enforce_goal_uniqueness(&rows, goal)?;
+        rows.insert(goal.id, *goal);
+        Ok(())
+    }
+
+    async fn update(&self, goal: &WeightGoal, expected: Revision) -> Result<UpdateOutcome> {
+        let mut rows = self.rows.lock().unwrap();
+        match rows.get(&goal.id) {
+            None => Ok(UpdateOutcome::NotFound),
+            Some(existing) if existing.revision != expected => {
+                Ok(UpdateOutcome::RevisionMismatch {
+                    actual: existing.revision,
+                })
+            }
+            Some(_) => {
+                enforce_goal_uniqueness(&rows, goal)?;
+                rows.insert(goal.id, *goal);
+                Ok(UpdateOutcome::Updated)
+            }
+        }
+    }
+
+    async fn delete(&self, id: WeightGoalId, expected: Revision) -> Result<UpdateOutcome> {
+        let mut rows = self.rows.lock().unwrap();
+        match rows.get(&id) {
+            None => Ok(UpdateOutcome::NotFound),
+            Some(existing) if existing.revision != expected => {
+                Ok(UpdateOutcome::RevisionMismatch {
+                    actual: existing.revision,
+                })
+            }
+            Some(_) => {
+                rows.remove(&id);
+                Ok(UpdateOutcome::Updated)
+            }
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct InMemoryHouseholdSettingsRepository {
+    row: Arc<Mutex<HouseholdSettings>>,
+}
+
+impl InMemoryHouseholdSettingsRepository {
+    pub fn new() -> Self {
+        Self {
+            row: Arc::new(Mutex::new(HouseholdSettings {
+                meal_times: MealTimes {
+                    breakfast: time::macros::time!(08:00),
+                    lunch: time::macros::time!(12:30),
+                    dinner: time::macros::time!(18:00),
+                },
+                timezone: crate::ports::DEFAULT_TIMEZONE.to_owned(),
+                missing_stock_interpretation: MissingStockInterpretation::Unknown,
+                default_all_members_participate: false,
+                assume_eaten_when_time_passes: false,
+                section_order: SectionOrder::default(),
+                revision: Revision::INITIAL,
+                created_at: time::OffsetDateTime::UNIX_EPOCH,
+                updated_at: time::OffsetDateTime::UNIX_EPOCH,
+            })),
+        }
+    }
+}
+
+impl InMemoryHouseholdSettingsRepository {
+    pub fn set_default_all_members_participate(&self, value: bool) {
+        self.row.lock().unwrap().default_all_members_participate = value;
+    }
+
+    pub fn set_assume_eaten_when_time_passes(&self, value: bool) {
+        self.row.lock().unwrap().assume_eaten_when_time_passes = value;
+    }
+
+    pub fn set_missing_stock_interpretation(&self, value: MissingStockInterpretation) {
+        self.row.lock().unwrap().missing_stock_interpretation = value;
+    }
+
+    pub fn set_meal_times(&self, meal_times: MealTimes) {
+        self.row.lock().unwrap().meal_times = meal_times;
+    }
+
+    pub fn set_section_order(&self, order: SectionOrder) {
+        self.row.lock().unwrap().section_order = order;
+    }
+}
+
+impl Default for InMemoryHouseholdSettingsRepository {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl HouseholdSettingsRepository for InMemoryHouseholdSettingsRepository {
+    async fn get(&self) -> Result<HouseholdSettings> {
+        Ok(self.row.lock().unwrap().clone())
+    }
+
+    async fn update(
+        &self,
+        settings: &HouseholdSettings,
+        expected: Revision,
+    ) -> Result<UpdateOutcome> {
+        let mut row = self.row.lock().unwrap();
+        if row.revision != expected {
+            return Ok(UpdateOutcome::RevisionMismatch {
+                actual: row.revision,
+            });
+        }
+        *row = settings.clone();
+        Ok(UpdateOutcome::Updated)
+    }
+}
+
+#[derive(Default, Clone)]
+pub struct InMemoryRecipeRepository {
+    rows: Arc<Mutex<HashMap<RecipeId, Recipe>>>,
+    photos: Arc<Mutex<HashMap<RecipeId, RecipePhoto>>>,
+}
+
+impl InMemoryRecipeRepository {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn seed(&self, recipe: Recipe) {
+        self.rows.lock().unwrap().insert(recipe.id, recipe);
+    }
+
+    pub fn count(&self) -> usize {
+        self.rows.lock().unwrap().len()
+    }
+}
+
+#[async_trait]
+impl RecipeRepository for InMemoryRecipeRepository {
+    async fn get(&self, id: RecipeId) -> Result<Option<Recipe>> {
+        Ok(self.rows.lock().unwrap().get(&id).cloned())
+    }
+
+    async fn list(&self, query: &RecipeQuery) -> Result<Paginated<RecipeSummary>> {
+        let rows = self.rows.lock().unwrap();
+        let items: Vec<RecipeSummary> = rows
+            .values()
+            .filter(|r| r.owner_id == query.owner_id)
+            .filter(|r| query.include_archived || !r.is_archived())
+            .filter(|r| {
+                query
+                    .search
+                    .as_deref()
+                    .is_none_or(|needle| matches(&r.name, needle))
+            })
+            .map(|recipe| RecipeSummary {
+                id: recipe.id,
+                name: recipe.name.clone(),
+                description: recipe.description.clone(),
+                servings: recipe.servings,
+                preparation_minutes: recipe.preparation_minutes,
+                cooking_minutes: recipe.cooking_minutes,
+                component_count: recipe.components.len() as i64,
+                unresolved_count: recipe
+                    .components
+                    .iter()
+                    .filter(|component| component.requirement.is_unresolved())
+                    .count() as i64,
+                meal_categories: recipe.meal_categories.clone(),
+                country_categories: recipe.country_categories.clone(),
+                tags: recipe.tags.clone(),
+                photo_version: recipe.photo_version,
+                revision: recipe.revision,
+                updated_at: recipe.updated_at,
+                archived_at: recipe.archived_at,
+            })
+            .collect();
+        Ok(paginate(items, query.page, query.sort, |r| r.name.clone()))
+    }
+
+    async fn referenced_ingredient_ids(
+        &self,
+        viewer_id: UserId,
+        include_all_private: bool,
+    ) -> Result<Vec<IngredientId>> {
+        let mut ids: Vec<_> = self
+            .rows
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|recipe| !recipe.is_archived())
+            .filter(|recipe| {
+                include_all_private
+                    || recipe.owner_id == viewer_id
+                    || recipe.visibility == RecipeVisibility::Shared
+            })
+            .flat_map(|recipe| {
+                recipe
+                    .components
+                    .iter()
+                    .filter_map(|component| component.requirement.ingredient_id())
+            })
+            .collect();
+        ids.sort_unstable();
+        ids.dedup();
+        Ok(ids)
+    }
+
+    async fn insert(&self, recipe: &Recipe) -> Result<()> {
+        self.rows.lock().unwrap().insert(recipe.id, recipe.clone());
+        Ok(())
+    }
+
+    async fn update(&self, recipe: &Recipe, expected: Revision) -> Result<UpdateOutcome> {
+        let mut rows = self.rows.lock().unwrap();
+        match rows.get(&recipe.id) {
+            None => Ok(UpdateOutcome::NotFound),
+            Some(existing) if existing.revision != expected => {
+                Ok(UpdateOutcome::RevisionMismatch {
+                    actual: existing.revision,
+                })
+            }
+            Some(_) => {
+                rows.insert(recipe.id, recipe.clone());
+                Ok(UpdateOutcome::Updated)
+            }
+        }
+    }
+
+    async fn get_photo(&self, id: RecipeId) -> Result<Option<RecipePhoto>> {
+        Ok(self.photos.lock().unwrap().get(&id).cloned())
+    }
+
+    async fn update_photo(
+        &self,
+        recipe: &Recipe,
+        expected: Revision,
+        photo: Option<&RecipePhoto>,
+    ) -> Result<UpdateOutcome> {
+        let outcome = self.update(recipe, expected).await?;
+        if outcome == UpdateOutcome::Updated {
+            let mut photos = self.photos.lock().unwrap();
+            match photo {
+                Some(photo) => {
+                    photos.insert(recipe.id, photo.clone());
+                }
+                None => {
+                    photos.remove(&recipe.id);
+                }
+            }
+        }
+        Ok(outcome)
+    }
+}
+
+fn demand_subject(subject: StockSubject) -> DemandSubject {
+    match subject {
+        StockSubject::Product { product_id } => DemandSubject::product(product_id),
+        StockSubject::PreparedPortion { prepared_batch_id } => {
+            DemandSubject::prepared_portion(prepared_batch_id)
+        }
+    }
+}
+
+fn candidate_matches(
+    candidates: &DeductionCandidates,
+    item: &StockItem,
+    recipe_of: impl Fn(&StockItem) -> Option<crate::domain::RecipeId>,
+) -> bool {
+    match candidates {
+        DeductionCandidates::Products(product_ids) => item
+            .product_id()
+            .is_some_and(|id| product_ids.contains(&id)),
+        DeductionCandidates::PreparedBatch(batch_id) => item.prepared_batch_id() == Some(*batch_id),
+        DeductionCandidates::CookedFood(recipe_id) => recipe_of(item) == Some(*recipe_id),
+    }
+}
+
+#[derive(Default, Clone)]
+pub struct InMemoryStockRepository {
+    rows: Arc<Mutex<HashMap<StockItemId, StockItem>>>,
+    events: Arc<Mutex<Vec<StockEvent>>>,
+    effects: Arc<Mutex<Vec<StockEffect>>>,
+    batch_recipes: Arc<Mutex<HashMap<PreparedBatchId, crate::domain::RecipeId>>>,
+}
+
+impl InMemoryStockRepository {
+    pub fn note_cook(&self, batch_id: PreparedBatchId, recipe_id: crate::domain::RecipeId) {
+        self.batch_recipes
+            .lock()
+            .unwrap()
+            .insert(batch_id, recipe_id);
+    }
+
+    fn recipe_of(&self, item: &StockItem) -> Option<crate::domain::RecipeId> {
+        let batch_id = item.prepared_batch_id()?;
+        self.batch_recipes.lock().unwrap().get(&batch_id).copied()
+    }
+}
+
+impl InMemoryStockRepository {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn seed(&self, item: StockItem) {
+        self.rows.lock().unwrap().insert(item.id, item);
+    }
+
+    pub fn count(&self) -> usize {
+        self.rows.lock().unwrap().len()
+    }
+
+    pub fn event_count(&self) -> usize {
+        self.events.lock().unwrap().len()
+    }
+
+    pub fn effect_count(&self) -> usize {
+        self.effects.lock().unwrap().len()
+    }
+
+    fn record(&self, item_id: StockItemId, event: &NewStockEvent) -> StockEventId {
+        let id = StockEventId::new();
+        self.events.lock().unwrap().push(StockEvent {
+            id,
+            stock_item_id: item_id,
+            kind: event.kind,
+            quantity_delta: event.quantity_delta,
+            actor_user_id: event.actor_user_id,
+            subject_member_id: event.subject_member_id,
+            source: event.source.clone(),
+            reverses_event_id: event.reverses_event_id,
+            note: event.note.clone(),
+            occurred_at: time::OffsetDateTime::UNIX_EPOCH,
+        });
+        id
+    }
+
+    pub(crate) fn insert_item(&self, item: &StockItem, event: &NewStockEvent) {
+        self.rows.lock().unwrap().insert(item.id, item.clone());
+        self.record(item.id, event);
+    }
+
+    pub(crate) fn apply_write(
+        &self,
+        write: &crate::ports::StockWrite,
+        now: time::OffsetDateTime,
+    ) -> Vec<StockOutcome> {
+        use crate::domain::{
+            DeductionPlan, ReleasePlan, Shortfall, StockEffectState, StockEventKind,
+            StockEventSource, apply_take, plan_deduction, plan_release,
+        };
+
+        let mut outcomes = Vec::new();
+
+        for release in &write.releases {
+            let targets: Vec<StockEffect> = self
+                .effects
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|e| {
+                    e.state == StockEffectState::Applied
+                        && e.source_kind == release.source_kind
+                        && e.source_id == release.source_id
+                        && release
+                            .source_detail_id
+                            .is_none_or(|detail| e.source_detail_id == Some(detail))
+                })
+                .cloned()
+                .collect();
+            let mut unresolved = false;
+            let mut subject = None;
+            let mut unit = Unit::Gram;
+            for effect in targets {
+                subject = Some(demand_subject(effect.subject));
+                unit = effect.applied_unit;
+                let item = self
+                    .rows
+                    .lock()
+                    .unwrap()
+                    .get(&effect.stock_item_id)
+                    .cloned();
+                let Some(item) = item else {
+                    continue;
+                };
+                match plan_release(&item, &effect) {
+                    ReleasePlan::Restored { new_level } => {
+                        let mut updated = item.clone();
+                        updated.level = new_level;
+                        updated.revision = updated.revision.next();
+                        updated.updated_at = now;
+                        self.rows.lock().unwrap().insert(updated.id, updated);
+                        let event = NewStockEvent {
+                            kind: StockEventKind::Released,
+                            quantity_delta: None,
+                            actor_user_id: release.actor_user_id,
+                            subject_member_id: release.subject_member_id,
+                            source: Some(StockEventSource {
+                                kind: release.source_kind,
+                                id: release.source_id,
+                                label: release.source_label.clone(),
+                            }),
+                            reverses_event_id: Some(effect.apply_event_id),
+                            note: None,
+                        };
+                        self.record(effect.stock_item_id, &event);
+                        let mut effects = self.effects.lock().unwrap();
+                        if let Some(stored) = effects.iter_mut().find(|e| e.id == effect.id) {
+                            stored.state = StockEffectState::Released;
+                            stored.released_at = Some(now);
+                        }
+                    }
+                    ReleasePlan::Failed { reason } => {
+                        unresolved = true;
+                        let event = NewStockEvent {
+                            kind: StockEventKind::Released,
+                            quantity_delta: None,
+                            actor_user_id: release.actor_user_id,
+                            subject_member_id: release.subject_member_id,
+                            source: Some(StockEventSource {
+                                kind: release.source_kind,
+                                id: release.source_id,
+                                label: release.source_label.clone(),
+                            }),
+                            reverses_event_id: Some(effect.apply_event_id),
+                            note: Some(reason.clone()),
+                        };
+                        self.record(effect.stock_item_id, &event);
+                        let mut effects = self.effects.lock().unwrap();
+                        if let Some(stored) = effects.iter_mut().find(|e| e.id == effect.id) {
+                            stored.state = StockEffectState::ReleaseFailed;
+                            stored.note = Some(reason.clone());
+                        }
+                    }
+                }
+            }
+            if unresolved && let Some(subject) = subject {
+                outcomes.push(StockOutcome {
+                    subject,
+                    wanted: Quantity::new(rust_decimal::Decimal::ZERO, unit),
+                    deducted: Quantity::new(rust_decimal::Decimal::ZERO, unit),
+                    shortfall: Shortfall::Covered,
+                    unresolved_release: true,
+                });
+            }
+        }
+
+        for deduction in &write.deductions {
+            let items: Vec<StockItem> = {
+                let rows = self.rows.lock().unwrap();
+                rows.values()
+                    .filter(|item| {
+                        candidate_matches(&deduction.target.candidates, item, |candidate| {
+                            self.recipe_of(candidate)
+                        })
+                    })
+                    .cloned()
+                    .collect()
+            };
+            let DeductionPlan::Planned { takes, shortfall } =
+                plan_deduction(&items, deduction.want)
+            else {
+                continue;
+            };
+
+            let mut deducted = rust_decimal::Decimal::ZERO;
+            for take in &takes {
+                let already = self.effects.lock().unwrap().iter().any(|e| {
+                    e.state == StockEffectState::Applied
+                        && e.source_kind == deduction.source_kind
+                        && e.source_id == deduction.source_id
+                        && e.source_detail_id == deduction.source_detail_id
+                        && e.stock_item_id == take.stock_item_id
+                });
+                if already {
+                    continue;
+                }
+                let mut rows = self.rows.lock().unwrap();
+                let Some(item) = rows.get(&take.stock_item_id).cloned() else {
+                    continue;
+                };
+                let Some(applied) = apply_take(&item.level, take.requested) else {
+                    continue;
+                };
+                let mut updated = item.clone();
+                updated.level = applied.new_level;
+                updated.revision = updated.revision.next();
+                updated.updated_at = now;
+                rows.insert(updated.id, updated.clone());
+                drop(rows);
+
+                let delta = applied
+                    .exact_delta
+                    .or(applied.estimated_delta)
+                    .unwrap_or(rust_decimal::Decimal::ZERO);
+                let event = NewStockEvent {
+                    kind: StockEventKind::Consumed,
+                    quantity_delta: Some(Quantity::new(delta, take.requested.unit)),
+                    actor_user_id: deduction.actor_user_id,
+                    subject_member_id: deduction.subject_member_id,
+                    source: Some(StockEventSource {
+                        kind: deduction.source_kind,
+                        id: deduction.source_id,
+                        label: deduction.source_label.clone(),
+                    }),
+                    reverses_event_id: None,
+                    note: None,
+                };
+                let event_id = self.record(take.stock_item_id, &event);
+                self.effects.lock().unwrap().push(StockEffect {
+                    id: crate::domain::StockEffectId::new(),
+                    source_kind: deduction.source_kind,
+                    source_id: deduction.source_id,
+                    source_detail_id: deduction.source_detail_id,
+                    stock_item_id: take.stock_item_id,
+                    subject: item.subject,
+                    state: StockEffectState::Applied,
+                    applied_mode: item.tracking_mode(),
+                    applied_unit: take.requested.unit,
+                    exact_delta: applied.exact_delta,
+                    estimated_delta: applied.estimated_delta,
+                    requested_value: take.requested.amount,
+                    apply_event_id: event_id,
+                    applied_at: now,
+                    released_at: None,
+                    note: None,
+                });
+                if let Ok(converted) = take.requested.convert_to(deduction.want.unit) {
+                    deducted += converted.amount;
+                }
+            }
+
+            if !matches!(shortfall, Shortfall::Covered) {
+                outcomes.push(StockOutcome {
+                    subject: deduction.target.subject,
+                    wanted: deduction.want,
+                    deducted: Quantity::new(deducted, deduction.want.unit),
+                    shortfall,
+                    unresolved_release: false,
+                });
+            }
+        }
+
+        outcomes
+    }
+}
+
+#[async_trait]
+impl StockRepository for InMemoryStockRepository {
+    async fn get(&self, id: StockItemId) -> Result<Option<StockItem>> {
+        Ok(self.rows.lock().unwrap().get(&id).cloned())
+    }
+
+    async fn list(&self, query: &StockQuery) -> Result<Paginated<StockItem>> {
+        let rows = self.rows.lock().unwrap();
+        let items: Vec<StockItem> = rows
+            .values()
+            .filter(|item| query.include_archived || !item.is_archived())
+            .filter(|item| {
+                query
+                    .product_id
+                    .is_none_or(|id| item.product_id() == Some(id))
+            })
+            .cloned()
+            .collect();
+        Ok(paginate(items, query.page, query.sort, |item| {
+            item.id.to_string()
+        }))
+    }
+
+    async fn list_for_products(&self, product_ids: &[ProductId]) -> Result<Vec<StockItem>> {
+        let rows = self.rows.lock().unwrap();
+        Ok(rows
+            .values()
+            .filter(|item| {
+                item.product_id()
+                    .is_some_and(|id| product_ids.contains(&id))
+            })
+            .cloned()
+            .collect())
+    }
+
+    async fn insert(&self, item: &StockItem, event: &NewStockEvent) -> Result<()> {
+        self.rows.lock().unwrap().insert(item.id, item.clone());
+        self.record(item.id, event);
+        Ok(())
+    }
+
+    async fn update(
+        &self,
+        item: &StockItem,
+        expected: Revision,
+        event: &NewStockEvent,
+    ) -> Result<UpdateOutcome> {
+        let mut rows = self.rows.lock().unwrap();
+        match rows.get(&item.id) {
+            None => Ok(UpdateOutcome::NotFound),
+            Some(existing) if existing.revision != expected => {
+                Ok(UpdateOutcome::RevisionMismatch {
+                    actual: existing.revision,
+                })
+            }
+            Some(_) => {
+                rows.insert(item.id, item.clone());
+                drop(rows);
+                self.record(item.id, event);
+                Ok(UpdateOutcome::Updated)
+            }
+        }
+    }
+
+    async fn list_events(&self, id: StockItemId) -> Result<Vec<StockEvent>> {
+        Ok(self
+            .events
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|event| event.stock_item_id == id)
+            .cloned()
+            .collect())
+    }
+
+    async fn effects_for_source(
+        &self,
+        source_kind: StockEffectSource,
+        source_id: uuid::Uuid,
+    ) -> Result<Vec<StockEffect>> {
+        Ok(self
+            .effects
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|effect| effect.source_kind == source_kind && effect.source_id == source_id)
+            .cloned()
+            .collect())
+    }
+}
+
+#[derive(Clone, Default)]
+pub struct InMemoryShoppingCadenceRepository {
+    row: Arc<Mutex<Option<ShoppingCadence>>>,
+}
+
+impl InMemoryShoppingCadenceRepository {
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+#[async_trait]
+impl ShoppingCadenceRepository for InMemoryShoppingCadenceRepository {
+    async fn get(&self) -> Result<Option<ShoppingCadence>> {
+        Ok(self.row.lock().unwrap().clone())
+    }
+
+    async fn set(&self, cadence: &ShoppingCadence, expected: Revision) -> Result<UpdateOutcome> {
+        let mut row = self.row.lock().unwrap();
+        match row.as_ref() {
+            None if expected == Revision::UNRECORDED => {}
+            None => return Ok(UpdateOutcome::NotFound),
+            Some(current) if current.revision != expected => {
+                return Ok(UpdateOutcome::RevisionMismatch {
+                    actual: current.revision,
+                });
+            }
+            Some(_) => {}
+        }
+        *row = Some(cadence.clone());
+        Ok(UpdateOutcome::Updated)
+    }
+
+    async fn clear(&self, expected: Revision) -> Result<UpdateOutcome> {
+        let mut row = self.row.lock().unwrap();
+        match row.as_ref() {
+            None => Ok(UpdateOutcome::NotFound),
+            Some(current) if current.revision != expected => Ok(UpdateOutcome::RevisionMismatch {
+                actual: current.revision,
+            }),
+            Some(_) => {
+                *row = None;
+                Ok(UpdateOutcome::Updated)
+            }
+        }
+    }
+}
+
+#[derive(Clone, Default)]
+pub struct InMemoryShoppingOpportunityRepository {
+    rows: Arc<Mutex<Vec<OpportunityException>>>,
+}
+
+impl InMemoryShoppingOpportunityRepository {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn count(&self) -> usize {
+        self.rows.lock().unwrap().len()
+    }
+}
+
+#[async_trait]
+impl ShoppingOpportunityRepository for InMemoryShoppingOpportunityRepository {
+    async fn get(&self, id: ShoppingOpportunityId) -> Result<Option<OpportunityException>> {
+        Ok(self
+            .rows
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|row| row.id == id)
+            .cloned())
+    }
+
+    async fn list_in_range(&self, from: Date, to: Date) -> Result<Vec<OpportunityException>> {
+        Ok(self
+            .rows
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|row| {
+                in_range(row.effective_date, from, to) || in_range(row.generated_for, from, to)
+            })
+            .cloned()
+            .collect())
+    }
+
+    async fn find_for_occurrence(
+        &self,
+        generated_for: Date,
+    ) -> Result<Option<OpportunityException>> {
+        Ok(self
+            .rows
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|row| row.generated_for == Some(generated_for))
+            .cloned())
+    }
+
+    async fn upsert(
+        &self,
+        exception: &OpportunityException,
+        expected: Revision,
+    ) -> Result<UpdateOutcome> {
+        let mut rows = self.rows.lock().unwrap();
+        let existing = rows.iter_mut().find(|row| row.id == exception.id);
+        match existing {
+            None if expected == Revision::UNRECORDED => {
+                rows.push(exception.clone());
+                Ok(UpdateOutcome::Updated)
+            }
+            None => Ok(UpdateOutcome::NotFound),
+            Some(existing) if existing.revision != expected => {
+                Ok(UpdateOutcome::RevisionMismatch {
+                    actual: existing.revision,
+                })
+            }
+            Some(existing) => {
+                *existing = exception.clone();
+                Ok(UpdateOutcome::Updated)
+            }
+        }
+    }
+
+    async fn delete(&self, id: ShoppingOpportunityId, expected: Revision) -> Result<UpdateOutcome> {
+        let mut rows = self.rows.lock().unwrap();
+        match rows.iter().position(|row| row.id == id) {
+            Some(index) if rows[index].revision != expected => {
+                Ok(UpdateOutcome::RevisionMismatch {
+                    actual: rows[index].revision,
+                })
+            }
+            Some(index) => {
+                rows.remove(index);
+                Ok(UpdateOutcome::Updated)
+            }
+            None => Ok(UpdateOutcome::NotFound),
+        }
+    }
+}
+
+#[derive(Clone, Default)]
+pub struct InMemoryShoppingSuggestionDismissalRepository {
+    rows: Arc<Mutex<HashSet<(Date, DemandSubject)>>>,
+}
+
+impl InMemoryShoppingSuggestionDismissalRepository {
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+#[async_trait]
+impl ShoppingSuggestionDismissalRepository for InMemoryShoppingSuggestionDismissalRepository {
+    async fn list_for_date(&self, date: Date) -> Result<Vec<DemandSubject>> {
+        Ok(self
+            .rows
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(on, _)| *on == date)
+            .map(|(_, subject)| *subject)
+            .collect())
+    }
+
+    async fn insert(&self, date: Date, subject: DemandSubject) -> Result<()> {
+        self.rows.lock().unwrap().insert((date, subject));
+        Ok(())
+    }
+
+    async fn delete(&self, date: Date, subject: DemandSubject) -> Result<UpdateOutcome> {
+        Ok(if self.rows.lock().unwrap().remove(&(date, subject)) {
+            UpdateOutcome::Updated
+        } else {
+            UpdateOutcome::NotFound
+        })
+    }
+}
+
+fn in_range(date: Option<Date>, from: Date, to: Date) -> bool {
+    date.is_some_and(|date| date >= from && date <= to)
+}
+
+#[derive(Clone, Default)]
+pub struct InMemoryPurchaseRepository {
+    rows: Arc<Mutex<Vec<Purchase>>>,
+    stock: Arc<Mutex<Vec<StockItem>>>,
+}
+
+impl InMemoryPurchaseRepository {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn count(&self) -> usize {
+        self.rows.lock().unwrap().len()
+    }
+
+    pub fn created_stock(&self) -> Vec<StockItem> {
+        self.stock.lock().unwrap().clone()
+    }
+}
+
+#[async_trait]
+impl PurchaseRepository for InMemoryPurchaseRepository {
+    async fn get(&self, id: PurchaseId) -> Result<Option<Purchase>> {
+        Ok(self
+            .rows
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|row| row.id == id)
+            .cloned())
+    }
+
+    async fn list(&self, query: &PurchaseQuery) -> Result<Paginated<Purchase>> {
+        let rows = self.rows.lock().unwrap();
+        let mut items: Vec<Purchase> = rows
+            .iter()
+            .filter(|row| query.state.is_none_or(|state| row.state == state))
+            .filter(|row| {
+                query
+                    .opportunity_date
+                    .is_none_or(|date| row.opportunity_date == Some(date))
+            })
+            .cloned()
+            .collect();
+        items.sort_by_key(|row| (row.purchased_at, row.id.as_uuid()));
+        if query.sort == SortDirection::Descending {
+            items.reverse();
+        }
+        let total = items.len() as i64;
+        let page: Vec<Purchase> = items
+            .into_iter()
+            .skip(query.page.offset() as usize)
+            .take(query.page.limit() as usize)
+            .collect();
+        Ok(Paginated::new(page, total, query.page))
+    }
+
+    async fn list_open(&self) -> Result<Vec<Purchase>> {
+        Ok(self
+            .rows
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|row| row.state != PurchaseState::Cancelled)
+            .cloned()
+            .collect())
+    }
+
+    async fn insert(
+        &self,
+        purchase: &Purchase,
+        stock: Option<&NewStockFromPurchase>,
+    ) -> Result<()> {
+        if let Some(stock) = stock {
+            self.stock.lock().unwrap().push(stock.item.clone());
+        }
+        self.rows.lock().unwrap().push(purchase.clone());
+        Ok(())
+    }
+
+    async fn update(
+        &self,
+        purchase: &Purchase,
+        expected: Revision,
+        stock: Option<&NewStockFromPurchase>,
+    ) -> Result<UpdateOutcome> {
+        let mut rows = self.rows.lock().unwrap();
+        let Some(existing) = rows.iter_mut().find(|row| row.id == purchase.id) else {
+            return Ok(UpdateOutcome::NotFound);
+        };
+        if existing.revision != expected {
+            return Ok(UpdateOutcome::RevisionMismatch {
+                actual: existing.revision,
+            });
+        }
+        if let Some(stock) = stock {
+            self.stock.lock().unwrap().push(stock.item.clone());
+        }
+        *existing = purchase.clone();
+        Ok(UpdateOutcome::Updated)
+    }
+}
+
+#[derive(Clone)]
+pub struct InMemoryFinishShopRepository {
+    purchases: InMemoryPurchaseRepository,
+    list_items: InMemoryShoppingListItemRepository,
+    trips: InMemoryShoppingTripRepository,
+}
+
+impl InMemoryFinishShopRepository {
+    pub fn new(
+        purchases: InMemoryPurchaseRepository,
+        list_items: InMemoryShoppingListItemRepository,
+        trips: InMemoryShoppingTripRepository,
+    ) -> Self {
+        Self {
+            purchases,
+            list_items,
+            trips,
+        }
+    }
+}
+
+#[async_trait]
+impl FinishShopRepository for InMemoryFinishShopRepository {
+    async fn finish_shop(
+        &self,
+        date: Date,
+        purchases: &[FinishedPurchase],
+        trip: Option<&FinishedShoppingTrip>,
+    ) -> Result<UpdateOutcome> {
+        let mut purchase_rows = self.purchases.rows.lock().unwrap();
+        let mut list_items = self.list_items.rows.lock().unwrap();
+        let mut trips = self.trips.rows.lock().unwrap();
+        let mut stock = self.purchases.stock.lock().unwrap();
+
+        for held in purchases {
+            let Some(existing) = purchase_rows.iter().find(|row| row.id == held.purchase.id) else {
+                return Ok(UpdateOutcome::NotFound);
+            };
+            if existing.revision != held.expected {
+                return Ok(UpdateOutcome::RevisionMismatch {
+                    actual: existing.revision,
+                });
+            }
+        }
+        if let Some(held) = trip {
+            let Some(existing) = trips.iter().find(|row| row.id == held.trip.id) else {
+                return Ok(UpdateOutcome::NotFound);
+            };
+            if existing.revision != held.expected {
+                return Ok(UpdateOutcome::RevisionMismatch {
+                    actual: existing.revision,
+                });
+            }
+        }
+
+        for held in purchases {
+            if let Some(existing) = purchase_rows
+                .iter_mut()
+                .find(|row| row.id == held.purchase.id)
+            {
+                *existing = held.purchase.clone();
+            }
+            stock.push(held.stock.item.clone());
+        }
+        list_items.retain(|item| item.opportunity_date != Some(date));
+        if let Some(held) = trip
+            && let Some(existing) = trips.iter_mut().find(|row| row.id == held.trip.id)
+        {
+            *existing = held.trip.clone();
+        }
+        Ok(UpdateOutcome::Updated)
+    }
+}
+
+#[derive(Clone, Default)]
+pub struct InMemoryShoppingTripRepository {
+    rows: Arc<Mutex<Vec<ShoppingTrip>>>,
+}
+
+impl InMemoryShoppingTripRepository {
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+#[async_trait]
+impl ShoppingTripRepository for InMemoryShoppingTripRepository {
+    async fn for_date(&self, date: Date) -> Result<Option<ShoppingTrip>> {
+        Ok(self
+            .rows
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|row| row.opportunity_date == date)
+            .cloned())
+    }
+
+    async fn insert(&self, trip: &ShoppingTrip) -> Result<()> {
+        self.rows.lock().unwrap().push(trip.clone());
+        Ok(())
+    }
+
+    async fn update(&self, trip: &ShoppingTrip, expected: Revision) -> Result<UpdateOutcome> {
+        let mut rows = self.rows.lock().unwrap();
+        let Some(existing) = rows.iter_mut().find(|row| row.id == trip.id) else {
+            return Ok(UpdateOutcome::NotFound);
+        };
+        if existing.revision != expected {
+            return Ok(UpdateOutcome::RevisionMismatch {
+                actual: existing.revision,
+            });
+        }
+        *existing = trip.clone();
+        Ok(UpdateOutcome::Updated)
+    }
+
+    async fn delete(&self, id: ShoppingTripId, expected: Revision) -> Result<UpdateOutcome> {
+        let mut rows = self.rows.lock().unwrap();
+        match rows.iter().position(|row| row.id == id) {
+            None => Ok(UpdateOutcome::NotFound),
+            Some(index) if rows[index].revision != expected => {
+                Ok(UpdateOutcome::RevisionMismatch {
+                    actual: rows[index].revision,
+                })
+            }
+            Some(index) => {
+                rows.remove(index);
+                Ok(UpdateOutcome::Updated)
+            }
+        }
+    }
+}
+
+#[derive(Clone, Default)]
+pub struct InMemoryShoppingListItemRepository {
+    rows: Arc<Mutex<Vec<ShoppingListItem>>>,
+}
+
+impl InMemoryShoppingListItemRepository {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn count(&self) -> usize {
+        self.rows.lock().unwrap().len()
+    }
+}
+
+#[async_trait]
+impl ShoppingListItemRepository for InMemoryShoppingListItemRepository {
+    async fn get(&self, id: ShoppingListItemId) -> Result<Option<ShoppingListItem>> {
+        Ok(self
+            .rows
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|row| row.id == id)
+            .cloned())
+    }
+
+    async fn list(&self) -> Result<Vec<ShoppingListItem>> {
+        Ok(self.rows.lock().unwrap().clone())
+    }
+
+    async fn insert(&self, item: &ShoppingListItem) -> Result<()> {
+        self.rows.lock().unwrap().push(item.clone());
+        Ok(())
+    }
+
+    async fn update(&self, item: &ShoppingListItem, expected: Revision) -> Result<UpdateOutcome> {
+        let mut rows = self.rows.lock().unwrap();
+        let Some(existing) = rows.iter_mut().find(|row| row.id == item.id) else {
+            return Ok(UpdateOutcome::NotFound);
+        };
+        if existing.revision != expected {
+            return Ok(UpdateOutcome::RevisionMismatch {
+                actual: existing.revision,
+            });
+        }
+        *existing = item.clone();
+        Ok(UpdateOutcome::Updated)
+    }
+
+    async fn delete(&self, id: ShoppingListItemId, expected: Revision) -> Result<UpdateOutcome> {
+        let mut rows = self.rows.lock().unwrap();
+        match rows.iter().position(|row| row.id == id) {
+            None => Ok(UpdateOutcome::NotFound),
+            Some(index) if rows[index].revision != expected => {
+                Ok(UpdateOutcome::RevisionMismatch {
+                    actual: rows[index].revision,
+                })
+            }
+            Some(index) => {
+                rows.remove(index);
+                Ok(UpdateOutcome::Updated)
+            }
+        }
+    }
+
+    async fn delete_for_opportunity(&self, date: Date) -> Result<()> {
+        self.rows
+            .lock()
+            .unwrap()
+            .retain(|row| row.opportunity_date != Some(date));
+        Ok(())
+    }
+}
+
+#[derive(Default, Clone)]
+pub struct InMemoryMealTemplateRepository {
+    rows: Arc<Mutex<HashMap<MealTemplateId, MealTemplate>>>,
+}
+
+impl InMemoryMealTemplateRepository {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn seed(&self, template: MealTemplate) {
+        self.rows.lock().unwrap().insert(template.id, template);
+    }
+
+    pub fn count(&self) -> usize {
+        self.rows.lock().unwrap().len()
+    }
+}
+
+#[async_trait]
+impl MealTemplateRepository for InMemoryMealTemplateRepository {
+    async fn get(&self, id: MealTemplateId) -> Result<Option<MealTemplate>> {
+        Ok(self.rows.lock().unwrap().get(&id).cloned())
+    }
+
+    async fn list(&self, query: &MealTemplateQuery) -> Result<Paginated<MealTemplate>> {
+        let rows = self.rows.lock().unwrap();
+        let items: Vec<MealTemplate> = rows
+            .values()
+            .filter(|template| template.owner_id == query.owner_id)
+            .filter(|template| query.include_archived || !template.is_archived())
+            .filter(|template| {
+                query
+                    .search
+                    .as_deref()
+                    .is_none_or(|needle| matches(&template.name, needle))
+            })
+            .cloned()
+            .collect();
+        drop(rows);
+        Ok(paginate(items, query.page, query.sort, |t| t.name.clone()))
+    }
+
+    async fn insert(&self, template: &MealTemplate) -> Result<()> {
+        self.rows
+            .lock()
+            .unwrap()
+            .insert(template.id, template.clone());
+        Ok(())
+    }
+
+    async fn update(&self, template: &MealTemplate, expected: Revision) -> Result<UpdateOutcome> {
+        let mut rows = self.rows.lock().unwrap();
+        match rows.get(&template.id) {
+            None => Ok(UpdateOutcome::NotFound),
+            Some(existing) if existing.revision != expected => {
+                Ok(UpdateOutcome::RevisionMismatch {
+                    actual: existing.revision,
+                })
+            }
+            Some(_) => {
+                rows.insert(template.id, template.clone());
+                Ok(UpdateOutcome::Updated)
+            }
+        }
+    }
+
+    async fn delete(&self, id: MealTemplateId, expected: Revision) -> Result<UpdateOutcome> {
+        let mut rows = self.rows.lock().unwrap();
+        match rows.get(&id) {
+            None => Ok(UpdateOutcome::NotFound),
+            Some(existing) if existing.revision != expected => {
+                Ok(UpdateOutcome::RevisionMismatch {
+                    actual: existing.revision,
+                })
+            }
+            Some(_) => {
+                rows.remove(&id);
+                Ok(UpdateOutcome::Updated)
+            }
+        }
+    }
+}
