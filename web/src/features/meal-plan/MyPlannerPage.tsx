@@ -22,8 +22,6 @@ import { PageHeader } from '../../components/PageHeader';
 import { ErrorState, Loading } from '../../components/States';
 import { useHouseholdTimeZone } from '../../hooks/useHouseholdTimeZone';
 import { addDays, defaultDayFor, parseIsoDate, startOfWeekIso, todayIso } from './date';
-import { CookedSection } from './CookedSection';
-import { CookSomethingDialog } from './CookSomethingDialog';
 import { MealRow } from './MealRow';
 import { MealEditorDialog } from './MealEditorDialog';
 import { MealSlotMenu } from './MealSlotMenu';
@@ -163,7 +161,6 @@ export function MyPlannerPage({ weekStart, day }: { weekStart: string; day: stri
   const optOut = useOptOutOfMeal();
   const rejoin = useRejoinMeal();
   const [editing, setEditing] = useState<EditSelection | null>(null);
-  const [cookingSomething, setCookingSomething] = useState(false);
   const [deleting, setDeleting] = useState<MealPlanEntry | null>(null);
   const [saving, setSaving] = useState<MealPlanEntry | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -231,7 +228,6 @@ export function MyPlannerPage({ weekStart, day }: { weekStart: string; day: stri
               day={activeDate}
               show={principal?.permissions?.includes('household:write') ?? false}
             />
-            <Button onClick={() => setCookingSomething(true)}>Cooked something</Button>
             {canPlan ? <MealSlotMenu choices={headerChoices} onSelect={(slot) => openEditor(null, slot)} /> : null}
           </>
         }
@@ -339,12 +335,8 @@ export function MyPlannerPage({ weekStart, day }: { weekStart: string; day: stri
               onDelete={(entry) => setDeleting(entry)}
             />
           </SlotSection>
-
-          <CookedSection date={selectedDay.date} />
         </Stack>
       ) : null}
-
-      {cookingSomething ? <CookSomethingDialog onClose={() => setCookingSomething(false)} /> : null}
 
       {editing ? (
         <MealEditorDialog

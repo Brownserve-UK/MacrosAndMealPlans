@@ -20,8 +20,6 @@ import { MealRow, plannerMealRow, type MealAction } from './MealRow';
 import { PlannerLens } from './PlannerLens';
 import { UseItUp, type PlannableDish } from './UseItUp';
 import { CookDialog } from './CookDialog';
-import { CookedSection } from './CookedSection';
-import { CookSomethingDialog } from './CookSomethingDialog';
 import { MealEditorDialog } from './MealEditorDialog';
 import { MealOutcomeDialog } from './MealOutcomeDialog';
 import { MealSlotMenu } from './MealSlotMenu';
@@ -91,7 +89,6 @@ export function HouseholdPlannerPage({ weekStart, day }: { weekStart: string; da
   const [outcome, setOutcome] = useState<PlannerMeal | null>(null);
   const [deleting, setDeleting] = useState<PlannerMeal | null>(null);
   const [cooking, setCooking] = useState<PlannerMeal | null>(null);
-  const [cookingSomething, setCookingSomething] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const timeZone = useHouseholdTimeZone();
@@ -134,7 +131,6 @@ export function HouseholdPlannerPage({ weekStart, day }: { weekStart: string; da
         actions={
           <>
             <PlannerLens lens="household" weekStart={weekStart} day={activeDate} show />
-            <Button onClick={() => setCookingSomething(true)}>Cooked something</Button>
             {canPlan ? <MealSlotMenu choices={MAIN_SLOTS} onSelect={(slot) => openEditor(null, slot)} /> : null}
           </>
         }
@@ -199,14 +195,12 @@ export function HouseholdPlannerPage({ weekStart, day }: { weekStart: string; da
               </SlotSection>
             );
           })}
-          <CookedSection date={activeDate} />
         </Stack>
       ) : null}
 
       {editing ? <MealEditorDialog key={editing.key} open mode="household" onClose={() => setEditing(null)} date={activeDate} slot={editing.slot} meal={editing.meal} startWith={editing.dish} /> : null}
       {outcome ? <MealOutcomeDialog meal={outcome} onClose={() => setOutcome(null)} /> : null}
       {cooking ? <CookDialog meal={cooking} onClose={() => setCooking(null)} /> : null}
-      {cookingSomething ? <CookSomethingDialog onClose={() => setCookingSomething(false)} /> : null}
       <Dialog open={Boolean(deleting)} onClose={remove.isPending ? undefined : () => setDeleting(null)}>
         <DialogTitle>Delete this meal?</DialogTitle>
         <DialogContent><Typography>The meal and its attendance plan will be removed.</Typography></DialogContent>

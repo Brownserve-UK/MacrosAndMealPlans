@@ -43,6 +43,11 @@ specification or ADRs.
       client has a consumer for them.
 - [ ] `MyPlannerPage` maps `preparation.shortage` into its meal shape but never renders it, so only
       the household planner warns that fewer servings were cooked than people are due.
+- [ ] Work out where cooking actually belongs. Both the Cooked section and the "Cooked something"
+      entry point have been pulled off the Planner entirely (neither earned its place there), with no
+      replacement decided yet. Until this lands, there is no way in the app to record a standalone
+      cook that is not tied to a planned meal. `CookSomethingDialog` and `CookedSection.tsx` are left
+      in place, unreferenced, as a starting point rather than deleted.
 - [ ] Align the `ensure_slot_free` error with the database-constraint fallback error.
 - [ ] Seed an opted-out member with a genuinely free personal slot for manual testing.
 - [x] Validate `meal_guest_allocation.allocated_unit` and `confirmed_unit` with `unit_code`, or
