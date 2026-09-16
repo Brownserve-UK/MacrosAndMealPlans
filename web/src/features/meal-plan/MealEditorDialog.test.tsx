@@ -60,7 +60,7 @@ async function addFood() {
 }
 
 function personChip(name: string): HTMLElement {
-  return screen.getByText(name).closest('.MuiChip-root') as HTMLElement;
+  return screen.getByText(name).closest('button') as HTMLElement;
 }
 
 describe('MealEditorDialog household roster', () => {
@@ -79,11 +79,9 @@ describe('MealEditorDialog household roster', () => {
     const user = await addFood();
     const chip = personChip('Morgan Sample');
     expect(chip).toHaveAttribute('aria-disabled', 'true');
+    expect(chip).toBeDisabled();
 
-    await user.click(chip);
-    expect(screen.queryByText('Cooking 1 serving')).not.toBeInTheDocument();
-
-    await user.hover(chip);
+    await user.hover(chip.parentElement as HTMLElement);
     expect(await screen.findByRole('tooltip')).toHaveTextContent('Already eating at 10:00');
   });
 
@@ -95,7 +93,8 @@ describe('MealEditorDialog household roster', () => {
       <MealEditorDialog open mode="household" onClose={vi.fn()} date="2026-09-10" slot="breakfast" meal={null} />,
     );
     const user = await addFood();
-    await user.hover(personChip('Morgan Sample'));
+    const chip = personChip('Morgan Sample');
+    await user.hover(chip.parentElement as HTMLElement);
     expect(await screen.findByRole('tooltip')).toHaveTextContent('Already in another meal');
   });
 
@@ -165,7 +164,7 @@ describe('MealEditorDialog household roster', () => {
     );
     expect(screen.queryByLabelText('Date')).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Meal')).not.toBeInTheDocument();
-    await waitFor(() => expect(screen.getByLabelText('Time')).toHaveValue('08:00'));
+    await waitFor(() => expect(screen.getByText('Breakfast · 08:00')).toBeInTheDocument());
     expect(screen.getByText('Thursday 10 September')).toBeInTheDocument();
   });
 });

@@ -94,25 +94,7 @@ function RecipeKcal({ recipeId }: { recipeId: string }) {
   );
 }
 
-export function MealFoodFields({
-  foods,
-  setFoods,
-  dinerCount,
-  making,
-  setMaking,
-  mealNoun,
-}: {
-  foods: FoodDraft[];
-  setFoods: Dispatch<SetStateAction<FoodDraft[]>>;
-  dinerCount: number;
-  making: number | null;
-  setMaking: Dispatch<SetStateAction<number | null>>;
-  mealNoun: string;
-}) {
-  const forecast = forecastServings(making, dinerCount);
-  const hasRecipe = foods.some((food) => food.itemKind === 'recipe');
-  const spare = forecast - dinerCount;
-
+function useFoodActions(foods: FoodDraft[], setFoods: Dispatch<SetStateAction<FoodDraft[]>>, forecast: number) {
   function addProduct(next: Product) {
     if (foods.some((food) => food.itemKind === 'product' && food.itemId === next.id)) return;
     setFoods((current) => [...current, {
@@ -223,6 +205,53 @@ export function MealFoodFields({
     else addSavedMeal(choice);
   }
 
+  return { addFood };
+}
+
+export function FoodSearchField({
+  foods,
+  setFoods,
+  dinerCount,
+  making,
+}: {
+  foods: FoodDraft[];
+  setFoods: Dispatch<SetStateAction<FoodDraft[]>>;
+  dinerCount: number;
+  making: number | null;
+}) {
+  const forecast = forecastServings(making, dinerCount);
+  const { addFood } = useFoodActions(foods, setFoods, forecast);
+  return (
+    <FoodSearch
+      onPick={addFood}
+      excludeProductIds={foods.filter((food) => food.itemKind === 'product').map((food) => food.itemId)}
+      excludeRecipeIds={foods.filter((food) => food.itemKind === 'recipe').map((food) => food.itemId)}
+      excludeDishIds={foods.filter((food) => food.itemKind === 'dish').map((food) => food.itemId)}
+      excludeIngredientIds={foods.filter((food) => food.itemKind === 'ingredient').map((food) => food.itemId)}
+      excludePreparedMealIds={foods.filter((food) => food.itemKind === 'prepared_meal').map((food) => food.itemId)}
+    />
+  );
+}
+
+export function FoodList({
+  foods,
+  setFoods,
+  dinerCount,
+  making,
+  setMaking,
+  mealNoun,
+}: {
+  foods: FoodDraft[];
+  setFoods: Dispatch<SetStateAction<FoodDraft[]>>;
+  dinerCount: number;
+  making: number | null;
+  setMaking: Dispatch<SetStateAction<number | null>>;
+  mealNoun: string;
+}) {
+  const forecast = forecastServings(making, dinerCount);
+  const hasRecipe = foods.some((food) => food.itemKind === 'recipe');
+  const spare = forecast - dinerCount;
+
   function setFoodAmount(componentId: string, amount: Amount) {
     setFoods((current) => current.map((food) => food.componentId === componentId ? { ...food, amount } : food));
   }
@@ -230,14 +259,6 @@ export function MealFoodFields({
   return (
     <Stack spacing={2.5}>
       <Stack spacing={1.5}>
-        <FoodSearch
-          onPick={addFood}
-          excludeProductIds={foods.filter((food) => food.itemKind === 'product').map((food) => food.itemId)}
-          excludeRecipeIds={foods.filter((food) => food.itemKind === 'recipe').map((food) => food.itemId)}
-          excludeDishIds={foods.filter((food) => food.itemKind === 'dish').map((food) => food.itemId)}
-          excludeIngredientIds={foods.filter((food) => food.itemKind === 'ingredient').map((food) => food.itemId)}
-          excludePreparedMealIds={foods.filter((food) => food.itemKind === 'prepared_meal').map((food) => food.itemId)}
-        />
         {foods.map((food) => (
           <Box key={food.componentId} sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2, p: 1.5 }}>
             <Stack direction="row" spacing={1.5} sx={{ alignItems: 'center' }}>

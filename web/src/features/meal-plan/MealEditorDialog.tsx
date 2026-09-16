@@ -1,16 +1,12 @@
 import AddIcon from '@mui/icons-material/AddOutlined';
-import CheckIcon from '@mui/icons-material/CheckOutlined';
+import CloseIcon from '@mui/icons-material/CloseOutlined';
+import PersonIcon from '@mui/icons-material/PersonOutlineOutlined';
 import RemoveIcon from '@mui/icons-material/RemoveOutlined';
 import Alert from '@mui/material/Alert';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
-import Chip from '@mui/material/Chip';
-import DialogActions from '@mui/material/DialogActions';
-import DialogContent from '@mui/material/DialogContent';
-import DialogTitle from '@mui/material/DialogTitle';
 import IconButton from '@mui/material/IconButton';
 import Stack from '@mui/material/Stack';
-import TextField from '@mui/material/TextField';
 import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 import { useMemo, useState } from 'react';
@@ -31,9 +27,11 @@ import {
   forecastServings,
   initialFoods,
   initialMaking,
-  MealFoodFields,
+  FoodList,
+  FoodSearchField,
 } from './MealFoodFields';
 import { memberBlockedReason } from './mealAttendance';
+import { MealTimeChip, OptionCard } from './MealDialogParts';
 import type { PlannableDish } from './UseItUp';
 
 type EditorMode = 'member' | 'household';
@@ -61,6 +59,7 @@ export function MealEditorDialog({
 }) {
   const { principal } = useAuth();
   const household = mode === 'household';
+  const singleAttendeeOnly = slot === 'snacks';
   const members = useMembers({ include_archived: false, per_page: 200 });
   const mealTimes = useHouseholdSettings();
   const create = useCreateMealPlanEntry();
@@ -92,6 +91,11 @@ export function MealEditorDialog({
   });
 
   function toggleMember(memberId: string) {
+    if (singleAttendeeOnly) {
+      setGuestCount(0);
+      setSelectedMembers((current) => (current.includes(memberId) ? [] : [memberId]));
+      return;
+    }
     setSelectedMembers((current) => current.includes(memberId)
       ? current.filter((id) => id !== memberId)
       : [...current, memberId]);
@@ -170,82 +174,88 @@ export function MealEditorDialog({
   }
 
   return (
-    <FormDialog open={open} onClose={busy ? undefined : onClose} fullWidth maxWidth="sm">
-      <DialogTitle sx={{ pb: 1 }}>
-        <Typography component="span" variant="h2">{meal ? `Edit ${slotLabel}` : `Plan ${slotLabel}`}</Typography>
-        <Typography component="span" variant="body2" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>{dateLabel}</Typography>
-      </DialogTitle>
-      <DialogContent dividers>
-        <Stack spacing={2.5}>
-          {error ? <Alert severity="error">{error}</Alert> : null}
-          <TextField
-            label={slot === 'snacks' ? 'Time (optional)' : 'Time'}
-            type="time"
-            value={plannedTime}
-            onChange={(event) => setPlannedTimeOverride(event.target.value)}
-            slotProps={{ inputLabel: { shrink: true } }}
-            sx={{ width: { xs: '100%', sm: 180 } }}
-          />
-          <Box>
-            <Typography variant="h3" sx={{ mb: 1 }}>Food</Typography>
-            <MealFoodFields
-              foods={foods}
-              setFoods={setFoods}
-              dinerCount={diners}
-              making={making}
-              setMaking={setMaking}
-              mealNoun={mealNoun}
-            />
-          </Box>
-          {household ? (
-            <Box>
-              <Stack direction="row" spacing={1} sx={{ alignItems: 'baseline', mb: 1 }}>
-                <Typography variant="h3">Eating</Typography>
-                {attendance.isFetching ? <Typography variant="caption" color="text.secondary">Checking who's free…</Typography> : null}
-              </Stack>
-              <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap', gap: 1, alignItems: 'center' }}>
+    <FormDialog open={open} onClose={busy ? undefined : onClose} fullWidth maxWidth="sm" slotProps={{ paper: { sx: { overflow: 'hidden' } } }}>
+      <Stack sx={{ minHeight: { xs: '70vh', sm: 520 }, maxHeight: { xs: '90vh', sm: '85vh' }, overflow: 'hidden' }}>
+        <Box sx={{ display: 'grid', gridTemplateColumns: '40px minmax(0, 1fr) 40px', alignItems: 'center', gap: 1, px: 2, pt: 2, flexShrink: 0 }}>
+          <Box sx={{ width: 40 }} />
+          <Box />
+          <IconButton aria-label="Close" onClick={onClose} disabled={busy}><CloseIcon /></IconButton>
+        </Box>
+        <Box sx={{ display: 'flex', justifyContent: 'center', mt: -0.5, pb: 1, flexShrink: 0 }}>
+          <MealTimeChip slot={slot} time={plannedTime} onChange={setPlannedTimeOverride} />
+        </Box>
+
+        <Box sx={{ px: 3, pt: { xs: 1, sm: 2 }, pb: 2, flexShrink: 0 }}>
+          <Stack spacing={2} sx={{ width: '100%', maxWidth: 480, mx: 'auto' }}>
+            <Box sx={{ textAlign: 'center' }}>
+              <Typography variant="h1">{`${meal ? 'Edit' : 'Plan'} ${slotLabel}`}</Typography>
+              <Typography variant="body2" color="text.secondary" className="numeral" sx={{ mt: 0.5 }}>{dateLabel}</Typography>
+            </Box>
+            {error ? <Alert severity="error">{error}</Alert> : null}
+            <FoodSearchField foods={foods} setFoods={setFoods} dinerCount={diners} making={making} />
+          </Stack>
+        </Box>
+
+        <Box sx={{ flex: 1, minHeight: 0, px: 3, py: { xs: 2, sm: 3 }, overflow: 'auto' }}>
+          <Stack spacing={3} sx={{ width: '100%', maxWidth: 480, mx: 'auto' }}>
+            {household ? (
+              <Stack spacing={2}>
+                <Typography variant="overline" color="text.secondary">Eating</Typography>
+                {singleAttendeeOnly ? (
+                  <Typography variant="caption" color="text.secondary">Snacks are planned for one person at a time.</Typography>
+                ) : null}
                 {visibleMembers.map((member) => {
                   const blocked = memberBlockedReason(attendance.data ?? [], member.id, meal?.people.map((person) => person.member_id));
-                  const picked = selectedMembers.includes(member.id);
-                  const chip = (
-                    <Chip
-                      label={member.display_name}
-                      icon={picked ? <CheckIcon /> : undefined}
-                      aria-disabled={blocked ? true : undefined}
-                      aria-pressed={blocked ? undefined : picked}
-                      onClick={blocked ? undefined : () => toggleMember(member.id)}
-                      disabled={attendance.isFetching}
-                      variant="outlined"
-                      sx={{
-                        borderRadius: 999,
-                        height: 36,
-                        px: 0.5,
-                        ...(picked ? { bgcolor: 'action.selected', borderColor: 'primary.main', color: 'primary.main' } : {}),
-                        ...(blocked ? { borderStyle: 'dashed', color: 'text.disabled', cursor: 'default' } : {}),
-                      }}
+                  const card = (
+                    <OptionCard
+                      title={member.display_name}
+                      caption={blocked ?? 'Household member'}
+                      icon={<PersonIcon />}
+                      selected={selectedMembers.includes(member.id)}
+                      disabled={attendance.isFetching || Boolean(blocked)}
+                      onClick={() => toggleMember(member.id)}
                     />
                   );
                   return blocked
-                    ? <Tooltip key={member.id} title={blocked}><span>{chip}</span></Tooltip>
-                    : <Box key={member.id} component="span">{chip}</Box>;
+                    ? <Tooltip key={member.id} title={blocked}><span>{card}</span></Tooltip>
+                    : <Box key={member.id}>{card}</Box>;
                 })}
-                <Stack direction="row" spacing={0.5} sx={{ alignItems: 'center', bgcolor: 'action.hover', borderRadius: 2, pl: 1.5, height: 36 }}>
-                  <Typography variant="body2" color="text.secondary">Guests</Typography>
-                  <IconButton size="small" aria-label="Remove guest" disabled={guestCount === 0} onClick={() => setGuestCount(Math.max(0, guestCount - 1))}><RemoveIcon fontSize="small" /></IconButton>
-                  <Typography className="numeral" sx={{ minWidth: 16, textAlign: 'center' }}>{guestCount}</Typography>
-                  <IconButton size="small" aria-label="Add guest" onClick={() => setGuestCount(guestCount + 1)}><AddIcon fontSize="small" /></IconButton>
-                </Stack>
+                {singleAttendeeOnly ? null : (
+                  <Stack direction="row" spacing={1} sx={{ alignItems: 'center', justifyContent: 'space-between', px: 1 }}>
+                    <Typography variant="body1" sx={{ fontWeight: 500 }}>Guests</Typography>
+                    <Stack direction="row" spacing={0.5} sx={{ alignItems: 'center' }}>
+                      <IconButton size="small" aria-label="Remove guest" disabled={guestCount === 0} onClick={() => setGuestCount(Math.max(0, guestCount - 1))}><RemoveIcon fontSize="small" /></IconButton>
+                      <Typography className="numeral" sx={{ minWidth: 24, textAlign: 'center' }}>{guestCount}</Typography>
+                      <IconButton size="small" aria-label="Add guest" onClick={() => setGuestCount(guestCount + 1)}><AddIcon fontSize="small" /></IconButton>
+                    </Stack>
+                  </Stack>
+                )}
+                {attendance.isFetching ? <Typography variant="caption" color="text.secondary">Checking who's free…</Typography> : null}
               </Stack>
-            </Box>
-          ) : null}
-        </Stack>
-      </DialogContent>
-      <DialogActions>
-        <Button onClick={onClose} disabled={busy}>Cancel</Button>
-        <Button variant="contained" onClick={() => void save()} disabled={busy || foods.length === 0 || (household && diners === 0)}>
-          {meal ? 'Save changes' : `Plan ${mealNoun}`}
-        </Button>
-      </DialogActions>
+            ) : null}
+
+            <Stack spacing={1}>
+              <Typography variant="overline" color="text.secondary">Food</Typography>
+              <FoodList
+                foods={foods}
+                setFoods={setFoods}
+                dinerCount={diners}
+                making={making}
+                setMaking={setMaking}
+                mealNoun={mealNoun}
+              />
+            </Stack>
+          </Stack>
+        </Box>
+
+        <Box sx={{ px: 3, pb: { xs: 2, sm: 3 }, pt: 1, flexShrink: 0 }}>
+          <Stack sx={{ width: '100%', maxWidth: 480, mx: 'auto' }}>
+            <Button variant="contained" size="large" onClick={() => void save()} disabled={busy || foods.length === 0 || (household && diners === 0)}>
+              {busy ? 'Saving…' : meal ? 'Save changes' : `Plan ${mealNoun}`}
+            </Button>
+          </Stack>
+        </Box>
+      </Stack>
     </FormDialog>
   );
 }

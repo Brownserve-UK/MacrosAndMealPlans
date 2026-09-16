@@ -1,23 +1,17 @@
 import AddIcon from '@mui/icons-material/AddOutlined';
 import ArrowBackIcon from '@mui/icons-material/ArrowBackIosNewOutlined';
-import CheckIcon from '@mui/icons-material/CheckOutlined';
 import CloseIcon from '@mui/icons-material/CloseOutlined';
-import EditIcon from '@mui/icons-material/EditOutlined';
 import PersonIcon from '@mui/icons-material/PersonOutlineOutlined';
 import RemoveIcon from '@mui/icons-material/RemoveOutlined';
 import Alert from '@mui/material/Alert';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
-import ButtonBase from '@mui/material/ButtonBase';
-import Chip from '@mui/material/Chip';
 import Dialog from '@mui/material/Dialog';
 import IconButton from '@mui/material/IconButton';
-import Paper from '@mui/material/Paper';
 import Stack from '@mui/material/Stack';
-import TextField from '@mui/material/TextField';
 import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Amount, MealSlot } from '../../api/client';
 import { ApiError } from '../../api/client';
 import {
@@ -31,61 +25,16 @@ import {
   amountForMeal,
   forecastServings,
   initialFoods,
-  MealFoodFields,
+  FoodList,
+  FoodSearchField,
 } from './MealFoodFields';
 import { memberBlockedReason } from './mealAttendance';
-import { labelForSlot } from './slots';
+import { MealTimeChip, OptionCard } from './MealDialogParts';
 
 type Step = 'attendance' | 'food';
 
 function equalShare(amount: Amount, dinerCount: number): Amount {
   return { ...amount, value: amount.value / Math.max(dinerCount, 1) };
-}
-
-function OptionCard({
-  title,
-  caption,
-  icon,
-  selected,
-  disabled,
-  onClick,
-}: {
-  title: string;
-  caption?: string;
-  icon?: ReactNode;
-  selected: boolean;
-  disabled?: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <ButtonBase
-      onClick={onClick}
-      disabled={disabled}
-      aria-pressed={disabled ? undefined : selected}
-      aria-disabled={disabled ? true : undefined}
-      sx={{ display: 'block', width: '100%', textAlign: 'left', borderRadius: '14px' }}
-    >
-      <Paper
-        elevation={0}
-        sx={{
-          width: '100%',
-          p: 2,
-          borderColor: selected ? 'primary.main' : 'divider',
-          ...(disabled ? { borderStyle: 'dashed', color: 'text.disabled' } : {}),
-        }}
-      >
-        <Stack direction="row" spacing={2} sx={{ alignItems: 'center' }}>
-          <Box sx={{ width: 34, height: 34, borderRadius: '10px', bgcolor: 'action.hover', display: 'grid', placeItems: 'center', color: disabled ? 'text.disabled' : 'text.secondary' }}>
-            {selected ? <CheckIcon /> : icon}
-          </Box>
-          <Stack spacing={0.5}>
-            <Typography variant="body1" sx={{ fontWeight: 500 }}>{title}</Typography>
-            {caption ? <Typography variant="caption" color={disabled ? 'text.disabled' : 'text.secondary'}>{caption}</Typography> : null}
-          </Stack>
-        </Stack>
-      </Paper>
-    </ButtonBase>
-  );
 }
 
 export function GuidedMealDialog({
@@ -101,19 +50,20 @@ export function GuidedMealDialog({
 }) {
   const { principal } = useAuth();
   const manager = principal?.permissions.includes('household:write') ?? false;
+  const singleAttendeeOnly = slot === 'snacks';
+  const showAttendanceStep = manager && !singleAttendeeOnly;
   const memberId = principal?.member_id ?? null;
   const members = useMembers({ include_archived: false, per_page: 200 });
-  const attendance = useHouseholdSlotAttendance(manager ? date : '', manager ? slot : '');
+  const attendance = useHouseholdSlotAttendance(showAttendanceStep ? date : '', showAttendanceStep ? slot : '');
   const mealTimes = useHouseholdSettings();
   const create = useCreateMealPlanEntry();
-  const [step, setStep] = useState<Step>(manager ? 'attendance' : 'food');
+  const [step, setStep] = useState<Step>(showAttendanceStep ? 'attendance' : 'food');
   const [direction, setDirection] = useState<'forward' | 'back'>('forward');
   const [transitioning, setTransitioning] = useState(false);
   const transitionTimer = useRef<number | null>(null);
   const [selectedMembers, setSelectedMembers] = useState<string[]>(memberId ? [memberId] : []);
   const [guestCount, setGuestCount] = useState(0);
   const [plannedTimeOverride, setPlannedTimeOverride] = useState<string | null>(null);
-  const [editingTime, setEditingTime] = useState(false);
   const [foods, setFoods] = useState(() => initialFoods(null));
   const [making, setMaking] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -162,7 +112,7 @@ export function GuidedMealDialog({
     }
     if (diners === 0) {
       setError(`Choose who is eating this ${mealNoun}.`);
-      if (manager) go('attendance', 'back');
+      if (showAttendanceStep) go('attendance', 'back');
       return;
     }
     setError(null);
@@ -209,28 +159,6 @@ export function GuidedMealDialog({
     }
   }
 
-  const headerTime = editingTime ? (
-    <TextField
-      autoFocus
-      aria-label={slot === 'snacks' ? 'Time (optional)' : 'Time'}
-      type="time"
-      size="small"
-      value={plannedTime}
-      onChange={(event) => setPlannedTimeOverride(event.target.value)}
-      onBlur={() => setEditingTime(false)}
-      slotProps={{ htmlInput: { style: { paddingTop: 6, paddingBottom: 6 } } }}
-      sx={{ width: 128 }}
-    />
-  ) : (
-    <Chip
-      size="small"
-      icon={<EditIcon />}
-      label={`${labelForSlot(slot)} · ${plannedTime || 'Add time'}`}
-      onClick={() => setEditingTime(true)}
-      sx={{ borderRadius: 999, bgcolor: 'action.hover', border: 0 }}
-    />
-  );
-
   return (
     <Dialog
       open={open}
@@ -238,11 +166,11 @@ export function GuidedMealDialog({
       aria-labelledby="guided-meal-title"
       fullWidth
       maxWidth="sm"
-      slotProps={{ paper: { sx: { minHeight: { xs: '80vh', sm: 600 } } } }}
+      slotProps={{ paper: { sx: { overflow: 'hidden' } } }}
     >
-      <Stack sx={{ minHeight: 'inherit' }}>
-        <Box sx={{ display: 'grid', gridTemplateColumns: '40px minmax(0, 1fr) 40px', alignItems: 'center', gap: 1, px: 2, pt: 2 }}>
-          {manager ? (
+      <Stack sx={{ minHeight: { xs: '70vh', sm: 520 }, maxHeight: { xs: '90vh', sm: '85vh' }, overflow: 'hidden' }}>
+        <Box sx={{ display: 'grid', gridTemplateColumns: '40px minmax(0, 1fr) 40px', alignItems: 'center', gap: 1, px: 2, pt: 2, flexShrink: 0 }}>
+          {showAttendanceStep ? (
             <IconButton
               aria-label="Back"
               onClick={() => step === 'food' && go('attendance', 'back')}
@@ -251,7 +179,7 @@ export function GuidedMealDialog({
               <ArrowBackIcon />
             </IconButton>
           ) : <Box sx={{ width: 40 }} />}
-          {manager ? (
+          {showAttendanceStep ? (
             <Stack direction="row" spacing={1} aria-label="Progress" sx={{ justifySelf: 'center' }}>
               {(['attendance', 'food'] as const).map((item, index) => {
                 const stepIndex = step === 'attendance' ? 0 : 1;
@@ -272,11 +200,23 @@ export function GuidedMealDialog({
           ) : <Box />}
           <IconButton aria-label="Close" onClick={onClose} disabled={create.isPending}><CloseIcon /></IconButton>
         </Box>
-        <Box sx={{ display: 'flex', justifyContent: 'center', mt: -0.5, pb: 1 }}>
-          {headerTime}
+        <Box sx={{ display: 'flex', justifyContent: 'center', mt: -0.5, pb: 1, flexShrink: 0 }}>
+          <MealTimeChip slot={slot} time={plannedTime} onChange={setPlannedTimeOverride} />
         </Box>
 
-        <Box sx={{ flex: 1, px: 3, py: { xs: 2, sm: 3 }, overflow: 'auto' }}>
+        <Box sx={{ px: 3, pt: { xs: 1, sm: 2 }, pb: 2, flexShrink: 0 }}>
+          <Stack spacing={2} sx={{ width: '100%', maxWidth: 480, mx: 'auto' }}>
+            <Typography id="guided-meal-title" variant="h1">
+              {step === 'attendance' ? "Who's eating?" : 'What are you eating?'}
+            </Typography>
+            {error ? <Alert severity="error">{error}</Alert> : null}
+            {step === 'food' ? (
+              <FoodSearchField foods={foods} setFoods={setFoods} dinerCount={diners} making={making} />
+            ) : null}
+          </Stack>
+        </Box>
+
+        <Box sx={{ flex: 1, minHeight: 0, px: 3, py: { xs: 2, sm: 3 }, overflow: 'auto' }}>
           <Stack
             key={step}
             spacing={3}
@@ -292,11 +232,6 @@ export function GuidedMealDialog({
               '@keyframes stepExitBack': { from: { opacity: 1, transform: 'translateX(0)' }, to: { opacity: 0, transform: 'translateX(32px)' } },
             }}
           >
-            <Typography id="guided-meal-title" variant="h1">
-              {step === 'attendance' ? "Who's eating?" : 'What are you eating?'}
-            </Typography>
-            {error ? <Alert severity="error">{error}</Alert> : null}
-
             {step === 'attendance' ? (
               <Stack spacing={2}>
                 {memberId ? (
@@ -349,24 +284,30 @@ export function GuidedMealDialog({
                   </Stack>
                 </Stack>
                 {attendance.isFetching ? <Typography variant="caption" color="text.secondary">Checking who's free…</Typography> : null}
-                <Button variant="contained" size="large" onClick={() => go('food')} disabled={diners === 0 || attendance.isFetching}>
-                  Continue
-                </Button>
               </Stack>
             ) : (
-              <Stack spacing={3}>
-                <MealFoodFields
-                  foods={foods}
-                  setFoods={setFoods}
-                  dinerCount={diners}
-                  making={making}
-                  setMaking={setMaking}
-                  mealNoun={mealNoun}
-                />
-                <Button variant="contained" size="large" onClick={() => void save()} disabled={create.isPending || foods.length === 0 || diners === 0}>
-                  {create.isPending ? 'Planning…' : `Plan ${mealNoun}`}
-                </Button>
-              </Stack>
+              <FoodList
+                foods={foods}
+                setFoods={setFoods}
+                dinerCount={diners}
+                making={making}
+                setMaking={setMaking}
+                mealNoun={mealNoun}
+              />
+            )}
+          </Stack>
+        </Box>
+
+        <Box sx={{ px: 3, pb: { xs: 2, sm: 3 }, pt: 1, flexShrink: 0 }}>
+          <Stack sx={{ width: '100%', maxWidth: 480, mx: 'auto' }}>
+            {step === 'attendance' ? (
+              <Button variant="contained" size="large" onClick={() => go('food')} disabled={diners === 0 || attendance.isFetching}>
+                Continue
+              </Button>
+            ) : (
+              <Button variant="contained" size="large" onClick={() => void save()} disabled={create.isPending || foods.length === 0 || diners === 0}>
+                {create.isPending ? 'Planning…' : `Plan ${mealNoun}`}
+              </Button>
             )}
           </Stack>
         </Box>
