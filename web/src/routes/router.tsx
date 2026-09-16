@@ -34,6 +34,7 @@ import { ProductStockPage } from '../features/stock/ProductStockPage';
 import { IngredientStockPage } from '../features/stock/IngredientStockPage';
 import { PreparedMealStockPage } from '../features/stock/PreparedMealStockPage';
 import { GoalsPage } from '../features/goals/GoalsPage';
+import { KitchenPage } from '../features/kitchen/KitchenPage';
 
 const rootRoute = createRootRoute({ component: AppShell });
 
@@ -135,6 +136,12 @@ const needsReviewRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/needs-review',
   component: NeedsReviewPage,
+});
+
+const kitchenRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/kitchen',
+  component: KitchenPage,
 });
 
 const foodsRoute = createRoute({
@@ -389,6 +396,7 @@ export const routeTree = rootRoute.addChildren([
   plannerIndexRoute,
   plannerWeekRoute,
   plannerDayRoute,
+  kitchenRoute,
   householdPlannerIndexRoute,
   householdPlannerWeekRoute,
   householdPlannerDayRoute,

@@ -60,9 +60,23 @@ function ComingOutOfStock({ recipeId, made }: { recipeId: string; made: number }
   );
 }
 
-export function CookDialog({ meal, onClose }: { meal: PlannerMeal; onClose: () => void }) {
+export function CookDialog({
+  meal,
+  componentId,
+  onClose,
+}: {
+  meal: PlannerMeal;
+  componentId?: string;
+  onClose: () => void;
+}) {
   const record = useRecordPreparation();
-  const food = meal.foods.find((candidate) => candidate.item_kind === 'recipe' && candidate.needs_cooking);
+  const food = meal.foods.find(
+    (candidate) =>
+      candidate.item_kind === 'recipe' &&
+      candidate.needs_cooking &&
+      !candidate.cooked &&
+      (!componentId || candidate.id === componentId),
+  );
   const recipe = food?.item_kind === 'recipe' ? food : null;
   const planned = Math.max(1, Math.round(recipe?.amount.value ?? 1));
 
