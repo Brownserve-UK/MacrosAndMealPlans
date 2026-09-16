@@ -16,12 +16,9 @@ const days = Array.from({ length: 7 }, (_, index) => ({
 describe('PlannerShell', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('preserves the lens when changing week', async () => {
+  it('changes week without search state', async () => {
     render(
       <PlannerShell
-        lens="household"
-        showLens
-        onLensChange={vi.fn()}
         weekStart="2026-09-14"
         activeDate="2026-09-15"
         dayCounts={days}
@@ -35,16 +32,12 @@ describe('PlannerShell', () => {
     expect(mocks.navigate).toHaveBeenCalledWith({
       to: '/planner/$weekStart/$day',
       params: { weekStart: '2026-09-21', day: '2026-09-21' },
-      search: { lens: 'household' },
     });
   });
 
-  it('preserves the lens when changing day', async () => {
+  it('changes day without search state', async () => {
     render(
       <PlannerShell
-        lens="mine"
-        showLens
-        onLensChange={vi.fn()}
         weekStart="2026-09-14"
         activeDate="2026-09-15"
         dayCounts={days}
@@ -58,7 +51,6 @@ describe('PlannerShell', () => {
     expect(mocks.navigate).toHaveBeenCalledWith({
       to: '/planner/$weekStart/$day',
       params: { weekStart: '2026-09-14', day: '2026-09-16' },
-      search: { lens: 'mine' },
     });
   });
 });

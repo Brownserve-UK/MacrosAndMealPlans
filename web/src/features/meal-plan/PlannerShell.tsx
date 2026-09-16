@@ -6,7 +6,6 @@ import type { ReactNode } from 'react';
 import { PageHeader } from '../../components/PageHeader';
 import { useHouseholdTimeZone } from '../../hooks/useHouseholdTimeZone';
 import { defaultDayFor, parseIsoDate, startOfWeekIso, todayIso } from './date';
-import { PlannerLens, type Lens } from './PlannerLens';
 import { WeekNavigator, type WeekNavigatorDay } from './WeekNavigator';
 
 function fullDayLabel(date: string) {
@@ -14,24 +13,20 @@ function fullDayLabel(date: string) {
 }
 
 export function PlannerShell({
-  lens,
-  showLens,
-  onLensChange,
   weekStart,
   activeDate,
   dayCounts,
   headerActions,
+  nutrition,
   error,
   onDismissError,
   children,
 }: {
-  lens: Lens;
-  showLens: boolean;
-  onLensChange: (lens: Lens) => void;
   weekStart: string;
   activeDate: string;
   dayCounts: WeekNavigatorDay[] | null;
   headerActions?: ReactNode;
+  nutrition?: ReactNode;
   error: string | null;
   onDismissError: () => void;
   children: ReactNode;
@@ -42,7 +37,6 @@ export function PlannerShell({
     void navigate({
       to: '/planner/$weekStart/$day',
       params: { weekStart: start, day: defaultDayFor(start, timeZone) },
-      search: { lens },
     });
   }
 
@@ -50,7 +44,6 @@ export function PlannerShell({
     void navigate({
       to: '/planner/$weekStart/$day',
       params: { weekStart, day: date },
-      search: { lens },
     });
   }
 
@@ -58,14 +51,10 @@ export function PlannerShell({
     <Box>
       <PageHeader
         title="Planner"
-        actions={
-          <>
-            <PlannerLens lens={lens} onChange={onLensChange} show={showLens} />
-            {headerActions}
-          </>
-        }
+        actions={headerActions}
       />
       {error ? <Alert severity="error" onClose={onDismissError} sx={{ mb: 2 }}>{error}</Alert> : null}
+      {nutrition}
       {dayCounts ? (
         <WeekNavigator
           weekStart={weekStart}

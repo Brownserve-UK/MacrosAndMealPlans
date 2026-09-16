@@ -10,7 +10,6 @@ import { MemberPage } from '../features/household/MemberPage';
 import { MealPlanIndexRedirect } from '../features/meal-plan/MealPlanIndexRedirect';
 import { MealPlanPage } from '../features/meal-plan/MealPlanPage';
 import { PlannerPage } from '../features/meal-plan/PlannerPage';
-import type { Lens } from '../features/meal-plan/PlannerLens';
 import { NeedsReviewPage } from '../features/meal-plan/NeedsReviewPage';
 import { defaultDayFor } from '../features/meal-plan/date';
 import { IngredientPage } from '../features/ingredients/IngredientPage';
@@ -37,10 +36,6 @@ import { PreparedMealStockPage } from '../features/stock/PreparedMealStockPage';
 import { GoalsPage } from '../features/goals/GoalsPage';
 
 const rootRoute = createRootRoute({ component: AppShell });
-
-function validatePlannerSearch(search: Record<string, unknown>): { lens?: Lens } {
-  return search.lens === 'mine' || search.lens === 'household' ? { lens: search.lens } : {};
-}
 
 const indexRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -80,22 +75,16 @@ const foodLogDayRoute = createRoute({
 const plannerIndexRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/planner',
-  validateSearch: validatePlannerSearch,
-  component: function PlannerIndex() {
-    const { lens } = plannerIndexRoute.useSearch();
-    return <MealPlanIndexRedirect to="/planner" lens={lens} />;
-  },
+  component: () => <MealPlanIndexRedirect to="/planner" />,
 });
 
 const plannerWeekRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/planner/$weekStart',
-  validateSearch: validatePlannerSearch,
-  beforeLoad: ({ params, search }) => {
+  beforeLoad: ({ params }) => {
     throw redirect({
       to: '/planner/$weekStart/$day',
       params: { weekStart: params.weekStart, day: defaultDayFor(params.weekStart) },
-      search,
       replace: true,
     });
   },
@@ -104,11 +93,9 @@ const plannerWeekRoute = createRoute({
 const plannerDayRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/planner/$weekStart/$day',
-  validateSearch: validatePlannerSearch,
   component: function ViewPlanner() {
     const { weekStart, day } = plannerDayRoute.useParams();
-    const { lens } = plannerDayRoute.useSearch();
-    return <PlannerPage weekStart={weekStart} day={day} requestedLens={lens} />;
+    return <PlannerPage weekStart={weekStart} day={day} />;
   },
 });
 
@@ -116,7 +103,7 @@ const householdPlannerIndexRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/household/planner',
   beforeLoad: () => {
-    throw redirect({ to: '/planner', search: { lens: 'household' }, replace: true });
+    throw redirect({ to: '/planner', replace: true });
   },
 });
 
@@ -127,7 +114,6 @@ const householdPlannerWeekRoute = createRoute({
     throw redirect({
       to: '/planner/$weekStart/$day',
       params: { weekStart: params.weekStart, day: defaultDayFor(params.weekStart) },
-      search: { lens: 'household' },
       replace: true,
     });
   },
@@ -140,7 +126,6 @@ const householdPlannerDayRoute = createRoute({
     throw redirect({
       to: '/planner/$weekStart/$day',
       params,
-      search: { lens: 'household' },
       replace: true,
     });
   },

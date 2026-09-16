@@ -6,6 +6,7 @@ export function entryToPlannerMeal(
 ): PlannerMeal {
   return {
     id: entry.id,
+    mine: true,
     scope: entry.scope,
     member_id: entry.member_id ?? undefined,
     owner_name: undefined,

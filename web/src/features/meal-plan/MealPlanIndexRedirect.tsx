@@ -4,7 +4,6 @@ import { useAuth } from '../../auth/AuthProvider';
 import { EmptyState, Loading } from '../../components/States';
 import { useHouseholdTimeZone } from '../../hooks/useHouseholdTimeZone';
 import { defaultDayFor, startOfWeekIso, todayIso } from './date';
-import { usePlannerLens } from './usePlannerLens';
 
 type IndexTarget = '/food-log' | '/planner';
 
@@ -13,10 +12,9 @@ const LABELS: Record<IndexTarget, { loading: string; unavailable: string }> = {
   '/planner': { loading: 'Loading planner', unavailable: 'Meal planner unavailable' },
 };
 
-export function MealPlanIndexRedirect({ to, lens }: { to: IndexTarget; lens?: 'mine' | 'household' }) {
+export function MealPlanIndexRedirect({ to }: { to: IndexTarget }) {
   const { principal } = useAuth();
   const navigate = useNavigate();
-  const { read: readPlannerLens } = usePlannerLens();
   const canUseHousehold = principal?.permissions?.includes('household:write') ?? false;
   const needsMember = to === '/food-log' || (to === '/planner' && !principal?.member_id && !canUseHousehold);
   const timeZone = useHouseholdTimeZone();
@@ -27,12 +25,9 @@ export function MealPlanIndexRedirect({ to, lens }: { to: IndexTarget; lens?: 'm
     const weekStart = startOfWeekIso(todayIso(timeZone));
     const day = defaultDayFor(weekStart, timeZone);
     if (to === '/planner') {
-      const defaultLens = principal.member_id ? readPlannerLens(canUseHousehold) : 'household';
-      const targetLens = lens ?? defaultLens;
       void navigate({
         to: '/planner/$weekStart/$day',
         params: { weekStart, day },
-        search: { lens: targetLens },
         replace: true,
       });
     } else {
@@ -42,7 +37,7 @@ export function MealPlanIndexRedirect({ to, lens }: { to: IndexTarget; lens?: 'm
         replace: true,
       });
     }
-  }, [canUseHousehold, lens, navigate, needsMember, principal, readPlannerLens, timeZone, to]);
+  }, [navigate, needsMember, principal, timeZone, to]);
 
   if (needsMember && !principal?.member_id) {
     return (
