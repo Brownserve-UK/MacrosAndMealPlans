@@ -21,7 +21,6 @@ import { collectStockOutcomes, describeStockOutcome } from './stockShortfall';
 import {
   useMealPlanWeek,
   useMarkMealPlanComponentEaten,
-  useMarkMealPlanEaten,
   useMeta,
   useReopenMealPlanComponent,
 } from '../../api/queries';
@@ -239,7 +238,6 @@ function SlotSection({
   onOpen,
   onAdd,
   allowChanges,
-  onMarkRemaining,
   onAteSomethingElse,
   entries,
 }: {
@@ -252,7 +250,6 @@ function SlotSection({
   onOpen: (item: MealItem) => void;
   onAdd: (slot: MealSlot) => void;
   allowChanges: boolean;
-  onMarkRemaining: (entryId: string, items: MealItem[]) => void;
   onAteSomethingElse: (entryId: string) => void;
   entries: MealPlanEntry[];
 }) {
@@ -321,14 +318,9 @@ function SlotSection({
             // as they are one long list of snacks differentiated per-row and by the "Unplanned" chip.
             const showPlannedHeader =
               slot !== 'snacks' && entryId !== null && firstPlannedGroup.get(entryId) === groupKey;
-            const pending = entryId === null
-              ? []
-              : items.filter(
-                  (item) =>
-                    item.kind === 'planned'
-                    && item.entry_id === entryId
-                    && (item.status === 'planned' || item.status === 'assumed'),
-                );
+            const hasAssumed = entryId !== null && items.some(
+              (item) => item.kind === 'planned' && item.entry_id === entryId && item.status === 'assumed',
+            );
             return (
               <Box
                 key={groupKey}
@@ -343,17 +335,10 @@ function SlotSection({
                     <Typography variant="caption" color="text.secondary">
                       Planned meal
                     </Typography>
-                    {allowChanges && pending.length > 0 && entryId ? (
-                      <Stack direction="row" spacing={1}>
-                        <Button size="small" onClick={() => onMarkRemaining(entryId, pending)}>
-                          Mark remaining eaten
-                        </Button>
-                        {pending.some((candidate) => candidate.status === 'assumed') ? (
-                          <Button size="small" onClick={() => onAteSomethingElse(entryId)}>
-                            Ate something else
-                          </Button>
-                        ) : null}
-                      </Stack>
+                    {allowChanges && hasAssumed && entryId ? (
+                      <Button size="small" onClick={() => onAteSomethingElse(entryId)}>
+                        Ate something else
+                      </Button>
                     ) : null}
                   </Stack>
                 ) : null}
@@ -403,7 +388,6 @@ export function MealPlanPage({ weekStart, day }: { weekStart: string; day: strin
   const [stockNotice, setStockNotice] = useState<string[]>([]);
   const [toggleError, setToggleError] = useState<string | null>(null);
   const [replacing, setReplacing] = useState<string | null>(null);
-  const markEaten = useMarkMealPlanEaten();
   const markComponentEaten = useMarkMealPlanComponentEaten();
   const reopenComponent = useReopenMealPlanComponent();
 
@@ -469,31 +453,6 @@ export function MealPlanPage({ weekStart, day }: { weekStart: string; day: strin
       setToggleError(null);
     } catch (caught) {
       setToggleError(caught instanceof ApiError ? caught.message : 'Could not update this item.');
-    } finally {
-      setToggling(null);
-    }
-  }
-
-  async function markRemaining(entryId: string, items: MealItem[]) {
-    const entry = selectedDay?.entries.find((candidate) => candidate.id === entryId);
-    if (!entry) return;
-    setToggling(entryId);
-    try {
-      const updated = await markEaten.mutateAsync({
-        id: entryId,
-        revision: entry.revision,
-        body: {
-          consumed_on: activeDate,
-          consumed_at: entry.planned_time ? combineDateTime(activeDate, entry.planned_time) : null,
-          components: items.flatMap((item) =>
-            item.kind === 'planned' ? [{ component_id: item.component_id, amount: item.amount }] : [],
-          ),
-        },
-      });
-      setStockNotice(collectStockOutcomes([updated]).map(describeStockOutcome));
-      setToggleError(null);
-    } catch (caught) {
-      setToggleError(caught instanceof ApiError ? caught.message : 'Could not update this meal.');
     } finally {
       setToggling(null);
     }
@@ -582,7 +541,6 @@ export function MealPlanPage({ weekStart, day }: { weekStart: string; day: strin
                 onOpen={(item) => openItem(slotView.slot, item)}
                 onAdd={addFood}
                 allowChanges={allowChanges}
-                onMarkRemaining={markRemaining}
                 onAteSomethingElse={setReplacing}
                 entries={selectedDay.entries}
               />

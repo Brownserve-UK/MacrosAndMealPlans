@@ -6,7 +6,6 @@ import { ApiError, type MealItem, type MealPlanEntry, type MealPlanWeek } from '
 import { MealPlanPage } from './MealPlanPage';
 
 const mocks = vi.hoisted(() => ({
-  markEaten: vi.fn(),
   markComponentEaten: vi.fn(),
   reopen: vi.fn(),
   navigate: vi.fn(),
@@ -159,7 +158,6 @@ vi.mock('../../api/queries', () => ({
   useMealPlanWeek: () => ({ data: week(), isLoading: false, isError: false, refetch: vi.fn() }),
   useHouseholdSettings: () => ({ data: undefined }),
   useMeta: () => ({ data: { nutrient_directions: {} } }),
-  useMarkMealPlanEaten: () => ({ mutateAsync: mocks.markEaten }),
   useMarkMealPlanComponentEaten: () => ({ mutateAsync: mocks.markComponentEaten }),
   useReopenMealPlanComponent: () => ({ mutateAsync: mocks.reopen }),
 }));
@@ -188,7 +186,7 @@ describe('MealPlanPage', () => {
     expect(screen.getByText('Whole Milk')).toBeInTheDocument();
   });
 
-  it('ticking one component in a shared meal only resolves that component', async () => {
+  it('ticks each component in a shared meal independently', async () => {
     mocks.markComponentEaten.mockResolvedValue({});
     renderPage();
     const user = userEvent.setup();
@@ -207,7 +205,19 @@ describe('MealPlanPage', () => {
       }),
     );
     expect(mocks.markComponentEaten).toHaveBeenCalledTimes(1);
-    expect(screen.getByRole('button', { name: 'Mark Sample Bananas eaten' })).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Mark Sample Bananas eaten' }));
+
+    expect(mocks.markComponentEaten).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        id: 'entry-1',
+        componentId: 'component-banana',
+        revision: 3,
+        body: expect.objectContaining({ amount: siblingItem.amount }),
+      }),
+    );
+    expect(mocks.markComponentEaten).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole('button', { name: 'Mark remaining eaten' })).not.toBeInTheDocument();
   });
 
   it('leaves the consumption time unknown when planned food has no scheduled time', async () => {
@@ -275,6 +285,15 @@ describe('MealPlanPage', () => {
       'Open Protein Shake',
       'Open Latte',
     ]);
+  });
+
+  it('distinguishes logged food from planned food without a bulk confirmation control', () => {
+    breakfastItems = [plannedItem, loggedItem];
+    renderPage();
+
+    expect(screen.getByText('Planned meal')).toBeInTheDocument();
+    expect(screen.getByText('Unplanned')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Mark remaining eaten' })).not.toBeInTheDocument();
   });
 });
 
