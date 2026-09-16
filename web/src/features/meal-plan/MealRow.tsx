@@ -101,12 +101,18 @@ function AvatarStack({ meal }: { meal: PlannerMeal }) {
   );
 }
 
-export function OtherMealsRoster({ meals }: { meals: PlannerMeal[] }) {
+export function OtherMealsRoster({
+  meals,
+  onSelect,
+}: {
+  meals: PlannerMeal[];
+  onSelect: (meal: PlannerMeal) => void;
+}) {
   return (
     <Paper sx={{ overflow: 'hidden' }}>
       <Stack divider={<Divider flexItem />}>
         {meals.map((meal) => (
-          <ButtonBase key={meal.id} onClick={() => undefined} sx={{ display: 'block', width: '100%', textAlign: 'left' }}>
+          <ButtonBase key={meal.id} onClick={() => onSelect(meal)} sx={{ display: 'block', width: '100%', textAlign: 'left' }}>
             <Stack direction="row" spacing={1.5} sx={{ alignItems: 'center', px: 2, py: 1.25 }}>
               <AvatarStack meal={meal} />
               <Stack sx={{ flexGrow: 1, minWidth: 0 }}>

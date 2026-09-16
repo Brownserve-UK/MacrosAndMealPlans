@@ -5,12 +5,8 @@ import { useNavigate } from '@tanstack/react-router';
 import type { ReactNode } from 'react';
 import { PageHeader } from '../../components/PageHeader';
 import { useHouseholdTimeZone } from '../../hooks/useHouseholdTimeZone';
-import { defaultDayFor, parseIsoDate, startOfWeekIso, todayIso } from './date';
+import { defaultDayFor, fullDayLabel, startOfWeekIso, todayIso } from './date';
 import { WeekNavigator, type WeekNavigatorDay } from './WeekNavigator';
-
-function fullDayLabel(date: string) {
-  return parseIsoDate(date).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' });
-}
 
 export function PlannerShell({
   weekStart,

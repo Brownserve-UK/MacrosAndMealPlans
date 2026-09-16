@@ -8,7 +8,7 @@ import Typography from '@mui/material/Typography';
 import { useNavigate } from '@tanstack/react-router';
 import { useState } from 'react';
 import { ApiError, type MealSlot, type PlannerMeal } from '../../api/client';
-import { useHouseholdPlannerWeek, useOptOutOfMeal } from '../../api/queries';
+import { useDeleteMealPlanEntry, useHouseholdPlannerWeek, useOptOutOfMeal, useRejoinMeal } from '../../api/queries';
 import { useAuth } from '../../auth/AuthProvider';
 import { FormDialog } from '../../components/FormDialog';
 import { EmptyState, ErrorState, Loading } from '../../components/States';
@@ -16,8 +16,10 @@ import { useHouseholdTimeZone } from '../../hooks/useHouseholdTimeZone';
 import { CompactNutrition } from './CompactNutrition';
 import { addDays, todayIso } from './date';
 import { GuidedMealDialog } from './GuidedMealDialog';
+import { DeleteMealDialog } from './DeleteMealDialog';
 import { MealEditorDialog } from './MealEditorDialog';
 import { MealRow, OtherMealsRoster, mealTitle, plannerMealRow } from './MealRow';
+import { MealSheet, shortageWarning } from './MealSheet';
 import { MealSlotMenu } from './MealSlotMenu';
 import { PlannerShell } from './PlannerShell';
 import { EmptySlot, SlotSection } from './SlotSection';
@@ -25,20 +27,17 @@ import { labelForSlot, MAIN_SLOTS, SLOTS } from './slots';
 
 type EditSelection = { key: string; meal: PlannerMeal | null; slot: MealSlot };
 
-function shortageWarning(meal: PlannerMeal) {
-  const shortages = meal.foods.filter((food) => food.shortage);
-  return shortages.length > 0
-    ? `Not enough servings for ${shortages.map((food) => food.item_name).join(', ')}`
-    : null;
-}
-
 export function PlannerPage({ weekStart, day }: { weekStart: string; day: string }) {
   const { principal } = useAuth();
   const navigate = useNavigate();
   const week = useHouseholdPlannerWeek(weekStart);
   const leave = useOptOutOfMeal();
+  const join = useRejoinMeal();
+  const remove = useDeleteMealPlanEntry();
   const [editing, setEditing] = useState<EditSelection | null>(null);
+  const [viewing, setViewing] = useState<PlannerMeal | null>(null);
   const [leaving, setLeaving] = useState<PlannerMeal | null>(null);
+  const [deleting, setDeleting] = useState<PlannerMeal | null>(null);
   const [error, setError] = useState<string | null>(null);
   const timeZone = useHouseholdTimeZone();
   const activeDate = day >= weekStart && day <= addDays(weekStart, 6) ? day : weekStart;
@@ -63,11 +62,6 @@ export function PlannerPage({ weekStart, day }: { weekStart: string; day: string
     setEditing({ key: crypto.randomUUID(), meal, slot });
   }
 
-  function openMeal(meal: PlannerMeal) {
-    if (meal.capabilities.can_edit) openEditor(meal, meal.slot);
-    else if (meal.can_opt_out) setLeaving(meal);
-  }
-
   async function leaveMeal() {
     if (!leaving) return;
     try {
@@ -75,6 +69,25 @@ export function PlannerPage({ weekStart, day }: { weekStart: string; day: string
       setLeaving(null);
     } catch (caught) {
       setError(caught instanceof ApiError ? caught.message : 'Could not leave this meal.');
+    }
+  }
+
+  async function joinMeal(meal: PlannerMeal) {
+    try {
+      await join.mutateAsync({ id: meal.id, revision: meal.revision });
+      setViewing(null);
+    } catch (caught) {
+      setError(caught instanceof ApiError ? caught.message : 'Could not join this meal.');
+    }
+  }
+
+  async function deleteMeal() {
+    if (!deleting) return;
+    try {
+      await remove.mutateAsync({ id: deleting.id, revision: deleting.revision });
+      setDeleting(null);
+    } catch (caught) {
+      setError(caught instanceof ApiError ? caught.message : 'Could not delete this meal.');
     }
   }
 
@@ -112,7 +125,7 @@ export function PlannerPage({ weekStart, day }: { weekStart: string; day: string
                     <MealRow
                       key={meal.id}
                       model={plannerMealRow(meal, memberId)}
-                      onClick={() => openMeal(meal)}
+                      onClick={() => setViewing(meal)}
                       warning={shortageWarning(meal)}
                     />
                   )) : canPlan ? (
@@ -123,7 +136,7 @@ export function PlannerPage({ weekStart, day }: { weekStart: string; day: string
                   {others.length > 0 ? (
                     <Stack spacing={0.75}>
                       <Typography variant="overline" color="text.secondary">{`Also in ${slot.label.toLowerCase()}`}</Typography>
-                      <OtherMealsRoster meals={others} />
+                      <OtherMealsRoster meals={others} onSelect={setViewing} />
                     </Stack>
                   ) : null}
                 </Stack>
@@ -155,6 +168,28 @@ export function PlannerPage({ weekStart, day }: { weekStart: string; day: string
         )
       ) : null}
 
+      {viewing ? (
+        <MealSheet
+          meal={viewing}
+          onClose={() => setViewing(null)}
+          onEdit={() => {
+            const meal = viewing;
+            setViewing(null);
+            openEditor(meal, meal.slot);
+          }}
+          onDelete={() => {
+            setDeleting(viewing);
+            setViewing(null);
+          }}
+          onLeave={() => {
+            setLeaving(viewing);
+            setViewing(null);
+          }}
+          onJoin={() => void joinMeal(viewing)}
+          busy={join.isPending}
+        />
+      ) : null}
+
       <FormDialog open={Boolean(leaving)} onClose={leave.isPending ? undefined : () => setLeaving(null)} fullWidth maxWidth="xs">
         <DialogTitle>Leave this meal?</DialogTitle>
         <DialogContent>
@@ -166,6 +201,14 @@ export function PlannerPage({ weekStart, day }: { weekStart: string; day: string
           <Button variant="contained" onClick={() => void leaveMeal()} disabled={leave.isPending}>Leave meal</Button>
         </DialogActions>
       </FormDialog>
+
+      <DeleteMealDialog
+        open={Boolean(deleting)}
+        description={deleting ? mealTitle(deleting) : ''}
+        busy={remove.isPending}
+        onCancel={() => setDeleting(null)}
+        onDelete={() => void deleteMeal()}
+      />
     </PlannerShell>
   );
 }

@@ -23,6 +23,14 @@ export function parseIsoDate(iso: string): Date {
   return new Date(year, month - 1, day);
 }
 
+export function fullDayLabel(date: string): string {
+  return parseIsoDate(date).toLocaleDateString('en-GB', {
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+  });
+}
+
 export function defaultDayFor(weekStart: string, timeZone?: string): string {
   const today = todayIso(timeZone);
   return today >= weekStart && today <= addDays(weekStart, 6) ? today : weekStart;
