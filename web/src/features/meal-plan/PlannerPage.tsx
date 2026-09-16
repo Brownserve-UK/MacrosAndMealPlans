@@ -15,6 +15,7 @@ import { EmptyState, ErrorState, Loading } from '../../components/States';
 import { useHouseholdTimeZone } from '../../hooks/useHouseholdTimeZone';
 import { CompactNutrition } from './CompactNutrition';
 import { addDays, todayIso } from './date';
+import { GuidedMealDialog } from './GuidedMealDialog';
 import { MealEditorDialog } from './MealEditorDialog';
 import { MealRow, OtherMealsRoster, mealTitle, plannerMealRow } from './MealRow';
 import { MealSlotMenu } from './MealSlotMenu';
@@ -133,15 +134,25 @@ export function PlannerPage({ weekStart, day }: { weekStart: string; day: string
       ) : null}
 
       {editing ? (
-        <MealEditorDialog
-          key={editing.key}
-          open
-          mode={editing.meal?.scope === 'household' || !memberId ? 'household' : 'member'}
-          onClose={() => setEditing(null)}
-          date={activeDate}
-          slot={editing.slot}
-          meal={editing.meal}
-        />
+        editing.meal ? (
+          <MealEditorDialog
+            key={editing.key}
+            open
+            mode={editing.meal.scope === 'household' || !memberId ? 'household' : 'member'}
+            onClose={() => setEditing(null)}
+            date={activeDate}
+            slot={editing.slot}
+            meal={editing.meal}
+          />
+        ) : (
+          <GuidedMealDialog
+            key={editing.key}
+            open
+            onClose={() => setEditing(null)}
+            date={activeDate}
+            slot={editing.slot}
+          />
+        )
       ) : null}
 
       <FormDialog open={Boolean(leaving)} onClose={leave.isPending ? undefined : () => setLeaving(null)} fullWidth maxWidth="xs">

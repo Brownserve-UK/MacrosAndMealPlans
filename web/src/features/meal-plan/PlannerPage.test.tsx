@@ -21,6 +21,7 @@ vi.mock('../../api/queries', () => ({
   useOptOutOfMeal: () => ({ mutateAsync: mocks.leave, isPending: false }),
 }));
 vi.mock('./MealEditorDialog', () => ({ MealEditorDialog: ({ meal }: { meal: PlannerMeal | null }) => <div>{meal ? `Editing ${meal.id}` : 'Planning meal'}</div> }));
+vi.mock('./GuidedMealDialog', () => ({ GuidedMealDialog: () => <div>Guided planning</div> }));
 
 function meal(overrides: Partial<PlannerMeal>): PlannerMeal {
   return {
@@ -123,6 +124,12 @@ describe('PlannerPage', () => {
     render(<PlannerPage weekStart="2026-09-14" day="2026-09-15" />);
     await userEvent.setup().click(screen.getByText('Soup'));
     expect(screen.getByText('Editing meal-1')).toBeInTheDocument();
+  });
+
+  it('opens the guided dialog when creating a meal', async () => {
+    render(<PlannerPage weekStart="2026-09-14" day="2026-09-15" />);
+    await userEvent.setup().click(screen.getByText('Plan breakfast'));
+    expect(screen.getByText('Guided planning')).toBeInTheDocument();
   });
 
   it('leaves a household meal through the existing opt-out mutation', async () => {
