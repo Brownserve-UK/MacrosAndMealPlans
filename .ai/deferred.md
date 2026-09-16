@@ -39,7 +39,7 @@ specification or ADRs.
       access.
 - [ ] Add the live nutrition total to `MealEditorDialog`, including recipe nutrition and mixed-unit
       conversion.
-- [ ] Populate `get_planner_week` values for `can_opt_out`, `can_join`, and `owner_name` when the web
+- [x] Populate `get_planner_week` values for `can_opt_out`, `can_join`, and `owner_name` when the web
       client has a consumer for them.
 - [x] `MyPlannerPage` maps `preparation.shortage` into its meal shape but never renders it, so only
       the household planner warns that fewer servings were cooked than people are due.

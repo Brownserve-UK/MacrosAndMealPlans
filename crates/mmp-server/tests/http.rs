@@ -1947,16 +1947,9 @@ async fn a_member_opts_out_of_a_household_meal_and_rejoins_from_their_own_planne
 }
 
 #[tokio::test]
-async fn the_household_planner_and_attendance_need_household_write() {
+async fn household_planner_attendance_still_needs_household_write() {
     let app = app().await;
     create_user(&app, "sam", &["basic_user"]).await;
-
-    let (status, _, _) = send(
-        &app,
-        Call::new("GET", "/api/v1/planner/2026-08-24").signed_in_as("sam"),
-    )
-    .await;
-    assert_eq!(status, StatusCode::FORBIDDEN);
 
     let (status, _, _) = send(
         &app,
@@ -1968,6 +1961,150 @@ async fn the_household_planner_and_attendance_need_household_write() {
     )
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn planner_feed_is_personal_for_members_and_complete_for_household_managers() {
+    let app = app().await;
+    let sam = create_member(&app, "Sam").await;
+    let morgan = create_member(&app, "Morgan").await;
+    let sam_user = create_user(&app, "sam", &["basic_user"]).await;
+    let manager_user = create_user(&app, "manager", &["household_manager"]).await;
+    for (member, user) in [(&sam, &sam_user), (&morgan, &manager_user)] {
+        let (status, body, _) = send(
+            &app,
+            Call::new(
+                "PUT",
+                format!("/api/v1/members/{}/account", member["id"].as_str().unwrap()),
+            )
+            .if_match(member["revision"].as_i64().unwrap())
+            .body(json!({"user_id": user["id"]})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+    }
+    let product = create_milk_product(&app).await;
+
+    let (status, sam_personal, _) = send(
+        &app,
+        Call::new("POST", "/api/v1/meal-plan-entries").body(json!({
+            "member_id": sam["id"],
+            "planned_on": "2026-08-26",
+            "planned_time": "08:00",
+            "slot": "breakfast",
+            "components": [{"product_id": product["id"], "amount": measured_amount(100.0)}]
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{sam_personal}");
+
+    let (status, manager_personal, _) = send(
+        &app,
+        Call::new("POST", "/api/v1/meal-plan-entries").body(json!({
+            "member_id": morgan["id"],
+            "planned_on": "2026-08-26",
+            "planned_time": "12:30",
+            "slot": "lunch",
+            "components": [{"product_id": product["id"], "amount": measured_amount(100.0)}]
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{manager_personal}");
+
+    let (status, sam_household, _) = send(
+        &app,
+        Call::new("POST", "/api/v1/meal-plan-entries").body(json!({
+            "household": true,
+            "planned_on": "2026-08-26",
+            "planned_time": "18:00",
+            "slot": "dinner",
+            "components": [{"product_id": product["id"], "amount": measured_amount(100.0)}],
+            "participants": [{"member_id": sam["id"], "allocations": []}]
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{sam_household}");
+
+    let (status, manager_household, _) = send(
+        &app,
+        Call::new("POST", "/api/v1/meal-plan-entries").body(json!({
+            "household": true,
+            "planned_on": "2026-08-27",
+            "planned_time": "18:00",
+            "slot": "dinner",
+            "components": [{"product_id": product["id"], "amount": measured_amount(100.0)}],
+            "participants": [{"member_id": morgan["id"], "allocations": []}]
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{manager_household}");
+
+    let (status, personal_feed, _) = send(
+        &app,
+        Call::new("GET", "/api/v1/planner/2026-08-24").signed_in_as("sam"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{personal_feed}");
+    let personal_meals = personal_feed["meals"].as_array().unwrap();
+    assert_eq!(personal_meals.len(), 2, "{personal_feed}");
+    assert!(personal_meals.iter().all(|meal| meal["mine"] == true));
+    assert!(
+        personal_meals
+            .iter()
+            .any(|meal| meal["id"] == sam_personal["id"])
+    );
+    assert!(
+        personal_meals
+            .iter()
+            .any(|meal| meal["id"] == sam_household["id"])
+    );
+    assert_eq!(personal_feed["days"].as_array().unwrap().len(), 7);
+    for field in ["actual", "remaining_planned", "projected"] {
+        assert!(personal_feed.get(field).is_some(), "{personal_feed}");
+        assert!(
+            personal_feed["days"][0].get(field).is_some(),
+            "{personal_feed}"
+        );
+    }
+
+    let (status, manager_feed, _) = send(
+        &app,
+        Call::new("GET", "/api/v1/planner/2026-08-24").signed_in_as("manager"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{manager_feed}");
+    let manager_meals = manager_feed["meals"].as_array().unwrap();
+    assert_eq!(manager_meals.len(), 4, "{manager_feed}");
+    let meal = |id: &Value| manager_meals.iter().find(|meal| meal["id"] == *id).unwrap();
+
+    let sam_personal_view = meal(&sam_personal["id"]);
+    assert_eq!(sam_personal_view["mine"], false);
+    assert_eq!(sam_personal_view["owner_name"], "Sam");
+    assert_eq!(sam_personal_view["can_opt_out"], false);
+    assert_eq!(sam_personal_view["can_join"], false);
+    assert_eq!(sam_personal_view["capabilities"]["can_edit"], false);
+
+    let manager_personal_view = meal(&manager_personal["id"]);
+    assert_eq!(manager_personal_view["mine"], true);
+    assert_eq!(manager_personal_view["owner_name"], "Morgan");
+    assert_eq!(manager_personal_view["can_opt_out"], false);
+    assert_eq!(manager_personal_view["can_join"], false);
+
+    let sam_household_view = meal(&sam_household["id"]);
+    assert_eq!(sam_household_view["mine"], false);
+    assert!(sam_household_view["owner_name"].is_null());
+    assert_eq!(sam_household_view["can_opt_out"], false);
+    assert_eq!(sam_household_view["can_join"], true);
+
+    let manager_household_view = meal(&manager_household["id"]);
+    assert_eq!(manager_household_view["mine"], true);
+    assert!(manager_household_view["owner_name"].is_null());
+    assert_eq!(manager_household_view["can_opt_out"], true);
+    assert_eq!(manager_household_view["can_join"], false);
+    assert_eq!(
+        manager_household_view["capabilities"]["can_record_guests"],
+        true
+    );
 
     let (status, _, _) = send(&app, Call::new("GET", "/api/v1/planner/2026-08-24")).await;
     assert_eq!(status, StatusCode::OK);
@@ -3000,6 +3137,13 @@ async fn the_meal_plan_week_carries_a_resolved_target() {
                 .unwrap()
                 .is_empty()
     );
+
+    let (status, planner, _) = send(&app, Call::new("GET", "/api/v1/planner/2026-08-24")).await;
+    assert_eq!(status, StatusCode::OK, "{planner}");
+    assert_eq!(planner["target"]["energy_kcal"], 14000.0);
+    assert_eq!(planner["calorie_direction"], "at_least");
+    assert_eq!(planner["days"][0]["target"]["energy_kcal"], 2000.0);
+    assert_eq!(planner["days"][0]["calorie_direction"], "at_least");
 }
 
 #[tokio::test]

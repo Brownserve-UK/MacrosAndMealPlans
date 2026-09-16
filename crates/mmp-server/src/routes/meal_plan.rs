@@ -222,12 +222,21 @@ async fn get_planner_week(
     principal: Principal,
     Path(week_start): Path<String>,
 ) -> ApiResult<Json<PlannerWeekDto>> {
-    principal.require(mmp_core::domain::Permission::HouseholdWrite)?;
     let week_start = parse_week_start(&week_start)?;
+    let member_id = personal_member(&state, &principal).await?;
+    let include_household = principal.has(mmp_core::domain::Permission::HouseholdWrite);
     let views = state.meal_plan.planner_entries(week_start).await?;
+    let nutrition = state.meal_plan.week(member_id, week_start).await?;
+    let objective = state
+        .weight
+        .goal(member_id)
+        .await?
+        .map(|goal| goal.objective);
+    let nutrition = MealPlanWeekDto::from(nutrition).with_calorie_direction(objective);
     let mut meals = Vec::new();
-    for view in views {
-        if view.entry.scope != mmp_core::domain::MealPlanScope::Household {
+    for view in &views {
+        let mine = view.entry.participant_for(member_id).is_some();
+        if !mine && !include_household {
             continue;
         }
         let mut people = Vec::with_capacity(view.participants.len());
@@ -251,10 +260,50 @@ async fn get_planner_week(
                 can_record,
             });
         }
-        let can_opt_out = false;
-        let can_join = false;
-        let can_edit = view.status.is_unresolved();
-        let owner_name = None;
+        let can_opt_out = view.entry.scope == mmp_core::domain::MealPlanScope::Household
+            && view
+                .entry
+                .participant_for(member_id)
+                .is_some_and(|participant| {
+                    participant
+                        .allocations
+                        .iter()
+                        .all(|allocation| !allocation.status.is_resolved())
+                });
+        let can_join = view.entry.scope == mmp_core::domain::MealPlanScope::Household
+            && !mine
+            && !views.iter().any(|candidate| {
+                candidate.entry.id != view.entry.id
+                    && candidate.entry.planned_on == view.entry.planned_on
+                    && candidate.entry.slot == view.entry.slot
+                    && (view.entry.slot != mmp_core::domain::MealSlot::Snacks
+                        || candidate.entry.planned_time == view.entry.planned_time)
+                    && (candidate.entry.member_id == Some(member_id)
+                        || candidate.entry.participant_for(member_id).is_some())
+            });
+        let can_edit = match view.entry.scope {
+            mmp_core::domain::MealPlanScope::Member => {
+                can_manage_personal_meal(
+                    &state,
+                    &principal,
+                    view.entry.member_id.ok_or_else(|| {
+                        ApiError::new(
+                            StatusCode::CONFLICT,
+                            "invalid-meal",
+                            "Meal unavailable",
+                            "This personal meal has no owner.",
+                        )
+                    })?,
+                )
+                .await?
+            }
+            mmp_core::domain::MealPlanScope::Household => include_household,
+        } && view.status.is_unresolved();
+        let owner_name = if let Some(owner_id) = view.entry.member_id {
+            Some(state.household.get_member(owner_id).await?.display_name)
+        } else {
+            None
+        };
         let foods = view
             .components
             .iter()
@@ -275,6 +324,7 @@ async fn get_planner_week(
             .collect();
         meals.push(PlannerMealDto {
             id: view.entry.id.as_uuid(),
+            mine,
             scope: view.entry.scope,
             member_id: view.entry.member_id.map(|id| id.as_uuid()),
             owner_name,
@@ -303,7 +353,7 @@ async fn get_planner_week(
             capabilities: PlannerCapabilitiesDto {
                 can_edit,
                 can_delete: can_edit,
-                can_record_guests: true,
+                can_record_guests: include_household,
             },
             revision: view.entry.revision.get(),
         });
@@ -311,6 +361,12 @@ async fn get_planner_week(
     Ok(Json(PlannerWeekDto {
         week_start,
         week_end: week_start + Duration::days(6),
+        days: nutrition.days.into_iter().map(Into::into).collect(),
+        actual: nutrition.actual,
+        remaining_planned: nutrition.remaining_planned,
+        projected: nutrition.projected,
+        target: nutrition.target,
+        calorie_direction: nutrition.calorie_direction,
         meals,
     }))
 }

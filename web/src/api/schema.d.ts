@@ -2715,6 +2715,15 @@ export interface components {
             can_edit: boolean;
             can_record_guests: boolean;
         };
+        PlannerDayDto: {
+            actual: components["schemas"]["NutritionSummaryDto"];
+            calorie_direction?: null | components["schemas"]["TargetDirectionDto"];
+            /** Format: date */
+            date: string;
+            projected: components["schemas"]["NutritionSummaryDto"];
+            remaining_planned: components["schemas"]["NutritionSummaryDto"];
+            target?: null | components["schemas"]["NutritionGoalsDto"];
+        };
         PlannerFoodDto: components["schemas"]["MealItemRefDto"] & {
             amount: components["schemas"]["AmountDto"];
             cooked?: null | components["schemas"]["CookedDto"];
@@ -2734,6 +2743,7 @@ export interface components {
             id: string;
             /** Format: uuid */
             member_id?: string | null;
+            mine: boolean;
             opted_out: components["schemas"]["MealOptOutDto"][];
             owner_name?: string | null;
             people: components["schemas"]["PlannerPersonDto"][];
@@ -2756,7 +2766,13 @@ export interface components {
             status: components["schemas"]["MealPlanStatus"];
         };
         PlannerWeekDto: {
+            actual: components["schemas"]["NutritionSummaryDto"];
+            calorie_direction?: null | components["schemas"]["TargetDirectionDto"];
+            days: components["schemas"]["PlannerDayDto"][];
             meals: components["schemas"]["PlannerMealDto"][];
+            projected: components["schemas"]["NutritionSummaryDto"];
+            remaining_planned: components["schemas"]["NutritionSummaryDto"];
+            target?: null | components["schemas"]["NutritionGoalsDto"];
             /** Format: date */
             week_end: string;
             /** Format: date */

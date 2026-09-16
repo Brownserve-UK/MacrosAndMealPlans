@@ -600,6 +600,7 @@ pub struct CookedDto {
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct PlannerMealDto {
     pub id: Uuid,
+    pub mine: bool,
     pub scope: MealPlanScope,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub member_id: Option<Uuid>,
@@ -624,6 +625,33 @@ pub struct PlannerMealDto {
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct PlannerDayDto {
+    #[serde(with = "iso_date")]
+    #[schema(value_type = String, format = Date)]
+    pub date: Date,
+    pub actual: NutritionSummaryDto,
+    pub remaining_planned: NutritionSummaryDto,
+    pub projected: NutritionSummaryDto,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target: Option<NutritionGoalsDto>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub calorie_direction: Option<TargetDirectionDto>,
+}
+
+impl From<MealPlanDayDto> for PlannerDayDto {
+    fn from(value: MealPlanDayDto) -> Self {
+        Self {
+            date: value.date,
+            actual: value.actual,
+            remaining_planned: value.remaining_planned,
+            projected: value.projected,
+            target: value.target,
+            calorie_direction: value.calorie_direction,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct PlannerWeekDto {
     #[serde(with = "iso_date")]
     #[schema(value_type = String, format = Date)]
@@ -631,6 +659,14 @@ pub struct PlannerWeekDto {
     #[serde(with = "iso_date")]
     #[schema(value_type = String, format = Date)]
     pub week_end: Date,
+    pub days: Vec<PlannerDayDto>,
+    pub actual: NutritionSummaryDto,
+    pub remaining_planned: NutritionSummaryDto,
+    pub projected: NutritionSummaryDto,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target: Option<NutritionGoalsDto>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub calorie_direction: Option<TargetDirectionDto>,
     pub meals: Vec<PlannerMealDto>,
 }
 
