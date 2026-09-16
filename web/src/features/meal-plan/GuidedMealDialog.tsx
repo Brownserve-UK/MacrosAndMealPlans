@@ -241,7 +241,7 @@ export function GuidedMealDialog({
       slotProps={{ paper: { sx: { minHeight: { xs: '80vh', sm: 600 } } } }}
     >
       <Stack sx={{ minHeight: 'inherit' }}>
-        <Box sx={{ display: 'grid', gridTemplateColumns: '40px minmax(0, 1fr) auto 40px', alignItems: 'center', gap: 1, p: 2 }}>
+        <Box sx={{ display: 'grid', gridTemplateColumns: '40px minmax(0, 1fr) 40px', alignItems: 'center', gap: 1, px: 2, pt: 2 }}>
           {manager ? (
             <IconButton
               aria-label="Back"
@@ -270,8 +270,10 @@ export function GuidedMealDialog({
               })}
             </Stack>
           ) : <Box />}
-          {headerTime}
           <IconButton aria-label="Close" onClick={onClose} disabled={create.isPending}><CloseIcon /></IconButton>
+        </Box>
+        <Box sx={{ display: 'flex', justifyContent: 'center', mt: -0.5, pb: 1 }}>
+          {headerTime}
         </Box>
 
         <Box sx={{ flex: 1, px: 3, py: { xs: 2, sm: 3 }, overflow: 'auto' }}>

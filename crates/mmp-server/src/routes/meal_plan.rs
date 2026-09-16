@@ -236,7 +236,7 @@ async fn get_planner_week(
     let mut meals = Vec::new();
     for view in &views {
         let mine = view.entry.participant_for(member_id).is_some();
-        if !mine && !include_household {
+        if !mine && (!include_household || view.entry.slot == mmp_core::domain::MealSlot::Snacks) {
             continue;
         }
         let mut people = Vec::with_capacity(view.participants.len());

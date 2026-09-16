@@ -82,8 +82,8 @@ describe('MealSheet', () => {
   it('shows the meal schedule, diners, food, amounts and shortage', () => {
     const dialog = renderSheet(meal());
 
-    expect(dialog.getByText('Chicken and rice, Yoghurt')).toBeInTheDocument();
-    expect(dialog.getByText('Dinner · Wednesday 16 September · 18:00')).toBeInTheDocument();
+    expect(dialog.getByText('Dinner', { exact: true })).toBeInTheDocument();
+    expect(dialog.getByText('Wednesday 16 September · 18:00')).toBeInTheDocument();
     expect(dialog.getByText('Alex Brown')).toBeInTheDocument();
     expect(dialog.getByText('Morgan Lee')).toBeInTheDocument();
     expect(dialog.getByText('1 guest')).toBeInTheDocument();

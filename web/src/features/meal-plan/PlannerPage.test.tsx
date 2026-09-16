@@ -129,8 +129,8 @@ describe('PlannerPage', () => {
     const user = userEvent.setup();
     await user.click(screen.getByText('Soup'));
     const dialog = within(screen.getByRole('dialog'));
-    expect(dialog.getByRole('heading')).toHaveTextContent('Soup');
-    expect(dialog.getByText('Lunch · Tuesday 15 September · 12:30')).toBeInTheDocument();
+    expect(dialog.getByRole('heading')).toHaveTextContent('Lunch');
+    expect(dialog.getByText('Tuesday 15 September · 12:30')).toBeInTheDocument();
     await user.click(dialog.getByRole('button', { name: 'Edit meal' }));
     expect(screen.getByText('Editing meal-1')).toBeInTheDocument();
   });
@@ -139,7 +139,7 @@ describe('PlannerPage', () => {
     render(<PlannerPage weekStart="2026-09-14" day="2026-09-15" />);
     await userEvent.setup().click(screen.getByText('Salad'));
     const dialog = within(screen.getByRole('dialog'));
-    expect(dialog.getByRole('heading')).toHaveTextContent('Salad');
+    expect(dialog.getByRole('heading')).toHaveTextContent('Lunch');
     expect(dialog.getByText('Morgan Lee')).toBeInTheDocument();
   });
 

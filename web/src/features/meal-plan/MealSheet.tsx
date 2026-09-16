@@ -16,7 +16,6 @@ import { InitialsAvatar } from '../../components/InitialsAvatar';
 import { KindChip, type Kind } from '../../components/KindChip';
 import { fullDayLabel } from './date';
 import { formatAmount } from './format';
-import { mealTitle } from './MealRow';
 import { labelForSlot } from './slots';
 
 type Allocation = PlannerMeal['people'][number]['allocations'][number]['allocated'];
@@ -93,7 +92,6 @@ export function MealSheet({
         ? 'leave'
         : null;
   const subtitle = [
-    labelForSlot(meal.slot),
     fullDayLabel(meal.planned_on),
     meal.planned_time,
   ].filter(Boolean).join(' · ');
@@ -109,7 +107,7 @@ export function MealSheet({
   return (
     <FormDialog open onClose={busy ? undefined : onClose} fullWidth maxWidth="sm">
       <DialogTitle sx={{ pb: 1 }}>
-        <Typography component="span" variant="h2">{mealTitle(meal)}</Typography>
+        <Typography component="span" variant="h2">{labelForSlot(meal.slot)}</Typography>
         <Typography component="span" variant="body2" color="text.secondary" className="numeral" sx={{ display: 'block', mt: 0.5 }}>{subtitle}</Typography>
       </DialogTitle>
       <DialogContent dividers>

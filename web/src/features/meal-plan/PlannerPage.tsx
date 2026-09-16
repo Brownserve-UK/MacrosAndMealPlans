@@ -91,10 +91,7 @@ export function PlannerPage({ weekStart, day }: { weekStart: string; day: string
     }
   }
 
-  const headerChoices = [
-    ...MAIN_SLOTS.filter((slot) => !dayMeals.some((meal) => meal.mine && meal.slot === slot.value)),
-    { value: 'snacks' as const, label: 'Snack' },
-  ];
+  const headerChoices = [...MAIN_SLOTS, { value: 'snacks' as const, label: 'Snack' }];
 
   return (
     <PlannerShell
@@ -107,7 +104,12 @@ export function PlannerPage({ weekStart, day }: { weekStart: string; day: string
           .reduce((sum, meal) => sum + meal.foods.length, 0),
       })) : null}
       headerActions={canPlan ? <MealSlotMenu choices={headerChoices} onSelect={(slot) => openEditor(null, slot)} /> : null}
-      nutrition={selectedDay ? <CompactNutrition day={selectedDay} onClick={() => void navigate({ to: '/goals' })} /> : null}
+      nutrition={selectedDay ? (
+        <CompactNutrition
+          day={selectedDay}
+          onClick={() => void navigate({ to: '/food-log/$weekStart/$day', params: { weekStart, day: activeDate } })}
+        />
+      ) : null}
       error={error}
       onDismissError={() => setError(null)}
     >
