@@ -49,7 +49,7 @@ specification or ADRs.
       cook that is not tied to a planned meal. `CookSomethingDialog` and `CookedSection.tsx` are left
       in place, unreferenced, as a starting point rather than deleted.
 - [ ] Align the `ensure_slot_free` error with the database-constraint fallback error.
-- [ ] Seed an opted-out member with a genuinely free personal slot for manual testing.
+- [x] Seed an opted-out member with a genuinely free personal slot for manual testing.
 - [x] Validate `meal_guest_allocation.allocated_unit` and `confirmed_unit` with `unit_code`, or
       document why those columns must remain unrestricted.
 - [ ] Add Consumption Record amendment history so corrections retain the previous nutrition and

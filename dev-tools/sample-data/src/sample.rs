@@ -1780,8 +1780,7 @@ impl Loader<'_> {
             2,
         )
         .await?;
-        self.ensure_opt_out_with_own_meal(sunday, MealSlot::Lunch, basic)
-            .await?;
+        self.ensure_opt_out(sunday, MealSlot::Lunch, basic).await?;
 
         let next_wed = self.week_start + Duration::weeks(1) + Duration::days(2);
         self.ensure_household_meal(
@@ -1815,6 +1814,17 @@ impl Loader<'_> {
         slot: MealSlot,
         member_id: HouseholdMemberId,
     ) -> anyhow::Result<()> {
+        self.ensure_opt_out(date, slot, member_id).await?;
+        self.ensure_personal_meal(date, slot, member_id, "opted-out")
+            .await
+    }
+
+    async fn ensure_opt_out(
+        &mut self,
+        date: Date,
+        slot: MealSlot,
+        member_id: HouseholdMemberId,
+    ) -> anyhow::Result<()> {
         let entry_id = meal_id(date, slot);
         let view = self.state.meal_plan.get(entry_id).await?;
         if view.entry.scope != MealPlanScope::Household {
@@ -1829,8 +1839,7 @@ impl Loader<'_> {
             .await?;
         self.report.household_participants_created =
             self.report.household_participants_created.saturating_sub(1);
-        self.ensure_personal_meal(date, slot, member_id, "opted-out")
-            .await
+        Ok(())
     }
 
     async fn ensure_personal_meal(
