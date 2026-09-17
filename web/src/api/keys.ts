@@ -77,9 +77,9 @@ const users = ['users'] as const;
 const user = ['user'] as const;
 const myWeek = ['mealPlanWeek'] as const;
 const householdWeek = ['plannerWeek'] as const;
+const plannerWeek = ['planner'] as const;
 const entry = ['mealPlanEntry'] as const;
 const needsReview = ['mealPlanNeedsReview'] as const;
-const slotAttendance = ['householdSlotAttendance'] as const;
 const nutritionTargets = ['nutritionTargets'] as const;
 const nutritionPlan = ['nutritionPlan'] as const;
 const weight = ['weight'] as const;
@@ -135,12 +135,11 @@ export const mealPlanKeys = {
   myWeek: (weekStart: string) => [...myWeek, weekStart] as const,
   householdWeeks: () => householdWeek,
   householdWeek: (weekStart: string) => [...householdWeek, weekStart] as const,
+  plannerWeeks: () => plannerWeek,
+  plannerWeek: (weekStart: string) => [...plannerWeek, weekStart] as const,
   entries: () => entry,
   entry: (id: string) => [...entry, id] as const,
   needsReview: () => needsReview,
-  slotAttendances: () => slotAttendance,
-  slotAttendance: (date: string, slot: string, excludeEntry?: string) =>
-    [...slotAttendance, date, slot, excludeEntry ?? null] as const,
 };
 
 export const nutritionTargetKeys = {

@@ -1,7 +1,30 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import type { MealSlot } from '../client';
 import { client, ifMatch, unwrap } from '../client';
 import type { components } from '../schema';
 import { mealPlanKeys } from '../keys';
+import type {
+  Attendance,
+  GroupPatch,
+  GroupView,
+  NewGroup,
+  OccasionPatch,
+  OccasionView,
+  PlannerWeek,
+} from '../../features/meal-plan/planner/types';
+
+type UntypedResult<T> = Promise<{ data?: T; error?: unknown; response: Response }>;
+
+type UntypedClient = {
+  GET: (path: string, init?: object) => UntypedResult<unknown>;
+  POST: (path: string, init?: object) => UntypedResult<unknown>;
+  PATCH: (path: string, init?: object) => UntypedResult<unknown>;
+  PUT: (path: string, init?: object) => UntypedResult<unknown>;
+  DELETE: (path: string, init?: object) => UntypedResult<unknown>;
+};
+
+// TODO: swap to generated types
+const planner = client as unknown as UntypedClient;
 
 export function useNeedsReview() {
   return useQuery({
@@ -23,16 +46,16 @@ export function useMealPlanWeek(weekStart: string, enabled = true) {
   });
 }
 
-export function useHouseholdPlannerWeek(weekStart: string, enabled = true) {
+export function usePlannerWeek(weekStart: string, enabled = true) {
   return useQuery({
-    queryKey: mealPlanKeys.householdWeek(weekStart),
+    queryKey: mealPlanKeys.plannerWeek(weekStart),
     enabled: Boolean(weekStart) && enabled,
     queryFn: async () =>
       unwrap(
-        await client.GET('/api/v1/planner/{week_start}', {
+        await planner.GET('/api/v1/planner/{week_start}', {
           params: { path: { week_start: weekStart } },
         }),
-      ),
+      ) as PlannerWeek,
   });
 }
 
@@ -41,16 +64,139 @@ function useMealPlanInvalidation() {
   return () => {
     void qc.invalidateQueries({ queryKey: mealPlanKeys.myWeeks() });
     void qc.invalidateQueries({ queryKey: mealPlanKeys.householdWeeks() });
-    void qc.invalidateQueries({ queryKey: mealPlanKeys.slotAttendances() });
+    void qc.invalidateQueries({ queryKey: mealPlanKeys.plannerWeeks() });
     void qc.invalidateQueries({ queryKey: mealPlanKeys.needsReview() });
   };
 }
 
-export function useCreateMealPlanEntry() {
+export function useCreateOccasion() {
   const invalidate = useMealPlanInvalidation();
   return useMutation({
-    mutationFn: async (body: components['schemas']['CreateMealPlanEntryRequest']) =>
-      unwrap(await client.POST('/api/v1/meal-plan-entries', { body })),
+    mutationFn: async (body: { planned_on: string; slot: MealSlot; group: NewGroup }) =>
+      unwrap(await planner.POST('/api/v1/planner/occasions', { body })) as OccasionView,
+    onSuccess: () => invalidate(),
+  });
+}
+
+export function useUpdateOccasion() {
+  const invalidate = useMealPlanInvalidation();
+  return useMutation({
+    mutationFn: async (input: { id: string; body: OccasionPatch }) =>
+      unwrap(
+        await planner.PATCH('/api/v1/planner/occasions/{id}', {
+          params: { path: { id: input.id }, header: ifMatch(input.body.revision) },
+          body: input.body,
+        }),
+      ) as OccasionView,
+    onSuccess: () => invalidate(),
+  });
+}
+
+export function useDeleteOccasion() {
+  const invalidate = useMealPlanInvalidation();
+  return useMutation({
+    mutationFn: async (input: { id: string; revision: number }) =>
+      unwrap(
+        await planner.DELETE('/api/v1/planner/occasions/{id}', {
+          params: { path: { id: input.id }, header: ifMatch(input.revision) },
+        }),
+      ),
+    onSuccess: () => invalidate(),
+  });
+}
+
+export function useMoveOccasion() {
+  const invalidate = useMealPlanInvalidation();
+  return useMutation({
+    mutationFn: async (input: { id: string; planned_on: string; slot: MealSlot }) =>
+      unwrap(
+        await planner.POST('/api/v1/planner/occasions/{id}/move', {
+          params: { path: { id: input.id } },
+          body: { planned_on: input.planned_on, slot: input.slot },
+        }),
+      ) as OccasionView,
+    onSuccess: () => invalidate(),
+  });
+}
+
+export function useCopyOccasion() {
+  const invalidate = useMealPlanInvalidation();
+  return useMutation({
+    mutationFn: async (input: { id: string; planned_on: string; slot: MealSlot }) =>
+      unwrap(
+        await planner.POST('/api/v1/planner/occasions/{id}/copy', {
+          params: { path: { id: input.id } },
+          body: { planned_on: input.planned_on, slot: input.slot },
+        }),
+      ) as OccasionView,
+    onSuccess: () => invalidate(),
+  });
+}
+
+export function useAddGroup() {
+  const invalidate = useMealPlanInvalidation();
+  return useMutation({
+    mutationFn: async (input: { occasionId: string; body: NewGroup }) =>
+      unwrap(
+        await planner.POST('/api/v1/planner/occasions/{id}/groups', {
+          params: { path: { id: input.occasionId } },
+          body: input.body,
+        }),
+      ) as GroupView,
+    onSuccess: () => invalidate(),
+  });
+}
+
+export function useUpdateGroup() {
+  const invalidate = useMealPlanInvalidation();
+  return useMutation({
+    mutationFn: async (input: { id: string; body: GroupPatch }) =>
+      unwrap(
+        await planner.PATCH('/api/v1/planner/groups/{id}', {
+          params: { path: { id: input.id }, header: ifMatch(input.body.revision) },
+          body: input.body,
+        }),
+      ) as GroupView,
+    onSuccess: () => invalidate(),
+  });
+}
+
+export function useDeleteGroup() {
+  const invalidate = useMealPlanInvalidation();
+  return useMutation({
+    mutationFn: async (input: { id: string; revision: number }) =>
+      unwrap(
+        await planner.DELETE('/api/v1/planner/groups/{id}', {
+          params: { path: { id: input.id }, header: ifMatch(input.revision) },
+        }),
+      ),
+    onSuccess: () => invalidate(),
+  });
+}
+
+export function useSetAttendance() {
+  const invalidate = useMealPlanInvalidation();
+  return useMutation({
+    mutationFn: async (input: { occasionId: string; memberId: string; attendance: Attendance }) =>
+      unwrap(
+        await planner.PUT('/api/v1/planner/occasions/{id}/attendance/{member_id}', {
+          params: { path: { id: input.occasionId, member_id: input.memberId } },
+          body: { attendance: input.attendance },
+        }),
+      ) as OccasionView,
+    onSuccess: () => invalidate(),
+  });
+}
+
+export function useCopyWeek() {
+  const invalidate = useMealPlanInvalidation();
+  return useMutation({
+    mutationFn: async (input: { weekStart: string; sourceWeekStart: string }) =>
+      unwrap(
+        await planner.POST('/api/v1/planner/{week_start}/copy-from/{source_week_start}', {
+          params: { path: { week_start: input.weekStart, source_week_start: input.sourceWeekStart } },
+        }),
+      ) as PlannerWeek,
     onSuccess: () => invalidate(),
   });
 }
@@ -168,70 +314,6 @@ export function useReopenMealPlanComponent() {
         }),
       ),
     onSuccess: () => invalidate(),
-  });
-}
-
-export function useSetMealPlanParticipants() {
-  const invalidate = useMealPlanInvalidation();
-  return useMutation({
-    mutationFn: async (input: {
-      id: string;
-      revision: number;
-      body: components['schemas']['SetMealPlanParticipantsRequest'];
-    }) =>
-      unwrap(
-        await client.PUT('/api/v1/meal-plan-entries/{id}/participants', {
-          params: { path: { id: input.id }, header: ifMatch(input.revision) },
-          body: input.body,
-        }),
-      ),
-    onSuccess: () => invalidate(),
-  });
-}
-
-export function useOptOutOfMeal() {
-  const invalidate = useMealPlanInvalidation();
-  return useMutation({
-    mutationFn: async (input: { id: string; revision: number }) =>
-      unwrap(
-        await client.POST('/api/v1/meal-plan-entries/{id}/opt-out', {
-          params: { path: { id: input.id }, header: ifMatch(input.revision) },
-        }),
-      ),
-    onSuccess: () => invalidate(),
-  });
-}
-
-export function useRejoinMeal() {
-  const invalidate = useMealPlanInvalidation();
-  return useMutation({
-    mutationFn: async (input: { id: string; revision: number }) =>
-      unwrap(
-        await client.DELETE('/api/v1/meal-plan-entries/{id}/opt-out', {
-          params: { path: { id: input.id }, header: ifMatch(input.revision) },
-        }),
-      ),
-    onSuccess: () => invalidate(),
-  });
-}
-
-export function useHouseholdSlotAttendance(
-  date: string,
-  slot: string,
-  excludeEntry?: string,
-) {
-  return useQuery({
-    queryKey: mealPlanKeys.slotAttendance(date, slot, excludeEntry),
-    enabled: Boolean(date && slot),
-    queryFn: async () =>
-      unwrap(
-        await client.GET('/api/v1/household/planner/attendance/{date}/{slot}', {
-          params: {
-            path: { date, slot },
-            query: excludeEntry ? { exclude_entry: excludeEntry } : {},
-          },
-        }),
-      ),
   });
 }
 

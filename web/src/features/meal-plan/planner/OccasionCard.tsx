@@ -1,0 +1,335 @@
+import CloseIcon from '@mui/icons-material/CloseOutlined';
+import EditIcon from '@mui/icons-material/EditOutlined';
+import Alert from '@mui/material/Alert';
+import Box from '@mui/material/Box';
+import Button from '@mui/material/Button';
+import DialogActions from '@mui/material/DialogActions';
+import DialogContent from '@mui/material/DialogContent';
+import DialogTitle from '@mui/material/DialogTitle';
+import Drawer from '@mui/material/Drawer';
+import IconButton from '@mui/material/IconButton';
+import InputBase from '@mui/material/InputBase';
+import Stack from '@mui/material/Stack';
+import Typography from '@mui/material/Typography';
+import { useState } from 'react';
+import { ApiError } from '../../../api/client';
+import { useAddGroup, useSetAttendance, useUpdateGroup, useUpdateOccasion } from '../../../api/queries';
+import { FormDialog } from '../../../components/FormDialog';
+import { AddMealPicker } from './AddMealPicker';
+import { GroupSlab } from './GroupSlab';
+import { NeedsMealSlab } from './NeedsMealSlab';
+import { groupDiners, occasionTitle, shortDate } from './plannerWeek';
+import type { GroupView, NewGroup, OccasionView, PlannerMember, PlannerWeek } from './types';
+import { useFridgeDishes } from './usePickerRows';
+
+type MemberPicker = { anchor: HTMLElement; member: PlannerMember };
+
+export function OccasionCard({
+  occasion,
+  week,
+  sheet,
+  onClose,
+  onMove,
+  onCopy,
+  onDelete,
+}: {
+  occasion: OccasionView;
+  week: PlannerWeek;
+  sheet: boolean;
+  onClose: () => void;
+  onMove: () => void;
+  onCopy: () => void;
+  onDelete: () => void;
+}) {
+  const updateOccasion = useUpdateOccasion();
+  const updateGroup = useUpdateGroup();
+  const addGroup = useAddGroup();
+  const setAttendance = useSetAttendance();
+  const dishes = useFridgeDishes();
+  const [error, setError] = useState<string | null>(null);
+  const [editingTime, setEditingTime] = useState(false);
+  const [timeText, setTimeText] = useState('');
+  const [editingNote, setEditingNote] = useState(false);
+  const [noteText, setNoteText] = useState('');
+  const [picker, setPicker] = useState<MemberPicker | null>(null);
+
+  const busy = updateOccasion.isPending || updateGroup.isPending || addGroup.isPending || setAttendance.isPending;
+  const members = week.members;
+  const unaccounted = occasion.unaccounted_member_ids
+    .map((id) => members.find((member) => member.id === id))
+    .filter((member): member is PlannerMember => member !== undefined);
+  const toBuy = occasion.groups.reduce((total, group) => total + group.to_buy, 0);
+  const hasFood = occasion.groups.some((group) => group.components.length > 0);
+
+  async function run(action: () => Promise<unknown>, fallback: string) {
+    try {
+      setError(null);
+      await action();
+    } catch (caught) {
+      setError(caught instanceof ApiError ? caught.message : fallback);
+    }
+  }
+
+  function untick(group: GroupView, member: PlannerMember) {
+    const remaining = groupDiners(occasion, group, members)
+      .filter((diner) => diner.id !== member.id)
+      .map((diner) => ({
+        member_id: diner.id,
+        note: group.participants.find((participant) => participant.member_id === diner.id)?.note ?? null,
+      }));
+    void run(
+      () => updateGroup.mutateAsync({ id: group.id, body: { everyone: false, participants: remaining, revision: group.revision } }),
+      'Could not change who is eating.',
+    );
+  }
+
+  function retick(group: GroupView, member: PlannerMember) {
+    void run(
+      () => setAttendance.mutateAsync({ occasionId: occasion.id, memberId: member.id, attendance: { kind: 'eating', group_id: group.id } }),
+      'Could not change who is eating.',
+    );
+  }
+
+  function variation(group: GroupView, member: PlannerMember, note: string | null) {
+    void run(
+      () =>
+        setAttendance.mutateAsync({
+          occasionId: occasion.id,
+          memberId: member.id,
+          attendance: { kind: 'eating', group_id: group.id, note },
+        }),
+      'Could not save the variation.',
+    );
+  }
+
+  function guests(group: GroupView, count: number) {
+    void run(
+      () => updateGroup.mutateAsync({ id: group.id, body: { guest_count: count, revision: group.revision } }),
+      'Could not change the guests.',
+    );
+  }
+
+  function cooking(group: GroupView, value: number | null) {
+    void run(
+      () => updateGroup.mutateAsync({ id: group.id, body: { cooking_servings: value, revision: group.revision } }),
+      'Could not change how much is being cooked.',
+    );
+  }
+
+  function addFor(member: PlannerMember, group: NewGroup) {
+    setPicker(null);
+    void run(
+      () =>
+        addGroup.mutateAsync({
+          occasionId: occasion.id,
+          body: { ...group, everyone: false, participants: [{ member_id: member.id }] },
+        }),
+      `Could not add a meal for ${member.name}.`,
+    );
+  }
+
+  function elsewhere(member: PlannerMember) {
+    void run(
+      () => setAttendance.mutateAsync({ occasionId: occasion.id, memberId: member.id, attendance: { kind: 'elsewhere' } }),
+      'Could not mark them as out.',
+    );
+  }
+
+  function commitTime() {
+    setEditingTime(false);
+    const value = timeText.trim() === '' ? null : timeText;
+    if (value === occasion.planned_time) return;
+    void run(
+      () => updateOccasion.mutateAsync({ id: occasion.id, body: { planned_time: value, revision: occasion.revision } }),
+      'Could not change the time.',
+    );
+  }
+
+  function commitNote() {
+    setEditingNote(false);
+    const value = noteText.trim() === '' ? null : noteText.trim();
+    if (value === occasion.note) return;
+    void run(
+      () => updateOccasion.mutateAsync({ id: occasion.id, body: { note: value, revision: occasion.revision } }),
+      'Could not save the note.',
+    );
+  }
+
+  const header = (
+    <Stack direction="row" sx={{ alignItems: 'flex-start', justifyContent: 'space-between', gap: 2 }}>
+      <Box>
+        <Typography variant="h2" component="h2">
+          {occasionTitle(occasion)}
+        </Typography>
+        <Stack direction="row" spacing={1} sx={{ alignItems: 'center', mt: 0.5 }}>
+          <Typography variant="body2" color="text.secondary" className="numeral">
+            {shortDate(occasion.planned_on)}
+          </Typography>
+          <Typography variant="body2" color="text.secondary">
+            ·
+          </Typography>
+          {editingTime ? (
+            <InputBase
+              autoFocus
+              type="time"
+              value={timeText}
+              inputProps={{ 'aria-label': 'Meal time' }}
+              onChange={(event) => setTimeText(event.target.value)}
+              onBlur={commitTime}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') commitTime();
+                if (event.key === 'Escape') setEditingTime(false);
+              }}
+              sx={{ fontSize: '0.875rem', border: '1px solid', borderColor: 'primary.main', borderRadius: '8px', px: 1 }}
+            />
+          ) : (
+            <>
+              <Typography variant="body2" color="text.secondary" className="numeral">
+                {occasion.effective_time ?? 'No set time'}
+              </Typography>
+              <IconButton
+                size="small"
+                aria-label="Change the time"
+                onClick={() => {
+                  setTimeText(occasion.effective_time ?? '');
+                  setEditingTime(true);
+                }}
+                sx={{ color: 'text.disabled', p: 0.25 }}
+              >
+                <EditIcon sx={{ fontSize: 14 }} />
+              </IconButton>
+            </>
+          )}
+        </Stack>
+      </Box>
+      <IconButton aria-label="Close" onClick={onClose} sx={{ border: '1px solid', borderColor: 'divider', borderRadius: '10px' }}>
+        <CloseIcon fontSize="small" />
+      </IconButton>
+    </Stack>
+  );
+
+  const body = (
+    <Stack spacing={1.5}>
+      {error ? <Alert severity="error" onClose={() => setError(null)}>{error}</Alert> : null}
+      {occasion.groups.map((group, index) => (
+        <GroupSlab
+          key={group.id}
+          occasion={occasion}
+          group={group}
+          members={members}
+          showOff={index === 0 ? unaccounted : []}
+          busy={busy}
+          onUntick={(member) => untick(group, member)}
+          onRetick={(member) => retick(group, member)}
+          onVariation={(member, note) => variation(group, member, note)}
+          onGuests={(count) => guests(group, count)}
+          onCooking={(value) => cooking(group, value)}
+        />
+      ))}
+      {unaccounted.map((member) => (
+        <NeedsMealSlab
+          key={member.id}
+          member={member}
+          dishes={dishes}
+          onLeftovers={(row) => addFor(member, row.group)}
+          onSavedMeal={(anchor) => setPicker({ anchor, member })}
+          onSomethingElse={(anchor) => setPicker({ anchor, member })}
+          onElsewhere={() => elsewhere(member)}
+        />
+      ))}
+      <Stack>
+        <Stack direction="row" sx={{ justifyContent: 'space-between', gap: 2, py: 1.5, borderTop: '1px solid', borderColor: 'divider' }}>
+          <Typography variant="body2" color="text.secondary">
+            Note
+          </Typography>
+          {editingNote ? (
+            <InputBase
+              autoFocus
+              value={noteText}
+              inputProps={{ 'aria-label': 'Note' }}
+              onChange={(event) => setNoteText(event.target.value)}
+              onBlur={commitNote}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') commitNote();
+                if (event.key === 'Escape') setEditingNote(false);
+              }}
+              sx={{ fontSize: '0.875rem', flexGrow: 1, textAlign: 'right', border: '1px solid', borderColor: 'primary.main', borderRadius: '8px', px: 1 }}
+            />
+          ) : (
+            <Box
+              component="button"
+              type="button"
+              onClick={() => {
+                setNoteText(occasion.note ?? '');
+                setEditingNote(true);
+              }}
+              sx={{ background: 'none', border: 0, p: 0, font: 'inherit', cursor: 'pointer', textAlign: 'right' }}
+            >
+              <Typography variant="body2" sx={{ color: occasion.note ? 'text.primary' : 'text.disabled' }}>
+                {occasion.note ?? 'Add a note'}
+              </Typography>
+            </Box>
+          )}
+        </Stack>
+        <Stack direction="row" sx={{ justifyContent: 'space-between', gap: 2, py: 1.5, borderTop: '1px solid', borderColor: 'divider' }}>
+          <Typography variant="body2" color="text.secondary">
+            Shopping
+          </Typography>
+          <Typography variant="body2" className="numeral" sx={{ color: toBuy > 0 ? 'warning.main' : 'text.primary' }}>
+            {toBuy > 0 ? `${toBuy} to buy` : hasFood ? 'Everything in stock' : 'Nothing to buy'}
+          </Typography>
+        </Stack>
+      </Stack>
+    </Stack>
+  );
+
+  const footer = (
+    <Stack direction="row" sx={{ justifyContent: 'space-between', width: '100%', borderTop: '1px solid', borderColor: 'divider', pt: 1.5 }}>
+      <Stack direction="row" spacing={0.5} sx={{ ml: -1.25 }}>
+        <Button onClick={onMove}>Move</Button>
+        <Button onClick={onCopy}>Copy to day</Button>
+      </Stack>
+      <Button color="error" onClick={onDelete} sx={{ mr: -1.25 }}>
+        Delete
+      </Button>
+    </Stack>
+  );
+
+  const pickerElement = (
+    <AddMealPicker
+      open={picker !== null}
+      anchorEl={picker?.anchor ?? null}
+      sheet={sheet}
+      initialQuery=""
+      placeholder={picker ? `Something for ${picker.member.name}` : 'What are you eating?'}
+      onPick={(group) => {
+        if (picker) addFor(picker.member, group);
+      }}
+      onClose={() => setPicker(null)}
+    />
+  );
+
+  if (sheet) {
+    return (
+      <Drawer anchor="bottom" open onClose={onClose} slotProps={{ paper: { sx: { borderRadius: '14px 14px 0 0', maxHeight: '92vh' } } }}>
+        <Stack spacing={3} sx={{ px: 2.5, pt: 3, pb: 2 }}>
+          {header}
+          {body}
+          {footer}
+        </Stack>
+        {pickerElement}
+      </Drawer>
+    );
+  }
+
+  return (
+    <FormDialog open onClose={onClose} fullWidth maxWidth={false} slotProps={{ paper: { sx: { width: 600, maxWidth: 'calc(100vw - 32px)' } } }}>
+      <DialogTitle component="div" sx={{ px: 4, pt: 3.5, pb: 1 }}>
+        {header}
+      </DialogTitle>
+      <DialogContent sx={{ px: 4, pt: 2 }}>{body}</DialogContent>
+      <DialogActions sx={{ px: 4, pb: 3, pt: 0 }}>{footer}</DialogActions>
+      {pickerElement}
+    </FormDialog>
+  );
+}

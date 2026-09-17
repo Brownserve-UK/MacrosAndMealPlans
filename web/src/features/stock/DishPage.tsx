@@ -7,17 +7,12 @@ import Stack from '@mui/material/Stack';
 import Typography from '@mui/material/Typography';
 import { Link } from '@tanstack/react-router';
 import { useState } from 'react';
-import type { MealSlot, StockItem } from '../../api/client';
+import type { StockItem } from '../../api/client';
 import { useRecipe, useRecipeNutrition, useStock, useStockAvailability, useStockEventsFor } from '../../api/queries';
 import { BackLabel } from '../../components/BackLink';
 import { IconTile } from '../../components/IconTile';
 import { EmptyState, ErrorState, Loading } from '../../components/States';
-import { useHouseholdTimeZone } from '../../hooks/useHouseholdTimeZone';
 import { MoveCookedDialog } from './MoveCookedDialog';
-import { MealEditorDialog } from '../meal-plan/MealEditorDialog';
-import { MealSlotMenu } from '../meal-plan/MealSlotMenu';
-import { todayIso } from '../meal-plan/date';
-import { MAIN_SLOTS } from '../meal-plan/slots';
 
 const PLACE_LABEL: Record<StockItem['storage_location'], string> = {
   ambient: 'Cupboard',
@@ -83,9 +78,7 @@ export function DishPage({ recipeId }: { recipeId: string }) {
   const nutrition = useRecipeNutrition(recipeId);
   const stock = useStock({ per_page: 200 });
   const availability = useStockAvailability();
-  const [planning, setPlanning] = useState<MealSlot | null>(null);
   const [moving, setMoving] = useState<Move | null>(null);
-  const timeZone = useHouseholdTimeZone();
 
   const portions = (stock.data?.items ?? []).filter(
     (item) => item.prepared_recipe_id === recipeId && servingsOf(item) > 0,
@@ -186,7 +179,9 @@ export function DishPage({ recipeId }: { recipeId: string }) {
 
           {left > 0 ? (
             <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap', gap: 1 }}>
-              <MealSlotMenu choices={MAIN_SLOTS} label="Plan it" onSelect={setPlanning} />
+              <Button component={Link} to="/planner" size="small">
+                Plan it
+              </Button>
             </Stack>
           ) : null}
         </Stack>
@@ -274,18 +269,6 @@ export function DishPage({ recipeId }: { recipeId: string }) {
           to={moving.to}
           available={moving.available}
           onClose={() => setMoving(null)}
-        />
-      ) : null}
-
-      {planning ? (
-        <MealEditorDialog
-          open
-          mode="household"
-          onClose={() => setPlanning(null)}
-          date={todayIso(timeZone)}
-          slot={planning}
-          meal={null}
-          startWith={{ recipeId, name: recipe.data.name, servings: left }}
         />
       ) : null}
     </Box>

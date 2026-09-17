@@ -1,6 +1,4 @@
-import AddIcon from '@mui/icons-material/AddOutlined';
 import Box from '@mui/material/Box';
-import Button from '@mui/material/Button';
 import Stack from '@mui/material/Stack';
 import Typography from '@mui/material/Typography';
 import type { ReactNode } from 'react';
@@ -26,35 +24,5 @@ export function SlotSection({
       </Stack>
       {children}
     </Box>
-  );
-}
-
-export function EmptySlot({
-  label,
-  onClick,
-  disabled,
-}: {
-  label: string;
-  onClick: () => void;
-  disabled?: boolean;
-}) {
-  return (
-    <Button
-      fullWidth
-      startIcon={<AddIcon />}
-      onClick={onClick}
-      disabled={disabled}
-      sx={{
-        justifyContent: 'center',
-        py: 1.5,
-        borderRadius: 1.5,
-        border: '1px dashed',
-        borderColor: 'divider',
-        color: 'primary.main',
-        '&:hover': { borderColor: 'primary.main', bgcolor: 'action.hover' },
-      }}
-    >
-      {label}
-    </Button>
   );
 }

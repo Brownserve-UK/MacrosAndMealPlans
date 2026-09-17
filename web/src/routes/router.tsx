@@ -9,7 +9,8 @@ import { HouseholdPage } from '../features/household/HouseholdPage';
 import { MemberPage } from '../features/household/MemberPage';
 import { MealPlanIndexRedirect } from '../features/meal-plan/MealPlanIndexRedirect';
 import { MealPlanPage } from '../features/meal-plan/MealPlanPage';
-import { PlannerPage } from '../features/meal-plan/PlannerPage';
+import { PlannerIndexRedirect } from '../features/meal-plan/planner/PlannerIndexRedirect';
+import { PlannerPage } from '../features/meal-plan/planner/PlannerPage';
 import { NeedsReviewPage } from '../features/meal-plan/NeedsReviewPage';
 import { defaultDayFor } from '../features/meal-plan/date';
 import { IngredientPage } from '../features/ingredients/IngredientPage';
@@ -42,14 +43,43 @@ const indexRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/',
   beforeLoad: () => {
-    throw redirect({ to: '/food-log' });
+    throw redirect({ to: '/my-food' });
+  },
+});
+
+const myFoodIndexRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/my-food',
+  component: MealPlanIndexRedirect,
+});
+
+const myFoodWeekRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/my-food/$weekStart',
+  beforeLoad: ({ params }) => {
+    throw redirect({
+      to: '/my-food/$weekStart/$day',
+      params: { weekStart: params.weekStart, day: defaultDayFor(params.weekStart) },
+      replace: true,
+    });
+  },
+});
+
+const myFoodDayRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/my-food/$weekStart/$day',
+  component: function ViewMyFood() {
+    const { weekStart, day } = myFoodDayRoute.useParams();
+    return <MealPlanPage weekStart={weekStart} day={day} />;
   },
 });
 
 const foodLogIndexRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/food-log',
-  component: () => <MealPlanIndexRedirect to="/food-log" />,
+  beforeLoad: () => {
+    throw redirect({ to: '/my-food', replace: true });
+  },
 });
 
 const foodLogWeekRoute = createRoute({
@@ -57,8 +87,8 @@ const foodLogWeekRoute = createRoute({
   path: '/food-log/$weekStart',
   beforeLoad: ({ params }) => {
     throw redirect({
-      to: '/food-log/$weekStart/$day',
-      params: { weekStart: params.weekStart, day: defaultDayFor(params.weekStart) },
+      to: '/my-food/$weekStart',
+      params: { weekStart: params.weekStart },
       replace: true,
     });
   },
@@ -67,66 +97,37 @@ const foodLogWeekRoute = createRoute({
 const foodLogDayRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/food-log/$weekStart/$day',
-  component: function ViewFoodLog() {
-    const { weekStart, day } = foodLogDayRoute.useParams();
-    return <MealPlanPage weekStart={weekStart} day={day} />;
+  beforeLoad: ({ params }) => {
+    throw redirect({
+      to: '/my-food/$weekStart/$day',
+      params: { weekStart: params.weekStart, day: params.day },
+      replace: true,
+    });
   },
 });
 
 const plannerIndexRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/planner',
-  component: () => <MealPlanIndexRedirect to="/planner" />,
+  component: PlannerIndexRedirect,
 });
 
 const plannerWeekRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/planner/$weekStart',
-  beforeLoad: ({ params }) => {
-    throw redirect({
-      to: '/planner/$weekStart/$day',
-      params: { weekStart: params.weekStart, day: defaultDayFor(params.weekStart) },
-      replace: true,
-    });
+  component: function ViewPlanner() {
+    const { weekStart } = plannerWeekRoute.useParams();
+    return <PlannerPage weekStart={weekStart} />;
   },
 });
 
 const plannerDayRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/planner/$weekStart/$day',
-  component: function ViewPlanner() {
-    const { weekStart, day } = plannerDayRoute.useParams();
-    return <PlannerPage weekStart={weekStart} day={day} />;
-  },
-});
-
-const householdPlannerIndexRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: '/household/planner',
-  beforeLoad: () => {
-    throw redirect({ to: '/planner', replace: true });
-  },
-});
-
-const householdPlannerWeekRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: '/household/planner/$weekStart',
   beforeLoad: ({ params }) => {
     throw redirect({
-      to: '/planner/$weekStart/$day',
-      params: { weekStart: params.weekStart, day: defaultDayFor(params.weekStart) },
-      replace: true,
-    });
-  },
-});
-
-const householdPlannerDayRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: '/household/planner/$weekStart/$day',
-  beforeLoad: ({ params }) => {
-    throw redirect({
-      to: '/planner/$weekStart/$day',
-      params,
+      to: '/planner/$weekStart',
+      params: { weekStart: params.weekStart },
       replace: true,
     });
   },
@@ -390,6 +391,9 @@ const profileRoute = createRoute({
 
 export const routeTree = rootRoute.addChildren([
   indexRoute,
+  myFoodIndexRoute,
+  myFoodWeekRoute,
+  myFoodDayRoute,
   foodLogIndexRoute,
   foodLogWeekRoute,
   foodLogDayRoute,
@@ -397,9 +401,6 @@ export const routeTree = rootRoute.addChildren([
   plannerWeekRoute,
   plannerDayRoute,
   kitchenRoute,
-  householdPlannerIndexRoute,
-  householdPlannerWeekRoute,
-  householdPlannerDayRoute,
   needsReviewRoute,
   foodsRoute,
   ingredientsRedirectRoute,

@@ -33,6 +33,7 @@ describe('query key shapes', () => {
     expect(householdKeys.memberAccess('m1')).toEqual(['member', 'm1', 'access']);
     expect(mealPlanKeys.myWeek('2026-09-07')).toEqual(['mealPlanWeek', '2026-09-07']);
     expect(mealPlanKeys.householdWeek('2026-09-07')).toEqual(['plannerWeek', '2026-09-07']);
+    expect(mealPlanKeys.plannerWeek('2026-09-07')).toEqual(['planner', '2026-09-07']);
     expect(recipeKeys.photo('r1', 'hero', 3)).toEqual(['recipe', 'r1', 'photo', 'hero', 3]);
     expect(stockKeys.availability('p1')).toEqual(['stock', 'availability', 'p1']);
     expect(shoppingKeys.list('2026-09-07')).toEqual(['shopping', 'requirements', '2026-09-07']);
@@ -40,12 +41,6 @@ describe('query key shapes', () => {
   });
 
   it('gives an absent argument a stable slot so two calls agree', () => {
-    expect(mealPlanKeys.slotAttendance('2026-09-07', 'dinner')).toEqual([
-      'householdSlotAttendance',
-      '2026-09-07',
-      'dinner',
-      null,
-    ]);
     expect(stockKeys.availability()).toEqual(['stock', 'availability', undefined]);
     expect(shoppingKeys.purchases()).toEqual(['shopping', 'purchases', undefined]);
   });
@@ -68,8 +63,8 @@ describe('query key shapes', () => {
       [householdKeys.user(), [householdKeys.userDetail('u1')]],
       [mealPlanKeys.myWeeks(), [mealPlanKeys.myWeek('2026-09-07')]],
       [mealPlanKeys.householdWeeks(), [mealPlanKeys.householdWeek('2026-09-07')]],
+      [mealPlanKeys.plannerWeeks(), [mealPlanKeys.plannerWeek('2026-09-07')]],
       [mealPlanKeys.entries(), [mealPlanKeys.entry('e1')]],
-      [mealPlanKeys.slotAttendances(), [mealPlanKeys.slotAttendance('2026-09-07', 'dinner')]],
       [nutritionTargetKeys.all(), [nutritionTargetKeys.forMember('m1')]],
       [weightKeys.all(), [weightKeys.summary('m1'), weightKeys.records('m1'), weightKeys.goal('m1')]],
       [recipeKeys.recipes(), [recipeKeys.recipeList({})]],
@@ -105,19 +100,14 @@ describe('invalidation targets', () => {
     myWeek: mealPlanKeys.myWeek('2026-09-07'),
     householdWeek: mealPlanKeys.householdWeek('2026-09-07'),
     needsReview: mealPlanKeys.needsReview(),
-    slotAttendance: mealPlanKeys.slotAttendance('2026-09-07', 'dinner'),
+    plannerWeek: mealPlanKeys.plannerWeek('2026-09-07'),
     unrelated: stockKeys.list({}),
   };
 
-  it('reaches the household attendance cache when a meal changes', () => {
-    expect(invalidatedBy(mealPlanKeys.slotAttendances(), mealPlanCache)).toEqual([
-      'slotAttendance',
-    ]);
-  });
-
-  it('separates the two planner weeks', () => {
+  it('separates the planner weeks', () => {
     expect(invalidatedBy(mealPlanKeys.myWeeks(), mealPlanCache)).toEqual(['myWeek']);
     expect(invalidatedBy(mealPlanKeys.householdWeeks(), mealPlanCache)).toEqual(['householdWeek']);
+    expect(invalidatedBy(mealPlanKeys.plannerWeeks(), mealPlanCache)).toEqual(['plannerWeek']);
   });
 
   it('leaves the rest of the cache alone', () => {
