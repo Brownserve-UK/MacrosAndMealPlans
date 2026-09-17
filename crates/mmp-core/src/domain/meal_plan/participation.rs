@@ -4,15 +4,15 @@ use rust_decimal::Decimal;
 use time::OffsetDateTime;
 
 use super::{
-    Assumption, MealGuestAllocation, MealGuestGroup, MealParticipant, MealParticipantAllocation,
-    MealPlanComponent, MealPlanEntry, MealPlanScope, MealPlanStatus, NewMealGuestGroup,
+    Assumption, MealGuestAllocation, MealGuestGroup, MealOccasion, MealParticipant,
+    MealParticipantAllocation, MealPlanComponent, MealPlanEntry, MealPlanStatus, NewMealGuestGroup,
     NewMealParticipant, ParticipantStatus, equal_split,
 };
 use crate::domain::{
     ConsumedAmount, ConsumptionRecordId, HouseholdMemberId, MealParticipantAllocationId,
     MealParticipantId, MealPlanComponentId, Revision, UserId,
 };
-use crate::error::{CoreError, Result, ValidationErrors};
+use crate::error::{Result, ValidationErrors};
 
 fn allocation_for_kind(component: &MealPlanComponent, full: bool) -> ConsumedAmount {
     if full {
@@ -33,6 +33,7 @@ pub fn build_participant(
     MealParticipant {
         id: MealParticipantId::new(),
         member_id,
+        note: None,
         allocations: components
             .iter()
             .map(|component| MealParticipantAllocation {
@@ -95,6 +96,10 @@ pub fn merge_participant(
             .or(new_participant.id)
             .unwrap_or_default(),
         member_id: new_participant.member_id,
+        note: new_participant
+            .note
+            .clone()
+            .or_else(|| previous.and_then(|participant| participant.note.clone())),
         allocations,
         revision: previous.map(|p| p.revision).unwrap_or(Revision::INITIAL),
         created_at: previous.map(|p| p.created_at).unwrap_or(now),
@@ -188,14 +193,9 @@ pub fn merge_guest_group(
     }
 }
 
-pub fn sync_allocations(
-    entry: &mut MealPlanEntry,
-    owner: Option<HouseholdMemberId>,
-    now: OffsetDateTime,
-) {
+pub fn sync_allocations(entry: &mut MealPlanEntry, now: OffsetDateTime) {
     let components = entry.components.clone();
     for participant in &mut entry.participants {
-        let full = Some(participant.member_id) == owner;
         participant.allocations.retain(|allocation| {
             components
                 .iter()
@@ -210,7 +210,7 @@ pub fn sync_allocations(
                 participant.allocations.push(MealParticipantAllocation {
                     id: MealParticipantAllocationId::new(),
                     component_id: component.id,
-                    allocated: allocation_for_kind(component, full),
+                    allocated: allocation_for_kind(component, false),
                     status: ParticipantStatus::Planned,
                     consumption_record_id: None,
                     resolved_by: None,
@@ -219,6 +219,31 @@ pub fn sync_allocations(
             }
         }
         participant.updated_at = now;
+    }
+    for group in &mut entry.guest_groups {
+        group.allocations.retain(|allocation| {
+            components
+                .iter()
+                .any(|component| component.id == allocation.component_id)
+        });
+        for component in &components {
+            if !group
+                .allocations
+                .iter()
+                .any(|allocation| allocation.component_id == component.id)
+            {
+                group.allocations.push(MealGuestAllocation {
+                    id: Default::default(),
+                    component_id: component.id,
+                    allocated: allocation_for_kind(component, false),
+                    status: ParticipantStatus::Planned,
+                    confirmed: None,
+                    resolved_by: None,
+                    resolved_at: None,
+                });
+            }
+        }
+        group.updated_at = now;
     }
 }
 
@@ -287,17 +312,78 @@ pub fn apply_equal_shares(entry: &mut MealPlanEntry) {
     }
 }
 
-pub fn require_household_attendance<P, G>(
-    scope: MealPlanScope,
-    participants: &[P],
-    guest_groups: &[G],
-) -> Result<()> {
-    if scope == MealPlanScope::Household && participants.is_empty() && guest_groups.is_empty() {
-        return Err(CoreError::conflict(
-            "A household meal needs at least one household member or guest.",
-        ));
+pub fn diners_for(
+    group: &MealPlanEntry,
+    occasion: &MealOccasion,
+    active_members: &[HouseholdMemberId],
+) -> Vec<HouseholdMemberId> {
+    if !group.everyone {
+        return group
+            .participants
+            .iter()
+            .map(|participant| participant.member_id)
+            .collect();
     }
-    Ok(())
+    let elsewhere: HashSet<HouseholdMemberId> = occasion
+        .groups
+        .iter()
+        .filter(|other| other.id != group.id)
+        .flat_map(|other| other.participants.iter().map(|p| p.member_id))
+        .chain(occasion.absences.iter().map(|absence| absence.member_id))
+        .collect();
+    let mut diners: Vec<HouseholdMemberId> = group
+        .participants
+        .iter()
+        .map(|participant| participant.member_id)
+        .filter(|member_id| !elsewhere.contains(member_id))
+        .collect();
+    for member_id in active_members {
+        if !elsewhere.contains(member_id) && !diners.contains(member_id) {
+            diners.push(*member_id);
+        }
+    }
+    diners
+}
+
+pub fn rescale_recipe_components(group: &mut MealPlanEntry) {
+    let servings = Decimal::from(group.effective_cooking_servings().max(0));
+    if servings.is_zero() {
+        return;
+    }
+    for component in &mut group.components {
+        if matches!(component.item, crate::domain::MealItemRef::Recipe { .. }) {
+            component.amount = ConsumedAmount::Servings(servings);
+        }
+    }
+}
+
+pub fn materialise_participants(
+    group: &mut MealPlanEntry,
+    diners: &[HouseholdMemberId],
+    now: OffsetDateTime,
+) {
+    let mut changed = false;
+    let before = group.participants.len();
+    group.participants.retain(|participant| {
+        diners.contains(&participant.member_id)
+            || participant
+                .allocations
+                .iter()
+                .any(|allocation| allocation.status.is_resolved())
+    });
+    changed |= group.participants.len() != before;
+    for member_id in diners {
+        if group.participant_for(*member_id).is_none() {
+            group
+                .participants
+                .push(build_participant(*member_id, &group.components, now, false));
+            changed = true;
+        }
+    }
+    if changed {
+        apply_equal_shares(group);
+    }
+    rescale_recipe_components(group);
 }
 
 pub fn set_allocation(
@@ -330,9 +416,6 @@ pub fn validate_participants(
     components: &[MealPlanComponent],
 ) -> crate::error::Result<()> {
     let mut errors = ValidationErrors::new();
-    if participants.is_empty() {
-        errors.push("participants", "A meal needs at least one participant");
-    }
 
     let mut seen_members = std::collections::HashSet::new();
     for (index, participant) in participants.iter().enumerate() {

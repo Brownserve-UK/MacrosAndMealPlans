@@ -53,11 +53,12 @@ pub use ids::{
     Revision, UserId,
 };
 pub use ids::{
-    MealGuestAllocationId, MealGuestGroupId, MealParticipantAllocationId, MealParticipantId,
-    MealPlanComponentId, MealPlanEntryId, MealTemplateComponentId, MealTemplateId,
-    NutritionTargetId, PreparedBatchId, PreparedMealId, PurchaseId, RecipeComponentId, RecipeId,
-    RecipeInstructionId, ShoppingListItemId, ShoppingOpportunityId, ShoppingTripId,
-    ShoppingTripRowId, StockEffectId, StockEventId, StockItemId, WeightGoalId, WeightRecordId,
+    MealGuestAllocationId, MealGuestGroupId, MealOccasionId, MealParticipantAllocationId,
+    MealParticipantId, MealPlanComponentId, MealPlanEntryId, MealTemplateComponentId,
+    MealTemplateId, NutritionTargetId, PreparedBatchId, PreparedMealId, PurchaseId,
+    RecipeComponentId, RecipeId, RecipeInstructionId, ShoppingListItemId, ShoppingOpportunityId,
+    ShoppingTripId, ShoppingTripRowId, StockEffectId, StockEventId, StockItemId, WeightGoalId,
+    WeightRecordId,
 };
 pub use ingredient::{
     Ingredient, IngredientPatch, IngredientSummary, MAX_NAME_LEN, NewIngredient, validate_name,
@@ -67,26 +68,27 @@ pub use macro_target::{
 };
 pub use meal_item::{MealItemRef, UnknownMealItemRef};
 pub use meal_plan::{
-    ActualMealPlanComponent, AllocationOutcome, Assumption, AssumptionRules, ChangedMealOutcome,
-    ComponentPreparation, ConfirmMealPlanComponent, ConfirmMealPlanEntry, MealGuestAllocation,
-    MealGuestGroup, MealOptOut, MealParticipant, MealParticipantAllocation, MealPlanComponent,
-    MealPlanComponentSnapshot, MealPlanEntry, MealPlanEntryPatch, MealPlanScope, MealPlanStatus,
-    MealSlot, NewMealGuestAllocation, NewMealGuestGroup, NewMealParticipant,
-    NewMealParticipantAllocation, NewMealPlanComponent, NewMealPlanEntry, OutcomeActor,
-    ParticipantStatus, ReplacementItem, ReviewMealOutcomes, ReviewedGuestOutcome,
-    ReviewedMealOutcome, ReviewedMemberOutcome, SetMealParticipants, SlotAttendance,
-    UnknownMealPlanScope, UnknownMealPlanStatus, UnknownMealSlot, UnknownParticipantStatus,
-    actual_components_for_member, allocated_total, apply_equal_shares, build_guest_results,
-    build_participant, component_still_eaten, derive_component_status, derive_entry_status,
-    derive_guest_status, derive_participant_status, effective_consumption, equal_split,
-    find_component, forecast_remaining, has_explicit_allocations, make_components,
-    merge_components, merge_guest_group, merge_participant, outcomes_for_component,
-    participant_status_to_meal, pending_component_ids, preparation_for, replacements_for,
-    require_allocation_planned, require_editable, require_household_attendance, require_planned,
-    require_subject_pending, set_allocation, sync_allocations, validate_actual_components,
-    validate_components, validate_guest_groups, validate_participants,
+    ActualMealPlanComponent, AdHocKind, AllocationOutcome, Assumption, AssumptionRules,
+    ChangedMealOutcome, ComponentPreparation, ConfirmMealPlanComponent, ConfirmMealPlanEntry,
+    MealAbsence, MealAttendance, MealGroupPatch, MealGuestAllocation, MealGuestGroup, MealOccasion,
+    MealOccasionPatch, MealParticipant, MealParticipantAllocation, MealPlanComponent,
+    MealPlanComponentSnapshot, MealPlanEntry, MealPlanStatus, MealSlot, NewMealGroup,
+    NewMealGuestAllocation, NewMealGuestGroup, NewMealOccasion, NewMealParticipant,
+    NewMealParticipantAllocation, NewMealPlanComponent, OutcomeActor, ParticipantStatus,
+    ReplacementItem, ReviewMealOutcomes, ReviewedGuestOutcome, ReviewedMealOutcome,
+    ReviewedMemberOutcome, UnknownAdHocKind, UnknownMealPlanStatus, UnknownMealSlot,
+    UnknownParticipantStatus, actual_components_for_member, allocated_total, apply_equal_shares,
+    build_guest_results, build_participant, component_still_eaten, derive_component_status,
+    derive_entry_status, derive_guest_status, derive_participant_status, diners_for,
+    effective_consumption, equal_split, find_component, forecast_remaining,
+    has_explicit_allocations, make_components, materialise_participants, merge_components,
+    merge_guest_group, merge_participant, outcomes_for_component, participant_status_to_meal,
+    pending_component_ids, preparation_for, replacements_for, require_allocation_planned,
+    require_editable, require_planned, require_subject_pending, rescale_recipe_components,
+    set_allocation, sync_allocations, validate_actual_components, validate_components,
+    validate_group_shape, validate_guest_groups, validate_participants,
 };
-pub(crate) use meal_plan::{MEAL_PLAN_COMPONENT, MEAL_PLAN_ENTRY};
+pub(crate) use meal_plan::{MEAL_OCCASION, MEAL_PLAN_COMPONENT, MEAL_PLAN_ENTRY};
 pub use meal_template::{
     MAX_NAME_LEN as MEAL_TEMPLATE_MAX_NAME_LEN, MealTemplate, MealTemplateComponent,
     MealTemplatePatch, NewMealTemplate, NewMealTemplateComponent,
@@ -118,13 +120,13 @@ pub use recipe::{
     recipe_nutrition_detailed,
 };
 pub use shopping::{
-    Assignment, Certainty, ExceptionState, NewPurchase, NewShoppingCadence, NewShoppingListItem,
-    OpportunityException, OpportunityState, Purchase, PurchasePatch, PurchaseState,
-    ShoppingCadence, ShoppingListItem, ShoppingListItemPatch, ShoppingOpportunity,
+    Assignment, Certainty, ExceptionState, MealReference, NewPurchase, NewShoppingCadence,
+    NewShoppingListItem, OpportunityException, OpportunityState, Purchase, PurchasePatch,
+    PurchaseState, ShoppingCadence, ShoppingListItem, ShoppingListItemPatch, ShoppingOpportunity,
     ShoppingRequirement, ShoppingSection, ShoppingTrip, ShoppingTripRow, SuggestionReason,
     TripState, UnknownExceptionState, UnknownOpportunityState, UnknownPurchaseState,
-    UnknownShoppingSection, UnknownTripState, assign, expand_opportunities, week_day_from_number,
-    week_day_number,
+    UnknownShoppingSection, UnknownTripState, assign, expand_opportunities, meals_for,
+    week_day_from_number, week_day_number,
 };
 pub use stock::{
     AppliedDelta, Availability, AvailabilityReport, Confidence, CookedFoodAvailability,

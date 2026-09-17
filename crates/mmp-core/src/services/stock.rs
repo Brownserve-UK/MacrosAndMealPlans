@@ -16,10 +16,9 @@ use crate::domain::{
 };
 use crate::error::{CoreError, Result};
 use crate::ports::{
-    Clock, HouseholdMemberRepository, HouseholdSettingsRepository, IngredientRepository,
-    MealPlanQuery, MealPlanRepository, MemberQuery, PageRequest, Paginated,
-    PreparedBatchRepository, PreparedMealRepository, ProductRepository, RecipeRepository,
-    StockQuery, StockRepository,
+    Clock, HouseholdSettingsRepository, IngredientRepository, MealPlanRepository, PageRequest,
+    Paginated, PreparedBatchRepository, PreparedMealRepository, ProductRepository,
+    RecipeRepository, StockQuery, StockRepository,
 };
 
 const STOCK_ITEM: &str = "stock item";
@@ -44,7 +43,6 @@ pub struct StockService {
     meal_plans: Arc<dyn MealPlanRepository>,
     recipes: Arc<dyn RecipeRepository>,
     batches: Arc<dyn PreparedBatchRepository>,
-    members: Arc<dyn HouseholdMemberRepository>,
     settings: Arc<dyn HouseholdSettingsRepository>,
     clock: Arc<dyn Clock>,
 }
@@ -59,7 +57,6 @@ impl StockService {
         meal_plans: Arc<dyn MealPlanRepository>,
         recipes: Arc<dyn RecipeRepository>,
         batches: Arc<dyn PreparedBatchRepository>,
-        members: Arc<dyn HouseholdMemberRepository>,
         settings: Arc<dyn HouseholdSettingsRepository>,
         clock: Arc<dyn Clock>,
     ) -> Self {
@@ -71,7 +68,6 @@ impl StockService {
             meal_plans,
             recipes,
             batches,
-            members,
             settings,
             clock,
         }
@@ -805,36 +801,53 @@ impl StockService {
         Ok(())
     }
 
-    async fn planned_demand(&self, from: Date, to: Date) -> Result<Demand> {
-        let members = self
-            .members
-            .list(&MemberQuery {
-                include_archived: false,
-                page: PageRequest::new(1, PageRequest::MAX_PER_PAGE),
-                ..Default::default()
-            })
-            .await?;
-
-        let mut entries: Vec<crate::domain::MealPlanEntry> = Vec::new();
-        for member in members.items {
-            entries.extend(
-                self.meal_plans
-                    .list(&MealPlanQuery {
-                        member_id: member.id,
-                        from,
-                        to,
-                        include_participating: false,
-                    })
-                    .await?,
-            );
+    async fn group_names(
+        &self,
+        entries: &[crate::domain::MealPlanEntry],
+        recipes: &HashMap<RecipeId, Recipe>,
+    ) -> Result<HashMap<crate::domain::MealPlanEntryId, String>> {
+        let mut names = HashMap::with_capacity(entries.len());
+        for entry in entries {
+            let first = entry.components.first().map(|component| component.item);
+            let component_name = match first {
+                None => String::new(),
+                Some(MealItemRef::Product { product_id }) => self
+                    .products
+                    .get(product_id)
+                    .await?
+                    .map(|product| product.name)
+                    .unwrap_or_default(),
+                Some(MealItemRef::Recipe { recipe_id }) | Some(MealItemRef::Dish { recipe_id }) => {
+                    match recipes.get(&recipe_id) {
+                        Some(recipe) => recipe.name.clone(),
+                        None => self
+                            .recipes
+                            .get(recipe_id)
+                            .await?
+                            .map(|recipe| recipe.name)
+                            .unwrap_or_default(),
+                    }
+                }
+                Some(MealItemRef::Ingredient { ingredient_id }) => self
+                    .ingredients
+                    .get(ingredient_id)
+                    .await?
+                    .map(|ingredient| ingredient.name)
+                    .unwrap_or_default(),
+                Some(MealItemRef::PreparedMeal { prepared_meal_id }) => self
+                    .prepared_meals
+                    .get(prepared_meal_id)
+                    .await?
+                    .map(|prepared_meal| prepared_meal.name)
+                    .unwrap_or_default(),
+            };
+            names.insert(entry.id, entry.display_name(|| component_name));
         }
-        entries.extend(
-            self.meal_plans
-                .list_all(from, to)
-                .await?
-                .into_iter()
-                .filter(|entry| entry.scope == crate::domain::MealPlanScope::Household),
-        );
+        Ok(names)
+    }
+
+    async fn planned_demand(&self, from: Date, to: Date) -> Result<Demand> {
+        let entries: Vec<crate::domain::MealPlanEntry> = self.meal_plans.list_all(from, to).await?;
 
         let mut recipe_ids: Vec<RecipeId> = entries
             .iter()
@@ -870,6 +883,7 @@ impl StockService {
             .map(|component| component.id)
             .collect();
         let prepared = self.batches.for_components(&component_ids).await?;
+        let group_names = self.group_names(&entries, &recipes).await?;
 
         let mut demand = Demand::default();
         let mut product_cache: HashMap<ProductId, Option<crate::domain::Product>> = HashMap::new();
@@ -882,6 +896,7 @@ impl StockService {
                 assumption_rules.enabled,
             )
             .assumed;
+            let group_name = group_names.get(&entry.id).cloned().unwrap_or_default();
             for component in &entry.components {
                 let Some(wanted) =
                     unresolved_demand(entry, component, prepared.contains_key(&component.id))
@@ -907,7 +922,14 @@ impl StockService {
                         match wanted.resolve(&product) {
                             Ok(quantity) => {
                                 demand.add(subject, quantity);
-                                demand.note_claim(entry, subject, quantity, None, assumed);
+                                demand.note_claim(
+                                    entry,
+                                    subject,
+                                    quantity,
+                                    &group_name,
+                                    None,
+                                    assumed,
+                                );
                             }
                             Err(_) => demand.note_gap(subject, DemandGap::AmountUnresolvable),
                         }
@@ -928,6 +950,7 @@ impl StockService {
                                 entry,
                                 want.target.subject,
                                 want.want,
+                                &group_name,
                                 Some(recipe.name.clone()),
                                 assumed,
                             );
@@ -947,7 +970,7 @@ impl StockService {
                         let subject = DemandSubject::cooked_food(recipe_id);
                         let quantity = Quantity::new(servings, Unit::Serving);
                         demand.add(subject, quantity);
-                        demand.note_claim(entry, subject, quantity, None, assumed);
+                        demand.note_claim(entry, subject, quantity, &group_name, None, assumed);
                     }
                     MealItemRef::Ingredient { ingredient_id } => {
                         let subject = DemandSubject::ingredient(ingredient_id);
@@ -969,7 +992,7 @@ impl StockService {
                             demand.note_gap(subject, DemandGap::FoodHasNoProducts);
                         }
                         demand.add(subject, quantity);
-                        demand.note_claim(entry, subject, quantity, None, assumed);
+                        demand.note_claim(entry, subject, quantity, &group_name, None, assumed);
                     }
                     MealItemRef::PreparedMeal { prepared_meal_id } => {
                         let subject = DemandSubject::prepared_meal(prepared_meal_id);
@@ -991,7 +1014,7 @@ impl StockService {
                             demand.note_gap(subject, DemandGap::FoodHasNoProducts);
                         }
                         demand.add(subject, quantity);
-                        demand.note_claim(entry, subject, quantity, None, assumed);
+                        demand.note_claim(entry, subject, quantity, &group_name, None, assumed);
                     }
                 }
             }
@@ -1109,6 +1132,7 @@ impl Demand {
         entry: &crate::domain::MealPlanEntry,
         subject: DemandSubject,
         quantity: Quantity,
+        group_name: &str,
         recipe_name: Option<String>,
         assumed: bool,
     ) {
@@ -1118,7 +1142,7 @@ impl Demand {
             entry_id: entry.id,
             planned_on: entry.planned_on,
             slot: entry.slot,
-            scope: entry.scope,
+            group_name: group_name.to_owned(),
             recipe_name,
             assumed,
         });

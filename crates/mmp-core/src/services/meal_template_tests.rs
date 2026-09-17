@@ -5,7 +5,7 @@ use time::macros::{date, datetime, time};
 
 use super::*;
 use crate::domain::{
-    ConsumedAmount, MealItemRef, MealPlanEntry, MealPlanScope, MealSlot, ProductId, Quantity, Unit,
+    ConsumedAmount, MealItemRef, MealOccasionId, MealPlanEntry, MealSlot, ProductId, Quantity, Unit,
 };
 use crate::ports::{Clock, FixedClock};
 use crate::testing::{InMemoryMealPlanRepository, InMemoryMealTemplateRepository};
@@ -139,11 +139,12 @@ async fn from_entry_keeps_foods_and_drops_cooked_food() {
     let fish_fingers = ProductId::new();
     let entry = MealPlanEntry {
         id: crate::domain::MealPlanEntryId::new(),
-        scope: MealPlanScope::Member,
-        member_id: Some(crate::domain::HouseholdMemberId::new()),
+        occasion_id: MealOccasionId::new(),
         planned_on: date!(2026 - 09 - 08),
         planned_time: Some(time!(18:30)),
         slot: MealSlot::Dinner,
+        label: None,
+        ad_hoc: None,
         components: vec![
             crate::domain::MealPlanComponent {
                 id: crate::domain::MealPlanComponentId::new(),
@@ -167,16 +168,17 @@ async fn from_entry_keeps_foods_and_drops_cooked_food() {
                 display_order: uuid::Uuid::now_v7(),
             },
         ],
+        everyone: true,
         participants: Vec::new(),
         guest_groups: Vec::new(),
-        opted_out: Vec::new(),
+        cooking_servings: None,
         created_by: h.owner,
         updated_by: h.owner,
         revision: Revision::INITIAL,
         created_at: OffsetDateTime::UNIX_EPOCH,
         updated_at: OffsetDateTime::UNIX_EPOCH,
     };
-    h.plans.insert(&entry).await.unwrap();
+    h.plans.seed_entry(entry.clone());
 
     let template = h
         .service

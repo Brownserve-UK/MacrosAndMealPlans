@@ -3,9 +3,9 @@ use super::str_enum::str_enum;
 use time::{Date, OffsetDateTime, Time, Weekday};
 
 use super::{
-    DemandClaim, DemandGap, DemandSubject, IngredientId, PreparedMealId, ProductId, PurchaseId,
-    Quantity, Revision, ShoppingListItemId, ShoppingOpportunityId, ShoppingTripId,
-    ShoppingTripRowId, StockItemId, UserId,
+    DemandClaim, DemandGap, DemandSubject, IngredientId, MealPlanEntryId, MealSlot, PreparedMealId,
+    ProductId, PurchaseId, Quantity, Revision, ShoppingListItemId, ShoppingOpportunityId,
+    ShoppingTripId, ShoppingTripRowId, StockItemId, UserId,
 };
 use crate::error::{Result, ValidationErrors};
 
@@ -326,6 +326,31 @@ pub enum Assignment {
     Unassigned,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct MealReference {
+    pub entry_id: MealPlanEntryId,
+    pub name: String,
+    pub planned_on: Date,
+    pub slot: MealSlot,
+}
+
+pub fn meals_for(claims: &[DemandClaim]) -> Vec<MealReference> {
+    let mut meals: Vec<MealReference> = Vec::new();
+    for claim in claims {
+        if meals.iter().any(|meal| meal.entry_id == claim.entry_id) {
+            continue;
+        }
+        meals.push(MealReference {
+            entry_id: claim.entry_id,
+            name: claim.group_name.clone(),
+            planned_on: claim.planned_on,
+            slot: claim.slot,
+        });
+    }
+    meals.sort_by_key(|meal| (meal.planned_on, meal.slot.order(), meal.name.clone()));
+    meals
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ShoppingRequirement {
     pub subject: DemandSubject,
@@ -337,6 +362,7 @@ pub struct ShoppingRequirement {
     pub certainty: Certainty,
     pub assignment: Assignment,
     pub claims: Vec<DemandClaim>,
+    pub for_meals: Vec<MealReference>,
     pub gaps: Vec<DemandGap>,
     pub purchases: Vec<Purchase>,
 }

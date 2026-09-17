@@ -5,14 +5,15 @@ use time::{Date, Duration, Time};
 
 use crate::domain::{
     Assumption, AssumptionRules, ComponentPreparation, ConsumedAmount, ConsumptionRecord,
-    ConsumptionRecordId, HouseholdMemberId, MealItemRef, MealParticipantAllocation,
-    MealPlanComponent, MealPlanComponentId, MealPlanEntry, MealPlanEntryId, MealPlanScope,
-    MealPlanStatus, MealSlot, NUTRIENT_KEYS, NutritionFacts, NutritionGoals, NutritionQuality,
-    PreparedBatch, Revision, derive_participant_status, outcomes_for_component,
-    participant_status_to_meal, preparation_for, resolve_on, sum_nutrition,
+    ConsumptionRecordId, HouseholdMemberId, MealAttendance, MealItemRef, MealOccasion,
+    MealOccasionId, MealParticipantAllocation, MealPlanComponent, MealPlanComponentId,
+    MealPlanEntry, MealPlanEntryId, MealPlanStatus, MealSlot, MealTimes, NUTRIENT_KEYS,
+    NutritionFacts, NutritionGoals, NutritionQuality, PreparedBatch, Revision, StockLevel, Unit,
+    derive_participant_status, outcomes_for_component, participant_status_to_meal, preparation_for,
+    resolve_on, sum_nutrition,
 };
 use crate::error::Result;
-use crate::ports::MealPlanQuery;
+use crate::ports::{MemberQuery, PageRequest};
 
 use super::MealPlanService;
 
@@ -40,6 +41,7 @@ pub struct MealPlanComponentView {
 pub struct MealParticipantView {
     pub member_id: HouseholdMemberId,
     pub display_name: String,
+    pub note: Option<String>,
     pub status: MealPlanStatus,
     pub allocations: Vec<MealParticipantAllocation>,
     pub nutrition: NutritionSummary,
@@ -63,6 +65,67 @@ pub struct MealPlanEntryView {
     pub assumption: Assumption,
     pub status: MealPlanStatus,
     pub subject_status: MealPlanStatus,
+}
+
+impl MealPlanEntryView {
+    pub fn name(&self) -> String {
+        self.entry.display_name(|| {
+            self.components
+                .first()
+                .map(|component| component.item_name.clone())
+                .unwrap_or_default()
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct MealDiner {
+    pub member_id: HouseholdMemberId,
+    pub display_name: String,
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct MealGroupView {
+    pub entry: MealPlanEntryView,
+    pub name: String,
+    pub diners: Vec<MealDiner>,
+    pub guest_count: i32,
+    pub serves: i32,
+    pub cooking_servings: Option<i32>,
+    pub effective_cooking_servings: i32,
+    pub cook_minutes: Option<i32>,
+    pub leftover_servings_available: Option<Decimal>,
+}
+
+#[derive(Debug, Clone)]
+pub struct MealOccasionView {
+    pub occasion: MealOccasion,
+    pub effective_time: Option<Time>,
+    pub groups: Vec<MealGroupView>,
+    pub absent_member_ids: Vec<HouseholdMemberId>,
+    pub unaccounted_member_ids: Vec<HouseholdMemberId>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PlannerMember {
+    pub id: HouseholdMemberId,
+    pub display_name: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct PlannerDay {
+    pub date: Date,
+    pub occasions: Vec<Option<MealOccasionView>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PlannerWeek {
+    pub week_start: Date,
+    pub week_end: Date,
+    pub usual_times: MealTimes,
+    pub members: Vec<PlannerMember>,
+    pub days: Vec<PlannerDay>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -100,6 +163,9 @@ type MealItemOrder = uuid::Uuid;
 #[derive(Debug, Clone)]
 pub struct MealSlotView {
     pub slot: MealSlot,
+    pub occasion_id: Option<MealOccasionId>,
+    pub attendance: Option<MealAttendance>,
+    pub group_name: Option<String>,
     pub items: Vec<MealItem>,
     pub nutrition: NutritionSummary,
 }
@@ -128,6 +194,8 @@ pub struct MealPlanWeek {
     pub insufficient_target_coverage: Vec<String>,
 }
 
+type SlotAttendance = (MealOccasionId, MealAttendance, Option<String>);
+
 impl MealPlanService {
     pub async fn week(
         &self,
@@ -135,15 +203,8 @@ impl MealPlanService {
         week_start: Date,
     ) -> Result<MealPlanWeek> {
         let week_end = week_start + Duration::days(6);
-        let entries = self
-            .plans
-            .list(&MealPlanQuery {
-                member_id,
-                from: week_start,
-                to: week_end,
-                include_participating: true,
-            })
-            .await?;
+        let occasions = self.plans.list_occasions(week_start, week_end).await?;
+        let active = self.active_member_ids().await?;
         let records = self
             .consumption
             .list_period(member_id, week_start, week_end)
@@ -163,20 +224,34 @@ impl MealPlanService {
         let mut presented_by_date: BTreeMap<Date, Vec<MealPlanEntryView>> = BTreeMap::new();
         let mut items_by_slot: HashMap<(Date, MealSlot), Vec<(MealItemOrder, MealItem)>> =
             HashMap::new();
-        for entry in entries {
-            let linked = records_by_entry
-                .get(&entry.id)
-                .map(Vec::as_slice)
-                .unwrap_or(&[]);
-            let date = entry.planned_on;
-            let view = self
-                .present_with(&rules, entry, linked, Some(member_id))
-                .await?;
-            for (item_date, order, item) in items_for_entry(&view) {
-                let bucket = (item_date, view.entry.slot);
-                items_by_slot.entry(bucket).or_default().push((order, item));
+        let mut attendance_by_slot: HashMap<(Date, MealSlot), SlotAttendance> = HashMap::new();
+        for mut occasion in occasions {
+            self.materialise_occasion(&mut occasion, &active);
+            let attendance = occasion.attendance_of(member_id);
+            let key = (occasion.planned_on, occasion.slot);
+            let mut group_name = None;
+            if let MealAttendance::Eating { group_id, .. } = &attendance
+                && let Some(group) = occasion
+                    .groups
+                    .into_iter()
+                    .find(|group| group.id == *group_id)
+            {
+                let linked = records_by_entry
+                    .get(&group.id)
+                    .map(Vec::as_slice)
+                    .unwrap_or(&[]);
+                let date = group.planned_on;
+                let view = self
+                    .present_with(&rules, group, linked, Some(member_id))
+                    .await?;
+                group_name = Some(view.name());
+                for (item_date, order, item) in items_for_entry(&view) {
+                    let bucket = (item_date, view.entry.slot);
+                    items_by_slot.entry(bucket).or_default().push((order, item));
+                }
+                presented_by_date.entry(date).or_default().push(view);
             }
-            presented_by_date.entry(date).or_default().push(view);
+            attendance_by_slot.insert(key, (occasion.id, attendance, group_name));
         }
         let logged_catalogue = self
             .catalogue_for(
@@ -221,8 +296,12 @@ impl MealPlanService {
                     items.sort_by_key(|(order, _)| *order);
                     let items: Vec<_> = items.into_iter().map(|(_, item)| item).collect();
                     let nutrition = item_summary(&items);
+                    let attendance = attendance_by_slot.remove(&(date, slot));
                     MealSlotView {
                         slot,
+                        occasion_id: attendance.as_ref().map(|(id, _, _)| *id),
+                        attendance: attendance.as_ref().map(|(_, kind, _)| kind.clone()),
+                        group_name: attendance.and_then(|(_, _, name)| name),
                         items,
                         nutrition,
                     }
@@ -257,16 +336,35 @@ impl MealPlanService {
         })
     }
 
-    pub async fn planner_entries(&self, week_start: Date) -> Result<Vec<MealPlanEntryView>> {
+    pub async fn planner_week(&self, week_start: Date) -> Result<PlannerWeek> {
         let week_end = week_start + Duration::days(6);
-        let entries = self.plans.list_all(week_start, week_end).await?;
+        let occasions = self.plans.list_occasions(week_start, week_end).await?;
+        let members = self.active_members().await?;
+        let active: Vec<HouseholdMemberId> = members.iter().map(|member| member.id).collect();
         let rules = self.assumption_rules().await?;
-        let mut views = Vec::with_capacity(entries.len());
-        for entry in entries {
-            let records = self.records_for_entry(entry.id).await?;
-            views.push(self.present_with(&rules, entry, &records, None).await?);
+        let mut by_cell: HashMap<(Date, MealSlot), MealOccasionView> = HashMap::new();
+        for mut occasion in occasions {
+            self.materialise_occasion(&mut occasion, &active);
+            let key = (occasion.planned_on, occasion.slot);
+            let view = self.present_occasion(&rules, occasion).await?;
+            by_cell.insert(key, view);
         }
-        Ok(views)
+        let mut days = Vec::with_capacity(7);
+        for offset in 0..7 {
+            let date = week_start + Duration::days(offset);
+            let occasions = MealSlot::ALL
+                .into_iter()
+                .map(|slot| by_cell.remove(&(date, slot)))
+                .collect();
+            days.push(PlannerDay { date, occasions });
+        }
+        Ok(PlannerWeek {
+            week_start,
+            week_end,
+            usual_times: rules.meal_times,
+            members,
+            days,
+        })
     }
 
     pub async fn needs_review(
@@ -276,32 +374,29 @@ impl MealPlanService {
     ) -> Result<NeedsReview> {
         let rules = self.assumption_rules().await?;
         let today = rules.now.date();
+        let active = self.active_member_ids().await?;
         let mut personal = Vec::new();
-        for entry in self.plans.list_through(member_id, today).await? {
-            let records = self.records_for_entry(entry.id).await?;
-            let view = self
-                .present_with(&rules, entry, &records, Some(member_id))
-                .await?;
-            if view.subject_status == MealPlanStatus::Assumed {
-                personal.push(view);
-            }
-        }
-
         let mut household = Vec::new();
-        if include_household {
-            for entry in self
-                .plans
-                .list_all_through(today)
-                .await?
-                .into_iter()
-                .filter(|entry| entry.scope == MealPlanScope::Household)
-            {
-                let records = self.records_for_entry(entry.id).await?;
-                let view = self.present_with(&rules, entry, &records, None).await?;
-                if view.status == MealPlanStatus::Assumed
-                    || (view.status == MealPlanStatus::PartiallyResolved && view.assumption.assumed)
-                {
-                    household.push(view);
+        for mut occasion in self.plans.list_occasions_through(today).await? {
+            self.materialise_occasion(&mut occasion, &active);
+            for group in occasion.groups {
+                let records = self.records_for_entry(group.id).await?;
+                if group.participant_for(member_id).is_some() {
+                    let view = self
+                        .present_with(&rules, group.clone(), &records, Some(member_id))
+                        .await?;
+                    if view.subject_status == MealPlanStatus::Assumed {
+                        personal.push(view);
+                    }
+                }
+                if include_household {
+                    let view = self.present_with(&rules, group, &records, None).await?;
+                    if view.status == MealPlanStatus::Assumed
+                        || (view.status == MealPlanStatus::PartiallyResolved
+                            && view.assumption.assumed)
+                    {
+                        household.push(view);
+                    }
                 }
             }
         }
@@ -312,6 +407,129 @@ impl MealPlanService {
             personal,
             household,
         })
+    }
+
+    pub(super) async fn active_members(&self) -> Result<Vec<PlannerMember>> {
+        let page = self
+            .members
+            .list(&MemberQuery {
+                include_archived: false,
+                page: PageRequest::new(1, PageRequest::MAX_PER_PAGE),
+                ..Default::default()
+            })
+            .await?;
+        Ok(page
+            .items
+            .into_iter()
+            .filter(|member| !member.is_archived())
+            .map(|member| PlannerMember {
+                id: member.id,
+                display_name: member.display_name,
+            })
+            .collect())
+    }
+
+    pub(super) async fn present_occasion(
+        &self,
+        rules: &AssumptionRules,
+        occasion: MealOccasion,
+    ) -> Result<MealOccasionView> {
+        let active = self.active_member_ids().await?;
+        let effective_time = occasion.effective_time(&rules.meal_times);
+        let mut groups = Vec::with_capacity(occasion.groups.len());
+        let mut seated: HashSet<HouseholdMemberId> = HashSet::new();
+        for group in &occasion.groups {
+            let records = self.records_for_entry(group.id).await?;
+            let view = self
+                .present_with(rules, group.clone(), &records, None)
+                .await?;
+            let name = view.name();
+            let diners: Vec<MealDiner> = view
+                .participants
+                .iter()
+                .map(|participant| MealDiner {
+                    member_id: participant.member_id,
+                    display_name: participant.display_name.clone(),
+                    note: participant.note.clone(),
+                })
+                .collect();
+            seated.extend(diners.iter().map(|diner| diner.member_id));
+            let cook_minutes = self.cook_minutes(group).await?;
+            let leftover_servings_available = self.leftover_servings(group).await?;
+            groups.push(MealGroupView {
+                name,
+                diners,
+                guest_count: group.guest_count(),
+                serves: group.serves(),
+                cooking_servings: group.cooking_servings,
+                effective_cooking_servings: group.effective_cooking_servings(),
+                cook_minutes,
+                leftover_servings_available,
+                entry: view,
+            });
+        }
+        let absent_member_ids: Vec<HouseholdMemberId> = occasion
+            .absences
+            .iter()
+            .map(|absence| absence.member_id)
+            .collect();
+        let unaccounted_member_ids = active
+            .into_iter()
+            .filter(|member_id| {
+                !seated.contains(member_id) && !absent_member_ids.contains(member_id)
+            })
+            .collect();
+        Ok(MealOccasionView {
+            effective_time,
+            groups,
+            absent_member_ids,
+            unaccounted_member_ids,
+            occasion,
+        })
+    }
+
+    async fn cook_minutes(&self, group: &MealPlanEntry) -> Result<Option<i32>> {
+        let mut total: Option<i32> = None;
+        for component in &group.components {
+            let MealItemRef::Recipe { recipe_id } = component.item else {
+                continue;
+            };
+            if let Some(recipe) = self.recipes.get(recipe_id).await? {
+                let minutes =
+                    recipe.preparation_minutes.unwrap_or(0) + recipe.cooking_minutes.unwrap_or(0);
+                if recipe.preparation_minutes.is_some() || recipe.cooking_minutes.is_some() {
+                    total = Some(total.unwrap_or(0).max(minutes));
+                }
+            }
+        }
+        Ok(total)
+    }
+
+    async fn leftover_servings(&self, group: &MealPlanEntry) -> Result<Option<Decimal>> {
+        let mut total: Option<Decimal> = None;
+        for component in &group.components {
+            let MealItemRef::Dish { recipe_id } = component.item else {
+                continue;
+            };
+            let mut available = Decimal::ZERO;
+            for batch in self.batches.held_for_recipe(recipe_id).await? {
+                for portion in self.batches.portions(batch.id).await? {
+                    if portion.is_archived() {
+                        continue;
+                    }
+                    match portion.level {
+                        StockLevel::Exact { quantity } | StockLevel::Estimated { quantity }
+                            if quantity.unit == Unit::Serving =>
+                        {
+                            available += quantity.amount;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            total = Some(total.unwrap_or(Decimal::ZERO) + available);
+        }
+        Ok(total)
     }
 
     pub(super) async fn present(
@@ -325,16 +543,14 @@ impl MealPlanService {
             .await
     }
 
-    async fn present_with(
+    pub(super) async fn present_with(
         &self,
         rules: &AssumptionRules,
         entry: MealPlanEntry,
         records: &[ConsumptionRecord],
         requested_subject: Option<HouseholdMemberId>,
     ) -> Result<MealPlanEntryView> {
-        let subject = requested_subject
-            .or(entry.member_id)
-            .or_else(|| entry.participants.first().map(|p| p.member_id));
+        let subject = requested_subject.or_else(|| entry.participants.first().map(|p| p.member_id));
         let assumption = rules.for_entry(&entry);
         let catalogue = self
             .catalogue_for(entry.components.iter().map(|component| component.item))
@@ -457,6 +673,7 @@ impl MealPlanService {
             participant_views.push(MealParticipantView {
                 member_id: participant.member_id,
                 display_name,
+                note: participant.note.clone(),
                 status: derive_participant_status(participant, assumption),
                 allocations: participant.allocations.clone(),
                 nutrition: summary(participant_records.into_iter()),

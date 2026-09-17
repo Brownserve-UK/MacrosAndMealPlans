@@ -1,545 +1,699 @@
 use std::collections::HashSet;
 
-use time::{Date, Time};
+use time::{Date, Duration, OffsetDateTime};
 
 use crate::domain::{
-    HouseholdMemberId, MEAL_PLAN_ENTRY, MealOptOut, MealPlanEntry, MealPlanEntryId,
-    MealPlanEntryPatch, MealPlanScope, MealSlot, NewMealPlanEntry, Revision, SetMealParticipants,
-    SlotAttendance, UserId, apply_equal_shares, build_participant, has_explicit_allocations,
-    make_components, merge_components, merge_guest_group, merge_participant, require_editable,
-    require_household_attendance, require_planned, sync_allocations, validate_components,
-    validate_guest_groups, validate_participants,
+    HouseholdMemberId, MEAL_OCCASION, MEAL_PLAN_ENTRY, MealAbsence, MealAttendance, MealGroupPatch,
+    MealOccasion, MealOccasionId, MealOccasionPatch, MealPlanEntry, MealPlanEntryId, MealSlot,
+    NewMealGroup, NewMealOccasion, NewMealParticipant, NewMealPlanComponent, ParticipantStatus,
+    Revision, UserId, apply_equal_shares, has_explicit_allocations, make_components,
+    merge_components, merge_guest_group, merge_participant, require_editable, require_planned,
+    sync_allocations, validate_components, validate_group_shape, validate_guest_groups,
+    validate_participants,
 };
 use crate::error::{CoreError, Result, ValidationErrors};
-use crate::ports::{MealPlanQuery, MemberQuery, PageRequest};
 
-use super::view::MealPlanEntryView;
+use super::view::{MealOccasionView, PlannerWeek};
 use super::{MealPlanService, ensure_not_past};
 use crate::services::revision::{commit_outcome, require_revision};
 
 impl MealPlanService {
-    pub async fn create(&self, input: NewMealPlanEntry) -> Result<MealPlanEntryView> {
+    pub async fn create_occasion(&self, input: NewMealOccasion) -> Result<MealOccasionView> {
         ensure_not_past(&self.clock, &*self.settings, input.planned_on).await?;
-        self.create_backdated(input).await
+        self.create_occasion_backdated(input).await
     }
 
-    pub async fn create_backdated(&self, input: NewMealPlanEntry) -> Result<MealPlanEntryView> {
-        validate_components(&input.components)?;
-        if input.scope == MealPlanScope::Member && input.member_id.is_none() {
-            return Err(CoreError::conflict(
-                "A personal meal needs a household member.",
-            ));
-        }
-        if input.scope == MealPlanScope::Household && input.slot == MealSlot::Snacks {
-            return Err(CoreError::conflict(
-                "Snacks stay on your own planner. Household planning covers breakfast, lunch and dinner.",
-            ));
-        }
-        if input.scope == MealPlanScope::Member {
-            let owner = input.member_id.expect("personal meal owner checked");
-            if !input.guest_groups.is_empty()
-                || input.participants.as_ref().is_some_and(|participants| {
-                    participants.len() != 1 || participants[0].member_id != owner
-                })
-            {
-                return Err(CoreError::conflict(
-                    "A personal meal can only contain its owner.",
-                ));
-            }
-        }
-        self.validate_component_items(&input.components, &HashSet::new(), input.actor_id)
-            .await?;
-
+    pub async fn create_occasion_backdated(
+        &self,
+        input: NewMealOccasion,
+    ) -> Result<MealOccasionView> {
         let now = self.clock.now();
-        let components = make_components(input.components);
-
-        let (owner_member_id, extra_member_ids) = match input.scope {
-            MealPlanScope::Member => (input.member_id, Vec::new()),
-            MealPlanScope::Household => {
-                let members = if self.settings.get().await?.default_all_members_participate {
-                    self.active_member_ids().await?
-                } else {
-                    Vec::new()
-                };
-                (None, members)
-            }
-        };
-
-        let explicit_allocations = input
-            .participants
-            .as_deref()
-            .is_some_and(has_explicit_allocations);
-
-        let participants = if let Some(requested) = &input.participants {
-            validate_participants(requested, &components)?;
-            let mut result = Vec::with_capacity(requested.len());
-            for participant in requested {
-                let member = self
-                    .members
-                    .get(participant.member_id)
-                    .await?
-                    .ok_or_else(|| {
-                        CoreError::not_found("household member", participant.member_id)
-                    })?;
-                if member.is_archived() {
-                    let mut errors = ValidationErrors::new();
-                    errors.push("participants", "Archived members cannot join a meal");
-                    return Err(errors.into());
-                }
-                result.push(merge_participant(None, participant, &components, now));
-            }
-            result
-        } else {
-            let mut result = Vec::new();
-            if let Some(member_id) = owner_member_id {
-                result.push(build_participant(member_id, &components, now, true));
-            }
-            for member_id in extra_member_ids {
-                result.push(build_participant(member_id, &components, now, false));
-            }
-            result
-        };
-        validate_guest_groups(&input.guest_groups, &components)?;
-        let guest_groups: Vec<_> = input
-            .guest_groups
-            .iter()
-            .map(|group| merge_guest_group(&[], group, now))
-            .collect();
-        require_household_attendance(input.scope, &participants, &guest_groups)?;
-        for member_id in participants.iter().map(|p| p.member_id).collect::<Vec<_>>() {
-            self.ensure_slot_free(
-                member_id,
-                input.planned_on,
-                input.slot,
-                input.planned_time,
-                None,
-            )
-            .await?;
+        if let Some(existing) = self
+            .plans
+            .find_occasion(input.planned_on, input.slot)
+            .await?
+        {
+            let mut occasion = self.load_occasion(existing.id).await?;
+            let group = self
+                .build_group(&occasion, input.group, input.actor_id, now)
+                .await?;
+            let expected = occasion.revision;
+            attach_group(&mut occasion, group)?;
+            self.commit_occasion(&mut occasion, expected, input.actor_id, now)
+                .await?;
+            return self.get_occasion(occasion.id).await;
         }
 
-        let mut entry = MealPlanEntry {
+        let mut occasion = MealOccasion {
             id: input.id.unwrap_or_default(),
-            scope: input.scope,
-            member_id: input.member_id,
             planned_on: input.planned_on,
-            planned_time: input.planned_time,
             slot: input.slot,
-            components,
-            participants,
-            guest_groups,
-            opted_out: Vec::new(),
+            planned_time: input.planned_time,
+            note: normalise_note(input.note),
+            groups: Vec::new(),
+            absences: Vec::new(),
             created_by: input.actor_id,
             updated_by: input.actor_id,
             revision: Revision::INITIAL,
             created_at: now,
             updated_at: now,
         };
-        if !explicit_allocations {
-            apply_equal_shares(&mut entry);
-        }
-        self.plans.insert(&entry).await?;
-        self.present(entry, &[], input.member_id).await
-    }
-
-    pub async fn set_participants(
-        &self,
-        id: MealPlanEntryId,
-        expected: Revision,
-        input: SetMealParticipants,
-    ) -> Result<MealPlanEntryView> {
-        let mut entry = self.get_entry(id).await?;
-        require_revision(MEAL_PLAN_ENTRY, id, expected, entry.revision)?;
-        require_editable(&entry)?;
-        validate_participants(&input.participants, &entry.components)?;
-        validate_guest_groups(&input.guest_groups, &entry.components)?;
-        require_household_attendance(entry.scope, &input.participants, &input.guest_groups)?;
-
-        for participant in &input.participants {
-            let member = self
-                .members
-                .get(participant.member_id)
-                .await?
-                .ok_or_else(|| CoreError::not_found("household member", participant.member_id))?;
-            if member.is_archived() {
-                let mut errors = ValidationErrors::new();
-                errors.push("participants", "Archived members cannot join a meal");
-                return Err(errors.into());
-            }
-        }
-
-        let now = self.clock.now();
-        let mut participants = Vec::with_capacity(input.participants.len());
-        for new_participant in &input.participants {
-            let previous = entry
-                .participants
-                .iter()
-                .find(|existing| existing.member_id == new_participant.member_id);
-            if previous.is_none() {
-                if entry.has_opted_out(new_participant.member_id) {
-                    return Err(CoreError::conflict(
-                        "This member has opted out of this meal. They can rejoin it from their own planner.",
-                    ));
-                }
-                self.ensure_slot_free(
-                    new_participant.member_id,
-                    entry.planned_on,
-                    entry.slot,
-                    entry.planned_time,
-                    Some(entry.id),
-                )
-                .await?;
-            }
-            participants.push(merge_participant(
-                previous,
-                new_participant,
-                &entry.components,
-                now,
-            ));
-        }
-        if let Some(removed) = entry.participants.iter().find(|existing| {
-            !input
-                .participants
-                .iter()
-                .any(|kept| kept.member_id == existing.member_id)
-                && existing.allocations.iter().any(|a| a.status.is_resolved())
-        }) {
-            let _ = removed;
-            return Err(CoreError::conflict(
-                "A participant who has already eaten cannot be removed. Reopen their portion first.",
-            ));
-        }
-
-        entry.participants = participants;
-        entry.guest_groups = input
-            .guest_groups
-            .iter()
-            .map(|group| merge_guest_group(&entry.guest_groups, group, now))
-            .collect();
-        entry.updated_by = input.actor_id;
-        entry.updated_at = now;
-        entry.revision = entry.revision.next();
-        commit_outcome(
-            MEAL_PLAN_ENTRY,
-            id,
-            expected,
-            self.plans.set_participants(&entry, expected).await?,
-        )?;
-        self.get(id).await
-    }
-
-    pub async fn opt_out(
-        &self,
-        id: MealPlanEntryId,
-        expected: Revision,
-        actor_id: UserId,
-        member_id: HouseholdMemberId,
-    ) -> Result<MealPlanEntryView> {
-        let mut entry = self.get_entry(id).await?;
-        require_revision(MEAL_PLAN_ENTRY, id, expected, entry.revision)?;
-        if entry.scope != MealPlanScope::Household {
-            return Err(CoreError::conflict(
-                "You can only opt out of a household meal.",
-            ));
-        }
-        let Some(participant) = entry.participant_for(member_id) else {
-            if entry.has_opted_out(member_id) {
-                return self.get(id).await;
-            }
-            return Err(CoreError::conflict("You are not part of this meal."));
-        };
-        if participant
-            .allocations
-            .iter()
-            .any(|allocation| allocation.status.is_resolved())
-        {
-            return Err(CoreError::conflict(
-                "Reopen your portion in the food log before opting out.",
-            ));
-        }
-
-        let now = self.clock.now();
-        entry
-            .participants
-            .retain(|participant| participant.member_id != member_id);
-        entry.opted_out.push(MealOptOut {
-            member_id,
-            created_by: actor_id,
-            created_at: now,
-        });
-        entry.updated_by = actor_id;
-        entry.updated_at = now;
-        entry.revision = entry.revision.next();
-        commit_outcome(
-            MEAL_PLAN_ENTRY,
-            id,
-            expected,
-            self.plans.set_participants(&entry, expected).await?,
-        )?;
-        self.get(id).await
-    }
-
-    pub async fn opt_in(
-        &self,
-        id: MealPlanEntryId,
-        expected: Revision,
-        actor_id: UserId,
-        member_id: HouseholdMemberId,
-    ) -> Result<MealPlanEntryView> {
-        let mut entry = self.get_entry(id).await?;
-        require_revision(MEAL_PLAN_ENTRY, id, expected, entry.revision)?;
-        if entry.scope != MealPlanScope::Household {
-            return Err(CoreError::conflict(
-                "You can only opt in to a household meal.",
-            ));
-        }
-        if entry.participant_for(member_id).is_some() {
-            return self.get(id).await;
-        }
-        let member = self
-            .members
-            .get(member_id)
-            .await?
-            .ok_or_else(|| CoreError::not_found("household member", member_id))?;
-        if member.is_archived() {
-            return Err(CoreError::conflict("Archived members cannot join a meal."));
-        }
-        self.ensure_slot_free(
-            member_id,
-            entry.planned_on,
-            entry.slot,
-            entry.planned_time,
-            Some(entry.id),
-        )
-        .await?;
-
-        let now = self.clock.now();
-        entry
-            .opted_out
-            .retain(|opt_out| opt_out.member_id != member_id);
-        entry
-            .participants
-            .push(build_participant(member_id, &entry.components, now, false));
-        entry.updated_by = actor_id;
-        entry.updated_at = now;
-        entry.revision = entry.revision.next();
-        commit_outcome(
-            MEAL_PLAN_ENTRY,
-            id,
-            expected,
-            self.plans.set_participants(&entry, expected).await?,
-        )?;
-        self.get(id).await
-    }
-
-    pub async fn slot_attendance(
-        &self,
-        planned_on: Date,
-        slot: MealSlot,
-        exclude_entry: Option<MealPlanEntryId>,
-    ) -> Result<Vec<(HouseholdMemberId, SlotAttendance, Option<Time>)>> {
-        let members = self.active_member_ids().await?;
-        let day = self.plans.list_all(planned_on, planned_on).await?;
-        let mut result = Vec::with_capacity(members.len());
-        for member_id in members {
-            let mut attendance = SlotAttendance::Available;
-            let mut claimed_time = None;
-            for entry in &day {
-                if entry.slot != slot || Some(entry.id) == exclude_entry {
-                    continue;
-                }
-                match entry.scope {
-                    MealPlanScope::Member if entry.member_id == Some(member_id) => {
-                        attendance = SlotAttendance::SelfCatering;
-                        claimed_time = entry.planned_time;
-                    }
-                    MealPlanScope::Household if entry.participant_for(member_id).is_some() => {
-                        attendance = SlotAttendance::Participating;
-                        claimed_time = entry.planned_time;
-                    }
-                    MealPlanScope::Household
-                        if entry.has_opted_out(member_id)
-                            && attendance == SlotAttendance::Available =>
-                    {
-                        attendance = SlotAttendance::OptedOut;
-                    }
-                    _ => {}
-                }
-            }
-            result.push((member_id, attendance, claimed_time));
-        }
-        Ok(result)
-    }
-
-    async fn active_member_ids(&self) -> Result<Vec<HouseholdMemberId>> {
-        let page = self
-            .members
-            .list(&MemberQuery {
-                include_archived: false,
-                page: PageRequest::new(1, PageRequest::MAX_PER_PAGE),
-                ..Default::default()
-            })
+        let group = self
+            .build_group(&occasion, input.group, input.actor_id, now)
             .await?;
-        Ok(page
-            .items
-            .into_iter()
-            .filter(|member| !member.is_archived())
-            .map(|member| member.id)
-            .collect())
+        attach_group(&mut occasion, group)?;
+        let active = self.active_member_ids().await?;
+        self.materialise_occasion(&mut occasion, &active);
+        self.plans.insert_occasion(&occasion).await?;
+        self.get_occasion(occasion.id).await
     }
 
-    async fn ensure_slot_free(
+    pub async fn update_occasion(
         &self,
-        member_id: HouseholdMemberId,
+        id: MealOccasionId,
+        expected: Revision,
+        patch: MealOccasionPatch,
+        actor_id: UserId,
+    ) -> Result<MealOccasionView> {
+        let mut occasion = self.load_occasion(id).await?;
+        require_revision(MEAL_OCCASION, id, expected, occasion.revision)?;
+        if let Some(planned_time) = patch.planned_time {
+            occasion.planned_time = planned_time;
+        }
+        if let Some(note) = patch.note {
+            occasion.note = normalise_note(note);
+        }
+        let now = self.clock.now();
+        self.commit_occasion(&mut occasion, expected, actor_id, now)
+            .await?;
+        self.get_occasion(id).await
+    }
+
+    pub async fn delete_occasion(&self, id: MealOccasionId, expected: Revision) -> Result<()> {
+        let occasion = self.load_occasion(id).await?;
+        require_revision(MEAL_OCCASION, id, expected, occasion.revision)?;
+        for group in &occasion.groups {
+            require_planned(group)?;
+        }
+        commit_outcome(
+            MEAL_OCCASION,
+            id,
+            expected,
+            self.plans.delete_occasion(id, expected).await?,
+        )
+    }
+
+    pub async fn move_occasion(
+        &self,
+        id: MealOccasionId,
+        expected: Revision,
         planned_on: Date,
         slot: MealSlot,
-        planned_time: Option<Time>,
-        ignore_entry: Option<MealPlanEntryId>,
-    ) -> Result<()> {
-        let clash = self
-            .plans
-            .list(&MealPlanQuery {
-                member_id,
-                from: planned_on,
-                to: planned_on,
-                include_participating: true,
-            })
-            .await?
-            .into_iter()
-            .any(|entry| {
-                entry.slot == slot
-                    && (slot != MealSlot::Snacks || entry.planned_time == planned_time)
-                    && Some(entry.id) != ignore_entry
-                    && !(entry.has_opted_out(member_id)
-                        && entry.participant_for(member_id).is_none())
-            });
-        if clash {
-            let message = if slot == MealSlot::Snacks {
-                if planned_time.is_some() {
-                    "A snack is already planned for that time. Edit it to add more food."
-                } else {
-                    "An untimed snack is already planned. Edit it to add more food."
-                }
-            } else {
-                "That meal slot already exists. Add food to the existing meal instead."
-            };
-            return Err(CoreError::conflict(message));
+        actor_id: UserId,
+    ) -> Result<MealOccasionView> {
+        ensure_not_past(&self.clock, &*self.settings, planned_on).await?;
+        let mut occasion = self.load_occasion(id).await?;
+        require_revision(MEAL_OCCASION, id, expected, occasion.revision)?;
+        if occasion.planned_on == planned_on && occasion.slot == slot {
+            return self.get_occasion(id).await;
         }
-        Ok(())
+        for group in &occasion.groups {
+            require_planned(group)?;
+        }
+        self.ensure_cell_free(planned_on, slot).await?;
+        occasion.planned_on = planned_on;
+        occasion.slot = slot;
+        let now = self.clock.now();
+        self.commit_occasion(&mut occasion, expected, actor_id, now)
+            .await?;
+        self.get_occasion(id).await
     }
 
-    pub async fn update(
+    pub async fn copy_occasion(
+        &self,
+        id: MealOccasionId,
+        planned_on: Date,
+        slot: MealSlot,
+        actor_id: UserId,
+    ) -> Result<MealOccasionView> {
+        ensure_not_past(&self.clock, &*self.settings, planned_on).await?;
+        let source = self.load_occasion(id).await?;
+        self.ensure_cell_free(planned_on, slot).await?;
+        let now = self.clock.now();
+        let mut copy = copy_of(&source, planned_on, slot, actor_id, now);
+        let active = self.active_member_ids().await?;
+        self.materialise_occasion(&mut copy, &active);
+        self.plans.insert_occasion(&copy).await?;
+        self.get_occasion(copy.id).await
+    }
+
+    pub async fn copy_week(
+        &self,
+        target_week_start: Date,
+        source_week_start: Date,
+        actor_id: UserId,
+    ) -> Result<PlannerWeek> {
+        ensure_not_past(&self.clock, &*self.settings, target_week_start).await?;
+        if target_week_start == source_week_start {
+            return self.planner_week(target_week_start).await;
+        }
+        let sources = self
+            .plans
+            .list_occasions(source_week_start, source_week_start + Duration::days(6))
+            .await?;
+        let existing = self
+            .plans
+            .list_occasions(target_week_start, target_week_start + Duration::days(6))
+            .await?;
+        let taken: HashSet<(Date, MealSlot)> = existing
+            .iter()
+            .map(|occasion| (occasion.planned_on, occasion.slot))
+            .collect();
+        let now = self.clock.now();
+        let active = self.active_member_ids().await?;
+        for source in sources {
+            let planned_on = target_week_start + (source.planned_on - source_week_start);
+            if taken.contains(&(planned_on, source.slot)) {
+                continue;
+            }
+            let mut copy = copy_of(&source, planned_on, source.slot, actor_id, now);
+            self.materialise_occasion(&mut copy, &active);
+            self.plans.insert_occasion(&copy).await?;
+        }
+        self.planner_week(target_week_start).await
+    }
+
+    pub async fn add_group(
+        &self,
+        occasion_id: MealOccasionId,
+        input: NewMealGroup,
+        actor_id: UserId,
+    ) -> Result<MealOccasionView> {
+        let mut occasion = self.load_occasion(occasion_id).await?;
+        let now = self.clock.now();
+        let group = self.build_group(&occasion, input, actor_id, now).await?;
+        let expected = occasion.revision;
+        attach_group(&mut occasion, group)?;
+        self.commit_occasion(&mut occasion, expected, actor_id, now)
+            .await?;
+        self.get_occasion(occasion_id).await
+    }
+
+    pub async fn update_group(
         &self,
         id: MealPlanEntryId,
         expected: Revision,
-        patch: MealPlanEntryPatch,
-        actor_id: crate::domain::UserId,
-    ) -> Result<MealPlanEntryView> {
-        let mut entry = self.get_entry(id).await?;
-        require_revision(MEAL_PLAN_ENTRY, id, expected, entry.revision)?;
-        require_editable(&entry)?;
-
+        patch: MealGroupPatch,
+        actor_id: UserId,
+    ) -> Result<MealOccasionView> {
+        let stored = self
+            .plans
+            .get(id)
+            .await?
+            .ok_or_else(|| CoreError::not_found(MEAL_PLAN_ENTRY, id))?;
+        let mut occasion = self.load_occasion(stored.occasion_id).await?;
+        let occasion_revision = occasion.revision;
+        let index = occasion
+            .groups
+            .iter()
+            .position(|group| group.id == id)
+            .ok_or_else(|| CoreError::not_found(MEAL_PLAN_ENTRY, id))?;
         let now = self.clock.now();
+        let mut group = occasion.groups[index].clone();
+        require_revision(MEAL_PLAN_ENTRY, id, expected, group.revision)?;
+        require_editable(&group)?;
+
+        let mut reshare = false;
+        if let Some(label) = patch.label {
+            group.label = normalise_note(label);
+        }
+        if let Some(ad_hoc) = patch.ad_hoc {
+            group.ad_hoc = ad_hoc;
+        }
         if let Some(components) = patch.components {
+            validate_group_shape(group.label.as_deref(), group.ad_hoc, &components)?;
             validate_components(&components)?;
-            let existing_items = entry
+            let existing_items = group
                 .components
                 .iter()
                 .map(|component| component.item)
                 .collect();
             self.validate_component_items(&components, &existing_items, actor_id)
                 .await?;
-            let owner = entry.member_id;
-            entry.components = merge_components(&entry.components, components)?;
-            sync_allocations(&mut entry, owner, now);
-        }
-        if let Some(participants) = patch.participants {
-            validate_participants(&participants, &entry.components)?;
-            entry.participants = participants
+            group.components = merge_components(&group.components, components)?;
+            sync_allocations(&mut group, now);
+            reshare = true;
+        } else {
+            let shape: Vec<NewMealPlanComponent> = group
+                .components
                 .iter()
-                .map(|participant| {
-                    let previous = entry
-                        .participants
-                        .iter()
-                        .find(|candidate| candidate.member_id == participant.member_id);
-                    merge_participant(previous, participant, &entry.components, now)
+                .map(|component| NewMealPlanComponent {
+                    id: Some(component.id),
+                    item: component.item,
+                    amount: component.amount,
                 })
                 .collect();
+            validate_group_shape(group.label.as_deref(), group.ad_hoc, &shape)?;
         }
-        if let Some(guest_groups) = patch.guest_groups {
-            validate_guest_groups(&guest_groups, &entry.components)?;
-            entry.guest_groups = guest_groups
-                .iter()
-                .map(|group| merge_guest_group(&entry.guest_groups, group, now))
-                .collect();
-        }
-        if let Some(planned_on) = patch.planned_on {
-            ensure_not_past(&self.clock, &*self.settings, planned_on).await?;
-            entry.planned_on = planned_on;
-        }
-        if let Some(planned_time) = patch.planned_time {
-            entry.planned_time = planned_time;
-        }
-        if let Some(slot) = patch.slot {
-            entry.slot = slot;
-        }
-        if entry.scope == MealPlanScope::Household && entry.slot == MealSlot::Snacks {
-            return Err(CoreError::conflict(
-                "Snacks stay on your own planner. Household planning covers breakfast, lunch and dinner.",
-            ));
-        }
-        if entry.scope == MealPlanScope::Member {
-            let owner = entry.member_id.expect("personal meal owner");
-            if !entry.guest_groups.is_empty()
-                || entry.participants.len() != 1
-                || entry.participants[0].member_id != owner
+        if let Some(everyone) = patch.everyone {
+            if everyone
+                && occasion
+                    .everyone_group()
+                    .is_some_and(|other| other.id != group.id)
             {
                 return Err(CoreError::conflict(
-                    "A personal meal can only contain its owner.",
+                    "Another meal here is already for everyone. Untick people from it instead.",
                 ));
             }
+            group.everyone = everyone;
         }
-        require_household_attendance(entry.scope, &entry.participants, &entry.guest_groups)?;
-        for participant in &entry.participants {
+        if let Some(participants) = patch.participants {
+            validate_participants(&participants, &group.components)?;
+            self.ensure_members_active(participants.iter().map(|p| p.member_id))
+                .await?;
+            if let Some(removed) = group.participants.iter().find(|existing| {
+                !participants
+                    .iter()
+                    .any(|kept| kept.member_id == existing.member_id)
+                    && existing.allocations.iter().any(|a| a.status.is_resolved())
+            }) {
+                let _ = removed;
+                return Err(CoreError::conflict(
+                    "Someone who has already eaten cannot be removed. Reopen their portion first.",
+                ));
+            }
+            let explicit = has_explicit_allocations(&participants);
+            group.participants = participants
+                .iter()
+                .map(|participant| {
+                    merge_participant(
+                        group.participant_for(participant.member_id),
+                        participant,
+                        &group.components,
+                        now,
+                    )
+                })
+                .collect();
+            reshare |= !explicit;
+        }
+        if let Some(guest_groups) = patch.guest_groups {
+            validate_guest_groups(&guest_groups, &group.components)?;
+            group.guest_groups = guest_groups
+                .iter()
+                .map(|guests| merge_guest_group(&group.guest_groups, guests, now))
+                .collect();
+            sync_allocations(&mut group, now);
+            reshare = true;
+        }
+        if let Some(cooking_servings) = patch.cooking_servings {
+            validate_cooking_servings(cooking_servings)?;
+            group.cooking_servings = cooking_servings;
+        }
+        if reshare {
+            apply_equal_shares(&mut group);
+        }
+        group.updated_by = actor_id;
+        group.updated_at = now;
+        group.revision = group.revision.next();
+
+        let members: Vec<HouseholdMemberId> = group
+            .participants
+            .iter()
+            .map(|participant| participant.member_id)
+            .collect();
+        occasion.groups[index] = group;
+        claim_members(&mut occasion, id, &members)?;
+        self.commit_occasion(&mut occasion, occasion_revision, actor_id, now)
+            .await?;
+        self.get_occasion(occasion.id).await
+    }
+
+    pub async fn delete_group(
+        &self,
+        id: MealPlanEntryId,
+        expected: Revision,
+        actor_id: UserId,
+    ) -> Result<Option<MealOccasionView>> {
+        let stored = self
+            .plans
+            .get(id)
+            .await?
+            .ok_or_else(|| CoreError::not_found(MEAL_PLAN_ENTRY, id))?;
+        let mut occasion = self.load_occasion(stored.occasion_id).await?;
+        let group = occasion
+            .group(id)
+            .ok_or_else(|| CoreError::not_found(MEAL_PLAN_ENTRY, id))?;
+        require_revision(MEAL_PLAN_ENTRY, id, expected, group.revision)?;
+        require_planned(group)?;
+        occasion.groups.retain(|group| group.id != id);
+        if occasion.groups.is_empty() {
+            commit_outcome(
+                MEAL_OCCASION,
+                occasion.id,
+                occasion.revision,
+                self.plans
+                    .delete_occasion(occasion.id, occasion.revision)
+                    .await?,
+            )?;
+            return Ok(None);
+        }
+        let expected_occasion = occasion.revision;
+        let now = self.clock.now();
+        self.commit_occasion(&mut occasion, expected_occasion, actor_id, now)
+            .await?;
+        Ok(Some(self.get_occasion(occasion.id).await?))
+    }
+
+    pub async fn set_attendance(
+        &self,
+        occasion_id: MealOccasionId,
+        member_id: HouseholdMemberId,
+        attendance: MealAttendance,
+        actor_id: UserId,
+    ) -> Result<MealOccasionView> {
+        let mut occasion = self.load_occasion(occasion_id).await?;
+        self.ensure_members_active([member_id]).await?;
+        let expected = occasion.revision;
+        let now = self.clock.now();
+        match attendance {
+            MealAttendance::Eating { group_id, note } => {
+                let index = occasion
+                    .groups
+                    .iter()
+                    .position(|group| group.id == group_id)
+                    .ok_or_else(|| CoreError::not_found(MEAL_PLAN_ENTRY, group_id))?;
+                release_member(&mut occasion, Some(group_id), member_id)?;
+                let group = &mut occasion.groups[index];
+                let requested = NewMealParticipant {
+                    id: None,
+                    member_id,
+                    note: note.clone(),
+                    allocations: Vec::new(),
+                };
+                let merged = merge_participant(
+                    group.participant_for(member_id),
+                    &requested,
+                    &group.components,
+                    now,
+                );
+                match group
+                    .participants
+                    .iter_mut()
+                    .find(|participant| participant.member_id == member_id)
+                {
+                    Some(existing) => {
+                        existing.note = note;
+                        existing.updated_at = now;
+                    }
+                    None => group.participants.push(merged),
+                }
+                apply_equal_shares(group);
+                group.updated_by = actor_id;
+                group.updated_at = now;
+                group.revision = group.revision.next();
+            }
+            MealAttendance::Elsewhere => {
+                release_member(&mut occasion, None, member_id)?;
+                occasion.absences.push(MealAbsence {
+                    member_id,
+                    created_by: actor_id,
+                    created_at: now,
+                });
+            }
+            MealAttendance::Unaccounted => {
+                release_member(&mut occasion, None, member_id)?;
+            }
+        }
+        self.commit_occasion(&mut occasion, expected, actor_id, now)
+            .await?;
+        self.get_occasion(occasion_id).await
+    }
+
+    async fn ensure_cell_free(&self, planned_on: Date, slot: MealSlot) -> Result<()> {
+        if self.plans.find_occasion(planned_on, slot).await?.is_some() {
+            return Err(CoreError::conflict(
+                "There is already a meal planned there. Move or delete it first.",
+            ));
+        }
+        Ok(())
+    }
+
+    async fn ensure_members_active(
+        &self,
+        member_ids: impl IntoIterator<Item = HouseholdMemberId>,
+    ) -> Result<()> {
+        for member_id in member_ids {
             let member = self
                 .members
-                .get(participant.member_id)
+                .get(member_id)
                 .await?
-                .ok_or_else(|| CoreError::not_found("household member", participant.member_id))?;
+                .ok_or_else(|| CoreError::not_found("household member", member_id))?;
             if member.is_archived() {
                 let mut errors = ValidationErrors::new();
                 errors.push("participants", "Archived members cannot join a meal");
                 return Err(errors.into());
             }
-            self.ensure_slot_free(
-                participant.member_id,
-                entry.planned_on,
-                entry.slot,
-                entry.planned_time,
-                Some(entry.id),
-            )
-            .await?;
         }
-        entry.updated_by = actor_id;
-        entry.updated_at = now;
-        entry.revision = entry.revision.next();
-        commit_outcome(
-            MEAL_PLAN_ENTRY,
-            id,
-            expected,
-            self.plans.update(&entry, expected).await?,
-        )?;
-        self.get(id).await
+        Ok(())
     }
 
-    pub async fn delete(&self, id: MealPlanEntryId, expected: Revision) -> Result<()> {
-        let entry = self.get_entry(id).await?;
-        require_revision(MEAL_PLAN_ENTRY, id, expected, entry.revision)?;
-        require_planned(&entry)?;
+    async fn build_group(
+        &self,
+        occasion: &MealOccasion,
+        input: NewMealGroup,
+        actor_id: UserId,
+        now: OffsetDateTime,
+    ) -> Result<MealPlanEntry> {
+        validate_group_shape(input.label.as_deref(), input.ad_hoc, &input.components)?;
+        validate_components(&input.components)?;
+        self.validate_component_items(&input.components, &HashSet::new(), actor_id)
+            .await?;
+        validate_cooking_servings(input.cooking_servings)?;
+        if input.everyone
+            && occasion
+                .everyone_group()
+                .is_some_and(|other| Some(other.id) != input.id)
+        {
+            return Err(CoreError::conflict(
+                "This meal already has a group for everyone. Untick people from it instead.",
+            ));
+        }
+        let components = make_components(input.components);
+        validate_participants(&input.participants, &components)?;
+        self.ensure_members_active(input.participants.iter().map(|p| p.member_id))
+            .await?;
+        validate_guest_groups(&input.guest_groups, &components)?;
+        let explicit = has_explicit_allocations(&input.participants);
+        let participants = input
+            .participants
+            .iter()
+            .map(|participant| merge_participant(None, participant, &components, now))
+            .collect();
+        let guest_groups = input
+            .guest_groups
+            .iter()
+            .map(|group| merge_guest_group(&[], group, now))
+            .collect();
+        let mut group = MealPlanEntry {
+            id: input.id.unwrap_or_default(),
+            occasion_id: occasion.id,
+            planned_on: occasion.planned_on,
+            planned_time: occasion.planned_time,
+            slot: occasion.slot,
+            label: normalise_note(input.label),
+            ad_hoc: input.ad_hoc,
+            components,
+            everyone: input.everyone,
+            participants,
+            guest_groups,
+            cooking_servings: input.cooking_servings,
+            created_by: actor_id,
+            updated_by: actor_id,
+            revision: Revision::INITIAL,
+            created_at: now,
+            updated_at: now,
+        };
+        if !explicit {
+            apply_equal_shares(&mut group);
+        }
+        Ok(group)
+    }
+
+    async fn commit_occasion(
+        &self,
+        occasion: &mut MealOccasion,
+        expected: Revision,
+        actor_id: UserId,
+        now: OffsetDateTime,
+    ) -> Result<()> {
+        occasion.updated_by = actor_id;
+        occasion.updated_at = now;
+        occasion.revision = occasion.revision.next();
+        let active = self.active_member_ids().await?;
+        self.materialise_occasion(occasion, &active);
+        for group in &mut occasion.groups {
+            group.planned_on = occasion.planned_on;
+            group.planned_time = occasion.planned_time;
+            group.slot = occasion.slot;
+        }
         commit_outcome(
-            MEAL_PLAN_ENTRY,
-            id,
+            MEAL_OCCASION,
+            occasion.id,
             expected,
-            self.plans.delete(id, expected).await?,
+            self.plans.update_occasion(occasion, expected).await?,
         )
+    }
+}
+
+fn normalise_note(value: Option<String>) -> Option<String> {
+    value
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+}
+
+fn validate_cooking_servings(value: Option<i32>) -> Result<()> {
+    if value.is_some_and(|value| value <= 0) {
+        let mut errors = ValidationErrors::new();
+        errors.push("cooking_servings", "Cook at least one serving");
+        return errors.into_result();
+    }
+    Ok(())
+}
+
+fn attach_group(occasion: &mut MealOccasion, group: MealPlanEntry) -> Result<()> {
+    if group.everyone && occasion.everyone_group().is_some() {
+        return Err(CoreError::conflict(
+            "This meal already has a group for everyone. Untick people from it instead.",
+        ));
+    }
+    let members: Vec<HouseholdMemberId> = group
+        .participants
+        .iter()
+        .map(|participant| participant.member_id)
+        .collect();
+    let group_id = group.id;
+    occasion.groups.push(group);
+    claim_members(occasion, group_id, &members)
+}
+
+fn claim_members(
+    occasion: &mut MealOccasion,
+    group_id: MealPlanEntryId,
+    members: &[HouseholdMemberId],
+) -> Result<()> {
+    for member_id in members {
+        release_member(occasion, Some(group_id), *member_id)?;
+    }
+    Ok(())
+}
+
+fn release_member(
+    occasion: &mut MealOccasion,
+    keep: Option<MealPlanEntryId>,
+    member_id: HouseholdMemberId,
+) -> Result<()> {
+    for group in &mut occasion.groups {
+        if Some(group.id) == keep {
+            continue;
+        }
+        let Some(participant) = group.participant_for(member_id) else {
+            continue;
+        };
+        if participant
+            .allocations
+            .iter()
+            .any(|allocation| allocation.status != ParticipantStatus::Planned)
+        {
+            return Err(CoreError::conflict(
+                "That person has already recorded this meal. Reopen it before moving them.",
+            ));
+        }
+        group
+            .participants
+            .retain(|participant| participant.member_id != member_id);
+        apply_equal_shares(group);
+    }
+    occasion
+        .absences
+        .retain(|absence| absence.member_id != member_id);
+    Ok(())
+}
+
+fn copy_of(
+    source: &MealOccasion,
+    planned_on: Date,
+    slot: MealSlot,
+    actor_id: UserId,
+    now: OffsetDateTime,
+) -> MealOccasion {
+    let id = MealOccasionId::new();
+    let groups = source
+        .groups
+        .iter()
+        .map(|group| {
+            let components = make_components(
+                group
+                    .components
+                    .iter()
+                    .map(|component| NewMealPlanComponent {
+                        id: None,
+                        item: component.item,
+                        amount: component.amount,
+                    })
+                    .collect(),
+            );
+            let participants = group
+                .participants
+                .iter()
+                .map(|participant| {
+                    merge_participant(
+                        None,
+                        &NewMealParticipant {
+                            id: None,
+                            member_id: participant.member_id,
+                            note: participant.note.clone(),
+                            allocations: Vec::new(),
+                        },
+                        &components,
+                        now,
+                    )
+                })
+                .collect();
+            let mut copy = MealPlanEntry {
+                id: MealPlanEntryId::new(),
+                occasion_id: id,
+                planned_on,
+                planned_time: source.planned_time,
+                slot,
+                label: group.label.clone(),
+                ad_hoc: group.ad_hoc,
+                components,
+                everyone: group.everyone,
+                participants,
+                guest_groups: Vec::new(),
+                cooking_servings: None,
+                created_by: actor_id,
+                updated_by: actor_id,
+                revision: Revision::INITIAL,
+                created_at: now,
+                updated_at: now,
+            };
+            apply_equal_shares(&mut copy);
+            copy
+        })
+        .collect();
+    MealOccasion {
+        id,
+        planned_on,
+        slot,
+        planned_time: source.planned_time,
+        note: source.note.clone(),
+        groups,
+        absences: Vec::new(),
+        created_by: actor_id,
+        updated_by: actor_id,
+        revision: Revision::INITIAL,
+        created_at: now,
+        updated_at: now,
     }
 }

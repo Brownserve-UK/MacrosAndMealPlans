@@ -46,9 +46,6 @@ impl HouseholdSettingsService {
         if let Some(interpretation) = patch.missing_stock_interpretation {
             current.missing_stock_interpretation = interpretation;
         }
-        if let Some(participate) = patch.default_all_members_participate {
-            current.default_all_members_participate = participate;
-        }
         if let Some(assume) = patch.assume_eaten_when_time_passes {
             current.assume_eaten_when_time_passes = assume;
         }

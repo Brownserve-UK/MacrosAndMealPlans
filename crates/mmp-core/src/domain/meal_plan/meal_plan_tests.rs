@@ -58,6 +58,7 @@ fn participant(allocations: Vec<MealParticipantAllocation>) -> MealParticipant {
     MealParticipant {
         id: MealParticipantId::new(),
         member_id: HouseholdMemberId::new(),
+        note: None,
         allocations,
         revision: Revision::INITIAL,
         created_at: OffsetDateTime::UNIX_EPOCH,
@@ -112,8 +113,26 @@ fn status_codes_round_trip() {
 }
 
 #[test]
-fn a_meal_needs_a_component() {
-    assert!(validate_components(&[]).is_err());
+fn a_meal_needs_a_component_a_name_or_an_ad_hoc_kind() {
+    assert!(validate_group_shape(None, None, &[]).is_err());
+    assert!(validate_group_shape(Some("   "), None, &[]).is_err());
+    assert!(validate_group_shape(Some("Pizza"), None, &[]).is_ok());
+    assert!(validate_group_shape(None, Some(AdHocKind::Takeaway), &[]).is_ok());
+
+    let food = vec![NewMealPlanComponent {
+        id: None,
+        item: MealItemRef::product(ProductId::new()),
+        amount: servings(1),
+    }];
+    assert!(validate_group_shape(None, None, &food).is_ok());
+    assert!(validate_group_shape(None, Some(AdHocKind::EatingOut), &food).is_err());
+}
+
+#[test]
+fn ad_hoc_kinds_round_trip() {
+    for kind in AdHocKind::ALL {
+        assert_eq!(AdHocKind::from_str(kind.code()).unwrap(), kind);
+    }
 }
 
 #[test]
@@ -145,13 +164,6 @@ fn a_recipe_component_must_be_measured_in_servings() {
         amount: grams,
     }];
     assert!(validate_components(&product_component).is_ok());
-}
-
-#[test]
-fn scope_codes_round_trip() {
-    for scope in MealPlanScope::ALL {
-        assert_eq!(MealPlanScope::from_str(scope.code()).unwrap(), scope);
-    }
 }
 
 #[test]
@@ -390,6 +402,7 @@ fn participants_validate_against_the_meal_components() {
     let ok = vec![NewMealParticipant {
         id: None,
         member_id: member,
+        note: None,
         allocations: vec![NewMealParticipantAllocation {
             component_id: comp.id,
             allocated: servings(2),
@@ -398,22 +411,15 @@ fn participants_validate_against_the_meal_components() {
     assert!(validate_participants(&ok, std::slice::from_ref(&comp)).is_ok());
 
     let duplicate_member = vec![
-        NewMealParticipant {
-            id: None,
-            member_id: member,
-            allocations: vec![],
-        },
-        NewMealParticipant {
-            id: None,
-            member_id: member,
-            allocations: vec![],
-        },
+        NewMealParticipant::member(member),
+        NewMealParticipant::member(member),
     ];
     assert!(validate_participants(&duplicate_member, std::slice::from_ref(&comp)).is_err());
 
     let wrong_kind = vec![NewMealParticipant {
         id: None,
         member_id: member,
+        note: None,
         allocations: vec![NewMealParticipantAllocation {
             component_id: comp.id,
             allocated: grams(100),
@@ -424,12 +430,187 @@ fn participants_validate_against_the_meal_components() {
     let unknown_component = vec![NewMealParticipant {
         id: None,
         member_id: member,
+        note: None,
         allocations: vec![NewMealParticipantAllocation {
             component_id: MealPlanComponentId::new(),
             allocated: servings(1),
         }],
     }];
     assert!(validate_participants(&unknown_component, std::slice::from_ref(&comp)).is_err());
+}
+
+fn group(everyone: bool, members: &[HouseholdMemberId]) -> MealPlanEntry {
+    let comp = component(MealPlanComponentId::new(), servings(4));
+    MealPlanEntry {
+        id: MealPlanEntryId::new(),
+        occasion_id: MealOccasionId::new(),
+        planned_on: time::macros::date!(2026 - 09 - 15),
+        planned_time: None,
+        slot: MealSlot::Dinner,
+        label: None,
+        ad_hoc: None,
+        components: vec![comp],
+        everyone,
+        participants: members
+            .iter()
+            .map(|member_id| MealParticipant {
+                id: MealParticipantId::new(),
+                member_id: *member_id,
+                note: None,
+                allocations: Vec::new(),
+                revision: Revision::INITIAL,
+                created_at: OffsetDateTime::UNIX_EPOCH,
+                updated_at: OffsetDateTime::UNIX_EPOCH,
+            })
+            .collect(),
+        guest_groups: Vec::new(),
+        cooking_servings: None,
+        created_by: UserId::new(),
+        updated_by: UserId::new(),
+        revision: Revision::INITIAL,
+        created_at: OffsetDateTime::UNIX_EPOCH,
+        updated_at: OffsetDateTime::UNIX_EPOCH,
+    }
+}
+
+fn occasion(groups: Vec<MealPlanEntry>, absent: &[HouseholdMemberId]) -> MealOccasion {
+    MealOccasion {
+        id: groups
+            .first()
+            .map(|group| group.occasion_id)
+            .unwrap_or_default(),
+        planned_on: time::macros::date!(2026 - 09 - 15),
+        slot: MealSlot::Dinner,
+        planned_time: None,
+        note: None,
+        groups,
+        absences: absent
+            .iter()
+            .map(|member_id| MealAbsence {
+                member_id: *member_id,
+                created_by: UserId::new(),
+                created_at: OffsetDateTime::UNIX_EPOCH,
+            })
+            .collect(),
+        created_by: UserId::new(),
+        updated_by: UserId::new(),
+        revision: Revision::INITIAL,
+        created_at: OffsetDateTime::UNIX_EPOCH,
+        updated_at: OffsetDateTime::UNIX_EPOCH,
+    }
+}
+
+#[test]
+fn everyone_means_every_active_member_not_seated_elsewhere() {
+    let steve = HouseholdMemberId::new();
+    let sarah = HouseholdMemberId::new();
+    let emily = HouseholdMemberId::new();
+    let jack = HouseholdMemberId::new();
+    let curry = group(true, &[]);
+    let leftovers = group(false, &[sarah]);
+    let table = occasion(vec![curry.clone(), leftovers], &[jack]);
+
+    let diners = diners_for(&curry, &table, &[steve, sarah, emily, jack]);
+    assert_eq!(diners, vec![steve, emily]);
+
+    assert_eq!(
+        table.attendance_of(sarah),
+        MealAttendance::Eating {
+            group_id: table.groups[1].id,
+            note: None
+        }
+    );
+    assert_eq!(table.attendance_of(jack), MealAttendance::Elsewhere);
+    assert_eq!(
+        table.attendance_of(emily),
+        MealAttendance::Eating {
+            group_id: curry.id,
+            note: None
+        }
+    );
+}
+
+#[test]
+fn an_explicit_group_seats_exactly_its_members() {
+    let steve = HouseholdMemberId::new();
+    let sarah = HouseholdMemberId::new();
+    let only_sarah = group(false, &[sarah]);
+    let table = occasion(vec![only_sarah.clone()], &[]);
+
+    assert_eq!(
+        diners_for(&only_sarah, &table, &[steve, sarah]),
+        vec![sarah]
+    );
+    assert_eq!(table.attendance_of(steve), MealAttendance::Unaccounted);
+}
+
+#[test]
+fn materialising_seats_the_diners_and_drops_planned_rows_for_people_who_left() {
+    let steve = HouseholdMemberId::new();
+    let sarah = HouseholdMemberId::new();
+    let mut curry = group(true, &[sarah]);
+    curry.participants[0].allocations = vec![allocation(curry.components[0].id, servings(1))];
+
+    materialise_participants(&mut curry, &[steve], OffsetDateTime::UNIX_EPOCH);
+
+    let seated: Vec<_> = curry
+        .participants
+        .iter()
+        .map(|participant| participant.member_id)
+        .collect();
+    assert_eq!(seated, vec![steve]);
+    assert_eq!(curry.serves(), 1);
+    assert_eq!(curry.participants[0].allocations[0].allocated, servings(1));
+
+    let mut eaten = group(true, &[sarah]);
+    eaten.participants[0].allocations = vec![resolved(
+        allocation(eaten.components[0].id, servings(1)),
+        ParticipantStatus::Eaten,
+    )];
+    materialise_participants(&mut eaten, &[steve], OffsetDateTime::UNIX_EPOCH);
+    assert_eq!(
+        eaten.participants.len(),
+        2,
+        "someone who already ate keeps their row"
+    );
+}
+
+#[test]
+fn serves_counts_diners_and_guests_and_cooking_can_override_it() {
+    let steve = HouseholdMemberId::new();
+    let sarah = HouseholdMemberId::new();
+    let mut roast = group(false, &[steve, sarah]);
+    roast.guest_groups = vec![guest_group(Vec::new())];
+    roast.guest_groups[0].count = 2;
+    assert_eq!(roast.guest_count(), 2);
+    assert_eq!(roast.serves(), 4);
+    assert_eq!(roast.effective_cooking_servings(), 4);
+
+    roast.cooking_servings = Some(6);
+    assert_eq!(roast.effective_cooking_servings(), 6);
+}
+
+#[test]
+fn a_group_is_named_by_its_label_kind_or_first_food() {
+    let mut pizza = group(true, &[]);
+    assert_eq!(pizza.display_name(|| "Margherita".to_owned()), "Margherita");
+    pizza.label = Some("Pizza night".to_owned());
+    assert_eq!(
+        pizza.display_name(|| "Margherita".to_owned()),
+        "Pizza night"
+    );
+
+    let mut out = group(true, &[]);
+    out.components.clear();
+    out.ad_hoc = Some(AdHocKind::FendForYourself);
+    assert_eq!(out.display_name(String::new), "Fend for yourself");
+    assert!(!out.is_cooked());
+    assert!(!out.is_leftovers());
+
+    let mut leftovers = group(true, &[]);
+    leftovers.components[0].item = MealItemRef::dish(RecipeId::new());
+    assert!(leftovers.is_leftovers());
+    assert!(!leftovers.is_cooked());
 }
 
 fn meal_times() -> MealTimes {

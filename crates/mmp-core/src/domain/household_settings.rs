@@ -55,7 +55,6 @@ pub struct HouseholdSettings {
     pub meal_times: MealTimes,
     pub timezone: String,
     pub missing_stock_interpretation: MissingStockInterpretation,
-    pub default_all_members_participate: bool,
     pub assume_eaten_when_time_passes: bool,
     pub section_order: SectionOrder,
     pub revision: Revision,
@@ -114,7 +113,6 @@ pub struct HouseholdSettingsPatch {
     pub dinner_time: Option<Time>,
     pub timezone: Option<String>,
     pub missing_stock_interpretation: Option<MissingStockInterpretation>,
-    pub default_all_members_participate: Option<bool>,
     pub assume_eaten_when_time_passes: Option<bool>,
     pub section_order: Option<Vec<ShoppingSection>>,
 }
@@ -126,7 +124,6 @@ impl HouseholdSettingsPatch {
             && self.dinner_time.is_none()
             && self.timezone.is_none()
             && self.missing_stock_interpretation.is_none()
-            && self.default_all_members_participate.is_none()
             && self.assume_eaten_when_time_passes.is_none()
             && self.section_order.is_none()
     }

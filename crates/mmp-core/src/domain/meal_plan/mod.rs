@@ -1,5 +1,4 @@
 use crate::domain::str_enum::str_enum;
-use std::fmt;
 
 use time::{Date, OffsetDateTime, Time};
 use uuid::Uuid;
@@ -8,12 +7,12 @@ use rust_decimal::Decimal;
 
 use super::{
     ConsumedAmount, ConsumptionRecordId, HouseholdMemberId, MealGuestAllocationId,
-    MealGuestGroupId, MealItemRef, MealParticipantAllocationId, MealParticipantId,
+    MealGuestGroupId, MealItemRef, MealOccasionId, MealParticipantAllocationId, MealParticipantId,
     MealPlanComponentId, MealPlanEntryId, MealTimes, NutritionFacts, NutritionQuality, Revision,
     UserId,
 };
 
-str_enum!(MealPlanScope, UnknownMealPlanScope, "meal plan scope");
+str_enum!(AdHocKind, UnknownAdHocKind, "ad hoc meal kind");
 str_enum!(MealPlanStatus, UnknownMealPlanStatus, "meal plan status");
 str_enum!(MealSlot, UnknownMealSlot, "meal slot");
 str_enum!(
@@ -55,6 +54,48 @@ impl MealSlot {
             MealSlot::Lunch => 1,
             MealSlot::Dinner => 2,
             MealSlot::Snacks => 3,
+        }
+    }
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            MealSlot::Breakfast => "Breakfast",
+            MealSlot::Lunch => "Lunch",
+            MealSlot::Dinner => "Dinner",
+            MealSlot::Snacks => "Snacks",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum AdHocKind {
+    EatingOut,
+    Takeaway,
+    FendForYourself,
+}
+
+impl AdHocKind {
+    pub const ALL: [AdHocKind; 3] = [
+        AdHocKind::EatingOut,
+        AdHocKind::Takeaway,
+        AdHocKind::FendForYourself,
+    ];
+
+    pub const fn code(self) -> &'static str {
+        match self {
+            AdHocKind::EatingOut => "eating_out",
+            AdHocKind::Takeaway => "takeaway",
+            AdHocKind::FendForYourself => "fend_for_yourself",
+        }
+    }
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            AdHocKind::EatingOut => "Eating out",
+            AdHocKind::Takeaway => "Takeaway",
+            AdHocKind::FendForYourself => "Fend for yourself",
         }
     }
 }
@@ -113,37 +154,10 @@ pub struct MealPlanComponent {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct MealOptOut {
+pub struct MealAbsence {
     pub member_id: HouseholdMemberId,
     pub created_by: UserId,
     pub created_at: OffsetDateTime,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[serde(rename_all = "snake_case")]
-pub enum SlotAttendance {
-    Participating,
-    OptedOut,
-    SelfCatering,
-    Available,
-}
-
-impl SlotAttendance {
-    pub const fn code(self) -> &'static str {
-        match self {
-            SlotAttendance::Participating => "participating",
-            SlotAttendance::OptedOut => "opted_out",
-            SlotAttendance::SelfCatering => "self_catering",
-            SlotAttendance::Available => "available",
-        }
-    }
-}
-
-impl fmt::Display for SlotAttendance {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.code())
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -238,17 +252,82 @@ impl AssumptionRules {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct MealOccasion {
+    pub id: MealOccasionId,
+    pub planned_on: Date,
+    pub slot: MealSlot,
+    pub planned_time: Option<Time>,
+    pub note: Option<String>,
+    pub groups: Vec<MealPlanEntry>,
+    pub absences: Vec<MealAbsence>,
+    pub created_by: UserId,
+    pub updated_by: UserId,
+    pub revision: Revision,
+    pub created_at: OffsetDateTime,
+    pub updated_at: OffsetDateTime,
+}
+
+impl MealOccasion {
+    pub fn group(&self, id: MealPlanEntryId) -> Option<&MealPlanEntry> {
+        self.groups.iter().find(|group| group.id == id)
+    }
+
+    pub fn is_absent(&self, member_id: HouseholdMemberId) -> bool {
+        self.absences
+            .iter()
+            .any(|absence| absence.member_id == member_id)
+    }
+
+    pub fn explicit_group_for(&self, member_id: HouseholdMemberId) -> Option<&MealPlanEntry> {
+        self.groups
+            .iter()
+            .find(|group| group.participant_for(member_id).is_some())
+    }
+
+    pub fn everyone_group(&self) -> Option<&MealPlanEntry> {
+        self.groups.iter().find(|group| group.everyone)
+    }
+
+    pub fn attendance_of(&self, member_id: HouseholdMemberId) -> MealAttendance {
+        if let Some(group) = self.explicit_group_for(member_id) {
+            return MealAttendance::Eating {
+                group_id: group.id,
+                note: group
+                    .participant_for(member_id)
+                    .and_then(|participant| participant.note.clone()),
+            };
+        }
+        if self.is_absent(member_id) {
+            return MealAttendance::Elsewhere;
+        }
+        match self.everyone_group() {
+            Some(group) => MealAttendance::Eating {
+                group_id: group.id,
+                note: None,
+            },
+            None => MealAttendance::Unaccounted,
+        }
+    }
+
+    pub fn effective_time(&self, meal_times: &MealTimes) -> Option<Time> {
+        self.planned_time.or_else(|| meal_times.for_slot(self.slot))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct MealPlanEntry {
     pub id: MealPlanEntryId,
-    pub scope: MealPlanScope,
-    pub member_id: Option<HouseholdMemberId>,
+    pub occasion_id: MealOccasionId,
     pub planned_on: Date,
     pub planned_time: Option<Time>,
     pub slot: MealSlot,
+    pub label: Option<String>,
+    pub ad_hoc: Option<AdHocKind>,
     pub components: Vec<MealPlanComponent>,
+    pub everyone: bool,
     pub participants: Vec<MealParticipant>,
     pub guest_groups: Vec<MealGuestGroup>,
-    pub opted_out: Vec<MealOptOut>,
+    pub cooking_servings: Option<i32>,
     pub created_by: UserId,
     pub updated_by: UserId,
     pub revision: Revision,
@@ -263,10 +342,64 @@ impl MealPlanEntry {
             .find(|participant| participant.member_id == member_id)
     }
 
-    pub fn has_opted_out(&self, member_id: HouseholdMemberId) -> bool {
-        self.opted_out
+    pub fn guest_count(&self) -> i32 {
+        self.guest_groups
             .iter()
-            .any(|opt_out| opt_out.member_id == member_id)
+            .map(|group| group.count.max(0))
+            .sum()
+    }
+
+    pub fn serves(&self) -> i32 {
+        i32::try_from(self.participants.len()).unwrap_or(i32::MAX) + self.guest_count()
+    }
+
+    pub fn effective_cooking_servings(&self) -> i32 {
+        self.cooking_servings.unwrap_or_else(|| self.serves())
+    }
+
+    pub fn is_cooked(&self) -> bool {
+        self.ad_hoc.is_none()
+            && self
+                .components
+                .iter()
+                .any(|component| !matches!(component.item, MealItemRef::Dish { .. }))
+    }
+
+    pub fn is_leftovers(&self) -> bool {
+        self.ad_hoc.is_none()
+            && !self.components.is_empty()
+            && self
+                .components
+                .iter()
+                .all(|component| matches!(component.item, MealItemRef::Dish { .. }))
+    }
+
+    pub fn display_name(&self, first_component_name: impl FnOnce() -> String) -> String {
+        if let Some(label) = self
+            .label
+            .as_deref()
+            .filter(|label| !label.trim().is_empty())
+        {
+            return label.to_owned();
+        }
+        if let Some(kind) = self.ad_hoc {
+            return kind.label().to_owned();
+        }
+        first_component_name()
+    }
+
+    pub fn has_resolved_allocations(&self) -> bool {
+        self.participants.iter().any(|participant| {
+            participant
+                .allocations
+                .iter()
+                .any(|allocation| allocation.status.is_resolved())
+        }) || self.guest_groups.iter().any(|group| {
+            group
+                .allocations
+                .iter()
+                .any(|allocation| allocation.status.is_resolved())
+        })
     }
 
     pub fn status(&self, assumption: Assumption) -> MealPlanStatus {
@@ -287,6 +420,16 @@ impl MealPlanEntry {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum MealAttendance {
+    Eating {
+        group_id: MealPlanEntryId,
+        note: Option<String>,
+    },
+    Elsewhere,
+    Unaccounted,
+}
+
 #[derive(Debug, Clone)]
 pub struct NewMealPlanComponent {
     pub id: Option<MealPlanComponentId>,
@@ -295,27 +438,58 @@ pub struct NewMealPlanComponent {
 }
 
 #[derive(Debug, Clone)]
-pub struct NewMealPlanEntry {
+pub struct NewMealGroup {
     pub id: Option<MealPlanEntryId>,
-    pub scope: MealPlanScope,
-    pub member_id: Option<HouseholdMemberId>,
-    pub planned_on: Date,
-    pub planned_time: Option<Time>,
-    pub slot: MealSlot,
+    pub label: Option<String>,
+    pub ad_hoc: Option<AdHocKind>,
     pub components: Vec<NewMealPlanComponent>,
-    pub participants: Option<Vec<NewMealParticipant>>,
+    pub everyone: bool,
+    pub participants: Vec<NewMealParticipant>,
     pub guest_groups: Vec<NewMealGuestGroup>,
+    pub cooking_servings: Option<i32>,
+}
+
+impl NewMealGroup {
+    pub fn for_everyone(components: Vec<NewMealPlanComponent>) -> Self {
+        Self {
+            id: None,
+            label: None,
+            ad_hoc: None,
+            components,
+            everyone: true,
+            participants: Vec::new(),
+            guest_groups: Vec::new(),
+            cooking_servings: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct NewMealOccasion {
+    pub id: Option<MealOccasionId>,
+    pub planned_on: Date,
+    pub slot: MealSlot,
+    pub planned_time: Option<Time>,
+    pub note: Option<String>,
+    pub group: NewMealGroup,
     pub actor_id: UserId,
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct MealPlanEntryPatch {
-    pub planned_on: Option<Date>,
+pub struct MealOccasionPatch {
     pub planned_time: Option<Option<Time>>,
-    pub slot: Option<MealSlot>,
+    pub note: Option<Option<String>>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct MealGroupPatch {
+    pub label: Option<Option<String>>,
+    pub ad_hoc: Option<Option<AdHocKind>>,
     pub components: Option<Vec<NewMealPlanComponent>>,
+    pub everyone: Option<bool>,
     pub participants: Option<Vec<NewMealParticipant>>,
     pub guest_groups: Option<Vec<NewMealGuestGroup>>,
+    pub cooking_servings: Option<Option<i32>>,
 }
 
 #[derive(Debug, Clone)]
@@ -404,32 +578,6 @@ pub struct ConfirmMealPlanComponent {
     pub subject_member_id: Option<HouseholdMemberId>,
 }
 
-#[derive(Debug, Clone)]
-pub struct SetMealParticipants {
-    pub participants: Vec<NewMealParticipant>,
-    pub guest_groups: Vec<NewMealGuestGroup>,
-    pub actor_id: UserId,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[serde(rename_all = "snake_case")]
-pub enum MealPlanScope {
-    Member,
-    Household,
-}
-
-impl MealPlanScope {
-    pub const ALL: [MealPlanScope; 2] = [MealPlanScope::Member, MealPlanScope::Household];
-
-    pub const fn code(self) -> &'static str {
-        match self {
-            MealPlanScope::Member => "member",
-            MealPlanScope::Household => "household",
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
@@ -474,6 +622,7 @@ pub struct MealParticipantAllocation {
 pub struct MealParticipant {
     pub id: MealParticipantId,
     pub member_id: HouseholdMemberId,
+    pub note: Option<String>,
     pub allocations: Vec<MealParticipantAllocation>,
     pub revision: Revision,
     pub created_at: OffsetDateTime,
@@ -490,7 +639,19 @@ pub struct NewMealParticipantAllocation {
 pub struct NewMealParticipant {
     pub id: Option<MealParticipantId>,
     pub member_id: HouseholdMemberId,
+    pub note: Option<String>,
     pub allocations: Vec<NewMealParticipantAllocation>,
+}
+
+impl NewMealParticipant {
+    pub fn member(member_id: HouseholdMemberId) -> Self {
+        Self {
+            id: None,
+            member_id,
+            note: None,
+            allocations: Vec::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -525,6 +686,16 @@ pub struct NewMealGuestGroup {
     pub id: Option<MealGuestGroupId>,
     pub count: i32,
     pub allocations: Vec<NewMealGuestAllocation>,
+}
+
+impl NewMealGuestGroup {
+    pub fn of(count: i32) -> Self {
+        Self {
+            id: None,
+            count,
+            allocations: Vec::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -569,16 +740,19 @@ mod outcomes;
 mod participation;
 mod status;
 
-pub use components::{make_components, merge_components, validate_components};
+pub use components::{
+    make_components, merge_components, validate_components, validate_group_shape,
+};
 pub use outcomes::{
     actual_components_for_member, build_guest_results, component_still_eaten, find_component,
     outcomes_for_component, pending_component_ids, replacements_for, require_allocation_planned,
     require_editable, require_planned, require_subject_pending, validate_actual_components,
 };
 pub use participation::{
-    apply_equal_shares, build_participant, has_explicit_allocations, merge_guest_group,
-    merge_participant, participant_status_to_meal, require_household_attendance, set_allocation,
-    sync_allocations, validate_guest_groups, validate_participants,
+    apply_equal_shares, build_participant, diners_for, has_explicit_allocations,
+    materialise_participants, merge_guest_group, merge_participant, participant_status_to_meal,
+    rescale_recipe_components, set_allocation, sync_allocations, validate_guest_groups,
+    validate_participants,
 };
 pub use status::{
     allocated_total, derive_component_status, derive_entry_status, derive_guest_status,
@@ -586,6 +760,7 @@ pub use status::{
     preparation_for,
 };
 
+pub(crate) const MEAL_OCCASION: &str = "meal occasion";
 pub(crate) const MEAL_PLAN_ENTRY: &str = "meal plan entry";
 pub(crate) const MEAL_PLAN_COMPONENT: &str = "meal plan component";
 

@@ -6,14 +6,15 @@ use time::macros::{date, datetime, time};
 
 use super::*;
 use crate::domain::{
-    ActualMealPlanComponent, ChangedMealOutcome, ConfirmMealPlanComponent, ConfirmMealPlanEntry,
-    ConsumedAmount, HouseholdMember, HouseholdMemberId, MealItemRef, MealPlanEntryPatch,
-    MealPlanScope, MealPlanStatus, MealSlot, NewConsumptionRecord, NewMealParticipant,
-    NewMealPlanComponent, NewMealPlanEntry, NewNutritionTarget, NutritionFacts, NutritionGoals,
-    NutritionQuality, OutcomeActor, ParticipantStatus, Product, ProductId, Provenance, Quantity,
-    Recipe, RecipeComponent, RecipeId, RecipeVisibility, ReplacementItem, ReviewMealOutcomes,
-    ReviewedMealOutcome, ReviewedMemberOutcome, Revision, StockItem, StockLevel, StockSubject,
-    StorageLocation, Unit, UserId, WeightDisplay,
+    ActualMealPlanComponent, AdHocKind, ChangedMealOutcome, ConfirmMealPlanComponent,
+    ConfirmMealPlanEntry, ConsumedAmount, HouseholdMember, HouseholdMemberId, MealAttendance,
+    MealGroupPatch, MealItemRef, MealOccasionPatch, MealPlanStatus, MealSlot, NewConsumptionRecord,
+    NewMealGroup, NewMealGuestGroup, NewMealOccasion, NewMealParticipant, NewMealPlanComponent,
+    NewNutritionTarget, NutritionFacts, NutritionGoals, NutritionQuality, OutcomeActor,
+    ParticipantStatus, Product, ProductId, Provenance, Quantity, Recipe, RecipeComponent, RecipeId,
+    RecipeVisibility, ReplacementItem, ReviewMealOutcomes, ReviewedMealOutcome,
+    ReviewedMemberOutcome, Revision, StockItem, StockLevel, StockSubject, StorageLocation, Unit,
+    UserId, WeightDisplay,
 };
 use crate::ports::{FixedClock, StockRepository};
 use crate::services::PreparationService;
@@ -175,7 +176,6 @@ fn harness() -> Harness {
         Arc::new(plans.clone()),
         Arc::new(recipes.clone()),
         Arc::new(batches.clone()),
-        Arc::new(members.clone()),
         Arc::new(settings.clone()),
         clock.clone(),
     );
@@ -325,80 +325,184 @@ fn kcal_goals(value: i64) -> NutritionGoals {
     }
 }
 
-async fn planned(h: &Harness, components: Vec<NewMealPlanComponent>) -> MealPlanEntryView {
+fn everyone(components: Vec<NewMealPlanComponent>) -> NewMealGroup {
+    NewMealGroup::for_everyone(components)
+}
+
+fn only(members: &[HouseholdMemberId], components: Vec<NewMealPlanComponent>) -> NewMealGroup {
+    NewMealGroup {
+        everyone: false,
+        participants: members
+            .iter()
+            .map(|member_id| NewMealParticipant::member(*member_id))
+            .collect(),
+        ..NewMealGroup::for_everyone(components)
+    }
+}
+
+fn occasion_input(
+    h: &Harness,
+    on: time::Date,
+    at: Option<time::Time>,
+    slot: MealSlot,
+    group: NewMealGroup,
+) -> NewMealOccasion {
+    NewMealOccasion {
+        id: None,
+        planned_on: on,
+        slot,
+        planned_time: at,
+        note: None,
+        group,
+        actor_id: h.actor_id,
+    }
+}
+
+fn last_group(view: MealOccasionView) -> MealPlanEntryView {
+    view.groups
+        .into_iter()
+        .last()
+        .expect("the occasion should hold at least one group")
+        .entry
+}
+
+async fn try_plan(
+    h: &Harness,
+    on: time::Date,
+    at: Option<time::Time>,
+    slot: MealSlot,
+    group: NewMealGroup,
+) -> Result<MealPlanEntryView> {
     h.service
-        .create(NewMealPlanEntry {
-            id: None,
-            scope: MealPlanScope::Member,
-            member_id: Some(h.member_id),
-            planned_on: date!(2026 - 08 - 25),
-            planned_time: Some(time!(18:30)),
-            slot: MealSlot::Dinner,
-            components,
-            participants: None,
-            guest_groups: Vec::new(),
-            actor_id: h.actor_id,
-        })
+        .create_occasion(occasion_input(h, on, at, slot, group))
         .await
-        .unwrap()
+        .map(last_group)
 }
 
-#[tokio::test]
-async fn a_member_has_one_main_meal_entry_per_day_and_slot() {
-    let h = harness();
-    let food = product("Food", 200);
-    h.products.seed(food.clone());
-    planned(&h, vec![measured(food.id, 100)]).await;
-
-    let error = h
-        .service
-        .create(NewMealPlanEntry {
-            id: None,
-            scope: MealPlanScope::Member,
-            member_id: Some(h.member_id),
-            planned_on: date!(2026 - 08 - 25),
-            planned_time: Some(time!(19:00)),
-            slot: MealSlot::Dinner,
-            components: vec![measured(food.id, 50)],
-            participants: None,
-            guest_groups: Vec::new(),
-            actor_id: h.actor_id,
-        })
-        .await
-        .unwrap_err();
-
-    assert!(matches!(error, CoreError::Conflict { .. }));
+async fn plan(
+    h: &Harness,
+    on: time::Date,
+    at: Option<time::Time>,
+    slot: MealSlot,
+    group: NewMealGroup,
+) -> MealPlanEntryView {
+    try_plan(h, on, at, slot, group).await.unwrap()
 }
 
-#[tokio::test]
-async fn snacks_allow_distinct_timed_occurrences_and_one_untimed_occurrence() {
-    let h = harness();
-    let food = product("Food", 200);
-    h.products.seed(food.clone());
-    let entry = h
-        .service
-        .create(NewMealPlanEntry {
-            id: None,
-            scope: MealPlanScope::Member,
-            member_id: Some(h.member_id),
-            planned_on: date!(2026 - 08 - 25),
-            planned_time: Some(time!(20:30)),
-            slot: MealSlot::Snacks,
-            components: vec![measured(food.id, 100)],
-            participants: None,
-            guest_groups: Vec::new(),
-            actor_id: h.actor_id,
-        })
-        .await
-        .unwrap();
-    assert_eq!(entry.entry.planned_time, Some(time!(20:30)));
+async fn planned(h: &Harness, components: Vec<NewMealPlanComponent>) -> MealPlanEntryView {
+    plan(
+        h,
+        date!(2026 - 08 - 25),
+        Some(time!(18:30)),
+        MealSlot::Dinner,
+        everyone(components),
+    )
+    .await
+}
 
-    let updated = h
-        .service
-        .update(
+async fn update_components(
+    h: &Harness,
+    entry: &MealPlanEntryView,
+    components: Vec<NewMealPlanComponent>,
+) -> Result<MealPlanEntryView> {
+    h.service
+        .update_group(
             entry.entry.id,
             entry.entry.revision,
-            MealPlanEntryPatch {
+            MealGroupPatch {
+                components: Some(components),
+                ..Default::default()
+            },
+            h.actor_id,
+        )
+        .await?;
+    h.service.get(entry.entry.id).await
+}
+
+async fn set_participants(
+    h: &Harness,
+    entry: &MealPlanEntryView,
+    participants: Vec<NewMealParticipant>,
+) -> Result<MealPlanEntryView> {
+    h.service
+        .update_group(
+            entry.entry.id,
+            entry.entry.revision,
+            MealGroupPatch {
+                everyone: Some(false),
+                participants: Some(participants),
+                ..Default::default()
+            },
+            h.actor_id,
+        )
+        .await?;
+    h.service.get(entry.entry.id).await
+}
+
+#[tokio::test]
+async fn a_second_meal_in_the_same_cell_joins_the_occasion_as_another_group() {
+    let h = harness();
+    let sam = h.add_member("Sam");
+    let food = product("Food", 200);
+    h.products.seed(food.clone());
+    let first = planned(&h, vec![measured(food.id, 100)]).await;
+
+    let second = plan(
+        &h,
+        date!(2026 - 08 - 25),
+        Some(time!(19:00)),
+        MealSlot::Dinner,
+        only(&[sam], vec![measured(food.id, 50)]),
+    )
+    .await;
+
+    assert_eq!(second.entry.occasion_id, first.entry.occasion_id);
+    assert_eq!(h.plans.occasion_count(), 1);
+    let occasion = h
+        .service
+        .get_occasion(first.entry.occasion_id)
+        .await
+        .unwrap();
+    assert_eq!(occasion.groups.len(), 2);
+    assert_eq!(
+        occasion.occasion.planned_time,
+        Some(time!(18:30)),
+        "joining a cell keeps the occasion's own time"
+    );
+    let seated: Vec<Vec<HouseholdMemberId>> = occasion
+        .groups
+        .iter()
+        .map(|group| group.diners.iter().map(|diner| diner.member_id).collect())
+        .collect();
+    assert_eq!(seated, vec![vec![h.member_id], vec![sam]]);
+}
+
+#[tokio::test]
+async fn snacks_are_one_occasion_per_day_with_no_usual_time() {
+    let h = harness();
+    let food = product("Food", 200);
+    h.products.seed(food.clone());
+    let snack = plan(
+        &h,
+        date!(2026 - 08 - 25),
+        None,
+        MealSlot::Snacks,
+        everyone(vec![measured(food.id, 100)]),
+    )
+    .await;
+    let occasion = h
+        .service
+        .get_occasion(snack.entry.occasion_id)
+        .await
+        .unwrap();
+    assert_eq!(occasion.effective_time, None);
+
+    let timed = h
+        .service
+        .update_occasion(
+            occasion.occasion.id,
+            occasion.occasion.revision,
+            MealOccasionPatch {
                 planned_time: Some(Some(time!(21:00))),
                 ..Default::default()
             },
@@ -406,77 +510,29 @@ async fn snacks_allow_distinct_timed_occurrences_and_one_untimed_occurrence() {
         )
         .await
         .unwrap();
-    assert_eq!(updated.entry.planned_time, Some(time!(21:00)));
+    assert_eq!(timed.effective_time, Some(time!(21:00)));
+    assert_eq!(timed.groups[0].entry.entry.planned_time, Some(time!(21:00)));
 
-    let timed = h
-        .service
-        .create(NewMealPlanEntry {
-            id: None,
-            scope: MealPlanScope::Member,
-            member_id: Some(h.member_id),
-            planned_on: date!(2026 - 08 - 25),
-            planned_time: Some(time!(20:30)),
-            slot: MealSlot::Snacks,
-            components: vec![measured(food.id, 50)],
-            participants: None,
-            guest_groups: Vec::new(),
-            actor_id: h.actor_id,
-        })
-        .await
-        .unwrap();
-    assert_eq!(timed.entry.planned_time, Some(time!(20:30)));
+    let second_everyone = try_plan(
+        &h,
+        date!(2026 - 08 - 25),
+        Some(time!(15:00)),
+        MealSlot::Snacks,
+        everyone(vec![measured(food.id, 25)]),
+    )
+    .await;
+    assert!(matches!(second_everyone, Err(CoreError::Conflict { .. })));
 
-    let duplicate_timed = h
-        .service
-        .create(NewMealPlanEntry {
-            id: None,
-            scope: MealPlanScope::Member,
-            member_id: Some(h.member_id),
-            planned_on: date!(2026 - 08 - 25),
-            planned_time: Some(time!(20:30)),
-            slot: MealSlot::Snacks,
-            components: vec![measured(food.id, 25)],
-            participants: None,
-            guest_groups: Vec::new(),
-            actor_id: h.actor_id,
-        })
-        .await
-        .unwrap_err();
-    assert!(matches!(duplicate_timed, CoreError::Conflict { .. }));
-
-    h.service
-        .create(NewMealPlanEntry {
-            id: None,
-            scope: MealPlanScope::Member,
-            member_id: Some(h.member_id),
-            planned_on: date!(2026 - 08 - 25),
-            planned_time: None,
-            slot: MealSlot::Snacks,
-            components: vec![measured(food.id, 25)],
-            participants: None,
-            guest_groups: Vec::new(),
-            actor_id: h.actor_id,
-        })
-        .await
-        .unwrap();
-
-    let duplicate_untimed = h
-        .service
-        .create(NewMealPlanEntry {
-            id: None,
-            scope: MealPlanScope::Member,
-            member_id: Some(h.member_id),
-            planned_on: date!(2026 - 08 - 25),
-            planned_time: None,
-            slot: MealSlot::Snacks,
-            components: vec![measured(food.id, 25)],
-            participants: None,
-            guest_groups: Vec::new(),
-            actor_id: h.actor_id,
-        })
-        .await
-        .unwrap_err();
-    assert!(matches!(duplicate_untimed, CoreError::Conflict { .. }));
+    let another = plan(
+        &h,
+        date!(2026 - 08 - 25),
+        Some(time!(15:00)),
+        MealSlot::Snacks,
+        only(&[h.member_id], vec![measured(food.id, 25)]),
+    )
+    .await;
+    assert_eq!(another.entry.occasion_id, snack.entry.occasion_id);
+    assert_eq!(h.plans.occasion_count(), 1);
 }
 
 #[tokio::test]
@@ -699,19 +755,7 @@ async fn editing_one_component_preserves_its_siblings() {
         })
         .collect();
 
-    let updated = h
-        .service
-        .update(
-            entry.entry.id,
-            entry.entry.revision,
-            MealPlanEntryPatch {
-                components: Some(components),
-                ..Default::default()
-            },
-            h.actor_id,
-        )
-        .await
-        .unwrap();
+    let updated = update_components(&h, &entry, components).await.unwrap();
 
     assert_eq!(
         updated
@@ -768,18 +812,7 @@ async fn later_planned_components_append_after_food_already_logged_in_the_slot()
         })
         .collect();
     components.push(measured(latte.id, 250));
-    h.service
-        .update(
-            entry.entry.id,
-            entry.entry.revision,
-            MealPlanEntryPatch {
-                components: Some(components),
-                ..Default::default()
-            },
-            h.actor_id,
-        )
-        .await
-        .unwrap();
+    update_components(&h, &entry, components).await.unwrap();
 
     let week = h
         .service
@@ -916,17 +949,7 @@ async fn resolved_entries_are_locked() {
         .await
         .unwrap();
 
-    let error = h
-        .service
-        .update(
-            resolved.entry.id,
-            resolved.entry.revision,
-            MealPlanEntryPatch {
-                planned_time: Some(None),
-                ..Default::default()
-            },
-            h.actor_id,
-        )
+    let error = update_components(&h, &resolved, vec![measured(food.id, 120)])
         .await
         .unwrap_err();
 
@@ -1008,35 +1031,17 @@ async fn an_archived_product_may_be_retained_but_not_newly_added() {
     food.archived_at = Some(datetime!(2026-08-24 10:00 UTC));
     h.products.seed(food.clone());
 
-    let retained = h
-        .service
-        .update(
-            entry.entry.id,
-            entry.entry.revision,
-            MealPlanEntryPatch {
-                components: Some(vec![measured(food.id, 120)]),
-                ..Default::default()
-            },
-            h.actor_id,
-        )
-        .await;
+    let retained = update_components(&h, &entry, vec![measured(food.id, 120)]).await;
     assert!(retained.is_ok());
 
-    let newly_added = h
-        .service
-        .create(NewMealPlanEntry {
-            id: None,
-            scope: MealPlanScope::Member,
-            member_id: Some(h.member_id),
-            planned_on: date!(2026 - 08 - 26),
-            planned_time: None,
-            slot: MealSlot::Lunch,
-            components: vec![measured(food.id, 100)],
-            participants: None,
-            guest_groups: Vec::new(),
-            actor_id: h.actor_id,
-        })
-        .await;
+    let newly_added = try_plan(
+        &h,
+        date!(2026 - 08 - 26),
+        None,
+        MealSlot::Lunch,
+        everyone(vec![measured(food.id, 100)]),
+    )
+    .await;
     assert!(matches!(newly_added, Err(CoreError::Validation(_))));
 }
 
@@ -1285,17 +1290,7 @@ async fn a_reopened_entry_can_be_edited_and_confirmed_again() {
         .await
         .unwrap();
 
-    let edited = h
-        .service
-        .update(
-            reopened.entry.id,
-            reopened.entry.revision,
-            MealPlanEntryPatch {
-                components: Some(vec![measured(food.id, 150)]),
-                ..Default::default()
-            },
-            h.actor_id,
-        )
+    let edited = update_components(&h, &reopened, vec![measured(food.id, 150)])
         .await
         .unwrap();
 
@@ -1327,22 +1322,15 @@ async fn date_policy_forbids_creating_a_plan_in_the_past() {
     let h = harness();
     let food = product("Food", 200);
     h.products.seed(food.clone());
-    let error = h
-        .service
-        .create(NewMealPlanEntry {
-            id: None,
-            scope: MealPlanScope::Member,
-            member_id: Some(h.member_id),
-            planned_on: date!(2026 - 08 - 20),
-            planned_time: None,
-            slot: MealSlot::Dinner,
-            components: vec![measured(food.id, 100)],
-            participants: None,
-            guest_groups: Vec::new(),
-            actor_id: h.actor_id,
-        })
-        .await
-        .unwrap_err();
+    let error = try_plan(
+        &h,
+        date!(2026 - 08 - 20),
+        None,
+        MealSlot::Dinner,
+        everyone(vec![measured(food.id, 100)]),
+    )
+    .await
+    .unwrap_err();
     assert!(matches!(error, CoreError::Validation(_)));
 }
 
@@ -1351,21 +1339,14 @@ async fn date_policy_allows_a_one_day_grace_into_the_past() {
     let h = harness();
     let food = product("Food", 200);
     h.products.seed(food.clone());
-    h.service
-        .create(NewMealPlanEntry {
-            id: None,
-            scope: MealPlanScope::Member,
-            member_id: Some(h.member_id),
-            planned_on: date!(2026 - 08 - 23),
-            planned_time: None,
-            slot: MealSlot::Dinner,
-            components: vec![measured(food.id, 100)],
-            participants: None,
-            guest_groups: Vec::new(),
-            actor_id: h.actor_id,
-        })
-        .await
-        .unwrap();
+    plan(
+        &h,
+        date!(2026 - 08 - 23),
+        None,
+        MealSlot::Dinner,
+        everyone(vec![measured(food.id, 100)]),
+    )
+    .await;
 }
 
 #[tokio::test]
@@ -1374,16 +1355,19 @@ async fn date_policy_forbids_moving_a_plan_into_the_past() {
     let food = product("Food", 200);
     h.products.seed(food.clone());
     let entry = planned(&h, vec![measured(food.id, 100)]).await;
+    let occasion = h
+        .service
+        .get_occasion(entry.entry.occasion_id)
+        .await
+        .unwrap();
 
     let error = h
         .service
-        .update(
-            entry.entry.id,
-            entry.entry.revision,
-            MealPlanEntryPatch {
-                planned_on: Some(date!(2026 - 08 - 20)),
-                ..Default::default()
-            },
+        .move_occasion(
+            occasion.occasion.id,
+            occasion.occasion.revision,
+            date!(2026 - 08 - 20),
+            MealSlot::Dinner,
             h.actor_id,
         )
         .await
@@ -1396,22 +1380,14 @@ async fn date_policy_forbids_resolving_a_plan_that_is_not_yet_due() {
     let h = harness();
     let food = product("Food", 200);
     h.products.seed(food.clone());
-    let entry = h
-        .service
-        .create(NewMealPlanEntry {
-            id: None,
-            scope: MealPlanScope::Member,
-            member_id: Some(h.member_id),
-            planned_on: date!(2026 - 08 - 30),
-            planned_time: None,
-            slot: MealSlot::Dinner,
-            components: vec![measured(food.id, 100)],
-            participants: None,
-            guest_groups: Vec::new(),
-            actor_id: h.actor_id,
-        })
-        .await
-        .unwrap();
+    let entry = plan(
+        &h,
+        date!(2026 - 08 - 30),
+        None,
+        MealSlot::Dinner,
+        everyone(vec![measured(food.id, 100)]),
+    )
+    .await;
 
     let error = h
         .service
@@ -1633,7 +1609,17 @@ async fn planned_nutrition_follows_the_serving_you_eat_not_the_batch_you_make() 
     h.products.seed(rice.clone());
     let curry = seed_recipe(&h, "Curry", 5, vec![recipe_line(rice.id, 500)]).await;
 
-    let entry = planned(&h, vec![servings_of(curry.id, 2)]).await;
+    let entry = plan(
+        &h,
+        date!(2026 - 08 - 25),
+        Some(time!(18:30)),
+        MealSlot::Dinner,
+        NewMealGroup {
+            cooking_servings: Some(2),
+            ..everyone(vec![servings_of(curry.id, 2)])
+        },
+    )
+    .await;
 
     assert_eq!(
         entry.planned.nutrition.energy_kcal,
@@ -1654,22 +1640,15 @@ async fn planning_a_recipe_you_do_not_own_is_refused() {
     let curry = recipe("Curry", someone_else, 4, vec![recipe_line(rice.id, 400)]);
     h.recipes.seed(curry.clone());
 
-    let error = h
-        .service
-        .create(NewMealPlanEntry {
-            id: None,
-            scope: MealPlanScope::Member,
-            member_id: Some(h.member_id),
-            planned_on: date!(2026 - 08 - 25),
-            planned_time: Some(time!(18:30)),
-            slot: MealSlot::Dinner,
-            components: vec![servings_of(curry.id, 1)],
-            participants: None,
-            guest_groups: Vec::new(),
-            actor_id: h.actor_id,
-        })
-        .await
-        .unwrap_err();
+    let error = try_plan(
+        &h,
+        date!(2026 - 08 - 25),
+        Some(time!(18:30)),
+        MealSlot::Dinner,
+        everyone(vec![servings_of(curry.id, 1)]),
+    )
+    .await
+    .unwrap_err();
 
     assert!(matches!(error, CoreError::NotFound { .. }));
 }
@@ -1681,26 +1660,19 @@ async fn a_recipe_component_rejects_a_measured_amount() {
     h.products.seed(rice.clone());
     let curry = seed_recipe(&h, "Curry", 4, vec![recipe_line(rice.id, 400)]).await;
 
-    let error = h
-        .service
-        .create(NewMealPlanEntry {
+    let error = try_plan(
+        &h,
+        date!(2026 - 08 - 25),
+        Some(time!(18:30)),
+        MealSlot::Dinner,
+        everyone(vec![NewMealPlanComponent {
             id: None,
-            scope: MealPlanScope::Member,
-            member_id: Some(h.member_id),
-            planned_on: date!(2026 - 08 - 25),
-            planned_time: Some(time!(18:30)),
-            slot: MealSlot::Dinner,
-            components: vec![NewMealPlanComponent {
-                id: None,
-                item: MealItemRef::recipe(curry.id),
-                amount: ConsumedAmount::Measure(Quantity::new(Decimal::new(200, 0), Unit::Gram)),
-            }],
-            participants: None,
-            guest_groups: Vec::new(),
-            actor_id: h.actor_id,
-        })
-        .await
-        .unwrap_err();
+            item: MealItemRef::recipe(curry.id),
+            amount: ConsumedAmount::Measure(Quantity::new(Decimal::new(200, 0), Unit::Gram)),
+        }]),
+    )
+    .await
+    .unwrap_err();
 
     assert!(matches!(error, CoreError::Validation { .. }));
 }
@@ -1808,30 +1780,14 @@ async fn confirming_a_recipe_component_writes_a_recipe_referencing_record() {
 }
 
 #[tokio::test]
-async fn a_household_meal_defaults_to_every_member_when_enabled() {
+async fn an_everyone_group_seats_every_active_member() {
     let h = harness();
-    h.settings.set_default_all_members_participate(true);
     let morgan = h.add_member("Morgan");
     let taylor = h.add_member("Taylor");
     let food = product("Stew", 200);
     h.products.seed(food.clone());
 
-    let entry = h
-        .service
-        .create(NewMealPlanEntry {
-            id: None,
-            scope: MealPlanScope::Household,
-            member_id: None,
-            planned_on: date!(2026 - 08 - 25),
-            planned_time: Some(time!(18:30)),
-            slot: MealSlot::Dinner,
-            components: vec![measured(food.id, 600)],
-            participants: None,
-            guest_groups: Vec::new(),
-            actor_id: h.actor_id,
-        })
-        .await
-        .unwrap();
+    let entry = planned(&h, vec![measured(food.id, 600)]).await;
 
     let member_ids: std::collections::HashSet<_> = entry
         .participants
@@ -1842,20 +1798,48 @@ async fn a_household_meal_defaults_to_every_member_when_enabled() {
     assert!(member_ids.contains(&h.member_id));
     assert!(member_ids.contains(&morgan));
     assert!(member_ids.contains(&taylor));
+    assert_eq!(entry.entry.serves(), 3);
 }
 
 #[tokio::test]
-async fn a_personal_meal_never_auto_adds_members() {
+async fn a_member_who_joins_the_household_later_is_seated_at_everyone_meals() {
     let h = harness();
-    h.settings.set_default_all_members_participate(true);
+    let food = product("Stew", 200);
+    h.products.seed(food.clone());
+    let entry = planned(&h, vec![measured(food.id, 600)]).await;
+    assert_eq!(entry.participants.len(), 1);
+
+    let newcomer = h.add_member("Newcomer");
+
+    let reloaded = h.service.get(entry.entry.id).await.unwrap();
+    assert!(
+        reloaded
+            .participants
+            .iter()
+            .any(|participant| participant.member_id == newcomer)
+    );
+    assert_eq!(reloaded.entry.serves(), 2);
+}
+
+#[tokio::test]
+async fn an_explicit_group_seats_only_its_members() {
+    let h = harness();
     h.add_member("Morgan");
     let food = product("Toast", 120);
     h.products.seed(food.clone());
 
-    let entry = planned(&h, vec![measured(food.id, 60)]).await;
+    let entry = plan(
+        &h,
+        date!(2026 - 08 - 25),
+        Some(time!(18:30)),
+        MealSlot::Dinner,
+        only(&[h.member_id], vec![measured(food.id, 60)]),
+    )
+    .await;
 
     assert_eq!(entry.participants.len(), 1);
     assert_eq!(entry.participants[0].member_id, h.member_id);
+    assert!(!entry.entry.everyone);
 }
 
 #[tokio::test]
@@ -1866,42 +1850,38 @@ async fn a_participant_sees_only_their_own_share_and_outcome() {
     h.products.seed(food.clone());
     let entry = planned(&h, vec![measured(food.id, 400)]).await;
 
-    let with_taylor = h
-        .service
-        .set_participants(
-            entry.entry.id,
-            entry.entry.revision,
-            crate::domain::SetMealParticipants {
-                actor_id: h.actor_id,
-                guest_groups: Vec::new(),
-                participants: vec![
-                    crate::domain::NewMealParticipant {
-                        id: None,
-                        member_id: h.member_id,
-                        allocations: vec![crate::domain::NewMealParticipantAllocation {
-                            component_id: entry.components[0].component.id,
-                            allocated: ConsumedAmount::Measure(Quantity::new(
-                                Decimal::new(300, 0),
-                                Unit::Gram,
-                            )),
-                        }],
-                    },
-                    crate::domain::NewMealParticipant {
-                        id: None,
-                        member_id: taylor,
-                        allocations: vec![crate::domain::NewMealParticipantAllocation {
-                            component_id: entry.components[0].component.id,
-                            allocated: ConsumedAmount::Measure(Quantity::new(
-                                Decimal::new(100, 0),
-                                Unit::Gram,
-                            )),
-                        }],
-                    },
-                ],
+    let with_taylor = set_participants(
+        &h,
+        &entry,
+        vec![
+            crate::domain::NewMealParticipant {
+                id: None,
+                member_id: h.member_id,
+                note: None,
+                allocations: vec![crate::domain::NewMealParticipantAllocation {
+                    component_id: entry.components[0].component.id,
+                    allocated: ConsumedAmount::Measure(Quantity::new(
+                        Decimal::new(300, 0),
+                        Unit::Gram,
+                    )),
+                }],
             },
-        )
-        .await
-        .unwrap();
+            crate::domain::NewMealParticipant {
+                id: None,
+                member_id: taylor,
+                note: None,
+                allocations: vec![crate::domain::NewMealParticipantAllocation {
+                    component_id: entry.components[0].component.id,
+                    allocated: ConsumedAmount::Measure(Quantity::new(
+                        Decimal::new(100, 0),
+                        Unit::Gram,
+                    )),
+                }],
+            },
+        ],
+    )
+    .await
+    .unwrap();
 
     let prep = &with_taylor.components[0].preparation;
     assert_eq!(
@@ -1954,42 +1934,32 @@ async fn recording_one_outcome_leaves_everyone_elses_share_alone() {
     let entry = planned(&h, vec![measured(food.id, 400)]).await;
     let component_id = entry.components[0].component.id;
 
-    let shared = h
-        .service
-        .set_participants(
-            entry.entry.id,
-            entry.entry.revision,
-            crate::domain::SetMealParticipants {
-                actor_id: h.actor_id,
-                guest_groups: Vec::new(),
-                participants: vec![
-                    crate::domain::NewMealParticipant {
-                        id: None,
-                        member_id: h.member_id,
-                        allocations: vec![crate::domain::NewMealParticipantAllocation {
-                            component_id,
-                            allocated: ConsumedAmount::Measure(Quantity::new(
-                                dgrams(300),
-                                Unit::Gram,
-                            )),
-                        }],
-                    },
-                    crate::domain::NewMealParticipant {
-                        id: None,
-                        member_id: taylor,
-                        allocations: vec![crate::domain::NewMealParticipantAllocation {
-                            component_id,
-                            allocated: ConsumedAmount::Measure(Quantity::new(
-                                dgrams(100),
-                                Unit::Gram,
-                            )),
-                        }],
-                    },
-                ],
+    let shared = set_participants(
+        &h,
+        &entry,
+        vec![
+            crate::domain::NewMealParticipant {
+                id: None,
+                member_id: h.member_id,
+                note: None,
+                allocations: vec![crate::domain::NewMealParticipantAllocation {
+                    component_id,
+                    allocated: ConsumedAmount::Measure(Quantity::new(dgrams(300), Unit::Gram)),
+                }],
             },
-        )
-        .await
-        .unwrap();
+            crate::domain::NewMealParticipant {
+                id: None,
+                member_id: taylor,
+                note: None,
+                allocations: vec![crate::domain::NewMealParticipantAllocation {
+                    component_id,
+                    allocated: ConsumedAmount::Measure(Quantity::new(dgrams(100), Unit::Gram)),
+                }],
+            },
+        ],
+    )
+    .await
+    .unwrap();
 
     let component = shared.components[0].component.clone();
     h.service
@@ -2046,31 +2016,19 @@ async fn household_planned(
     h: &Harness,
     components: Vec<NewMealPlanComponent>,
     members: &[HouseholdMemberId],
+    cooking_servings: Option<i32>,
 ) -> MealPlanEntryView {
-    h.service
-        .create(NewMealPlanEntry {
-            id: None,
-            scope: MealPlanScope::Household,
-            member_id: None,
-            planned_on: date!(2026 - 08 - 25),
-            planned_time: Some(time!(18:30)),
-            slot: MealSlot::Dinner,
-            components,
-            participants: Some(
-                members
-                    .iter()
-                    .map(|member_id| NewMealParticipant {
-                        id: None,
-                        member_id: *member_id,
-                        allocations: Vec::new(),
-                    })
-                    .collect(),
-            ),
-            guest_groups: Vec::new(),
-            actor_id: h.actor_id,
-        })
-        .await
-        .unwrap()
+    plan(
+        h,
+        date!(2026 - 08 - 25),
+        Some(time!(18:30)),
+        MealSlot::Dinner,
+        NewMealGroup {
+            cooking_servings,
+            ..only(members, components)
+        },
+    )
+    .await
 }
 
 async fn confirm_component_for(
@@ -2196,28 +2154,12 @@ async fn confirming_a_planned_component_draws_its_prepared_amount_from_stock() {
 #[tokio::test]
 async fn a_second_participant_confirming_does_not_draw_stock_again() {
     let h = harness();
-    h.settings.set_default_all_members_participate(true);
     let other = h.add_member("Other");
     let chicken = product("Chicken", 120);
     h.products.seed(chicken.clone());
     let item = h.seed_stock_grams(chicken.id, 500);
 
-    let created = h
-        .service
-        .create(NewMealPlanEntry {
-            id: None,
-            scope: MealPlanScope::Household,
-            member_id: None,
-            planned_on: date!(2026 - 08 - 25),
-            planned_time: Some(time!(18:30)),
-            slot: MealSlot::Dinner,
-            components: vec![measured(chicken.id, 300)],
-            participants: None,
-            guest_groups: Vec::new(),
-            actor_id: h.actor_id,
-        })
-        .await
-        .unwrap();
+    let created = household_dinner(&h, chicken.id, 300).await;
     let component = created.components[0].component.clone();
 
     let confirm = |subject, revision| {
@@ -2377,7 +2319,6 @@ async fn a_confirmed_component_stops_counting_as_planned_stock_demand() {
         Arc::new(h.plans.clone()),
         Arc::new(h.recipes.clone()),
         Arc::new(h.batches.clone()),
-        Arc::new(h.members.clone()),
         Arc::new(h.settings.clone()),
         Arc::new(FixedClock::new(datetime!(2026-08-24 09:00 UTC))),
     );
@@ -2419,118 +2360,27 @@ async fn a_confirmed_component_stops_counting_as_planned_stock_demand() {
 }
 
 async fn household_dinner(h: &Harness, product_id: ProductId, grams: i64) -> MealPlanEntryView {
+    planned(h, vec![measured(product_id, grams)]).await
+}
+
+async fn occasion_of(h: &Harness, entry: &MealPlanEntryView) -> MealOccasionView {
     h.service
-        .create(NewMealPlanEntry {
-            id: None,
-            scope: MealPlanScope::Household,
-            member_id: None,
-            planned_on: date!(2026 - 08 - 25),
-            planned_time: Some(time!(18:30)),
-            slot: MealSlot::Dinner,
-            components: vec![measured(product_id, grams)],
-            participants: None,
-            guest_groups: Vec::new(),
-            actor_id: h.actor_id,
-        })
+        .get_occasion(entry.entry.occasion_id)
         .await
         .unwrap()
 }
 
-#[tokio::test]
-async fn opting_out_frees_the_slot_for_a_personal_meal() {
-    let h = harness();
-    h.settings.set_default_all_members_participate(true);
-    let food = product("Roast", 150);
-    h.products.seed(food.clone());
-    let household = household_dinner(&h, food.id, 900).await;
-
-    let clash = h
-        .service
-        .create(NewMealPlanEntry {
-            id: None,
-            scope: MealPlanScope::Member,
-            member_id: Some(h.member_id),
-            planned_on: date!(2026 - 08 - 25),
-            planned_time: None,
-            slot: MealSlot::Dinner,
-            components: vec![measured(food.id, 100)],
-            participants: None,
-            guest_groups: Vec::new(),
-            actor_id: h.actor_id,
-        })
-        .await;
-    assert!(clash.is_err());
-
-    let after = h
-        .service
-        .opt_out(
-            household.entry.id,
-            household.entry.revision,
-            h.actor_id,
-            h.member_id,
-        )
-        .await
-        .unwrap();
-    assert!(after.entry.participant_for(h.member_id).is_none());
-    assert!(after.entry.has_opted_out(h.member_id));
-
-    h.service
-        .create(NewMealPlanEntry {
-            id: None,
-            scope: MealPlanScope::Member,
-            member_id: Some(h.member_id),
-            planned_on: date!(2026 - 08 - 25),
-            planned_time: None,
-            slot: MealSlot::Dinner,
-            components: vec![measured(food.id, 100)],
-            participants: None,
-            guest_groups: Vec::new(),
-            actor_id: h.actor_id,
-        })
-        .await
-        .unwrap();
+fn diners_of(view: &MealOccasionView, index: usize) -> Vec<HouseholdMemberId> {
+    view.groups[index]
+        .diners
+        .iter()
+        .map(|diner| diner.member_id)
+        .collect()
 }
 
 #[tokio::test]
-async fn opting_out_of_a_future_meal_is_allowed() {
+async fn eating_elsewhere_takes_you_out_of_the_everyone_group() {
     let h = harness();
-    h.settings.set_default_all_members_participate(true);
-    let food = product("Pie", 150);
-    h.products.seed(food.clone());
-    let household = h
-        .service
-        .create(NewMealPlanEntry {
-            id: None,
-            scope: MealPlanScope::Household,
-            member_id: None,
-            planned_on: date!(2026 - 09 - 20),
-            planned_time: Some(time!(18:30)),
-            slot: MealSlot::Dinner,
-            components: vec![measured(food.id, 900)],
-            participants: None,
-            guest_groups: Vec::new(),
-            actor_id: h.actor_id,
-        })
-        .await
-        .unwrap();
-
-    let after = h
-        .service
-        .opt_out(
-            household.entry.id,
-            household.entry.revision,
-            h.actor_id,
-            h.member_id,
-        )
-        .await
-        .unwrap();
-    assert!(after.entry.has_opted_out(h.member_id));
-}
-
-#[tokio::test]
-async fn opting_out_leaves_the_other_portions_alone_and_a_manager_cannot_re_add() {
-    let h = harness();
-    h.settings.set_default_all_members_participate(true);
     let morgan = h.add_member("Morgan");
     let taylor = h.add_member("Taylor");
     let food = product("Chilli", 150);
@@ -2540,57 +2390,187 @@ async fn opting_out_leaves_the_other_portions_alone_and_a_manager_cannot_re_add(
 
     let after = h
         .service
-        .opt_out(
-            household.entry.id,
-            household.entry.revision,
-            h.actor_id,
+        .set_attendance(
+            household.entry.occasion_id,
             taylor,
+            MealAttendance::Elsewhere,
+            h.actor_id,
         )
         .await
         .unwrap();
-    assert_eq!(after.entry.participants.len(), 2);
-    let prep = &after.components[0].preparation;
+
+    assert_eq!(after.absent_member_ids, vec![taylor]);
+    assert!(after.unaccounted_member_ids.is_empty());
+    let mut seated = diners_of(&after, 0);
+    seated.sort();
+    let mut expected = vec![h.member_id, morgan];
+    expected.sort();
+    assert_eq!(seated, expected);
+    assert_eq!(after.groups[0].serves, 2);
+    let prep = &after.groups[0].entry.components[0].preparation;
     assert_eq!(
         prep.allocated,
         Some(ConsumedAmount::Measure(Quantity::new(
-            Decimal::new(600, 0),
+            Decimal::new(900, 0),
             Unit::Gram
-        )))
+        ))),
+        "the 900 g is reshared between the two people still eating"
+    );
+    assert!(
+        after.groups[0]
+            .entry
+            .participants
+            .iter()
+            .all(|participant| participant.allocations[0].allocated
+                == ConsumedAmount::Measure(Quantity::new(Decimal::new(450, 0), Unit::Gram)))
     );
     assert_eq!(
-        prep.unallocated,
-        Some(ConsumedAmount::Measure(Quantity::new(
-            Decimal::new(300, 0),
-            Unit::Gram
-        )))
+        after.occasion.attendance_of(taylor),
+        MealAttendance::Elsewhere
     );
-
-    let err = h
-        .service
-        .set_participants(
-            after.entry.id,
-            after.entry.revision,
-            crate::domain::SetMealParticipants {
-                actor_id: h.actor_id,
-                guest_groups: Vec::new(),
-                participants: vec![h.member_id, morgan, taylor]
-                    .into_iter()
-                    .map(|member_id| crate::domain::NewMealParticipant {
-                        id: None,
-                        member_id,
-                        allocations: Vec::new(),
-                    })
-                    .collect(),
-            },
-        )
-        .await;
-    assert!(err.is_err());
 }
 
 #[tokio::test]
-async fn opting_out_is_refused_once_the_portion_is_resolved() {
+async fn someone_marked_elsewhere_can_be_seated_again_with_a_note() {
     let h = harness();
-    h.settings.set_default_all_members_participate(true);
+    let taylor = h.add_member("Taylor");
+    let food = product("Curry", 150);
+    h.products.seed(food.clone());
+    let household = household_dinner(&h, food.id, 600).await;
+
+    h.service
+        .set_attendance(
+            household.entry.occasion_id,
+            taylor,
+            MealAttendance::Elsewhere,
+            h.actor_id,
+        )
+        .await
+        .unwrap();
+
+    let seated = h
+        .service
+        .set_attendance(
+            household.entry.occasion_id,
+            taylor,
+            MealAttendance::Eating {
+                group_id: household.entry.id,
+                note: Some("mild".to_owned()),
+            },
+            h.actor_id,
+        )
+        .await
+        .unwrap();
+
+    assert!(seated.absent_member_ids.is_empty());
+    let diner = seated.groups[0]
+        .diners
+        .iter()
+        .find(|diner| diner.member_id == taylor)
+        .expect("Taylor is back at the table");
+    assert_eq!(diner.note.as_deref(), Some("mild"));
+
+    let renamed = h
+        .service
+        .set_attendance(
+            household.entry.occasion_id,
+            taylor,
+            MealAttendance::Eating {
+                group_id: household.entry.id,
+                note: Some("extra hot".to_owned()),
+            },
+            h.actor_id,
+        )
+        .await
+        .unwrap();
+    let diner = renamed.groups[0]
+        .diners
+        .iter()
+        .find(|diner| diner.member_id == taylor)
+        .unwrap();
+    assert_eq!(diner.note.as_deref(), Some("extra hot"));
+    assert_eq!(renamed.groups[0].diners.len(), 2);
+}
+
+#[tokio::test]
+async fn leaving_a_future_meal_is_allowed() {
+    let h = harness();
+    let food = product("Pie", 150);
+    h.products.seed(food.clone());
+    let household = plan(
+        &h,
+        date!(2026 - 09 - 20),
+        Some(time!(18:30)),
+        MealSlot::Dinner,
+        everyone(vec![measured(food.id, 900)]),
+    )
+    .await;
+
+    let after = h
+        .service
+        .set_attendance(
+            household.entry.occasion_id,
+            h.member_id,
+            MealAttendance::Elsewhere,
+            h.actor_id,
+        )
+        .await
+        .unwrap();
+    assert_eq!(after.absent_member_ids, vec![h.member_id]);
+    assert!(after.groups[0].diners.is_empty());
+}
+
+#[tokio::test]
+async fn a_second_group_takes_its_members_out_of_the_everyone_group() {
+    let h = harness();
+    let morgan = h.add_member("Morgan");
+    let taylor = h.add_member("Taylor");
+    let food = product("Chilli", 150);
+    let lasagne = product("Lasagne", 150);
+    h.products.seed(food.clone());
+    h.products.seed(lasagne.clone());
+    let household = household_dinner(&h, food.id, 900).await;
+
+    let with_lasagne = h
+        .service
+        .add_group(
+            household.entry.occasion_id,
+            only(&[taylor], vec![measured(lasagne.id, 300)]),
+            h.actor_id,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(with_lasagne.groups.len(), 2);
+    let mut seated = diners_of(&with_lasagne, 0);
+    seated.sort();
+    let mut expected = vec![h.member_id, morgan];
+    expected.sort();
+    assert_eq!(seated, expected);
+    assert_eq!(diners_of(&with_lasagne, 1), vec![taylor]);
+    assert!(with_lasagne.unaccounted_member_ids.is_empty());
+    assert_eq!(
+        with_lasagne.occasion.attendance_of(taylor),
+        MealAttendance::Eating {
+            group_id: with_lasagne.groups[1].entry.entry.id,
+            note: None,
+        }
+    );
+
+    let second_everyone = h
+        .service
+        .add_group(
+            household.entry.occasion_id,
+            everyone(vec![measured(lasagne.id, 100)]),
+            h.actor_id,
+        )
+        .await;
+    assert!(matches!(second_everyone, Err(CoreError::Conflict { .. })));
+}
+
+#[tokio::test]
+async fn attendance_cannot_change_once_the_portion_is_resolved() {
+    let h = harness();
     let food = product("Bake", 150);
     h.products.seed(food.clone());
     let household = household_dinner(&h, food.id, 300).await;
@@ -2612,140 +2592,473 @@ async fn opting_out_is_refused_once_the_portion_is_resolved() {
         .await
         .unwrap();
 
-    let current = h.service.get(household.entry.id).await.unwrap();
     let err = h
         .service
-        .opt_out(
-            current.entry.id,
-            current.entry.revision,
-            h.actor_id,
+        .set_attendance(
+            household.entry.occasion_id,
             h.member_id,
+            MealAttendance::Elsewhere,
+            h.actor_id,
         )
         .await;
-    assert!(err.is_err());
+    assert!(matches!(err, Err(CoreError::Conflict { .. })));
 }
 
 #[tokio::test]
-async fn a_household_meal_cannot_use_the_snacks_slot() {
+async fn naming_someone_in_a_group_moves_them_there_and_clears_their_absence() {
     let h = harness();
-    let food = product("Nuts", 150);
+    let taylor = h.add_member("Taylor");
+    let food = product("Chilli", 150);
+    let lasagne = product("Lasagne", 150);
     h.products.seed(food.clone());
+    h.products.seed(lasagne.clone());
+    let household = household_dinner(&h, food.id, 900).await;
+    h.service
+        .set_attendance(
+            household.entry.occasion_id,
+            taylor,
+            MealAttendance::Elsewhere,
+            h.actor_id,
+        )
+        .await
+        .unwrap();
+
+    let with_leftovers = h
+        .service
+        .add_group(
+            household.entry.occasion_id,
+            only(&[taylor], vec![measured(lasagne.id, 300)]),
+            h.actor_id,
+        )
+        .await
+        .unwrap();
+    assert!(with_leftovers.absent_member_ids.is_empty());
+    assert_eq!(diners_of(&with_leftovers, 0), vec![h.member_id]);
+    assert_eq!(diners_of(&with_leftovers, 1), vec![taylor]);
+
+    let curry = with_leftovers.groups[0].entry.entry.clone();
+    let moved_back = h
+        .service
+        .update_group(
+            curry.id,
+            curry.revision,
+            MealGroupPatch {
+                everyone: Some(false),
+                participants: Some(vec![
+                    NewMealParticipant::member(h.member_id),
+                    NewMealParticipant::member(taylor),
+                ]),
+                ..Default::default()
+            },
+            h.actor_id,
+        )
+        .await
+        .unwrap();
+    let mut seated = diners_of(&moved_back, 0);
+    seated.sort();
+    let mut expected = vec![h.member_id, taylor];
+    expected.sort();
+    assert_eq!(seated, expected);
+    assert!(diners_of(&moved_back, 1).is_empty());
+
+    let leftovers = moved_back.groups[1].entry.entry.clone();
+    let component = moved_back.groups[0].entry.components[0].component.clone();
+    h.service
+        .mark_component_eaten_backdated(
+            curry.id,
+            component.id,
+            component.revision,
+            ConfirmMealPlanComponent {
+                consumed_on: date!(2026 - 08 - 25),
+                consumed_at: None,
+                amount: ConsumedAmount::Measure(Quantity::new(Decimal::new(450, 0), Unit::Gram)),
+                actor_id: h.actor_id,
+                subject_member_id: Some(taylor),
+            },
+        )
+        .await
+        .unwrap();
     let err = h
         .service
-        .create(NewMealPlanEntry {
-            id: None,
-            scope: MealPlanScope::Household,
-            member_id: None,
-            planned_on: date!(2026 - 08 - 25),
-            planned_time: Some(time!(15:00)),
-            slot: MealSlot::Snacks,
-            components: vec![measured(food.id, 50)],
-            participants: Some(vec![crate::domain::NewMealParticipant {
-                id: None,
-                member_id: h.member_id,
-                allocations: Vec::new(),
-            }]),
-            guest_groups: Vec::new(),
-            actor_id: h.actor_id,
-        })
+        .update_group(
+            leftovers.id,
+            leftovers.revision,
+            MealGroupPatch {
+                participants: Some(vec![NewMealParticipant::member(taylor)]),
+                ..Default::default()
+            },
+            h.actor_id,
+        )
         .await;
-    assert!(err.is_err());
+    assert!(matches!(err, Err(CoreError::Conflict { .. })));
 }
 
 #[tokio::test]
-async fn slot_attendance_marks_self_catering_and_opted_out_members() {
+async fn deleting_the_last_group_removes_the_occasion() {
     let h = harness();
-    h.settings.set_default_all_members_participate(true);
-    let morgan = h.add_member("Morgan");
     let taylor = h.add_member("Taylor");
-    let food = product("Tart", 150);
+    let food = product("Chilli", 150);
     h.products.seed(food.clone());
-
-    h.service
-        .create(NewMealPlanEntry {
-            id: None,
-            scope: MealPlanScope::Member,
-            member_id: Some(morgan),
-            planned_on: date!(2026 - 08 - 25),
-            planned_time: Some(time!(19:00)),
-            slot: MealSlot::Dinner,
-            components: vec![measured(food.id, 100)],
-            participants: None,
-            guest_groups: Vec::new(),
-            actor_id: h.actor_id,
-        })
-        .await
-        .unwrap();
-
-    let household = h
+    let household = household_dinner(&h, food.id, 900).await;
+    let extra = h
         .service
-        .create(NewMealPlanEntry {
-            id: None,
-            scope: MealPlanScope::Household,
-            member_id: None,
-            planned_on: date!(2026 - 08 - 25),
-            planned_time: Some(time!(18:30)),
-            slot: MealSlot::Dinner,
-            components: vec![measured(food.id, 600)],
-            participants: Some(
-                vec![h.member_id, taylor]
-                    .into_iter()
-                    .map(|member_id| crate::domain::NewMealParticipant {
-                        id: None,
-                        member_id,
-                        allocations: Vec::new(),
-                    })
-                    .collect(),
-            ),
-            guest_groups: Vec::new(),
-            actor_id: h.actor_id,
-        })
-        .await
-        .unwrap();
-
-    h.service
-        .opt_out(
-            household.entry.id,
-            household.entry.revision,
+        .add_group(
+            household.entry.occasion_id,
+            only(&[taylor], vec![measured(food.id, 100)]),
             h.actor_id,
-            taylor,
+        )
+        .await
+        .unwrap();
+    let extra_group = extra.groups[1].entry.entry.clone();
+
+    let remaining = h
+        .service
+        .delete_group(extra_group.id, extra_group.revision, h.actor_id)
+        .await
+        .unwrap()
+        .expect("the everyone group is still there");
+    assert_eq!(remaining.groups.len(), 1);
+    assert!(
+        remaining.groups[0]
+            .diners
+            .iter()
+            .any(|diner| diner.member_id == taylor),
+        "Taylor falls back into the everyone group"
+    );
+
+    let last = remaining.groups[0].entry.entry.clone();
+    let gone = h
+        .service
+        .delete_group(last.id, last.revision, h.actor_id)
+        .await
+        .unwrap();
+    assert!(gone.is_none());
+    assert_eq!(h.plans.occasion_count(), 0);
+}
+
+#[tokio::test]
+async fn moving_an_occasion_needs_an_empty_cell() {
+    let h = harness();
+    let food = product("Soup", 150);
+    h.products.seed(food.clone());
+    let dinner = planned(&h, vec![measured(food.id, 300)]).await;
+    let lunch = plan(
+        &h,
+        date!(2026 - 08 - 26),
+        None,
+        MealSlot::Lunch,
+        everyone(vec![measured(food.id, 200)]),
+    )
+    .await;
+    let occasion = occasion_of(&h, &dinner).await;
+
+    let clash = h
+        .service
+        .move_occasion(
+            occasion.occasion.id,
+            occasion.occasion.revision,
+            date!(2026 - 08 - 26),
+            MealSlot::Lunch,
+            h.actor_id,
+        )
+        .await;
+    assert!(matches!(clash, Err(CoreError::Conflict { .. })));
+
+    let moved = h
+        .service
+        .move_occasion(
+            occasion.occasion.id,
+            occasion.occasion.revision,
+            date!(2026 - 08 - 27),
+            MealSlot::Lunch,
+            h.actor_id,
+        )
+        .await
+        .unwrap();
+    assert_eq!(moved.occasion.planned_on, date!(2026 - 08 - 27));
+    assert_eq!(moved.occasion.slot, MealSlot::Lunch);
+    assert_eq!(
+        moved.groups[0].entry.entry.planned_on,
+        date!(2026 - 08 - 27)
+    );
+    assert_eq!(moved.groups[0].entry.entry.slot, MealSlot::Lunch);
+    assert!(
+        h.service
+            .get_occasion(lunch.entry.occasion_id)
+            .await
+            .is_ok()
+    );
+
+    let week = h.service.planner_week(date!(2026 - 08 - 24)).await.unwrap();
+    assert!(week.days[1].occasions[2].is_none());
+    assert!(week.days[3].occasions[1].is_some());
+}
+
+#[tokio::test]
+async fn copying_an_occasion_resets_guests_and_the_cooking_override() {
+    let h = harness();
+    let taylor = h.add_member("Taylor");
+    let food = product("Roast", 150);
+    h.products.seed(food.clone());
+    let source = plan(
+        &h,
+        date!(2026 - 08 - 25),
+        Some(time!(17:30)),
+        MealSlot::Dinner,
+        NewMealGroup {
+            guest_groups: vec![NewMealGuestGroup::of(2)],
+            cooking_servings: Some(8),
+            participants: vec![NewMealParticipant {
+                note: Some("mild".to_owned()),
+                ..NewMealParticipant::member(taylor)
+            }],
+            ..everyone(vec![measured(food.id, 900)])
+        },
+    )
+    .await;
+    assert_eq!(source.entry.guest_count(), 2);
+    assert_eq!(source.entry.serves(), 4);
+    assert_eq!(source.entry.effective_cooking_servings(), 8);
+
+    let copy = h
+        .service
+        .copy_occasion(
+            source.entry.occasion_id,
+            date!(2026 - 08 - 27),
+            MealSlot::Dinner,
+            h.actor_id,
         )
         .await
         .unwrap();
 
-    let attendance = h
+    assert_eq!(copy.occasion.planned_time, Some(time!(17:30)));
+    let group = &copy.groups[0];
+    assert!(group.entry.entry.everyone);
+    assert_eq!(group.guest_count, 0);
+    assert_eq!(group.cooking_servings, None);
+    assert_eq!(group.serves, 2);
+    assert_eq!(group.effective_cooking_servings, 2);
+    let note = group
+        .diners
+        .iter()
+        .find(|diner| diner.member_id == taylor)
+        .and_then(|diner| diner.note.clone());
+    assert_eq!(note.as_deref(), Some("mild"));
+    assert_ne!(group.entry.entry.id, source.entry.id);
+}
+
+#[tokio::test]
+async fn copying_a_week_fills_only_the_empty_cells() {
+    let h = harness();
+    let food = product("Soup", 150);
+    h.products.seed(food.clone());
+    planned(&h, vec![measured(food.id, 300)]).await;
+    plan(
+        &h,
+        date!(2026 - 08 - 26),
+        None,
+        MealSlot::Lunch,
+        everyone(vec![measured(food.id, 200)]),
+    )
+    .await;
+    let already = plan(
+        &h,
+        date!(2026 - 09 - 01),
+        None,
+        MealSlot::Dinner,
+        everyone(vec![measured(food.id, 50)]),
+    )
+    .await;
+
+    let week = h
         .service
-        .slot_attendance(date!(2026 - 08 - 25), MealSlot::Dinner, None)
+        .copy_week(date!(2026 - 08 - 31), date!(2026 - 08 - 24), h.actor_id)
         .await
         .unwrap();
-    let by_member: std::collections::HashMap<_, _> = attendance
-        .into_iter()
-        .map(|(member, state, claimed)| (member, (state, claimed)))
-        .collect();
+
+    let tuesday_dinner = week.days[1].occasions[2].as_ref().unwrap();
+    assert_eq!(tuesday_dinner.occasion.id, already.entry.occasion_id);
+    let wednesday_lunch = week.days[2].occasions[1].as_ref().unwrap();
+    assert_eq!(wednesday_lunch.occasion.planned_on, date!(2026 - 09 - 02));
+    assert_eq!(h.plans.occasion_count(), 4);
+}
+
+#[tokio::test]
+async fn a_meal_can_be_just_a_name_or_an_ad_hoc_kind() {
+    let h = harness();
+    let pizza = plan(
+        &h,
+        date!(2026 - 08 - 28),
+        None,
+        MealSlot::Dinner,
+        NewMealGroup {
+            label: Some("Pizza".to_owned()),
+            ..everyone(Vec::new())
+        },
+    )
+    .await;
+    assert_eq!(pizza.name(), "Pizza");
+    assert!(pizza.components.is_empty());
+    assert_eq!(pizza.entry.serves(), 1);
+
+    let out = plan(
+        &h,
+        date!(2026 - 08 - 29),
+        None,
+        MealSlot::Dinner,
+        NewMealGroup {
+            ad_hoc: Some(AdHocKind::EatingOut),
+            ..everyone(Vec::new())
+        },
+    )
+    .await;
+    assert_eq!(out.name(), "Eating out");
+    assert!(!out.entry.is_cooked());
+
+    let nameless = try_plan(
+        &h,
+        date!(2026 - 08 - 30),
+        None,
+        MealSlot::Dinner,
+        everyone(Vec::new()),
+    )
+    .await;
+    assert!(matches!(nameless, Err(CoreError::Validation(_))));
+
+    let food = product("Chips", 150);
+    h.products.seed(food.clone());
+    let takeaway_with_food = try_plan(
+        &h,
+        date!(2026 - 08 - 30),
+        None,
+        MealSlot::Dinner,
+        NewMealGroup {
+            ad_hoc: Some(AdHocKind::Takeaway),
+            ..everyone(vec![measured(food.id, 100)])
+        },
+    )
+    .await;
+    assert!(matches!(takeaway_with_food, Err(CoreError::Validation(_))));
+}
+
+#[tokio::test]
+async fn a_recipe_forecast_follows_the_cooking_servings() {
+    let h = harness();
+    let sam = h.add_member("Sam");
+    let rice = product("Rice", 100);
+    h.products.seed(rice.clone());
+    let curry = seed_recipe(&h, "Curry", 4, vec![recipe_line(rice.id, 400)]).await;
+
+    let entry = planned(&h, vec![servings_of(curry.id, 4)]).await;
     assert_eq!(
-        by_member[&morgan],
-        (
-            crate::domain::SlotAttendance::SelfCatering,
-            Some(time!(19:00))
+        entry.components[0].component.amount,
+        ConsumedAmount::Servings(Decimal::new(2, 0)),
+        "two diners, so the forecast is two servings however many the recipe makes"
+    );
+
+    let updated = h
+        .service
+        .update_group(
+            entry.entry.id,
+            entry.entry.revision,
+            MealGroupPatch {
+                cooking_servings: Some(Some(6)),
+                ..Default::default()
+            },
+            h.actor_id,
         )
+        .await
+        .unwrap();
+    assert_eq!(updated.groups[0].effective_cooking_servings, 6);
+    assert_eq!(
+        updated.groups[0].entry.components[0].component.amount,
+        ConsumedAmount::Servings(Decimal::new(6, 0))
     );
     assert_eq!(
-        by_member[&taylor],
-        (crate::domain::SlotAttendance::OptedOut, None)
+        updated.groups[0].entry.components[0]
+            .preparation
+            .unallocated,
+        Some(ConsumedAmount::Servings(Decimal::new(4, 0)))
     );
-    assert_eq!(
-        by_member[&h.member_id],
-        (
-            crate::domain::SlotAttendance::Participating,
-            Some(time!(18:30))
+
+    h.service
+        .set_attendance(
+            entry.entry.occasion_id,
+            sam,
+            MealAttendance::Elsewhere,
+            h.actor_id,
         )
+        .await
+        .unwrap();
+    let cleared = h
+        .service
+        .update_group(
+            entry.entry.id,
+            updated.groups[0].entry.entry.revision,
+            MealGroupPatch {
+                cooking_servings: Some(None),
+                ..Default::default()
+            },
+            h.actor_id,
+        )
+        .await
+        .unwrap();
+    assert_eq!(cleared.groups[0].serves, 1);
+    assert_eq!(
+        cleared.groups[0].entry.components[0].component.amount,
+        ConsumedAmount::Servings(Decimal::ONE)
     );
+}
+
+#[tokio::test]
+async fn the_food_log_reports_where_a_member_is_for_each_occasion() {
+    let h = harness();
+    let taylor = h.add_member("Taylor");
+    let food = product("Chilli", 150);
+    h.products.seed(food.clone());
+    let household = household_dinner(&h, food.id, 900).await;
+    h.service
+        .set_attendance(
+            household.entry.occasion_id,
+            taylor,
+            MealAttendance::Elsewhere,
+            h.actor_id,
+        )
+        .await
+        .unwrap();
+
+    let mine = h
+        .service
+        .week(h.member_id, date!(2026 - 08 - 24))
+        .await
+        .unwrap();
+    let dinner = mine.days[1]
+        .slots
+        .iter()
+        .find(|slot| slot.slot == MealSlot::Dinner)
+        .unwrap();
+    assert_eq!(dinner.occasion_id, Some(household.entry.occasion_id));
+    assert!(matches!(
+        dinner.attendance,
+        Some(MealAttendance::Eating { .. })
+    ));
+    assert_eq!(dinner.group_name.as_deref(), Some("Chilli"));
+    assert_eq!(dinner.items.len(), 1);
+
+    let taylors = h.service.week(taylor, date!(2026 - 08 - 24)).await.unwrap();
+    let dinner = taylors.days[1]
+        .slots
+        .iter()
+        .find(|slot| slot.slot == MealSlot::Dinner)
+        .unwrap();
+    assert_eq!(dinner.attendance, Some(MealAttendance::Elsewhere));
+    assert!(dinner.items.is_empty());
+    assert_eq!(taylors.remaining_planned.nutrition.energy_kcal, None);
 }
 
 #[tokio::test]
 async fn one_member_resolving_does_not_freeze_the_meal_for_a_manager() {
     let h = harness();
-    h.settings.set_default_all_members_participate(true);
     let morgan = h.add_member("Morgan");
     let food = product("Gratin", 150);
     let extra = product("Salad", 20);
@@ -2773,26 +3086,20 @@ async fn one_member_resolving_does_not_freeze_the_meal_for_a_manager() {
     let current = h.service.get(household.entry.id).await.unwrap();
     assert_eq!(current.status, MealPlanStatus::PartiallyResolved);
 
-    let updated = h
-        .service
-        .update(
-            current.entry.id,
-            current.entry.revision,
-            MealPlanEntryPatch {
-                components: Some(vec![
-                    NewMealPlanComponent {
-                        id: Some(component.id),
-                        item: component.item,
-                        amount: component.amount,
-                    },
-                    measured(extra.id, 120),
-                ]),
-                ..Default::default()
+    let updated = update_components(
+        &h,
+        &current,
+        vec![
+            NewMealPlanComponent {
+                id: Some(component.id),
+                item: component.item,
+                amount: component.amount,
             },
-            h.actor_id,
-        )
-        .await
-        .unwrap();
+            measured(extra.id, 120),
+        ],
+    )
+    .await
+    .unwrap();
     assert_eq!(updated.components.len(), 2);
     assert!(morgan != h.member_id);
 }
@@ -2805,19 +3112,9 @@ async fn planned_at(
     components: Vec<NewMealPlanComponent>,
 ) -> MealPlanEntryView {
     h.service
-        .create_backdated(NewMealPlanEntry {
-            id: None,
-            scope: MealPlanScope::Member,
-            member_id: Some(h.member_id),
-            planned_on: on,
-            planned_time: at,
-            slot,
-            components,
-            participants: None,
-            guest_groups: Vec::new(),
-            actor_id: h.actor_id,
-        })
+        .create_occasion_backdated(occasion_input(h, on, at, slot, everyone(components)))
         .await
+        .map(last_group)
         .unwrap()
 }
 
@@ -2916,19 +3213,13 @@ async fn an_assumed_meal_can_still_be_edited() {
         MealPlanStatus::Assumed
     );
 
-    let updated = h
-        .service
-        .update(
-            entry.entry.id,
-            entry.entry.revision,
-            MealPlanEntryPatch {
-                components: Some(vec![measured(food.id, 100), measured(extra.id, 20)]),
-                ..Default::default()
-            },
-            h.actor_id,
-        )
-        .await
-        .unwrap();
+    let updated = update_components(
+        &h,
+        &entry,
+        vec![measured(food.id, 100), measured(extra.id, 20)],
+    )
+    .await
+    .unwrap();
     assert_eq!(updated.components.len(), 2);
 }
 
@@ -3468,7 +3759,6 @@ async fn cooked_food_availability_pools_every_cook_and_nets_off_planned_dishes()
         Arc::new(h.plans.clone()),
         Arc::new(h.recipes.clone()),
         Arc::new(h.batches.clone()),
-        Arc::new(h.members.clone()),
         Arc::new(h.settings.clone()),
         Arc::new(FixedClock::new(datetime!(2026-08-24 09:00 UTC))),
     );
@@ -3572,7 +3862,13 @@ async fn a_forecast_above_the_head_count_is_spare_rather_than_bigger_portions() 
     h.products.seed(food.clone());
     let curry = seed_recipe(&h, "Curry", 4, vec![recipe_line(food.id, 200)]).await;
 
-    let entry = household_planned(&h, vec![servings_of(curry.id, 5)], &[h.member_id, other]).await;
+    let entry = household_planned(
+        &h,
+        vec![servings_of(curry.id, 5)],
+        &[h.member_id, other],
+        Some(5),
+    )
+    .await;
 
     for participant in &entry.entry.participants {
         assert_eq!(
@@ -3596,7 +3892,17 @@ async fn cooking_more_than_planned_leaves_the_surplus_unallocated() {
     h.seed_stock_grams(tesco.id, 2000);
 
     let curry = seed_recipe(&h, "Curry", 4, vec![ingredient_line(rice_id, 400)]).await;
-    let entry = planned(&h, vec![servings_of(curry.id, 2)]).await;
+    let entry = plan(
+        &h,
+        date!(2026 - 08 - 25),
+        Some(time!(18:30)),
+        MealSlot::Dinner,
+        NewMealGroup {
+            cooking_servings: Some(2),
+            ..everyone(vec![servings_of(curry.id, 2)])
+        },
+    )
+    .await;
     let component = entry.components[0].component.clone();
     cook(&h, entry.entry.id, component.id, curry.id, 5).await;
 
@@ -3621,8 +3927,13 @@ async fn cooking_less_than_the_people_eating_is_reported_as_a_shortage() {
     h.seed_stock_grams(tesco.id, 2000);
 
     let curry = seed_recipe(&h, "Curry", 4, vec![ingredient_line(rice_id, 400)]).await;
-    let entry =
-        household_planned(&h, vec![servings_of(curry.id, 6)], &[h.member_id, sam, ash]).await;
+    let entry = household_planned(
+        &h,
+        vec![servings_of(curry.id, 6)],
+        &[h.member_id, sam, ash],
+        Some(6),
+    )
+    .await;
     let component = entry.components[0].component.clone();
     cook(&h, entry.entry.id, component.id, curry.id, 1).await;
 
@@ -3646,7 +3957,13 @@ async fn a_second_eater_draws_from_the_portion_without_cooking_the_recipe_again(
     let other = h.add_member("Sam");
 
     let curry = seed_recipe(&h, "Curry", 4, vec![ingredient_line(rice_id, 400)]).await;
-    let entry = household_planned(&h, vec![servings_of(curry.id, 4)], &[h.member_id, other]).await;
+    let entry = household_planned(
+        &h,
+        vec![servings_of(curry.id, 4)],
+        &[h.member_id, other],
+        Some(4),
+    )
+    .await;
     let component = entry.components[0].component.clone();
     cook(&h, entry.entry.id, component.id, curry.id, 4).await;
 

@@ -58,6 +58,7 @@ pub struct ShoppingList {
 pub struct ShopCount {
     pub date: Date,
     pub items: usize,
+    pub planned: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -599,33 +600,42 @@ impl ShoppingService {
             .iter()
             .map(|opportunity| {
                 let date = opportunity.date;
-                let derived = requirements
+                let assigned: Vec<&ShoppingRequirement> = requirements
                     .iter()
                     .filter(|requirement| {
                         matches!(requirement.assignment, Assignment::Opportunity { date: on } if on == date)
                     })
-                    .count();
+                    .collect();
                 let by_hand = all_manual
                     .iter()
                     .filter(|item| item.opportunity_date == Some(date))
                     .count();
                 ShopCount {
                     date,
-                    items: derived + by_hand,
+                    items: assigned.len() + by_hand,
+                    planned: assigned
+                        .iter()
+                        .filter(|requirement| !requirement.for_meals.is_empty())
+                        .count(),
                 }
             })
             .collect();
         if let Some(first) = counts.first_mut() {
-            first.items += requirements
+            let earlier: Vec<&ShoppingRequirement> = requirements
                 .iter()
                 .filter(|requirement| {
                     matches!(requirement.assignment, Assignment::NeedsEarlierOpportunity)
                 })
-                .count()
+                .collect();
+            first.items += earlier.len()
                 + all_manual
                     .iter()
                     .filter(|item| item.opportunity_date.is_none())
                     .count();
+            first.planned += earlier
+                .iter()
+                .filter(|requirement| !requirement.for_meals.is_empty())
+                .count();
         }
 
         if let Some(focus) = focus {
@@ -1205,6 +1215,8 @@ fn build(
                 })
                 .map(|purchase| (*purchase).clone())
                 .collect();
+            let claims: Vec<DemandClaim> = held.into_iter().map(|held| held.claim).collect();
+            let for_meals = crate::domain::meals_for(&claims);
 
             ShoppingRequirement {
                 subject,
@@ -1215,7 +1227,8 @@ fn build(
                 section,
                 certainty,
                 assignment,
-                claims: held.into_iter().map(|held| held.claim).collect(),
+                claims,
+                for_meals,
                 gaps,
                 purchases,
             }

@@ -4,9 +4,8 @@ use time::macros::date;
 
 use super::*;
 use crate::domain::{
-    DemandSubject, IngredientId, MealPlanEntryId, MealPlanScope, MealSlot, ProductId, Revision,
-    SourceDate, SourceDateKind, StockItemId, StockSubject, StorageLocation, Unit,
-    UsabilityDeadline,
+    DemandSubject, IngredientId, MealPlanEntryId, MealSlot, ProductId, Revision, SourceDate,
+    SourceDateKind, StockItemId, StockSubject, StorageLocation, Unit, UsabilityDeadline,
 };
 
 fn ml(value: i64) -> Quantity {
@@ -49,7 +48,7 @@ fn claim_for(subject: DemandSubject, quantity: Quantity, on: Date, assumed: bool
         entry_id: MealPlanEntryId::new(),
         planned_on: on,
         slot: MealSlot::Dinner,
-        scope: MealPlanScope::Member,
+        group_name: "Dinner".to_owned(),
         recipe_name: None,
         assumed,
     }

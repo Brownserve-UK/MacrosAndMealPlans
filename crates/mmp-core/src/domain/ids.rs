@@ -74,6 +74,7 @@ entity_id!(ProductId, "product");
 entity_id!(UserId, "user");
 entity_id!(HouseholdMemberId, "household_member");
 entity_id!(ConsumptionRecordId, "consumption_record");
+entity_id!(MealOccasionId, "meal_occasion");
 entity_id!(MealPlanEntryId, "meal_plan_entry");
 entity_id!(MealPlanComponentId, "meal_plan_component");
 entity_id!(MealParticipantId, "meal_plan_participant");

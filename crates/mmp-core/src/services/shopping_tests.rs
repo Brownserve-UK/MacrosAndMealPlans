@@ -11,7 +11,7 @@ use crate::domain::{
     ProductId, Provenance, Quantity, Revision, SectionOrder, StockLevel, StockSubject,
     StorageLocation, Unit, UserId, WeightDisplay,
 };
-use crate::ports::{Clock, FixedClock, MealPlanRepository};
+use crate::ports::{Clock, FixedClock};
 use crate::testing::{
     InMemoryFinishShopRepository, InMemoryHouseholdMemberRepository,
     InMemoryHouseholdSettingsRepository, InMemoryIngredientRepository, InMemoryMealPlanRepository,
@@ -72,10 +72,10 @@ fn harness() -> Harness {
         Arc::new(meal_plans.clone()),
         Arc::new(recipes),
         Arc::new(InMemoryPreparedBatchRepository::with_stock(stock.clone())),
-        Arc::new(members),
         Arc::new(settings.clone()),
         clock.clone(),
     );
+    drop(members);
     let shopping = ShoppingService::new(
         Arc::new(cadence),
         Arc::new(opportunities),
@@ -179,8 +179,7 @@ async fn plan_product(h: &Harness, product_id: ProductId, quantity: Quantity, on
     let now = OffsetDateTime::UNIX_EPOCH;
     let entry = MealPlanEntry {
         id: crate::domain::MealPlanEntryId::new(),
-        scope: crate::domain::MealPlanScope::Member,
-        member_id: Some(h.member_id),
+        occasion_id: crate::domain::MealOccasionId::new(),
         planned_on: on,
         planned_time: None,
         slot: MealSlot::Breakfast,
@@ -193,16 +192,19 @@ async fn plan_product(h: &Harness, product_id: ProductId, quantity: Quantity, on
             revision: Revision::INITIAL,
             display_order: uuid::Uuid::nil(),
         }],
+        label: None,
+        ad_hoc: None,
+        everyone: false,
         participants: Vec::new(),
         guest_groups: Vec::new(),
-        opted_out: Vec::new(),
+        cooking_servings: None,
         created_by: h.actor_id,
         updated_by: h.actor_id,
         revision: Revision::INITIAL,
         created_at: now,
         updated_at: now,
     };
-    h.meal_plans.insert(&entry).await.unwrap();
+    h.meal_plans.seed_entry(entry);
 }
 
 async fn plan_ingredient(
@@ -214,8 +216,7 @@ async fn plan_ingredient(
     let now = OffsetDateTime::UNIX_EPOCH;
     let entry = MealPlanEntry {
         id: crate::domain::MealPlanEntryId::new(),
-        scope: crate::domain::MealPlanScope::Member,
-        member_id: Some(h.member_id),
+        occasion_id: crate::domain::MealOccasionId::new(),
         planned_on: on,
         planned_time: None,
         slot: MealSlot::Breakfast,
@@ -228,16 +229,19 @@ async fn plan_ingredient(
             revision: Revision::INITIAL,
             display_order: uuid::Uuid::nil(),
         }],
+        label: None,
+        ad_hoc: None,
+        everyone: false,
         participants: Vec::new(),
         guest_groups: Vec::new(),
-        opted_out: Vec::new(),
+        cooking_servings: None,
         created_by: h.actor_id,
         updated_by: h.actor_id,
         revision: Revision::INITIAL,
         created_at: now,
         updated_at: now,
     };
-    h.meal_plans.insert(&entry).await.unwrap();
+    h.meal_plans.seed_entry(entry);
 }
 
 async fn weekly_saturdays(h: &Harness) {

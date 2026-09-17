@@ -85,11 +85,37 @@ pub fn merge_components(
     Ok(components)
 }
 
+pub fn validate_group_shape(
+    label: Option<&str>,
+    ad_hoc: Option<super::AdHocKind>,
+    components: &[NewMealPlanComponent],
+) -> crate::error::Result<()> {
+    let mut errors = ValidationErrors::new();
+    let named = label.is_some_and(|label| !label.trim().is_empty());
+    if let Some(label) = label
+        && label.chars().count() > MAX_LABEL_LEN
+    {
+        errors.push("label", "Keep the name under 120 characters");
+    }
+    if ad_hoc.is_some() && !components.is_empty() {
+        errors.push(
+            "components",
+            "Eating out, takeaway and fend for yourself have no food",
+        );
+    }
+    if ad_hoc.is_none() && components.is_empty() && !named {
+        errors.push(
+            "components",
+            "Add at least one item or give the meal a name",
+        );
+    }
+    errors.into_result()
+}
+
+pub const MAX_LABEL_LEN: usize = 120;
+
 pub fn validate_components(components: &[NewMealPlanComponent]) -> crate::error::Result<()> {
     let mut errors = ValidationErrors::new();
-    if components.is_empty() {
-        errors.push("components", "Add at least one item");
-    }
     for (index, component) in components.iter().enumerate() {
         if component.amount.value() <= rust_decimal::Decimal::ZERO {
             errors.push(

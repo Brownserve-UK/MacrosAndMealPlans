@@ -7,15 +7,15 @@ use super::{PageRequest, Paginated};
 use crate::domain::{
     AccessScope, CalorieCalculation, CalorieCalculationId, CatalogueOrigin, ConsumptionRecord,
     ConsumptionRecordId, DeductionTarget, DemandSubject, HouseholdMember, HouseholdMemberId,
-    HouseholdSettings, Ingredient, IngredientId, MealParticipant, MealPlanComponentId,
-    MealPlanComponentSnapshot, MealPlanEntry, MealPlanEntryId, MealTemplate, MealTemplateId,
-    MemberAccessGrant, MemberBodyProfile, NewStockEvent, NutritionTarget, NutritionTargetId,
-    OpportunityException, PreparedBatch, PreparedBatchId, PreparedMeal, PreparedMealId, Product,
-    ProductId, Purchase, PurchaseId, PurchaseState, Quantity, Recipe, RecipeId, RecipePhoto,
-    RecipeSummary, Revision, Role, ShoppingCadence, ShoppingListItem, ShoppingListItemId,
-    ShoppingOpportunityId, ShoppingTrip, ShoppingTripId, StockEffect, StockEffectSource,
-    StockEvent, StockItem, StockItemId, StockOutcome, User, UserId, WeightGoal, WeightGoalId,
-    WeightRecord, WeightRecordId,
+    HouseholdSettings, Ingredient, IngredientId, MealOccasion, MealOccasionId, MealParticipant,
+    MealPlanComponentId, MealPlanComponentSnapshot, MealPlanEntry, MealPlanEntryId, MealSlot,
+    MealTemplate, MealTemplateId, MemberAccessGrant, MemberBodyProfile, NewStockEvent,
+    NutritionTarget, NutritionTargetId, OpportunityException, PreparedBatch, PreparedBatchId,
+    PreparedMeal, PreparedMealId, Product, ProductId, Purchase, PurchaseId, PurchaseState,
+    Quantity, Recipe, RecipeId, RecipePhoto, RecipeSummary, Revision, Role, ShoppingCadence,
+    ShoppingListItem, ShoppingListItemId, ShoppingOpportunityId, ShoppingTrip, ShoppingTripId,
+    StockEffect, StockEffectSource, StockEvent, StockItem, StockItemId, StockOutcome, User, UserId,
+    WeightGoal, WeightGoalId, WeightRecord, WeightRecordId,
 };
 use crate::error::Result;
 
@@ -110,14 +110,6 @@ pub struct ConsumptionQuery {
     pub to: Option<Date>,
     pub page: PageRequest,
     pub sort: SortDirection,
-}
-
-#[derive(Debug, Clone)]
-pub struct MealPlanQuery {
-    pub member_id: HouseholdMemberId,
-    pub from: Date,
-    pub to: Date,
-    pub include_participating: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -373,17 +365,32 @@ pub trait ConsumptionRecordRepository: Send + Sync + 'static {
 
 #[async_trait]
 pub trait MealPlanRepository: Send + Sync + 'static {
+    async fn get_occasion(&self, id: MealOccasionId) -> Result<Option<MealOccasion>>;
+
+    async fn find_occasion(&self, planned_on: Date, slot: MealSlot)
+    -> Result<Option<MealOccasion>>;
+
+    async fn list_occasions(&self, from: Date, to: Date) -> Result<Vec<MealOccasion>>;
+
+    async fn list_occasions_through(&self, to: Date) -> Result<Vec<MealOccasion>>;
+
+    async fn insert_occasion(&self, occasion: &MealOccasion) -> Result<()>;
+
+    async fn update_occasion(
+        &self,
+        occasion: &MealOccasion,
+        expected: Revision,
+    ) -> Result<UpdateOutcome>;
+
+    async fn delete_occasion(
+        &self,
+        id: MealOccasionId,
+        expected: Revision,
+    ) -> Result<UpdateOutcome>;
+
     async fn get(&self, id: MealPlanEntryId) -> Result<Option<MealPlanEntry>>;
 
-    async fn list(&self, query: &MealPlanQuery) -> Result<Vec<MealPlanEntry>>;
-
     async fn list_all(&self, from: Date, to: Date) -> Result<Vec<MealPlanEntry>>;
-
-    async fn list_through(
-        &self,
-        member_id: HouseholdMemberId,
-        to: Date,
-    ) -> Result<Vec<MealPlanEntry>>;
 
     async fn list_all_through(&self, to: Date) -> Result<Vec<MealPlanEntry>>;
 

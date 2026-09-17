@@ -4,14 +4,15 @@ use std::sync::Arc;
 use time::{Date, Duration};
 
 use crate::domain::{
-    AssumptionRules, ConsumedAmount, ConsumptionRecord, HouseholdMemberId, MEAL_PLAN_ENTRY,
-    MealItemRef, MealPlanEntry, MealPlanEntryId, NewMealPlanComponent, RecipeVisibility, UserId,
+    AssumptionRules, ConsumedAmount, ConsumptionRecord, HouseholdMemberId, MEAL_OCCASION,
+    MEAL_PLAN_ENTRY, MealItemRef, MealOccasion, MealOccasionId, MealPlanEntry, MealPlanEntryId,
+    NewMealPlanComponent, RecipeVisibility, UserId, diners_for, materialise_participants,
 };
 use crate::error::{CoreError, Result, ValidationErrors};
 use crate::ports::{
     Clock, ConsumptionRecordRepository, HouseholdMemberRepository, HouseholdSettingsRepository,
-    IngredientRepository, MealPlanRepository, NutritionTargetRepository, PreparedBatchRepository,
-    PreparedMealRepository, ProductRepository, RecipeRepository,
+    IngredientRepository, MealPlanRepository, MemberQuery, NutritionTargetRepository, PageRequest,
+    PreparedBatchRepository, PreparedMealRepository, ProductRepository, RecipeRepository,
 };
 use crate::services::PreparationService;
 
@@ -21,8 +22,9 @@ mod planning;
 mod view;
 
 pub use view::{
-    MealItem, MealItemSource, MealParticipantView, MealPlanComponentView, MealPlanDay,
-    MealPlanEntryView, MealPlanWeek, MealSlotView, NeedsReview, NutritionSummary,
+    MealDiner, MealGroupView, MealItem, MealItemSource, MealOccasionView, MealParticipantView,
+    MealPlanComponentView, MealPlanDay, MealPlanEntryView, MealPlanWeek, MealSlotView, NeedsReview,
+    NutritionSummary, PlannerDay, PlannerMember, PlannerWeek,
 };
 
 const PRODUCT: &str = "product";
@@ -86,11 +88,64 @@ impl MealPlanService {
         self.present(entry, &records, None).await
     }
 
+    pub async fn get_occasion(&self, id: MealOccasionId) -> Result<MealOccasionView> {
+        let occasion = self.load_occasion(id).await?;
+        let rules = self.assumption_rules().await?;
+        self.present_occasion(&rules, occasion).await
+    }
+
     async fn get_entry(&self, id: MealPlanEntryId) -> Result<MealPlanEntry> {
-        self.plans
+        let stored = self
+            .plans
             .get(id)
             .await?
+            .ok_or_else(|| CoreError::not_found(MEAL_PLAN_ENTRY, id))?;
+        let occasion = self.load_occasion(stored.occasion_id).await?;
+        occasion
+            .groups
+            .into_iter()
+            .find(|group| group.id == id)
             .ok_or_else(|| CoreError::not_found(MEAL_PLAN_ENTRY, id))
+    }
+
+    async fn load_occasion(&self, id: MealOccasionId) -> Result<MealOccasion> {
+        let mut occasion = self
+            .plans
+            .get_occasion(id)
+            .await?
+            .ok_or_else(|| CoreError::not_found(MEAL_OCCASION, id))?;
+        let active = self.active_member_ids().await?;
+        self.materialise_occasion(&mut occasion, &active);
+        Ok(occasion)
+    }
+
+    fn materialise_occasion(&self, occasion: &mut MealOccasion, active: &[HouseholdMemberId]) {
+        let now = self.clock.now();
+        let diners: Vec<Vec<HouseholdMemberId>> = occasion
+            .groups
+            .iter()
+            .map(|group| diners_for(group, occasion, active))
+            .collect();
+        for (group, diners) in occasion.groups.iter_mut().zip(diners) {
+            materialise_participants(group, &diners, now);
+        }
+    }
+
+    async fn active_member_ids(&self) -> Result<Vec<HouseholdMemberId>> {
+        let page = self
+            .members
+            .list(&MemberQuery {
+                include_archived: false,
+                page: PageRequest::new(1, PageRequest::MAX_PER_PAGE),
+                ..Default::default()
+            })
+            .await?;
+        Ok(page
+            .items
+            .into_iter()
+            .filter(|member| !member.is_archived())
+            .map(|member| member.id)
+            .collect())
     }
 
     fn resolve_subject(
@@ -99,7 +154,6 @@ impl MealPlanService {
         requested: Option<HouseholdMemberId>,
     ) -> Result<HouseholdMemberId> {
         requested
-            .or(entry.member_id)
             .or_else(|| entry.participants.first().map(|p| p.member_id))
             .ok_or_else(|| {
                 CoreError::conflict("This meal has no participant to record an outcome against.")

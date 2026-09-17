@@ -8,7 +8,7 @@ pub use repository::{
     AccessGrantRepository, CalorieCalculationRepository, ConsumptionQuery,
     ConsumptionRecordRepository, FinishShopRepository, FinishedPurchase, FinishedShoppingTrip,
     HouseholdMemberRepository, HouseholdSettingsRepository, IngredientQuery, IngredientRepository,
-    IngredientSort, MealPlanComponentUpdate, MealPlanQuery, MealPlanRepository, MealTemplateQuery,
+    IngredientSort, MealPlanComponentUpdate, MealPlanRepository, MealTemplateQuery,
     MealTemplateRepository, MemberBodyProfileRepository, MemberQuery, NewStockFromPurchase,
     NutritionTargetRepository, PreparedBatchRepository, PreparedMealQuery, PreparedMealRepository,
     PreparedMealSort, ProductQuery, ProductRepository, PurchaseQuery, PurchaseRepository,

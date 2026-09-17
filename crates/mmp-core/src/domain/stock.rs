@@ -5,9 +5,9 @@ use rust_decimal::Decimal;
 use time::{Date, OffsetDateTime};
 
 use super::{
-    HouseholdMemberId, IngredientId, MealPlanEntryId, MealPlanScope, MealSlot, Patch,
-    PreparedBatchId, PreparedMealId, ProductId, Quantity, RecipeId, Revision, StockEffectId,
-    StockEventId, StockItemId, Unit, UserId,
+    HouseholdMemberId, IngredientId, MealPlanEntryId, MealSlot, Patch, PreparedBatchId,
+    PreparedMealId, ProductId, Quantity, RecipeId, Revision, StockEffectId, StockEventId,
+    StockItemId, Unit, UserId,
 };
 use crate::error::{Result, ValidationErrors};
 
@@ -481,7 +481,7 @@ pub struct DemandClaim {
     pub entry_id: MealPlanEntryId,
     pub planned_on: Date,
     pub slot: MealSlot,
-    pub scope: MealPlanScope,
+    pub group_name: String,
     pub recipe_name: Option<String>,
     pub assumed: bool,
 }

@@ -9,22 +9,23 @@ use time::Date;
 use crate::domain::{
     AccessScope, CalorieCalculation, CalorieCalculationId, ConsumptionRecord, ConsumptionRecordId,
     DeductionCandidates, DemandSubject, HouseholdMember, HouseholdMemberId, HouseholdSettings,
-    Ingredient, IngredientId, MealParticipant, MealPlanComponentId, MealPlanEntry, MealPlanEntryId,
-    MealTemplate, MealTemplateId, MealTimes, MemberAccessGrant, MemberBodyProfile,
-    MissingStockInterpretation, NewStockEvent, NutritionTarget, NutritionTargetId,
-    OpportunityException, PreparedBatch, PreparedBatchId, PreparedMeal, PreparedMealId, Product,
-    ProductId, Purchase, PurchaseId, PurchaseState, Quantity, Recipe, RecipeId, RecipePhoto,
-    RecipeSummary, RecipeVisibility, Revision, Role, SectionOrder, ShoppingCadence,
-    ShoppingListItem, ShoppingListItemId, ShoppingOpportunityId, ShoppingTrip, ShoppingTripId,
-    StockEffect, StockEffectSource, StockEvent, StockEventId, StockItem, StockItemId, StockOutcome,
-    StockSubject, Unit, User, UserId, WeightGoal, WeightGoalId, WeightRecord, WeightRecordId,
+    Ingredient, IngredientId, MealOccasion, MealOccasionId, MealParticipant, MealPlanComponentId,
+    MealPlanEntry, MealPlanEntryId, MealSlot, MealTemplate, MealTemplateId, MealTimes,
+    MemberAccessGrant, MemberBodyProfile, MissingStockInterpretation, NewStockEvent,
+    NutritionTarget, NutritionTargetId, OpportunityException, PreparedBatch, PreparedBatchId,
+    PreparedMeal, PreparedMealId, Product, ProductId, Purchase, PurchaseId, PurchaseState,
+    Quantity, Recipe, RecipeId, RecipePhoto, RecipeSummary, RecipeVisibility, Revision, Role,
+    SectionOrder, ShoppingCadence, ShoppingListItem, ShoppingListItemId, ShoppingOpportunityId,
+    ShoppingTrip, ShoppingTripId, StockEffect, StockEffectSource, StockEvent, StockEventId,
+    StockItem, StockItemId, StockOutcome, StockSubject, Unit, User, UserId, WeightGoal,
+    WeightGoalId, WeightRecord, WeightRecordId,
 };
 use crate::error::{CoreError, Result};
 use crate::ports::{
     AccessGrantRepository, CalorieCalculationRepository, ConsumptionQuery,
     ConsumptionRecordRepository, FinishShopRepository, FinishedPurchase, FinishedShoppingTrip,
     HouseholdMemberRepository, HouseholdSettingsRepository, IngredientQuery, IngredientRepository,
-    IngredientSort, MealPlanComponentUpdate, MealPlanQuery, MealPlanRepository, MealTemplateQuery,
+    IngredientSort, MealPlanComponentUpdate, MealPlanRepository, MealTemplateQuery,
     MealTemplateRepository, MemberBodyProfileRepository, MemberQuery, NewStockFromPurchase,
     NutritionTargetRepository, Paginated, PreparedMealQuery, PreparedMealRepository,
     PreparedMealSort, ProductQuery, ProductRepository, PurchaseQuery, PurchaseRepository,
@@ -1289,6 +1290,7 @@ impl crate::ports::PreparedBatchRepository for InMemoryPreparedBatchRepository {
 
 #[derive(Clone)]
 pub struct InMemoryMealPlanRepository {
+    occasions: Arc<Mutex<HashMap<MealOccasionId, MealOccasion>>>,
     rows: Arc<Mutex<HashMap<MealPlanEntryId, MealPlanEntry>>>,
     consumption: InMemoryConsumptionRecordRepository,
 }
@@ -1296,6 +1298,7 @@ pub struct InMemoryMealPlanRepository {
 impl InMemoryMealPlanRepository {
     pub fn new(consumption: InMemoryConsumptionRecordRepository) -> Self {
         Self {
+            occasions: Arc::new(Mutex::new(HashMap::new())),
             rows: Arc::new(Mutex::new(HashMap::new())),
             consumption,
         }
@@ -1303,6 +1306,74 @@ impl InMemoryMealPlanRepository {
 
     pub fn count(&self) -> usize {
         self.rows.lock().unwrap().len()
+    }
+
+    pub fn occasion_count(&self) -> usize {
+        self.occasions.lock().unwrap().len()
+    }
+
+    pub fn seed_entry(&self, entry: MealPlanEntry) {
+        let mut occasions = self.occasions.lock().unwrap();
+        let occasion_id = match occasions
+            .values()
+            .find(|occasion| occasion.planned_on == entry.planned_on && occasion.slot == entry.slot)
+            .map(|occasion| occasion.id)
+        {
+            Some(id) => id,
+            None => {
+                let shell = MealOccasion {
+                    id: entry.occasion_id,
+                    planned_on: entry.planned_on,
+                    slot: entry.slot,
+                    planned_time: entry.planned_time,
+                    note: None,
+                    groups: Vec::new(),
+                    absences: Vec::new(),
+                    created_by: entry.created_by,
+                    updated_by: entry.updated_by,
+                    revision: Revision::INITIAL,
+                    created_at: entry.created_at,
+                    updated_at: entry.updated_at,
+                };
+                occasions.insert(shell.id, shell);
+                entry.occasion_id
+            }
+        };
+        self.rows.lock().unwrap().insert(
+            entry.id,
+            MealPlanEntry {
+                occasion_id,
+                ..entry
+            },
+        );
+    }
+
+    fn assemble(
+        occasion: &MealOccasion,
+        rows: &HashMap<MealPlanEntryId, MealPlanEntry>,
+    ) -> MealOccasion {
+        let mut groups: Vec<MealPlanEntry> = rows
+            .values()
+            .filter(|entry| entry.occasion_id == occasion.id)
+            .cloned()
+            .collect();
+        groups.sort_by_key(|group| (group.created_at, group.id));
+        MealOccasion {
+            groups,
+            ..occasion.clone()
+        }
+    }
+
+    fn sorted_entries(entries: &mut [MealPlanEntry]) {
+        entries.sort_by_key(|entry| {
+            (
+                entry.planned_on,
+                entry.slot.order(),
+                entry.planned_time,
+                entry.created_at,
+                entry.id,
+            )
+        });
     }
 }
 
@@ -1314,38 +1385,158 @@ impl Default for InMemoryMealPlanRepository {
 
 #[async_trait]
 impl MealPlanRepository for InMemoryMealPlanRepository {
-    async fn get(&self, id: MealPlanEntryId) -> Result<Option<MealPlanEntry>> {
-        Ok(self.rows.lock().unwrap().get(&id).cloned())
+    async fn get_occasion(&self, id: MealOccasionId) -> Result<Option<MealOccasion>> {
+        let occasions = self.occasions.lock().unwrap();
+        let rows = self.rows.lock().unwrap();
+        Ok(occasions
+            .get(&id)
+            .map(|occasion| Self::assemble(occasion, &rows)))
     }
 
-    async fn list(&self, query: &MealPlanQuery) -> Result<Vec<MealPlanEntry>> {
-        let mut entries: Vec<_> = self
-            .rows
-            .lock()
-            .unwrap()
+    async fn find_occasion(
+        &self,
+        planned_on: Date,
+        slot: MealSlot,
+    ) -> Result<Option<MealOccasion>> {
+        let occasions = self.occasions.lock().unwrap();
+        let rows = self.rows.lock().unwrap();
+        Ok(occasions
             .values()
-            .filter(|entry| {
-                entry.member_id == Some(query.member_id)
-                    || (query.include_participating
-                        && (entry
-                            .participants
-                            .iter()
-                            .any(|participant| participant.member_id == query.member_id)
-                            || entry.has_opted_out(query.member_id)))
-            })
-            .filter(|entry| entry.planned_on >= query.from && entry.planned_on <= query.to)
-            .cloned()
+            .find(|occasion| occasion.planned_on == planned_on && occasion.slot == slot)
+            .map(|occasion| Self::assemble(occasion, &rows)))
+    }
+
+    async fn list_occasions(&self, from: Date, to: Date) -> Result<Vec<MealOccasion>> {
+        let occasions = self.occasions.lock().unwrap();
+        let rows = self.rows.lock().unwrap();
+        let mut result: Vec<MealOccasion> = occasions
+            .values()
+            .filter(|occasion| occasion.planned_on >= from && occasion.planned_on <= to)
+            .map(|occasion| Self::assemble(occasion, &rows))
             .collect();
-        entries.sort_by_key(|entry| {
-            (
-                entry.planned_on,
-                entry.slot.order(),
-                entry.planned_time,
-                entry.created_at,
-                entry.id,
-            )
+        result.sort_by_key(|occasion| (occasion.planned_on, occasion.slot.order()));
+        Ok(result)
+    }
+
+    async fn list_occasions_through(&self, to: Date) -> Result<Vec<MealOccasion>> {
+        let occasions = self.occasions.lock().unwrap();
+        let rows = self.rows.lock().unwrap();
+        let mut result: Vec<MealOccasion> = occasions
+            .values()
+            .filter(|occasion| occasion.planned_on <= to)
+            .map(|occasion| Self::assemble(occasion, &rows))
+            .collect();
+        result.sort_by_key(|occasion| (occasion.planned_on, occasion.slot.order()));
+        Ok(result)
+    }
+
+    async fn insert_occasion(&self, occasion: &MealOccasion) -> Result<()> {
+        let mut occasions = self.occasions.lock().unwrap();
+        if occasions.values().any(|existing| {
+            existing.planned_on == occasion.planned_on && existing.slot == occasion.slot
+        }) {
+            return Err(CoreError::conflict(
+                "That meal is already on the plan. Add to it instead.",
+            ));
+        }
+        let mut rows = self.rows.lock().unwrap();
+        for group in &occasion.groups {
+            rows.insert(
+                group.id,
+                MealPlanEntry {
+                    occasion_id: occasion.id,
+                    planned_on: occasion.planned_on,
+                    planned_time: occasion.planned_time,
+                    slot: occasion.slot,
+                    ..group.clone()
+                },
+            );
+        }
+        occasions.insert(
+            occasion.id,
+            MealOccasion {
+                groups: Vec::new(),
+                ..occasion.clone()
+            },
+        );
+        Ok(())
+    }
+
+    async fn update_occasion(
+        &self,
+        occasion: &MealOccasion,
+        expected: Revision,
+    ) -> Result<UpdateOutcome> {
+        let mut occasions = self.occasions.lock().unwrap();
+        match occasions.get(&occasion.id) {
+            None => return Ok(UpdateOutcome::NotFound),
+            Some(current) if current.revision != expected => {
+                return Ok(UpdateOutcome::RevisionMismatch {
+                    actual: current.revision,
+                });
+            }
+            Some(_) => {}
+        }
+        if occasions.values().any(|existing| {
+            existing.id != occasion.id
+                && existing.planned_on == occasion.planned_on
+                && existing.slot == occasion.slot
+        }) {
+            return Err(CoreError::conflict(
+                "That meal is already on the plan. Add to it instead.",
+            ));
+        }
+        let mut rows = self.rows.lock().unwrap();
+        rows.retain(|_, entry| {
+            entry.occasion_id != occasion.id
+                || occasion.groups.iter().any(|group| group.id == entry.id)
         });
-        Ok(entries)
+        for group in &occasion.groups {
+            rows.insert(
+                group.id,
+                MealPlanEntry {
+                    occasion_id: occasion.id,
+                    planned_on: occasion.planned_on,
+                    planned_time: occasion.planned_time,
+                    slot: occasion.slot,
+                    ..group.clone()
+                },
+            );
+        }
+        occasions.insert(
+            occasion.id,
+            MealOccasion {
+                groups: Vec::new(),
+                ..occasion.clone()
+            },
+        );
+        Ok(UpdateOutcome::Updated)
+    }
+
+    async fn delete_occasion(
+        &self,
+        id: MealOccasionId,
+        expected: Revision,
+    ) -> Result<UpdateOutcome> {
+        let mut occasions = self.occasions.lock().unwrap();
+        match occasions.get(&id) {
+            None => Ok(UpdateOutcome::NotFound),
+            Some(current) if current.revision != expected => Ok(UpdateOutcome::RevisionMismatch {
+                actual: current.revision,
+            }),
+            Some(_) => {
+                occasions.remove(&id);
+                self.rows
+                    .lock()
+                    .unwrap()
+                    .retain(|_, entry| entry.occasion_id != id);
+                Ok(UpdateOutcome::Updated)
+            }
+        }
+    }
+
+    async fn get(&self, id: MealPlanEntryId) -> Result<Option<MealPlanEntry>> {
+        Ok(self.rows.lock().unwrap().get(&id).cloned())
     }
 
     async fn list_all(&self, from: Date, to: Date) -> Result<Vec<MealPlanEntry>> {
@@ -1357,47 +1548,7 @@ impl MealPlanRepository for InMemoryMealPlanRepository {
             .filter(|entry| entry.planned_on >= from && entry.planned_on <= to)
             .cloned()
             .collect();
-        entries.sort_by_key(|entry| {
-            (
-                entry.planned_on,
-                entry.slot.order(),
-                entry.planned_time,
-                entry.created_at,
-                entry.id,
-            )
-        });
-        Ok(entries)
-    }
-
-    async fn list_through(
-        &self,
-        member_id: HouseholdMemberId,
-        to: Date,
-    ) -> Result<Vec<MealPlanEntry>> {
-        let mut entries: Vec<_> = self
-            .rows
-            .lock()
-            .unwrap()
-            .values()
-            .filter(|entry| {
-                entry.member_id == Some(member_id)
-                    || entry
-                        .participants
-                        .iter()
-                        .any(|participant| participant.member_id == member_id)
-            })
-            .filter(|entry| entry.planned_on <= to)
-            .cloned()
-            .collect();
-        entries.sort_by_key(|entry| {
-            (
-                entry.planned_on,
-                entry.slot.order(),
-                entry.planned_time,
-                entry.created_at,
-                entry.id,
-            )
-        });
+        Self::sorted_entries(&mut entries);
         Ok(entries)
     }
 
@@ -1410,20 +1561,27 @@ impl MealPlanRepository for InMemoryMealPlanRepository {
             .filter(|entry| entry.planned_on <= to)
             .cloned()
             .collect();
-        entries.sort_by_key(|entry| {
-            (
-                entry.planned_on,
-                entry.slot.order(),
-                entry.planned_time,
-                entry.created_at,
-                entry.id,
-            )
-        });
+        Self::sorted_entries(&mut entries);
         Ok(entries)
     }
 
     async fn insert(&self, entry: &MealPlanEntry) -> Result<()> {
-        self.rows.lock().unwrap().insert(entry.id, entry.clone());
+        let occasions = self.occasions.lock().unwrap();
+        let Some(occasion) = occasions.get(&entry.occasion_id) else {
+            return Err(CoreError::not_found(
+                crate::domain::MEAL_OCCASION,
+                entry.occasion_id,
+            ));
+        };
+        self.rows.lock().unwrap().insert(
+            entry.id,
+            MealPlanEntry {
+                planned_on: occasion.planned_on,
+                planned_time: occasion.planned_time,
+                slot: occasion.slot,
+                ..entry.clone()
+            },
+        );
         Ok(())
     }
 
@@ -2146,7 +2304,6 @@ impl InMemoryHouseholdSettingsRepository {
                 },
                 timezone: crate::ports::DEFAULT_TIMEZONE.to_owned(),
                 missing_stock_interpretation: MissingStockInterpretation::Unknown,
-                default_all_members_participate: false,
                 assume_eaten_when_time_passes: false,
                 section_order: SectionOrder::default(),
                 revision: Revision::INITIAL,
@@ -2158,10 +2315,6 @@ impl InMemoryHouseholdSettingsRepository {
 }
 
 impl InMemoryHouseholdSettingsRepository {
-    pub fn set_default_all_members_participate(&self, value: bool) {
-        self.row.lock().unwrap().default_all_members_participate = value;
-    }
-
     pub fn set_assume_eaten_when_time_passes(&self, value: bool) {
         self.row.lock().unwrap().assume_eaten_when_time_passes = value;
     }
