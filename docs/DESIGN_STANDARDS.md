@@ -69,7 +69,7 @@ Chip colour is assigned by kind and is consistent everywhere that kind appears.
 
 Each card, dialog or page gets one primary action, and it is the filled green button. Everything else on that surface is a text button.
 
-Destructive actions are text buttons. They are never filled and never red.
+Destructive actions are red text buttons. They are never filled.
 
 Three actions in one row is the practical maximum. Needing more means the surface is doing more than one job.
 
@@ -110,6 +110,7 @@ The palette carries meaning. Do not use it for variety.
 - **Green.** The app's voice, and the one primary action per surface.
 - **Amber.** The user's food or plan needs their attention: going off, running low, running out. Never for UI state, never for a destructive control.
 - **Brown.** Kitchen activity, such as cooking.
+- **Red.** Destructive actions, and nothing else.
 - **Grey.** Everything the user is not being asked to act on.
 
 Never introduce a colour, radius or font size that is not in the theme.
