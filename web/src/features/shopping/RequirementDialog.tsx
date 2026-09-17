@@ -22,6 +22,7 @@ import { formatDayLabel } from '../meal-plan/date';
 import { labelForSlot } from '../meal-plan/slots';
 import { formatQuantity } from '../stock/SpokenFor';
 import { boughtSentence, boughtSoFar } from './bought';
+import { mealsFor } from './forMeals';
 import { purchasesOf, requirementKey } from './requirementKey';
 import { sectionLabel } from './sections';
 
@@ -145,6 +146,7 @@ function Body({
   }
 
   const bought = boughtSoFar(requirement);
+  const meals = mealsFor(requirement);
 
   const dates = [
     requirement.required_by ? { label: 'Needed by', value: requirement.required_by } : null,
@@ -253,6 +255,27 @@ function Body({
                   Add another
                 </Button>
               ) : null}
+            </Box>
+          ) : null}
+
+          {meals.length > 0 ? (
+            <Box>
+              <Heading>For</Heading>
+              <Stack spacing={0.5}>
+                {meals.map((meal) => (
+                  <Stack key={`${meal.planned_on}-${meal.slot}-${meal.name}`} direction="row" spacing={1.5}>
+                    <Typography variant="body2" color="text.secondary" className="numeral" sx={{ minWidth: 88 }}>
+                      {formatDayLabel(meal.planned_on)}
+                    </Typography>
+                    <Typography variant="body2" noWrap>
+                      {meal.name}
+                    </Typography>
+                    <Typography variant="body2" color="text.secondary">
+                      {labelForSlot(meal.slot)}
+                    </Typography>
+                  </Stack>
+                ))}
+              </Stack>
             </Box>
           ) : null}
 

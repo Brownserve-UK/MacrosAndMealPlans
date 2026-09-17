@@ -9,6 +9,7 @@ import { IconTile, type Tone } from './IconTile';
 export function ThingRow({
   concept,
   tone,
+  leading,
   title,
   caption,
   chip,
@@ -16,6 +17,7 @@ export function ThingRow({
 }: {
   concept: Concept;
   tone?: Tone;
+  leading?: ReactNode;
   title: ReactNode;
   caption?: ReactNode;
   chip?: ReactNode;
@@ -23,7 +25,7 @@ export function ThingRow({
 }) {
   return (
     <Paper sx={{ display: 'flex', alignItems: 'center', gap: 2, px: 2.25, py: 1.75 }}>
-      <IconTile concept={concept} tone={tone} />
+      {leading ?? <IconTile concept={concept} tone={tone} />}
 
       <Stack sx={{ minWidth: 0, flexGrow: 1 }}>
         <Typography

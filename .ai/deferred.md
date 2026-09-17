@@ -37,8 +37,8 @@ specification or ADRs.
       managed-member and guest outcomes.
 - [ ] Redact another member's `MealParticipantView.nutrition` unless the caller has health-data
       access.
-- [ ] Add the live nutrition total to `MealEditorDialog`, including recipe nutrition and mixed-unit
-      conversion.
+- [ ] Add the live nutrition total to the planner meal card, including recipe nutrition and
+      mixed-unit conversion.
 - [x] Populate `get_planner_week` values for `can_opt_out`, `can_join`, and `owner_name` when the web
       client has a consumer for them.
 - [x] `MyPlannerPage` maps `preparation.shortage` into its meal shape but never renders it, so only
@@ -100,6 +100,9 @@ specification or ADRs.
 - [ ] Avoid recomputing the full stock and meal-plan snapshot on every `requirements()` call.
 - [ ] Reassess `SuggestionReason::UnknownAvailability` if manual items and prediction do not give it
       a useful path.
+- [x] Remove the "Change when you shop" / "Set up your shopping days" link from the foot of the
+      Shopping hub. Settings live under Administration everywhere else, and the same page is already
+      reachable from there.
 
 ## API and validation
 

@@ -8,8 +8,8 @@ export function RouteNotFound() {
       title="Page not found"
       description="That page does not exist or has moved."
       action={
-        <Button component={Link} to="/food-log" variant="contained">
-          Go to food log
+        <Button component={Link} to="/my-food" variant="contained">
+          Go to My food
         </Button>
       }
     />

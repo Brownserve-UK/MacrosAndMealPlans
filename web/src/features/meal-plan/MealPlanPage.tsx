@@ -1,9 +1,11 @@
 import AddIcon from '@mui/icons-material/AddOutlined';
 import CheckCircleIcon from '@mui/icons-material/CheckCircleOutlined';
+import EditIcon from '@mui/icons-material/EditOutlined';
 import HelpIcon from '@mui/icons-material/HelpOutlineOutlined';
 import ChevronRightIcon from '@mui/icons-material/ChevronRightOutlined';
 import RadioButtonUncheckedIcon from '@mui/icons-material/RadioButtonUncheckedOutlined';
 import RemoveCircleOutlineIcon from '@mui/icons-material/RemoveCircleOutlineOutlined';
+import StorefrontIcon from '@mui/icons-material/StorefrontOutlined';
 import WarningAmberIcon from '@mui/icons-material/WarningAmberOutlined';
 import Alert from '@mui/material/Alert';
 import Box from '@mui/material/Box';
@@ -11,20 +13,28 @@ import Button from '@mui/material/Button';
 import ButtonBase from '@mui/material/ButtonBase';
 import Chip from '@mui/material/Chip';
 import IconButton from '@mui/material/IconButton';
+import ListItemIcon from '@mui/material/ListItemIcon';
+import ListItemText from '@mui/material/ListItemText';
+import Menu from '@mui/material/Menu';
+import MenuItem from '@mui/material/MenuItem';
 import Paper from '@mui/material/Paper';
 import Stack from '@mui/material/Stack';
 import Typography from '@mui/material/Typography';
 import { useNavigate } from '@tanstack/react-router';
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { ApiError, type MealItem, type MealPlanEntry, type MealSlot } from '../../api/client';
 import { collectStockOutcomes, describeStockOutcome } from './stockShortfall';
 import {
+  useAddGroup,
   useMealPlanWeek,
   useMarkMealPlanComponentEaten,
   useMeta,
+  usePlannerWeek,
   useReopenMealPlanComponent,
+  useSetAttendance,
 } from '../../api/queries';
 import { useAuth } from '../../auth/AuthProvider';
+import { IconTile } from '../../components/IconTile';
 import { InitialsAvatar } from '../../components/InitialsAvatar';
 import { PageHeader } from '../../components/PageHeader';
 import { ErrorState, Loading } from '../../components/States';
@@ -36,6 +46,9 @@ import { addDays, combineDateTime, defaultDayFor, extractTime, parseIsoDate, sta
 import { EditFoodDialog } from './EditFoodDialog';
 import { formatAmount } from './format';
 import { DayWeekNutrition } from './NutritionSummary';
+import { groupDiners, occasionAt, occasionTitle } from './planner/plannerWeek';
+import type { GroupView, OccasionView, PlannerWeek } from './planner/types';
+import { leftoversRow, servingsInFridge, useFridgeDishes } from './planner/usePickerRows';
 import { SLOTS } from './slots';
 import { WeekNavigator } from './WeekNavigator';
 
@@ -55,6 +68,19 @@ type EditSelection = {
   entry: MealPlanEntry | null;
 };
 
+export type MyAttendance = {
+  occasion: OccasionView;
+  group: GroupView | null;
+  absent: boolean;
+  note: string | null;
+};
+
+type NotEating = {
+  anchor: HTMLElement;
+  occasion: OccasionView;
+  group: GroupView;
+};
+
 function longDayName(date: string) {
   return parseIsoDate(date).toLocaleDateString('en-GB', {
     weekday: 'long',
@@ -69,6 +95,26 @@ function displayedEnergy(items: MealItem[]): number | null {
     .map((item) => item.nutrition.energy_kcal)
     .filter((value): value is number => value != null);
   return values.length > 0 ? values.reduce((total, value) => total + value, 0) : null;
+}
+
+export function myAttendance(
+  week: PlannerWeek | undefined,
+  date: string,
+  slot: MealSlot,
+  memberId: string,
+): MyAttendance | null {
+  const occasion = occasionAt(week, date, slot);
+  if (!occasion || !week) return null;
+  const group =
+    occasion.groups.find((candidate) =>
+      groupDiners(occasion, candidate, week.members).some((diner) => diner.id === memberId),
+    ) ?? null;
+  return {
+    occasion,
+    group,
+    absent: occasion.absent_member_ids.includes(memberId),
+    note: group?.participants.find((participant) => participant.member_id === memberId)?.note ?? null,
+  };
 }
 
 function StatusIcon({ status }: { status: MealItem['status'] }) {
@@ -91,6 +137,8 @@ function MealItemRow({
   onToggle,
   onOpen,
   unplanned,
+  note,
+  from,
 }: {
   item: MealItem;
   divided: boolean;
@@ -98,11 +146,15 @@ function MealItemRow({
   onToggle: (() => void) | null;
   onOpen: (() => void) | null;
   unplanned: boolean;
+  note: string | null;
+  from: string | null;
 }) {
   const detail = [
+    note,
     item.consumed_at ? extractTime(item.consumed_at) : item.kind === 'logged' ? item.at : null,
     formatAmount(item.amount),
     item.planned_amount ? `Planned ${formatAmount(item.planned_amount)}` : null,
+    from ? `from ${from}` : null,
   ]
     .filter(Boolean)
     .join(' · ');
@@ -176,15 +228,16 @@ function MealItemRow({
           >
             {item.item_name}
           </Typography>
-          {item.status === 'assumed' ? (
-            <Chip size="small" variant="outlined" color="warning" label="Assumed" sx={{ width: 'fit-content' }} />
-          ) : null}
-          {unplanned ? (
-            <Chip size="small" variant="outlined" color="warning" label="Unplanned" sx={{ width: 'fit-content' }} />
-          ) : null}
-          {item.item_kind === 'recipe' ? (
-            <Chip size="small" variant="outlined" label="Recipe" sx={{ width: 'fit-content' }} />
-          ) : null}
+          <Stack direction="row" spacing={0.75} sx={{ flexWrap: 'wrap' }}>
+            {item.kind === 'planned' && item.status === 'planned' ? (
+              <Chip size="small" variant="outlined" label="Planned" />
+            ) : null}
+            {item.status === 'assumed' ? (
+              <Chip size="small" variant="outlined" color="warning" label="Assumed" />
+            ) : null}
+            {unplanned ? <Chip size="small" variant="outlined" color="warning" label="Unplanned" /> : null}
+            {item.item_kind === 'recipe' ? <Chip size="small" variant="outlined" label="Recipe" /> : null}
+          </Stack>
           {detail ? (
             <Typography variant="caption" color="text.secondary">
               {detail}
@@ -228,6 +281,51 @@ function MealItemRow({
   );
 }
 
+function OutIcon() {
+  return (
+    <Box
+      aria-hidden
+      sx={(theme) => ({
+        width: 34,
+        height: 34,
+        flexShrink: 0,
+        borderRadius: '10px',
+        display: 'grid',
+        placeItems: 'center',
+        backgroundColor: theme.palette.background.default,
+        color: theme.palette.text.secondary,
+      })}
+    >
+      <StorefrontIcon sx={{ fontSize: 17 }} />
+    </Box>
+  );
+}
+
+function ElsewhereRow({
+  occasion,
+  busy,
+  onChange,
+}: {
+  occasion: OccasionView;
+  busy: boolean;
+  onChange: () => void;
+}) {
+  return (
+    <Stack direction="row" spacing={2} sx={{ alignItems: 'center', px: 2, py: 1.5, opacity: 0.7 }}>
+      <OutIcon />
+      <Stack sx={{ minWidth: 0, flexGrow: 1 }}>
+        <Typography variant="subtitle1">Eating elsewhere</Typography>
+        <Typography variant="caption" color="text.secondary">
+          {`${occasionTitle(occasion)} · you're out on the planner`}
+        </Typography>
+      </Stack>
+      <Button size="small" color="inherit" onClick={onChange} disabled={busy}>
+        Change
+      </Button>
+    </Stack>
+  );
+}
+
 function SlotSection({
   slot,
   label,
@@ -238,7 +336,10 @@ function SlotSection({
   onOpen,
   onAdd,
   allowChanges,
-  onAteSomethingElse,
+  attendance,
+  busy,
+  onNotEating,
+  onChangeAttendance,
   entries,
 }: {
   slot: MealSlot;
@@ -250,22 +351,49 @@ function SlotSection({
   onOpen: (item: MealItem) => void;
   onAdd: (slot: MealSlot) => void;
   allowChanges: boolean;
-  onAteSomethingElse: (entryId: string) => void;
+  attendance: MyAttendance | null;
+  busy: boolean;
+  onNotEating: (anchor: HTMLElement, occasion: OccasionView, group: GroupView) => void;
+  onChangeAttendance: (occasion: OccasionView) => void;
   entries: MealPlanEntry[];
 }) {
   const slotEntry = entries.find((entry) => entry.slot === slot);
+  const time = attendance?.occasion.effective_time ?? slotEntry?.planned_time ?? null;
   const groups = new Map<string, MealItem[]>();
-  const firstPlannedGroup = new Map<string, string>();
+  const lastPlannedGroup = new Map<string, string>();
   for (const item of items) {
     const itemKey = item.kind === 'planned' ? item.component_id : item.record_id;
     const groupKey = `item:${itemKey}`;
     const group = groups.get(groupKey) ?? [];
     group.push(item);
     groups.set(groupKey, group);
-    if (item.kind === 'planned' && !firstPlannedGroup.has(item.entry_id)) {
-      firstPlannedGroup.set(item.entry_id, groupKey);
-    }
+    if (item.kind === 'planned') lastPlannedGroup.set(item.entry_id, groupKey);
   }
+  const absent = attendance?.absent ?? false;
+  const from = attendance ? occasionTitle(attendance.occasion) : null;
+  const addFood = (bordered: boolean) => (
+    <Button
+      fullWidth
+      startIcon={<AddIcon />}
+      onClick={() => onAdd(slot)}
+      sx={
+        bordered
+          ? { py: 1.25, borderTop: '1px solid', borderColor: 'divider', borderRadius: 0 }
+          : {
+              justifyContent: 'flex-start',
+              py: 1.5,
+              px: 2,
+              color: 'text.secondary',
+              border: '1px dashed',
+              borderColor: 'divider',
+              borderRadius: 2,
+            }
+      }
+    >
+      Add food
+    </Button>
+  );
+
   return (
     <Box component="section" aria-label={label}>
       <Stack direction="row" sx={{ alignItems: 'center', justifyContent: 'space-between', minHeight: 30, mb: 1 }}>
@@ -273,9 +401,9 @@ function SlotSection({
           <Typography variant="overline" color="text.secondary">
             {label}
           </Typography>
-          {slot !== 'snacks' && slotEntry?.planned_time ? (
+          {slot !== 'snacks' && time ? (
             <Typography variant="overline" color="text.secondary">
-              · {slotEntry.planned_time}
+              · {time}
             </Typography>
           ) : null}
         </Stack>
@@ -285,24 +413,9 @@ function SlotSection({
           </Typography>
         ) : null}
       </Stack>
-      {items.length === 0 ? (
+      {items.length === 0 && !absent ? (
         allowChanges ? (
-          <Button
-            fullWidth
-            startIcon={<AddIcon />}
-            onClick={() => onAdd(slot)}
-            sx={{
-              justifyContent: 'flex-start',
-              py: 1.5,
-              px: 2,
-              color: 'text.secondary',
-              border: '1px dashed',
-              borderColor: 'divider',
-              borderRadius: 2,
-            }}
-          >
-            Add food
-          </Button>
+          addFood(false)
         ) : (
           <Paper variant="outlined" sx={{ px: 2, py: 1.5 }}>
             <Typography variant="body2" color="text.secondary">Nothing planned</Typography>
@@ -310,68 +423,69 @@ function SlotSection({
         )
       ) : (
         <Paper sx={{ overflow: 'hidden' }}>
+          {absent && attendance ? (
+            <ElsewhereRow
+              occasion={attendance.occasion}
+              busy={busy}
+              onChange={() => onChangeAttendance(attendance.occasion)}
+            />
+          ) : null}
           {Array.from(groups.entries()).map(([groupKey, group], groupIndex) => {
-            const planned = group[0]?.kind === 'planned';
-            const entryId = planned && group[0]?.kind === 'planned' ? group[0].entry_id : null;
-            // 2026-09-01 - SB: Claude introduced a regression in the planner rework with snacks.
-            // by reintroducing the header between planned snacks. This isn't needed for Snacks
-            // as they are one long list of snacks differentiated per-row and by the "Unplanned" chip.
-            const showPlannedHeader =
-              slot !== 'snacks' && entryId !== null && firstPlannedGroup.get(entryId) === groupKey;
-            const hasAssumed = entryId !== null && items.some(
-              (item) => item.kind === 'planned' && item.entry_id === entryId && item.status === 'assumed',
-            );
+            const first = group[0];
+            const entryId = first?.kind === 'planned' ? first.entry_id : null;
+            const closesEntry = entryId !== null && lastPlannedGroup.get(entryId) === groupKey;
+            const mine = entryId !== null && attendance?.group?.id === entryId ? attendance : null;
+            const unresolved = group.some((item) => item.status === 'planned' || item.status === 'assumed');
             return (
               <Box
                 key={groupKey}
-                sx={{ borderTop: groupIndex > 0 ? '1px solid' : 'none', borderColor: 'divider' }}
+                sx={{ borderTop: groupIndex > 0 || absent ? '1px solid' : 'none', borderColor: 'divider' }}
               >
-                {showPlannedHeader ? (
-                  <Stack
-                    direction="row"
-                    spacing={1}
-                    sx={{ px: 2, py: 1, alignItems: 'center', justifyContent: 'space-between', backgroundColor: 'action.hover' }}
-                  >
-                    <Typography variant="caption" color="text.secondary">
-                      Planned meal
-                    </Typography>
-                    {allowChanges && hasAssumed && entryId ? (
-                      <Button size="small" onClick={() => onAteSomethingElse(entryId)}>
-                        Ate something else
-                      </Button>
-                    ) : null}
-                  </Stack>
-                ) : null}
                 {group.map((item, index) => {
                   const key = item.kind === 'planned' ? item.component_id : item.record_id;
                   return (
                     <MealItemRow
                       key={key}
                       item={item}
-                      divided={index > 0 || showPlannedHeader}
+                      divided={index > 0}
                       toggling={toggling === key}
                       onToggle={allowChanges && item.kind === 'planned' ? () => onToggle(item) : null}
                       onOpen={allowChanges ? () => onOpen(item) : null}
                       unplanned={item.kind === 'logged'}
+                      note={item.kind === 'planned' && mine ? mine.note : null}
+                      from={item.kind === 'planned' ? from : null}
                     />
                   );
                 })}
+                {closesEntry && mine?.group && unresolved ? (
+                  <Box sx={{ display: 'flex', justifyContent: 'flex-end', px: 1.5, pb: 1 }}>
+                    <Button
+                      size="small"
+                      color="inherit"
+                      disabled={busy}
+                      sx={{ color: 'text.secondary' }}
+                      onClick={(event) => onNotEating(event.currentTarget, mine.occasion, mine.group as GroupView)}
+                    >
+                      Not eating this
+                    </Button>
+                  </Box>
+                ) : null}
               </Box>
             );
           })}
-          {allowChanges ? (
-            <Button
-              fullWidth
-              startIcon={<AddIcon />}
-              onClick={() => onAdd(slot)}
-              sx={{ py: 1.25, borderTop: '1px solid', borderColor: 'divider', borderRadius: 0 }}
-            >
-              Add food
-            </Button>
-          ) : null}
+          {allowChanges ? addFood(true) : null}
         </Paper>
       )}
     </Box>
+  );
+}
+
+function MenuRow({ icon, primary, secondary }: { icon: ReactNode; primary: string; secondary: string | null }) {
+  return (
+    <>
+      <ListItemIcon sx={{ minWidth: 46 }}>{icon}</ListItemIcon>
+      <ListItemText primary={primary} secondary={secondary} />
+    </>
   );
 }
 
@@ -380,7 +494,9 @@ export function MealPlanPage({ weekStart, day }: { weekStart: string; day: strin
   const { principal } = useAuth();
   const memberId = principal?.member_id ?? '';
   const week = useMealPlanWeek(weekStart);
+  const plannerWeek = usePlannerWeek(weekStart);
   const meta = useMeta();
+  const dishes = useFridgeDishes();
   const directions = meta.data?.nutrient_directions ?? {};
   const [adding, setAdding] = useState<AddSelection | null>(null);
   const [editing, setEditing] = useState<EditSelection | null>(null);
@@ -388,8 +504,11 @@ export function MealPlanPage({ weekStart, day }: { weekStart: string; day: strin
   const [stockNotice, setStockNotice] = useState<string[]>([]);
   const [toggleError, setToggleError] = useState<string | null>(null);
   const [replacing, setReplacing] = useState<string | null>(null);
+  const [notEating, setNotEating] = useState<NotEating | null>(null);
   const markComponentEaten = useMarkMealPlanComponentEaten();
   const reopenComponent = useReopenMealPlanComponent();
+  const setAttendance = useSetAttendance();
+  const addGroup = useAddGroup();
 
   const timeZone = useHouseholdTimeZone();
   const currentMonday = startOfWeekIso(todayIso(timeZone));
@@ -397,14 +516,14 @@ export function MealPlanPage({ weekStart, day }: { weekStart: string; day: strin
 
   function goToWeek(start: string) {
     void navigate({
-      to: '/food-log/$weekStart/$day',
+      to: '/my-food/$weekStart/$day',
       params: { weekStart: start, day: defaultDayFor(start, timeZone) },
     });
   }
 
   function goToDay(date: string) {
     void navigate({
-      to: '/food-log/$weekStart/$day',
+      to: '/my-food/$weekStart/$day',
       params: { weekStart, day: date },
     });
   }
@@ -458,13 +577,58 @@ export function MealPlanPage({ weekStart, day }: { weekStart: string; day: strin
     }
   }
 
+  async function attend(action: () => Promise<unknown>, fallback: string) {
+    setNotEating(null);
+    try {
+      await action();
+      setToggleError(null);
+    } catch (caught) {
+      setToggleError(caught instanceof ApiError ? caught.message : fallback);
+    }
+  }
+
+  function eatElsewhere(occasion: OccasionView) {
+    void attend(
+      () => setAttendance.mutateAsync({ occasionId: occasion.id, memberId, attendance: { kind: 'elsewhere' } }),
+      'Could not mark you as out.',
+    );
+  }
+
+  function eatLeftovers(occasion: OccasionView) {
+    const dish = dishes[0];
+    if (!dish) return;
+    void attend(
+      () =>
+        addGroup.mutateAsync({
+          occasionId: occasion.id,
+          body: { ...leftoversRow(dish, 1).group, everyone: false, participants: [{ member_id: memberId }] },
+        }),
+      'Could not switch you to leftovers.',
+    );
+  }
+
+  function backIn(occasion: OccasionView) {
+    const group = occasion.groups.find((candidate) => candidate.everyone) ?? occasion.groups[0] ?? null;
+    void attend(
+      () =>
+        setAttendance.mutateAsync({
+          occasionId: occasion.id,
+          memberId,
+          attendance: group ? { kind: 'eating', group_id: group.id } : { kind: 'unaccounted' },
+        }),
+      'Could not put you back on the plan.',
+    );
+  }
+
   const future = activeDate > todayIso(timeZone);
   const allowChanges = !future;
+  const busy = setAttendance.isPending || addGroup.isPending;
+  const fridge = dishes[0] ?? null;
 
   return (
     <Box>
       <PageHeader
-        title="Food log"
+        title="My food"
         actions={
           selectedDay && allowChanges ? (
             <Button variant="contained" startIcon={<AddIcon />} onClick={() => addFood(DEFAULT_SLOT)}>
@@ -541,13 +705,63 @@ export function MealPlanPage({ weekStart, day }: { weekStart: string; day: strin
                 onOpen={(item) => openItem(slotView.slot, item)}
                 onAdd={addFood}
                 allowChanges={allowChanges}
-                onAteSomethingElse={setReplacing}
+                attendance={myAttendance(plannerWeek.data, selectedDay.date, slotView.slot, memberId)}
+                busy={busy}
+                onNotEating={(anchor, occasion, group) => setNotEating({ anchor, occasion, group })}
+                onChangeAttendance={backIn}
                 entries={selectedDay.entries}
               />
             ))}
           </Stack>
         </Box>
       ) : null}
+
+      <Menu
+        open={Boolean(notEating)}
+        anchorEl={notEating?.anchor ?? null}
+        onClose={() => setNotEating(null)}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+        transformOrigin={{ vertical: 'top', horizontal: 'right' }}
+      >
+        <MenuItem onClick={() => notEating && eatElsewhere(notEating.occasion)}>
+          <MenuRow icon={<OutIcon />} primary="Eating elsewhere" secondary="The planner shows you as out" />
+        </MenuItem>
+        <MenuItem disabled={!fridge} onClick={() => notEating && eatLeftovers(notEating.occasion)}>
+          <MenuRow
+            icon={<IconTile concept="dish" tone="secondary" />}
+            primary="Leftovers"
+            secondary={fridge ? `${fridge.name}, ${servingsInFridge(fridge)}` : 'Nothing in the fridge'}
+          />
+        </MenuItem>
+        <MenuItem
+          onClick={() => {
+            const group = notEating?.group ?? null;
+            setNotEating(null);
+            if (group) setReplacing(group.id);
+          }}
+        >
+          <MenuRow
+            icon={
+              <Box
+                aria-hidden
+                sx={(theme) => ({
+                  width: 34,
+                  height: 34,
+                  borderRadius: '10px',
+                  display: 'grid',
+                  placeItems: 'center',
+                  backgroundColor: theme.palette.background.default,
+                  color: theme.palette.text.secondary,
+                })}
+              >
+                <EditIcon sx={{ fontSize: 17 }} />
+              </Box>
+            }
+            primary="Something else"
+            secondary="Log what you had"
+          />
+        </MenuItem>
+      </Menu>
 
       {adding ? (
         <AddFoodDialog
@@ -565,7 +779,14 @@ export function MealPlanPage({ weekStart, day }: { weekStart: string; day: strin
           open
           onClose={() => setReplacing(null)}
           entryId={replacing}
-          revision={selectedDay.entries.find((entry) => entry.id === replacing)?.revision ?? 0}
+          revision={
+            plannerWeek.data?.days
+              .flatMap((candidate) => candidate.occasions)
+              .flatMap((occasion) => occasion?.groups ?? [])
+              .find((group) => group.id === replacing)?.revision ??
+            selectedDay.entries.find((entry) => entry.id === replacing)?.revision ??
+            0
+          }
           memberId={memberId}
           consumedOn={activeDate}
         />

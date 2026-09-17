@@ -12,6 +12,7 @@ import { ErrorState, Loading } from '../../components/States';
 import { useHouseholdTimeZone } from '../../hooks/useHouseholdTimeZone';
 import { formatFullDate, todayIso } from '../meal-plan/date';
 import { ChangeShopDialog } from './ChangeShopDialog';
+import { plannedCountOf } from './forMeals';
 import { GapCard } from './GapCard';
 import { TripCard } from './TripCard';
 
@@ -29,6 +30,10 @@ export function ShoppingPage() {
   const unpacked = waiting.data ?? [];
   const countFor = (date: string) =>
     data.counts.find((count) => count.date === date)?.items ?? 0;
+  const plannedFor = (date: string) => {
+    const count = data.counts.find((candidate) => candidate.date === date);
+    return count ? plannedCountOf(count) : null;
+  };
 
   const [next, ...rest] = data.opportunities;
   const later = rest.filter((opportunity) => countFor(opportunity.date) > 0);
@@ -95,6 +100,7 @@ export function ShoppingPage() {
           <TripCard
             opportunity={next}
             count={countFor(next.date)}
+            planned={plannedFor(next.date)}
             sections={sections}
             imminent
             onChange={() => setChanging(next)}
@@ -108,6 +114,7 @@ export function ShoppingPage() {
             key={opportunity.date}
             opportunity={opportunity}
             count={countFor(opportunity.date)}
+            planned={plannedFor(opportunity.date)}
             onChange={() => setChanging(opportunity)}
           />
         ))}
@@ -119,12 +126,6 @@ export function ShoppingPage() {
               : 'Tell us when you shop and we will work out what to buy for each trip.'}
           </Typography>
         ) : null}
-
-        <Box>
-          <Button component={Link} to="/administration/shopping" sx={{ ml: -1.5 }}>
-            {data.cadence_configured ? 'Change when you shop' : 'Set up your shopping days'}
-          </Button>
-        </Box>
       </Stack>
 
       <ChangeShopDialog

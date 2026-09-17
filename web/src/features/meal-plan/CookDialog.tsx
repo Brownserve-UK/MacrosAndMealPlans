@@ -11,7 +11,7 @@ import Stack from '@mui/material/Stack';
 import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
 import { useState } from 'react';
-import { ApiError, type PlannerMeal } from '../../api/client';
+import { ApiError, type Amount } from '../../api/client';
 import { useRecipe, useRecordPreparation } from '../../api/queries';
 import { FormDialog } from '../../components/FormDialog';
 import { ConceptIcon, type Concept } from '../../components/ConceptIcon';
@@ -25,7 +25,15 @@ const PLACES: { value: Place; label: string; hint: string; concept: Concept; loc
   { value: 'freezer', label: 'Freezer', hint: 'Keeps for months', concept: 'freezer', location: 'frozen' },
 ];
 
-export function scaledAmount(amount: PlannerMeal['foods'][number]['amount'], factor: number): string {
+export type PlannedCook = {
+  entryId: string;
+  componentId: string;
+  recipeId: string;
+  name: string;
+  planned: number;
+};
+
+export function scaledAmount(amount: Amount, factor: number): string {
   const value = Math.round(amount.value * factor * 10) / 10;
   if (amount.kind === 'measure') return `${value} ${displayUnit(amount.unit)}`;
   if (amount.kind === 'packs') return value === 1 ? '1 pack' : `${value} packs`;
@@ -60,49 +68,30 @@ function ComingOutOfStock({ recipeId, made }: { recipeId: string; made: number }
   );
 }
 
-export function CookDialog({
-  meal,
-  componentId,
-  onClose,
-}: {
-  meal: PlannerMeal;
-  componentId?: string;
-  onClose: () => void;
-}) {
+export function CookDialog({ cook: planned, onClose }: { cook: PlannedCook; onClose: () => void }) {
   const record = useRecordPreparation();
-  const food = meal.foods.find(
-    (candidate) =>
-      candidate.item_kind === 'recipe' &&
-      candidate.needs_cooking &&
-      !candidate.cooked &&
-      (!componentId || candidate.id === componentId),
-  );
-  const recipe = food?.item_kind === 'recipe' ? food : null;
-  const planned = Math.max(1, Math.round(recipe?.amount.value ?? 1));
+  const expected = Math.max(1, Math.round(planned.planned));
 
-  const [made, setMade] = useState(planned);
+  const [made, setMade] = useState(expected);
   const [place, setPlace] = useState<Place>('serving');
   const [useBy, setUseBy] = useState('');
   const [error, setError] = useState<string | null>(null);
 
-  if (!recipe) return null;
-
   const chosen = PLACES.find((candidate) => candidate.value === place)!;
 
   async function cook() {
-    if (!recipe) return;
     setError(null);
     try {
       await record.mutateAsync({
-        recipe_id: recipe.recipe_id,
+        recipe_id: planned.recipeId,
         servings_produced: made,
         placements: [{
           storage_location: chosen.location,
           servings: made,
           ...(useBy && place !== 'serving' ? { usability_deadline: { date: useBy } } : {}),
         }],
-        meal_plan_entry_id: meal.id,
-        meal_plan_component_id: recipe.id,
+        meal_plan_entry_id: planned.entryId,
+        meal_plan_component_id: planned.componentId,
       });
       onClose();
     } catch (caught) {
@@ -115,7 +104,7 @@ export function CookDialog({
       <DialogTitle sx={{ pb: 1 }}>
         <Typography component="span" variant="h2">Cooked it</Typography>
         <Typography component="span" variant="body2" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
-          {recipe.item_name}
+          {planned.name}
         </Typography>
       </DialogTitle>
       <DialogContent dividers>
@@ -126,7 +115,7 @@ export function CookDialog({
             <Box sx={{ flex: 1, minWidth: 0 }}>
               <Typography variant="subtitle2">How much did you make?</Typography>
               <Typography variant="caption" color="text.secondary" className="numeral" sx={{ display: 'block' }}>
-                {`You planned ${planned}`}
+                {`You planned ${expected}`}
               </Typography>
             </Box>
             <Stack direction="row" spacing={0.5} sx={{ alignItems: 'center' }}>
@@ -204,7 +193,7 @@ export function CookDialog({
             ) : null}
           </Box>
 
-          <ComingOutOfStock recipeId={recipe.recipe_id} made={made} />
+          <ComingOutOfStock recipeId={planned.recipeId} made={made} />
         </Stack>
       </DialogContent>
       <DialogActions>

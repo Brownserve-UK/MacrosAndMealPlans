@@ -54,13 +54,11 @@ function EditMealTimes({
   const [failure, setFailure] = useState<string | null>(null);
   const [conflict, setConflict] = useState<ApiError | null>(null);
   const [saved, setSaved] = useState(false);
-  const [defaultAll, setDefaultAll] = useState(settings.default_all_members_participate);
   const [assumeEaten, setAssumeEaten] = useState(settings.assume_eaten_when_time_passes);
 
   const dirty =
     SLOTS.some(({ key }) => times[key] !== settings[key]) ||
     timezone !== settings.timezone ||
-    defaultAll !== settings.default_all_members_participate ||
     assumeEaten !== settings.assume_eaten_when_time_passes;
 
   async function onSubmit(event: FormEvent) {
@@ -72,9 +70,6 @@ function EditMealTimes({
     }
     if (timezone !== settings.timezone) {
       body.timezone = timezone;
-    }
-    if (defaultAll !== settings.default_all_members_participate) {
-      body.default_all_members_participate = defaultAll;
     }
     if (assumeEaten !== settings.assume_eaten_when_time_passes) {
       body.assume_eaten_when_time_passes = assumeEaten;
@@ -133,17 +128,6 @@ function EditMealTimes({
               disabled={!canManage}
               helperText="An IANA timezone name, such as Europe/London."
               fullWidth
-            />
-
-            <FormControlLabel
-              control={
-                <Switch
-                  checked={defaultAll}
-                  onChange={(event) => setDefaultAll(event.target.checked)}
-                  disabled={!canManage}
-                />
-              }
-              label="Add everyone to new household meals"
             />
 
             <FormControlLabel

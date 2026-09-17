@@ -6,17 +6,20 @@ import Typography from '@mui/material/Typography';
 import { Link } from '@tanstack/react-router';
 import type { ShoppingOpportunity } from '../../api/client';
 import { formatDayLabel, formatFullDate } from '../meal-plan/date';
+import { plannedCaption } from './forMeals';
 import { sectionLabel } from './sections';
 
 export function TripCard({
   opportunity,
   count,
+  planned,
   sections,
   imminent,
   onChange,
 }: {
   opportunity: ShoppingOpportunity;
   count?: number;
+  planned?: number | null;
   sections?: string[];
   imminent?: boolean;
   onChange: () => void;
@@ -25,6 +28,7 @@ export function TripCard({
   const beneath = [
     imminent ? formatFullDate(opportunity.date) : null,
     count == null ? null : count === 1 ? '1 thing' : `${count} things`,
+    count == null || planned == null ? null : plannedCaption(planned),
     opportunity.state === 'moved' && opportunity.generated_for
       ? `Moved from ${formatDayLabel(opportunity.generated_for)}`
       : null,

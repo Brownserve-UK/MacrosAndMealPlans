@@ -85,6 +85,12 @@ describe('TripPage', () => {
     expect(screen.getByText(/Use by at least/)).toBeInTheDocument();
   });
 
+  it('says which meal an item is for after its shelf life', () => {
+    renderPage();
+
+    expect(screen.getByText(/Use by at least .* · Porridge and 1 more/)).toBeInTheDocument();
+  });
+
   it('shows an amount only where there is one worth showing', () => {
     renderPage();
 

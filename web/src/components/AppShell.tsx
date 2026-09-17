@@ -4,7 +4,7 @@ import DarkModeIcon from '@mui/icons-material/DarkModeOutlined';
 import CalendarMonthIcon from '@mui/icons-material/CalendarMonthOutlined';
 import FlagIcon from '@mui/icons-material/OutlinedFlagOutlined';
 import HelpIcon from '@mui/icons-material/HelpOutlineOutlined';
-import MenuBookIcon from '@mui/icons-material/MenuBookOutlined';
+import LocalDiningIcon from '@mui/icons-material/LocalDiningOutlined';
 import InventoryIcon from '@mui/icons-material/Inventory2Outlined';
 import KitchenIcon from '@mui/icons-material/KitchenOutlined';
 import OutdoorGrillIcon from '@mui/icons-material/OutdoorGrillOutlined';
@@ -39,7 +39,7 @@ import { useAuth } from '../auth/AuthProvider';
 export const DRAWER_WIDTH = 236;
 
 const NAV = [
-  { to: '/food-log', label: 'Food log', icon: <MenuBookIcon fontSize="small" />, needs: undefined },
+  { to: '/my-food', label: 'My food', icon: <LocalDiningIcon fontSize="small" />, needs: undefined },
   { to: '/planner', label: 'Planner', icon: <CalendarMonthIcon fontSize="small" />, needs: undefined },
   { to: '/kitchen', label: 'Kitchen', icon: <OutdoorGrillIcon fontSize="small" />, needs: undefined },
   { to: '/saved-meals', label: 'Saved meals', icon: <BookmarkIcon fontSize="small" />, needs: undefined },

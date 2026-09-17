@@ -1,4 +1,12 @@
-import type { ShoppingList } from '../../api/client';
+import type { ShoppingList, ShoppingRequirement } from '../../api/client';
+import type { MealNeed } from './forMeals';
+
+type Count = ShoppingList['counts'][number] & { planned_count: number };
+type Requirement = ShoppingRequirement & { for_meals?: MealNeed[] };
+type Fixture = Omit<ShoppingList, 'counts' | 'requirements'> & {
+  counts: Count[];
+  requirements: Requirement[];
+};
 
 const ml = (amount: number) => ({ amount, unit: 'ml' as const });
 const g = (amount: number) => ({ amount, unit: 'g' as const });
@@ -13,7 +21,7 @@ const claim = (planned_on: string, amount: number) => ({
   assumed: false,
 });
 
-export const shoppingList: ShoppingList = {
+const fixture: Fixture = {
   opportunities: [
     { date: '2026-09-05', state: 'normal', revision: 0 },
     { date: '2026-09-12', state: 'normal', revision: 0 },
@@ -36,9 +44,9 @@ export const shoppingList: ShoppingList = {
   manual: [],
   unplanned: [],
   counts: [
-    { date: '2026-09-05', items: 3 },
-    { date: '2026-09-12', items: 8 },
-    { date: '2026-09-19', items: 0 },
+    { date: '2026-09-05', items: 3, planned_count: 2 },
+    { date: '2026-09-12', items: 8, planned_count: 0 },
+    { date: '2026-09-19', items: 0, planned_count: 0 },
   ],
   requirements: [
     {
@@ -52,6 +60,10 @@ export const shoppingList: ShoppingList = {
       assignment: { kind: 'opportunity', date: '2026-09-05' },
       claims: [claim('2026-09-07', 300), claim('2026-09-09', 300)],
       gaps: [],
+      for_meals: [
+        { name: 'Porridge', planned_on: '2026-09-07', slot: 'breakfast' },
+        { name: 'Pancakes', planned_on: '2026-09-09', slot: 'breakfast' },
+      ],
     },
     {
       subject: { kind: 'ingredient', ingredient_id: 'flour' },
@@ -92,3 +104,5 @@ export const shoppingList: ShoppingList = {
     },
   ],
 };
+
+export const shoppingList: ShoppingList = fixture;

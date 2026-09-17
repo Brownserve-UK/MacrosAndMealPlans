@@ -4,11 +4,15 @@ import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError, type MealItem, type MealPlanEntry, type MealPlanWeek } from '../../api/client';
 import { MealPlanPage } from './MealPlanPage';
+import type { GroupView, OccasionView, PlannerWeek } from './planner/types';
 
 const mocks = vi.hoisted(() => ({
   markComponentEaten: vi.fn(),
   reopen: vi.fn(),
+  setAttendance: vi.fn(),
+  addGroup: vi.fn(),
   navigate: vi.fn(),
+  absent: false,
 }));
 
 const WEEK_START = '2026-08-24';
@@ -146,6 +150,57 @@ function week(): MealPlanWeek {
   };
 }
 
+const breakfastGroup: GroupView = {
+  id: 'entry-1',
+  name: 'Porridge',
+  label: 'Porridge',
+  ad_hoc: null,
+  components: [],
+  everyone: true,
+  participants: [{ member_id: 'member-1', name: 'Sam', note: 'extra honey' }],
+  guest_count: 0,
+  serves: 2,
+  cooking_servings: null,
+  effective_cooking_servings: 2,
+  cook_minutes: 10,
+  to_buy: 0,
+  leftover_servings_available: null,
+  revision: 7,
+};
+
+function plannerWeek(): PlannerWeek {
+  const days = Array.from({ length: 7 }, (_, index) => {
+    const date = new Date('2026-08-24T00:00:00');
+    date.setDate(date.getDate() + index);
+    const iso = date.toISOString().slice(0, 10);
+    const breakfast: OccasionView | null =
+      iso === DAY
+        ? {
+            id: 'occasion-1',
+            planned_on: DAY,
+            slot: 'breakfast',
+            planned_time: '08:30',
+            effective_time: '08:30',
+            note: null,
+            groups: [breakfastGroup],
+            absent_member_ids: mocks.absent ? ['member-1'] : [],
+            unaccounted_member_ids: [],
+            revision: 2,
+          }
+        : null;
+    return { date: iso, occasions: [breakfast, null, null, null] };
+  });
+  return {
+    week_start: WEEK_START,
+    usual_times: { breakfast: '08:00', lunch: '12:30', dinner: '18:00', snacks: null },
+    members: [
+      { id: 'member-1', name: 'Sam', initials: 'S' },
+      { id: 'member-2', name: 'Alex', initials: 'A' },
+    ],
+    days,
+  };
+}
+
 vi.mock('@tanstack/react-router', () => ({
   useNavigate: () => mocks.navigate,
 }));
@@ -156,10 +211,14 @@ vi.mock('../../auth/AuthProvider', () => ({
 
 vi.mock('../../api/queries', () => ({
   useMealPlanWeek: () => ({ data: week(), isLoading: false, isError: false, refetch: vi.fn() }),
+  usePlannerWeek: () => ({ data: plannerWeek(), isLoading: false, isError: false, refetch: vi.fn() }),
   useHouseholdSettings: () => ({ data: undefined }),
   useMeta: () => ({ data: { nutrient_directions: {} } }),
+  useStock: () => ({ data: { items: [] } }),
   useMarkMealPlanComponentEaten: () => ({ mutateAsync: mocks.markComponentEaten }),
   useReopenMealPlanComponent: () => ({ mutateAsync: mocks.reopen }),
+  useSetAttendance: () => ({ mutateAsync: mocks.setAttendance, isPending: false }),
+  useAddGroup: () => ({ mutateAsync: mocks.addGroup, isPending: false }),
 }));
 
 function renderPage() {
@@ -176,7 +235,54 @@ function renderPage() {
 describe('MealPlanPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.absent = false;
     breakfastItems = [plannedItem, siblingItem, eatenItem];
+  });
+
+  it('is called My food', () => {
+    renderPage();
+
+    expect(screen.getByRole('heading', { name: 'My food' })).toBeInTheDocument();
+  });
+
+  it('says where planned food came from and how you have it', () => {
+    renderPage();
+
+    expect(screen.getByText('extra honey · 80 g · from Tuesday breakfast')).toBeInTheDocument();
+  });
+
+  it('lets you say you are eating elsewhere', async () => {
+    mocks.setAttendance.mockResolvedValue({});
+    renderPage();
+    const user = userEvent.setup();
+
+    await user.click(screen.getByRole('button', { name: 'Not eating this' }));
+    await user.click(screen.getByText('Eating elsewhere'));
+
+    expect(mocks.setAttendance).toHaveBeenCalledWith({
+      occasionId: 'occasion-1',
+      memberId: 'member-1',
+      attendance: { kind: 'elsewhere' },
+    });
+  });
+
+  it('shows you as out and lets you change your mind', async () => {
+    mocks.absent = true;
+    mocks.setAttendance.mockResolvedValue({});
+    breakfastItems = [];
+    renderPage();
+    const user = userEvent.setup();
+
+    expect(screen.getByText('Eating elsewhere')).toBeInTheDocument();
+    expect(screen.getByText("Tuesday breakfast · you're out on the planner")).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Change' }));
+
+    expect(mocks.setAttendance).toHaveBeenCalledWith({
+      occasionId: 'occasion-1',
+      memberId: 'member-1',
+      attendance: { kind: 'eating', group_id: 'entry-1' },
+    });
   });
 
   it('renders planned and eaten food in the same slot', () => {
@@ -291,8 +397,9 @@ describe('MealPlanPage', () => {
     breakfastItems = [plannedItem, loggedItem];
     renderPage();
 
-    expect(screen.getByText('Planned meal')).toBeInTheDocument();
+    expect(screen.getByText('Planned')).toBeInTheDocument();
     expect(screen.getByText('Unplanned')).toBeInTheDocument();
+    expect(screen.queryByText('Planned meal')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Mark remaining eaten' })).not.toBeInTheDocument();
   });
 });
@@ -322,8 +429,14 @@ describe('MealPlanPage assumed meals', () => {
     );
   });
 
-  it('offers the different-food action only while something is assumed', async () => {
+  it('offers something else from the not eating this menu', async () => {
     renderPage();
-    expect(screen.getByRole('button', { name: 'Ate something else' })).toBeInTheDocument();
+    const user = userEvent.setup();
+
+    expect(screen.queryByRole('button', { name: 'Ate something else' })).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Not eating this' }));
+
+    expect(screen.getByText('Something else')).toBeInTheDocument();
+    expect(screen.getByText('Log what you had')).toBeInTheDocument();
   });
 });

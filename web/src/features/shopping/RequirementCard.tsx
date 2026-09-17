@@ -5,6 +5,7 @@ import Typography from '@mui/material/Typography';
 import type { ShoppingRequirement } from '../../api/client';
 import { formatDayLabel } from '../meal-plan/date';
 import { formatQuantity } from '../stock/SpokenFor';
+import { mealsCaption, mealsFor } from './forMeals';
 
 export function amountOf(requirement: ShoppingRequirement): string | null {
   if (!requirement.quantity) return null;
@@ -24,6 +25,10 @@ export function RequirementCard({
 }) {
   const amount = amountOf(requirement);
   const keepUntil = requirement.use_by_at_least;
+  const meals = mealsCaption(mealsFor(requirement));
+  const caption = [keepUntil ? `Use by at least ${formatDayLabel(keepUntil)}` : null, meals]
+    .filter((part) => part !== null)
+    .join(' · ');
 
   return (
     <Stack
@@ -70,9 +75,9 @@ export function RequirementCard({
           >
             {requirement.name}
           </Typography>
-          {keepUntil ? (
+          {caption ? (
             <Typography variant="caption" color="text.secondary" className="numeral">
-              Use by at least: {formatDayLabel(keepUntil)}
+              {caption}
             </Typography>
           ) : null}
         </Stack>

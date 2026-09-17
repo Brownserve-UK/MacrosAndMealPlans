@@ -55,6 +55,20 @@ describe('ShoppingPage', () => {
     expect(screen.getByText(/8 things/)).toBeInTheDocument();
   });
 
+  it('says how much of each trip is for planned meals', () => {
+    renderPage();
+
+    expect(screen.getByText(/3 things · 2 for planned meals/)).toBeInTheDocument();
+    expect(screen.getByText(/8 things · nothing planned yet/)).toBeInTheDocument();
+  });
+
+  it('does not offer settings from the hub', () => {
+    renderPage();
+
+    expect(screen.queryByText('Change when you shop')).not.toBeInTheDocument();
+    expect(screen.queryByText('Set up your shopping days')).not.toBeInTheDocument();
+  });
+
   it('leaves out a later trip with nothing to buy', () => {
     renderPage();
 

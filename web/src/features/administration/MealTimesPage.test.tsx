@@ -17,6 +17,7 @@ vi.mock('../../api/queries', () => ({
       lunch: '12:30',
       dinner: '18:00',
       timezone: 'Etc/UTC',
+      assume_eaten_when_time_passes: true,
       revision: 4,
       created_at: '2026-08-27T00:00:00Z',
       updated_at: '2026-08-27T00:00:00Z',
@@ -62,6 +63,12 @@ describe('MealTimesPage', () => {
       revision: 4,
       body: { lunch: '13:00' },
     });
+  });
+
+  it('no longer offers a switch for adding everyone to new meals', () => {
+    render(<MealTimesPage />);
+    expect(screen.queryByLabelText('Add everyone to new household meals')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Assume meals were eaten once their time passes')).toBeInTheDocument();
   });
 
   it('hides the save control without household:write', () => {
