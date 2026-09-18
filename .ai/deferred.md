@@ -49,6 +49,12 @@ specification or ADRs.
       cook that is not tied to a planned meal. `CookSomethingDialog` and `CookedSection.tsx` are left
       in place, unreferenced, as a starting point rather than deleted.
 - [ ] Align the `ensure_slot_free` error with the database-constraint fallback error.
+- [ ] Planner leftovers ignore storage location and the occasion's date, so the freezer reads as the
+      fridge and today's stock is offered for any future day. See
+      `.ai/plans/2026-09-18 - Planner leftovers findings.md`.
+- [ ] Decide and finish past-day locking on the planner. `ensure_not_past` covers create, move and
+      copy only; every edit path is unguarded, and the past-day nudges still nag. See
+      `.ai/plans/2026-09-18 - Planner past day editing findings.md`.
 - [x] Seed an opted-out member with a genuinely free personal slot for manual testing.
 - [x] Validate `meal_guest_allocation.allocated_unit` and `confirmed_unit` with `unit_code`, or
       document why those columns must remain unrestricted.
