@@ -49,7 +49,15 @@ export function NeedsMealSlab({
   onElsewhere: () => void;
 }) {
   return (
-    <Box sx={(theme) => ({ p: 1.75, borderRadius: '10px', backgroundColor: alpha(theme.palette.warning.main, 0.09) })}>
+    <Box
+      sx={(theme) => ({
+        p: 1.75,
+        borderRadius: '10px',
+        backgroundColor: theme.vars
+          ? `rgba(${theme.vars.palette.warning.mainChannel} / 0.09)`
+          : alpha(theme.palette.warning.main, 0.09),
+      })}
+    >
       <Typography sx={{ fontWeight: 600, color: 'warning.main', mb: 0.75 }}>{`${member.name} needs a meal`}</Typography>
       <Stack spacing={0.25}>
         {dishes.slice(0, 2).map((dish) => {

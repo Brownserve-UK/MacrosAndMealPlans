@@ -19,16 +19,16 @@ import { usePickerRows } from './usePickerRows';
 function TileFor({ concept }: { concept: PickerRow['concept'] }) {
   const boxed = (icon: ReactNode) => (
     <Box
-      sx={(theme) => ({
+      sx={{
         width: 34,
         height: 34,
         flexShrink: 0,
         borderRadius: '10px',
         display: 'grid',
         placeItems: 'center',
-        backgroundColor: theme.palette.background.default,
-        color: theme.palette.text.secondary,
-      })}
+        backgroundColor: 'background.default',
+        color: 'text.secondary',
+      }}
     >
       {icon}
     </Box>
@@ -67,7 +67,7 @@ export function PickerRowButton({
   return (
     <ButtonBase
       onClick={(event) => onPick(event.currentTarget)}
-      sx={(theme) => ({
+      sx={{
         display: 'grid',
         gridTemplateColumns: '34px 1fr auto',
         gap: 1.5,
@@ -77,9 +77,9 @@ export function PickerRowButton({
         py: 0.75,
         borderRadius: '10px',
         textAlign: 'left',
-        backgroundColor: selected ? theme.palette.action.hover : 'transparent',
-        '&:hover': { backgroundColor: theme.palette.action.hover },
-      })}
+        backgroundColor: selected ? 'action.hover' : 'transparent',
+        '&:hover': { backgroundColor: 'action.hover' },
+      }}
     >
       <TileFor concept={row.concept} />
       <Box sx={{ minWidth: 0 }}>
@@ -166,8 +166,10 @@ function PickerBody({
           mb: 0.5,
           borderRadius: '10px',
           border: '1px solid',
-          borderColor: theme.palette.primary.main,
-          boxShadow: `0 0 0 3px ${alpha(theme.palette.primary.main, 0.12)}`,
+          borderColor: 'primary.main',
+          boxShadow: theme.vars
+            ? `0 0 0 3px rgba(${theme.vars.palette.primary.mainChannel} / 0.12)`
+            : `0 0 0 3px ${alpha(theme.palette.primary.main, 0.12)}`,
           fontWeight: 500,
         })}
       />

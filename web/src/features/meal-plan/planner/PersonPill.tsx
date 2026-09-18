@@ -10,7 +10,7 @@ function Circle({ children, off }: { children: ReactNode; off?: boolean }) {
   return (
     <Box
       aria-hidden
-      sx={(theme) => ({
+      sx={{
         width: 24,
         height: 24,
         borderRadius: '50%',
@@ -19,10 +19,11 @@ function Circle({ children, off }: { children: ReactNode; off?: boolean }) {
         placeItems: 'center',
         fontSize: '0.68rem',
         fontWeight: 600,
-        backgroundColor: off ? 'transparent' : theme.palette.divider,
-        border: off ? `1px dashed ${theme.palette.text.disabled}` : 'none',
-        color: off ? theme.palette.text.disabled : theme.palette.text.secondary,
-      })}
+        backgroundColor: off ? 'transparent' : 'divider',
+        border: off ? '1px dashed' : 'none',
+        borderColor: off ? 'text.disabled' : undefined,
+        color: off ? 'text.disabled' : 'text.secondary',
+      }}
     >
       {children}
     </Box>

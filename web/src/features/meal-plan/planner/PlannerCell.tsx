@@ -100,17 +100,17 @@ export const PlannerCell = forwardRef<HTMLButtonElement, CellProps>(function Pla
       onDragOver={dragOver}
       onDrop={drop}
       onFocus={onFocus}
-      sx={(theme) => ({
+      sx={{
         position: 'relative',
         minHeight: 82,
         px: 1.75,
         py: 1.5,
         borderRadius: '10px',
         border: '1px solid',
-        borderColor: occasion ? theme.palette.divider : past ? 'transparent' : theme.palette.divider,
+        borderColor: occasion ? 'divider' : past ? 'transparent' : 'divider',
         borderStyle: occasion ? 'solid' : 'dashed',
-        backgroundColor: occasion && !past ? theme.palette.background.paper : 'transparent',
-        color: past ? theme.palette.text.disabled : theme.palette.text.primary,
+        backgroundColor: occasion && !past ? 'background.paper' : 'transparent',
+        color: past ? 'text.disabled' : 'text.primary',
         textAlign: 'left',
         font: 'inherit',
         cursor: 'pointer',
@@ -124,12 +124,12 @@ export const PlannerCell = forwardRef<HTMLButtonElement, CellProps>(function Pla
           : {
               '& .plus': { opacity: 0 },
               '&:hover, &:focus-visible': {
-                borderColor: theme.palette.text.disabled,
-                backgroundColor: theme.palette.action.hover,
+                borderColor: 'text.disabled',
+                backgroundColor: 'action.hover',
                 '& .plus': { opacity: 1 },
               },
             }),
-      })}
+      }}
     >
       {occasion && summary ? (
         <>
