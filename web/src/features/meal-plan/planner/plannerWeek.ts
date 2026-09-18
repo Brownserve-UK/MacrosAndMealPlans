@@ -6,6 +6,7 @@ import type {
   NewGroup,
   NewGroupComponent,
   OccasionView,
+  PickerRow,
   PlannerMember,
   PlannerWeek,
 } from './types';
@@ -115,6 +116,44 @@ export function groupDiners(occasion: OccasionView, group: GroupView, members: P
   return members.filter((member) => !elsewhere.has(member.id));
 }
 
+export type MemberStatus =
+  | { kind: 'eating'; group: GroupView }
+  | { kind: 'elsewhere' }
+  | { kind: 'unaccounted' };
+
+export function memberStatus(
+  occasion: OccasionView,
+  member: PlannerMember,
+  members: PlannerMember[],
+): MemberStatus {
+  for (const group of occasion.groups) {
+    if (groupDiners(occasion, group, members).some((diner) => diner.id === member.id)) {
+      return { kind: 'eating', group };
+    }
+  }
+  if (occasion.absent_member_ids.includes(member.id)) return { kind: 'elsewhere' };
+  return { kind: 'unaccounted' };
+}
+
+export function memberVariation(group: GroupView, memberId: string): string | null {
+  return group.participants.find((participant) => participant.member_id === memberId)?.note ?? null;
+}
+
+export function isLeftoversGroup(group: GroupView): boolean {
+  return groupKind(group) === 'dish' && group.leftover_servings_available != null;
+}
+
+export function dishLabel(group: GroupView): string {
+  return isLeftoversGroup(group) ? `Leftovers · ${group.name}` : group.name;
+}
+
+export function moveTargets(occasion: OccasionView, status: MemberStatus): GroupView[] {
+  if (status.kind === 'eating') return occasion.groups;
+  const everyoneGroup = occasion.groups.find((group) => group.everyone);
+  if (!everyoneGroup) return occasion.groups;
+  return [everyoneGroup, ...occasion.groups.filter((group) => group.id !== everyoneGroup.id)];
+}
+
 export function groupKind(group: GroupView): 'recipe' | 'product' | 'saved' | 'dish' | 'ad_hoc' | 'label' {
   if (group.ad_hoc) return 'ad_hoc';
   const first = group.components[0];
@@ -123,6 +162,25 @@ export function groupKind(group: GroupView): 'recipe' | 'product' | 'saved' | 'd
   if (first.item_kind === 'dish') return 'dish';
   if (first.item_kind === 'product') return 'product';
   return 'saved';
+}
+
+export function conceptFor(group: GroupView): PickerRow['concept'] {
+  switch (groupKind(group)) {
+    case 'recipe':
+      return 'recipe';
+    case 'dish':
+      return 'dish';
+    case 'product':
+      return 'food';
+    case 'saved':
+      return 'saved_meal';
+    case 'ad_hoc':
+      if (group.ad_hoc === 'eating_out') return 'out';
+      if (group.ad_hoc === 'takeaway') return 'takeaway';
+      return 'fend';
+    default:
+      return 'meal';
+  }
 }
 
 export function groupCaption(group: GroupView): string | null {

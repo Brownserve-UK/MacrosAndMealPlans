@@ -15,14 +15,16 @@ import { useState } from 'react';
 import { ApiError } from '../../../api/client';
 import { useAddGroup, useSetAttendance, useUpdateGroup, useUpdateOccasion } from '../../../api/queries';
 import { FormDialog } from '../../../components/FormDialog';
-import { AddMealPicker } from './AddMealPicker';
-import { GroupSlab } from './GroupSlab';
-import { NeedsMealSlab } from './NeedsMealSlab';
-import { groupDiners, occasionTitle, shortDate } from './plannerWeek';
+import { CookingList } from './CookingList';
+import { GuestMenu } from './GuestMenu';
+import { PersonPicker } from './PersonPicker';
+import { Roster } from './Roster';
+import { memberStatus, occasionTitle, shortDate } from './plannerWeek';
 import type { GroupView, NewGroup, OccasionView, PlannerMember, PlannerWeek } from './types';
-import { useFridgeDishes } from './usePickerRows';
 
-type MemberPicker = { anchor: HTMLElement; member: PlannerMember };
+type Picker =
+  | { anchor: HTMLElement; kind: 'member'; member: PlannerMember }
+  | { anchor: HTMLElement; kind: 'guests'; group: GroupView };
 
 export function OccasionCard({
   occasion,
@@ -45,19 +47,15 @@ export function OccasionCard({
   const updateGroup = useUpdateGroup();
   const addGroup = useAddGroup();
   const setAttendance = useSetAttendance();
-  const dishes = useFridgeDishes();
   const [error, setError] = useState<string | null>(null);
   const [editingTime, setEditingTime] = useState(false);
   const [timeText, setTimeText] = useState('');
   const [editingNote, setEditingNote] = useState(false);
   const [noteText, setNoteText] = useState('');
-  const [picker, setPicker] = useState<MemberPicker | null>(null);
+  const [picker, setPicker] = useState<Picker | null>(null);
 
   const busy = updateOccasion.isPending || updateGroup.isPending || addGroup.isPending || setAttendance.isPending;
   const members = week.members;
-  const unaccounted = occasion.unaccounted_member_ids
-    .map((id) => members.find((member) => member.id === id))
-    .filter((member): member is PlannerMember => member !== undefined);
   const toBuy = occasion.groups.reduce((total, group) => total + group.to_buy, 0);
   const hasFood = occasion.groups.some((group) => group.components.length > 0);
 
@@ -68,19 +66,6 @@ export function OccasionCard({
     } catch (caught) {
       setError(caught instanceof ApiError ? caught.message : fallback);
     }
-  }
-
-  function untick(group: GroupView, member: PlannerMember) {
-    const remaining = groupDiners(occasion, group, members)
-      .filter((diner) => diner.id !== member.id)
-      .map((diner) => ({
-        member_id: diner.id,
-        note: group.participants.find((participant) => participant.member_id === diner.id)?.note ?? null,
-      }));
-    void run(
-      () => updateGroup.mutateAsync({ id: group.id, body: { everyone: false, participants: remaining, revision: group.revision } }),
-      'Could not change who is eating.',
-    );
   }
 
   function retick(group: GroupView, member: PlannerMember) {
@@ -133,6 +118,19 @@ export function OccasionCard({
       () => setAttendance.mutateAsync({ occasionId: occasion.id, memberId: member.id, attendance: { kind: 'elsewhere' } }),
       'Could not mark them as out.',
     );
+  }
+
+  function moveGuests(from: GroupView, to: GroupView) {
+    if (from.id === to.id) return;
+    const moving = from.guest_count;
+    if (moving === 0) return;
+    void run(async () => {
+      await updateGroup.mutateAsync({ id: from.id, body: { guest_count: 0, revision: from.revision } });
+      await updateGroup.mutateAsync({
+        id: to.id,
+        body: { guest_count: to.guest_count + moving, revision: to.revision },
+      });
+    }, 'Could not move the guests.');
   }
 
   function commitTime() {
@@ -211,32 +209,15 @@ export function OccasionCard({
   const body = (
     <Stack spacing={1.5}>
       {error ? <Alert severity="error" onClose={() => setError(null)}>{error}</Alert> : null}
-      {occasion.groups.map((group, index) => (
-        <GroupSlab
-          key={group.id}
-          occasion={occasion}
-          group={group}
-          members={members}
-          showOff={index === 0 ? unaccounted : []}
-          busy={busy}
-          onUntick={(member) => untick(group, member)}
-          onRetick={(member) => retick(group, member)}
-          onVariation={(member, note) => variation(group, member, note)}
-          onGuests={(count) => guests(group, count)}
-          onCooking={(value) => cooking(group, value)}
-        />
-      ))}
-      {unaccounted.map((member) => (
-        <NeedsMealSlab
-          key={member.id}
-          member={member}
-          dishes={dishes}
-          onLeftovers={(row) => addFor(member, row.group)}
-          onSavedMeal={(anchor) => setPicker({ anchor, member })}
-          onSomethingElse={(anchor) => setPicker({ anchor, member })}
-          onElsewhere={() => elsewhere(member)}
-        />
-      ))}
+      <Roster
+        occasion={occasion}
+        week={week}
+        busy={busy}
+        onOpenMember={(member, anchor) => setPicker({ anchor, kind: 'member', member })}
+        onAddGuest={(group) => guests(group, group.guest_count + 1)}
+        onOpenGuests={(group, anchor) => setPicker({ anchor, kind: 'guests', group })}
+      />
+      <CookingList occasion={occasion} members={members} busy={busy} onCooking={(group, value) => cooking(group, value)} />
       <Stack>
         <Stack direction="row" sx={{ justifyContent: 'space-between', gap: 2, py: 1.5, borderTop: '1px solid', borderColor: 'divider' }}>
           <Typography variant="body2" color="text.secondary">
@@ -296,17 +277,52 @@ export function OccasionCard({
   );
 
   const pickerElement = (
-    <AddMealPicker
-      open={picker !== null}
-      anchorEl={picker?.anchor ?? null}
-      sheet={sheet}
-      initialQuery=""
-      placeholder={picker ? `Something for ${picker.member.name}` : 'What are you eating?'}
-      onPick={(group) => {
-        if (picker) addFor(picker.member, group);
-      }}
-      onClose={() => setPicker(null)}
-    />
+    <>
+      <PersonPicker
+        open={picker?.kind === 'member'}
+        anchorEl={picker?.anchor ?? null}
+        sheet={sheet}
+        member={picker?.kind === 'member' ? picker.member : null}
+        groups={occasion.groups}
+        status={picker?.kind === 'member' ? memberStatus(occasion, picker.member, members) : null}
+        onRetick={(group) => {
+          if (picker?.kind === 'member') retick(group, picker.member);
+          setPicker(null);
+        }}
+        onElsewhere={() => {
+          if (picker?.kind === 'member') elsewhere(picker.member);
+          setPicker(null);
+        }}
+        onAddFor={(group) => {
+          if (picker?.kind === 'member') addFor(picker.member, group);
+        }}
+        onVariation={(group, note) => {
+          if (picker?.kind === 'member') variation(group, picker.member, note);
+          setPicker(null);
+        }}
+        onClose={() => setPicker(null)}
+      />
+      <GuestMenu
+        open={picker?.kind === 'guests'}
+        anchorEl={picker?.anchor ?? null}
+        sheet={sheet}
+        group={picker?.kind === 'guests' ? picker.group : null}
+        groups={occasion.groups}
+        onMove={(target) => {
+          if (picker?.kind === 'guests') moveGuests(picker.group, target);
+          setPicker(null);
+        }}
+        onAdd={() => {
+          if (picker?.kind === 'guests') guests(picker.group, picker.group.guest_count + 1);
+          setPicker(null);
+        }}
+        onRemove={() => {
+          if (picker?.kind === 'guests') guests(picker.group, Math.max(0, picker.group.guest_count - 1));
+          setPicker(null);
+        }}
+        onClose={() => setPicker(null)}
+      />
+    </>
   );
 
   if (sheet) {

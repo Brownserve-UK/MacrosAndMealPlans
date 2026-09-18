@@ -55,6 +55,21 @@ specification or ADRs.
 - [ ] Decide and finish past-day locking on the planner. `ensure_not_past` covers create, move and
       copy only; every edit path is unguarded, and the past-day nudges still nag. See
       `.ai/plans/2026-09-18 - Planner past day editing findings.md`.
+- [ ] Build household favourites (member ratings and likes, starred recipes, frequently used),
+      weighted by how many criteria a recipe meets and by how much, and feed the meal picker's idle
+      state from it. Until it exists, "start from favourites" on an empty planner week does not do
+      that and should be renamed. See `.ai/plans/2026-09-18 - Household favourites.md`.
+- [ ] Setting a variation on a participant whose portion is already resolved returns a 500
+      (`replacing meal plan components failed`). Pre-existing, reachable from any past meal card.
+      Recorded with a reproduction in
+      `.ai/plans/2026-09-18 - Planner past day editing findings.md`.
+- [ ] `set_attendance`/`update_group` now delete a group that ends up with no participants and no
+      guests (`drop_orphaned_groups` in `planning.rs`), but deliberately never let that take the
+      occasion's last group with it, to avoid the card vanishing under the caller and a breaking
+      change to `set_attendance`/`update_group`'s return type (both stay `MealOccasionView`, not
+      `Option`). Only the explicit `delete_group`/`delete_occasion` actions can remove an occasion's
+      last group. Revisit if a genuinely empty occasion left behind by this guard turns out to be a
+      real problem (e.g. a single-member household marking themselves elsewhere).
 - [x] Seed an opted-out member with a genuinely free personal slot for manual testing.
 - [x] Validate `meal_guest_allocation.allocated_unit` and `confirmed_unit` with `unit_code`, or
       document why those columns must remain unrestricted.

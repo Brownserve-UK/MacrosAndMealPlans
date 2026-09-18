@@ -83,36 +83,38 @@ export function usePickerRows(query: string): { rows: PickerRow[]; loading: bool
 
   const rows = useMemo<PickerRow[]>(() => {
     const matches: PickerRow[] = [];
-    for (const recipe of recipes.data?.items ?? []) {
-      const minutes = (recipe.preparation_minutes ?? 0) + (recipe.cooking_minutes ?? 0);
-      matches.push({
-        id: `recipe:${recipe.id}`,
-        title: recipe.name,
-        caption: minutes > 0 ? `Recipe · ${formatMinutes(minutes)}` : 'Recipe',
-        concept: 'recipe',
-        section: 'matches',
-        group: { components: [{ recipe_id: recipe.id, amount: { kind: 'servings', value: recipe.servings } }] },
-      });
-    }
-    for (const template of savedMeals.data?.items ?? []) {
-      matches.push({
-        id: `saved:${template.id}`,
-        title: template.name,
-        caption: 'Saved meal',
-        concept: 'saved_meal',
-        section: 'matches',
-        group: { label: template.name, components: templateComponents(template) },
-      });
-    }
-    for (const product of products.data?.items ?? []) {
-      matches.push({
-        id: `product:${product.id}`,
-        title: product.name,
-        caption: product.brand ? `Product · ${product.brand}` : 'Product',
-        concept: 'food',
-        section: 'matches',
-        group: { components: [{ product_id: product.id, amount: { kind: 'packs', value: 1 } }] },
-      });
+    if (debounced !== '') {
+      for (const recipe of recipes.data?.items ?? []) {
+        const minutes = (recipe.preparation_minutes ?? 0) + (recipe.cooking_minutes ?? 0);
+        matches.push({
+          id: `recipe:${recipe.id}`,
+          title: recipe.name,
+          caption: minutes > 0 ? `Recipe · ${formatMinutes(minutes)}` : 'Recipe',
+          concept: 'recipe',
+          section: 'matches',
+          group: { components: [{ recipe_id: recipe.id, amount: { kind: 'servings', value: recipe.servings } }] },
+        });
+      }
+      for (const template of savedMeals.data?.items ?? []) {
+        matches.push({
+          id: `saved:${template.id}`,
+          title: template.name,
+          caption: 'Saved meal',
+          concept: 'saved_meal',
+          section: 'matches',
+          group: { label: template.name, components: templateComponents(template) },
+        });
+      }
+      for (const product of products.data?.items ?? []) {
+        matches.push({
+          id: `product:${product.id}`,
+          title: product.name,
+          caption: product.brand ? `Product · ${product.brand}` : 'Product',
+          concept: 'food',
+          section: 'matches',
+          group: { components: [{ product_id: product.id, amount: { kind: 'packs', value: 1 } }] },
+        });
+      }
     }
     const quick: PickerRow[] = [
       ...dishes.slice(0, 3).map((dish) => leftoversRow(dish)),
@@ -142,7 +144,7 @@ export function usePickerRows(query: string): { rows: PickerRow[]; loading: bool
       },
     ];
     return [...matches, ...quick];
-  }, [recipes.data, savedMeals.data, products.data, dishes]);
+  }, [debounced, recipes.data, savedMeals.data, products.data, dishes]);
 
   return { rows, loading: recipes.isLoading || savedMeals.isLoading || products.isLoading };
 }

@@ -2659,38 +2659,160 @@ async fn naming_someone_in_a_group_moves_them_there_and_clears_their_absence() {
     let mut expected = vec![h.member_id, taylor];
     expected.sort();
     assert_eq!(seated, expected);
-    assert!(diners_of(&moved_back, 1).is_empty());
+}
 
-    let leftovers = moved_back.groups[1].entry.entry.clone();
-    let component = moved_back.groups[0].entry.components[0].component.clone();
+#[tokio::test]
+async fn a_resolved_participant_cannot_be_removed_even_if_it_would_orphan_the_group() {
+    let h = harness();
+    let taylor = h.add_member("Taylor");
+    let lasagne = product("Lasagne", 150);
+    h.products.seed(lasagne.clone());
+    let leftovers = plan(
+        &h,
+        date!(2026 - 08 - 25),
+        Some(time!(18:30)),
+        MealSlot::Dinner,
+        only(&[taylor], vec![measured(lasagne.id, 300)]),
+    )
+    .await;
+    let component = leftovers.components[0].component.clone();
     h.service
         .mark_component_eaten_backdated(
-            curry.id,
+            leftovers.entry.id,
             component.id,
             component.revision,
             ConfirmMealPlanComponent {
                 consumed_on: date!(2026 - 08 - 25),
                 consumed_at: None,
-                amount: ConsumedAmount::Measure(Quantity::new(Decimal::new(450, 0), Unit::Gram)),
+                amount: ConsumedAmount::Measure(Quantity::new(Decimal::new(300, 0), Unit::Gram)),
                 actor_id: h.actor_id,
                 subject_member_id: Some(taylor),
             },
         )
         .await
         .unwrap();
+    let fresh = h.service.get(leftovers.entry.id).await.unwrap();
     let err = h
         .service
         .update_group(
-            leftovers.id,
-            leftovers.revision,
+            fresh.entry.id,
+            fresh.entry.revision,
             MealGroupPatch {
-                participants: Some(vec![NewMealParticipant::member(taylor)]),
+                participants: Some(vec![]),
                 ..Default::default()
             },
             h.actor_id,
         )
         .await;
     assert!(matches!(err, Err(CoreError::Conflict { .. })));
+}
+
+#[tokio::test]
+async fn releasing_the_last_member_removes_the_group() {
+    let h = harness();
+    let taylor = h.add_member("Taylor");
+    let food = product("Chilli", 150);
+    let lasagne = product("Lasagne", 150);
+    h.products.seed(food.clone());
+    h.products.seed(lasagne.clone());
+    let household = household_dinner(&h, food.id, 900).await;
+    let with_leftovers = h
+        .service
+        .add_group(
+            household.entry.occasion_id,
+            only(&[taylor], vec![measured(lasagne.id, 300)]),
+            h.actor_id,
+        )
+        .await
+        .unwrap();
+    assert_eq!(with_leftovers.groups.len(), 2);
+    assert_eq!(diners_of(&with_leftovers, 1), vec![taylor]);
+
+    let after = h
+        .service
+        .set_attendance(
+            household.entry.occasion_id,
+            taylor,
+            MealAttendance::Elsewhere,
+            h.actor_id,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        after.groups.len(),
+        1,
+        "the leftovers group had nobody left on it, so it should be gone rather than left empty"
+    );
+    assert_eq!(after.groups[0].entry.entry.id, household.entry.id);
+    assert_eq!(after.absent_member_ids, vec![taylor]);
+}
+
+#[tokio::test]
+async fn emptying_the_occasions_only_group_keeps_it_rather_than_vanishing_under_the_caller() {
+    let h = harness();
+    let food = product("Soup", 150);
+    h.products.seed(food.clone());
+    let dinner = household_dinner(&h, food.id, 300).await;
+
+    let after = h
+        .service
+        .set_attendance(
+            dinner.entry.occasion_id,
+            h.member_id,
+            MealAttendance::Elsewhere,
+            h.actor_id,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        after.groups.len(),
+        1,
+        "removing the occasion's only group is left to the explicit delete action, not this implicit cleanup"
+    );
+    assert!(diners_of(&after, 0).is_empty());
+    assert!(
+        h.service
+            .get_occasion(dinner.entry.occasion_id)
+            .await
+            .is_ok()
+    );
+}
+
+#[tokio::test]
+async fn a_guests_only_group_survives_when_its_last_member_leaves() {
+    let h = harness();
+    let taylor = h.add_member("Taylor");
+    let lasagne = product("Lasagne", 150);
+    h.products.seed(lasagne.clone());
+    let dinner = plan(
+        &h,
+        date!(2026 - 08 - 25),
+        Some(time!(18:30)),
+        MealSlot::Dinner,
+        NewMealGroup {
+            guest_groups: vec![NewMealGuestGroup::of(2)],
+            ..only(&[taylor], vec![measured(lasagne.id, 300)])
+        },
+    )
+    .await;
+    assert_eq!(dinner.entry.guest_count(), 2);
+
+    let after = h
+        .service
+        .set_attendance(
+            dinner.entry.occasion_id,
+            taylor,
+            MealAttendance::Elsewhere,
+            h.actor_id,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(after.groups.len(), 1);
+    assert_eq!(after.groups[0].guest_count, 2);
+    assert!(diners_of(&after, 0).is_empty());
 }
 
 #[tokio::test]

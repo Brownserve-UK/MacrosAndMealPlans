@@ -324,6 +324,7 @@ impl MealPlanService {
             .collect();
         occasion.groups[index] = group;
         claim_members(&mut occasion, id, &members)?;
+        drop_orphaned_groups(&mut occasion);
         self.commit_occasion(&mut occasion, occasion_revision, actor_id, now)
             .await?;
         self.get_occasion(occasion.id).await
@@ -378,12 +379,12 @@ impl MealPlanService {
         let now = self.clock.now();
         match attendance {
             MealAttendance::Eating { group_id, note } => {
+                release_member(&mut occasion, Some(group_id), member_id)?;
                 let index = occasion
                     .groups
                     .iter()
                     .position(|group| group.id == group_id)
                     .ok_or_else(|| CoreError::not_found(MEAL_PLAN_ENTRY, group_id))?;
-                release_member(&mut occasion, Some(group_id), member_id)?;
                 let group = &mut occasion.groups[index];
                 let requested = NewMealParticipant {
                     id: None,
@@ -618,7 +619,28 @@ fn release_member(
     occasion
         .absences
         .retain(|absence| absence.member_id != member_id);
+    drop_orphaned_groups(occasion);
     Ok(())
+}
+
+fn is_orphaned_group(group: &MealPlanEntry) -> bool {
+    !group.everyone && group.participants.is_empty() && group.guest_count() == 0
+}
+
+fn drop_orphaned_groups(occasion: &mut MealOccasion) {
+    let mut removable: Vec<MealPlanEntryId> = occasion
+        .groups
+        .iter()
+        .filter(|group| is_orphaned_group(group))
+        .map(|group| group.id)
+        .collect();
+    removable.truncate(occasion.groups.len().saturating_sub(1));
+    if removable.is_empty() {
+        return;
+    }
+    occasion
+        .groups
+        .retain(|group| !removable.contains(&group.id));
 }
 
 fn copy_of(
