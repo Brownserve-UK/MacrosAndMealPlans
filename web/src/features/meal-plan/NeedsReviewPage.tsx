@@ -29,7 +29,6 @@ import { Fact, FactBar, MealCard } from './MealCard';
 import { MealOutcomeDialog } from './MealOutcomeDialog';
 import { ProductPicker } from './ProductPicker';
 import { labelForSlot } from './slots';
-import { entryToPlannerMeal } from './plannerMeal';
 
 function whenLabel(entry: MealPlanEntry) {
   const day = parseIsoDate(entry.planned_on).toLocaleDateString('en-GB', {
@@ -401,10 +400,9 @@ function HouseholdReview({ entryId, onClose }: { entryId: string; onClose: () =>
   if (!entry) return null;
   return (
     <MealOutcomeDialog
-      meal={entryToPlannerMeal(entry, {
-        canRecord: true,
-        capabilities: { can_edit: false, can_delete: false, can_record_guests: true },
-      })}
+      meal={entry}
+      canRecord
+      canRecordGuests
       onClose={onClose}
     />
   );

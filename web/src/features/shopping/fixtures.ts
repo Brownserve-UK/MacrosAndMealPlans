@@ -15,9 +15,9 @@ const claim = (planned_on: string, amount: number) => ({
   subject: { kind: 'ingredient' as const, ingredient_id: 'milk' },
   quantity: ml(amount),
   entry_id: 'e1',
+  group_name: planned_on === '2026-09-07' ? 'Porridge' : 'Pancakes',
   planned_on,
   slot: 'breakfast' as const,
-  scope: 'member' as const,
   assumed: false,
 });
 

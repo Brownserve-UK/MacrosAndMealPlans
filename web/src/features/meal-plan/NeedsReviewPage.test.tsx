@@ -18,12 +18,11 @@ const nutrition = { nutrition: {}, unknown_count: 0, partial_count: 0 };
 function entry(id: string, plannedOn: string, name: string): MealPlanEntry {
   return {
     id,
-    scope: 'member',
-    member_id: 'member-1',
+    occasion_id: `${id}-occasion`,
+    everyone: false,
     subject_member_id: 'member-1',
     participants: [],
     guest_groups: [],
-    opted_out: [],
     planned_on: plannedOn,
     planned_time: '08:30',
     slot: 'breakfast',
@@ -52,7 +51,7 @@ function entry(id: string, plannedOn: string, name: string): MealPlanEntry {
     revision: 3,
     created_at: '2026-08-24T10:00:00Z',
     updated_at: '2026-08-24T10:00:00Z',
-  } as MealPlanEntry;
+  } satisfies MealPlanEntry;
 }
 
 vi.mock('../../auth/AuthProvider', () => ({
@@ -102,7 +101,7 @@ describe('NeedsReviewPage', () => {
           entry('entry-new', '2026-08-22', 'Newer Porridge'),
         ],
         household_meals: [],
-        ingredient_mappings: [],
+        food_mappings: [],
       },
       isLoading: false,
       isError: false,
@@ -150,7 +149,7 @@ describe('NeedsReviewPage', () => {
 
   it('says so when there is nothing to review', () => {
     mocks.needsReview.mockReturnValue({
-      data: { personal_meals: [], household_meals: [], ingredient_mappings: [] },
+      data: { personal_meals: [], household_meals: [], food_mappings: [] },
       isLoading: false,
       isError: false,
       refetch: vi.fn(),
@@ -174,7 +173,7 @@ describe('NeedsReviewPage shopping', () => {
     mocks.permissions = ['shopping:read'];
     mocks.shoppingList.mockReturnValue(undefined);
     mocks.needsReview.mockReturnValue({
-      data: { personal_meals: [], household_meals: [], ingredient_mappings: [] },
+      data: { personal_meals: [], household_meals: [], food_mappings: [] },
       isLoading: false,
       isError: false,
       refetch: vi.fn(),

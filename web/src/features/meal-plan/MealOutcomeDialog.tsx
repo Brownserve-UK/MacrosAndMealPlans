@@ -11,7 +11,7 @@ import Stack from '@mui/material/Stack';
 import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
 import { useState } from 'react';
-import { ApiError, type Amount, type PlannerMeal } from '../../api/client';
+import { ApiError, type Amount, type MealPlanEntry } from '../../api/client';
 import { usePlacePortions, useReviewMealOutcomes } from '../../api/queries';
 import type { components } from '../../api/schema';
 import { ConceptIcon } from '../../components/ConceptIcon';
@@ -35,12 +35,22 @@ function show(value: number) {
   return Number.isInteger(value) ? String(value) : value.toFixed(1);
 }
 
-function servingsMade(food: PlannerMeal['foods'][number]): number | null {
+function servingsMade(food: MealPlanEntry['components'][number]): number | null {
   if (food.amount.kind !== 'servings') return null;
   return food.cooked ? food.cooked.servings_produced : Number(food.amount.value);
 }
 
-export function MealOutcomeDialog({ meal, onClose }: { meal: PlannerMeal; onClose: () => void }) {
+export function MealOutcomeDialog({
+  meal,
+  canRecord,
+  canRecordGuests,
+  onClose,
+}: {
+  meal: MealPlanEntry;
+  canRecord: boolean;
+  canRecordGuests: boolean;
+  onClose: () => void;
+}) {
   const review = useReviewMealOutcomes();
   const place = usePlacePortions();
   const [claims, setClaims] = useState<Claims>({});
@@ -48,10 +58,10 @@ export function MealOutcomeDialog({ meal, onClose }: { meal: PlannerMeal; onClos
   const [error, setError] = useState<string | null>(null);
   const isSnack = meal.slot === 'snacks';
 
-  const pendingPeople = meal.people.filter(
-    (person) => person.can_record && person.allocations.some((allocation) => allocation.status === 'planned'),
+  const pendingPeople = meal.participants.filter(
+    (person) => canRecord && person.allocations.some((allocation) => allocation.status === 'planned'),
   );
-  const pendingGuests = meal.capabilities.can_record_guests
+  const pendingGuests = canRecordGuests
     ? meal.guest_groups.filter((group) => group.allocations.some((allocation) => allocation.status === 'planned'))
     : [];
 
@@ -78,7 +88,7 @@ export function MealOutcomeDialog({ meal, onClose }: { meal: PlannerMeal; onClos
 
   const defaults: Claims = {};
   const spare = new Map<string, number>();
-  for (const food of meal.foods) {
+  for (const food of meal.components) {
     const made = servingsMade(food);
     if (made != null) spare.set(food.id, made);
   }
@@ -110,7 +120,7 @@ export function MealOutcomeDialog({ meal, onClose }: { meal: PlannerMeal; onClos
   }
 
   function remainingFor(componentId: string) {
-    const food = meal.foods.find((candidate) => candidate.id === componentId);
+    const food = meal.components.find((candidate) => candidate.id === componentId);
     const made = food ? servingsMade(food) : null;
     if (made == null) return null;
     return Math.round((made - claimedTotal(componentId)) * 10) / 10;
@@ -161,7 +171,7 @@ export function MealOutcomeDialog({ meal, onClose }: { meal: PlannerMeal; onClos
         },
       });
 
-      for (const food of meal.foods) {
+      for (const food of meal.components) {
         const remaining = remainingFor(food.id);
         if (!food.cooked || remaining == null || remaining <= 0) continue;
         const chilled = Math.min(fridge[food.id] ?? 0, remaining);
@@ -183,7 +193,7 @@ export function MealOutcomeDialog({ meal, onClose }: { meal: PlannerMeal; onClos
     }
   }
 
-  const madeLine = meal.foods
+  const madeLine = meal.components
     .map((food) => {
       const made = servingsMade(food);
       return made == null ? null : `${show(made)} ${made === 1 ? 'serving' : 'servings'} of ${food.item_name} made`;
@@ -224,7 +234,7 @@ export function MealOutcomeDialog({ meal, onClose }: { meal: PlannerMeal; onClos
                 </Box>
                 <Stack direction="row" spacing={1.5} sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
                   {subject.allocations.map((allocation) => {
-                    const food = meal.foods.find((candidate) => candidate.id === allocation.component_id);
+                    const food = meal.components.find((candidate) => candidate.id === allocation.component_id);
                     const value = claimFor(subject.key, allocation);
                     if (allocation.allocated.kind !== 'servings') {
                       return (
@@ -277,7 +287,7 @@ export function MealOutcomeDialog({ meal, onClose }: { meal: PlannerMeal; onClos
             </Box>
           ))}
 
-          {meal.foods.map((food) => {
+          {meal.components.map((food) => {
             const remaining = remainingFor(food.id);
             if (remaining == null) return null;
             return (

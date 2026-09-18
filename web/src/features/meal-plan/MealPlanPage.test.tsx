@@ -94,12 +94,11 @@ const latteItem: MealItem = {
 
 const plannedEntry = {
   id: 'entry-1',
-  scope: 'member' as const,
-  member_id: 'member-1',
+  occasion_id: 'occasion-1',
+  everyone: true,
   subject_member_id: 'member-1',
   participants: [],
   guest_groups: [],
-  opted_out: [],
   planned_on: DAY,
   planned_time: '08:30',
   slot: 'breakfast',

@@ -204,8 +204,6 @@ export function EditFoodDialog({
         id: item.entry_id,
         revision: entry?.revision ?? item.revision,
         body: {
-          planned_on: draft.date,
-          slot: draft.slot,
           components,
         },
       });
@@ -369,28 +367,30 @@ export function EditFoodDialog({
               </>
             )}
 
-            <Stack direction="row" spacing={2}>
-              <TextField
-                type="date"
-                label="Day"
-                value={draft.date}
-                onChange={(e) => e.target.value && setDraft({ ...draft, date: e.target.value })}
-                slotProps={{ inputLabel: { shrink: true } }}
-                fullWidth
-              />
-              {linked ? (
+            {isLogged || linked ? (
+              <Stack direction="row" spacing={2}>
                 <TextField
-                  type="time"
-                  label="Time eaten"
-                  value={draft.time}
-                  onChange={(e) => setDraft({ ...draft, time: e.target.value })}
+                  type="date"
+                  label="Day"
+                  value={draft.date}
+                  onChange={(e) => e.target.value && setDraft({ ...draft, date: e.target.value })}
                   slotProps={{ inputLabel: { shrink: true } }}
                   fullWidth
                 />
-              ) : null}
-            </Stack>
+                {linked ? (
+                  <TextField
+                    type="time"
+                    label="Time eaten"
+                    value={draft.time}
+                    onChange={(e) => setDraft({ ...draft, time: e.target.value })}
+                    slotProps={{ inputLabel: { shrink: true } }}
+                    fullWidth
+                  />
+                ) : null}
+              </Stack>
+            ) : null}
 
-            {isLogged || !linked ? (
+            {isLogged ? (
               <TextField
                 select
                 label="Meal"

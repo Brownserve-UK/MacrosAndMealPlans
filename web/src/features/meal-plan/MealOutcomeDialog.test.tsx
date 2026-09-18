@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { PlannerMeal } from '../../api/client';
+import type { MealPlanEntry } from '../../api/client';
 import { MealOutcomeDialog } from './MealOutcomeDialog';
 
 const mocks = vi.hoisted(() => ({ review: vi.fn(), place: vi.fn() }));
@@ -12,53 +12,81 @@ vi.mock('../../api/queries', () => ({
   usePlacePortions: () => ({ mutateAsync: mocks.place, isPending: false }),
 }));
 
-function mealWith(overrides: Partial<PlannerMeal>): PlannerMeal {
+const nutrition = { nutrition: {}, unknown_count: 0, partial_count: 0 };
+
+const productComponent: MealPlanEntry['components'][number] = {
+  id: 'c1',
+  item_kind: 'product',
+  product_id: 'p1',
+  item_name: 'Chilli',
+  amount: { kind: 'measure', value: 600, unit: 'g' },
+  nutrition: {},
+  quality: 'known',
+  preparation: { prepared: { kind: 'measure', value: '600', unit: 'g' }, shortage: false },
+  status: 'planned',
+  subject_status: 'planned',
+  position: 0,
+  revision: 1,
+  needs_cooking: false,
+};
+
+function mealWith(overrides: Partial<MealPlanEntry>): MealPlanEntry {
   return {
     id: 'meal-1',
-    scope: 'household',
+    occasion_id: 'occasion-1',
+    everyone: true,
     planned_on: '2026-08-25',
     planned_time: '18:30',
     slot: 'dinner',
     status: 'planned',
-    foods: [{ id: 'c1', item_kind: 'product', product_id: 'p1', item_name: 'Chilli', amount: { kind: 'measure', value: 600, unit: 'g' }, shortage: false }],
-    people: [
-      { member_id: 'm1', display_name: 'Alex', status: 'planned', can_record: true, allocations: [{ component_id: 'c1', allocated: { kind: 'measure', value: '300', unit: 'g' }, status: 'planned' }] },
-      { member_id: 'm2', display_name: 'Morgan', status: 'eaten', can_record: true, allocations: [{ component_id: 'c1', allocated: { kind: 'measure', value: '300', unit: 'g' }, status: 'eaten' }] },
+    components: [productComponent],
+    participants: [
+      { member_id: 'm1', display_name: 'Alex', status: 'planned', nutrition, allocations: [{ component_id: 'c1', allocated: { kind: 'measure', value: '300', unit: 'g' }, status: 'planned' }] },
+      { member_id: 'm2', display_name: 'Morgan', status: 'eaten', nutrition, allocations: [{ component_id: 'c1', allocated: { kind: 'measure', value: '300', unit: 'g' }, status: 'eaten' }] },
     ],
     guest_groups: [],
-    opted_out: [],
-    can_opt_out: false,
-    can_join: false,
-    capabilities: { can_edit: true, can_delete: true, can_record_guests: true },
+    planned: nutrition,
+    needs_attention: false,
+    created_by: 'user-1',
+    updated_by: 'user-1',
+    created_at: '2026-08-24T10:00:00Z',
+    updated_at: '2026-08-24T10:00:00Z',
     revision: 4,
     ...overrides,
-  } as PlannerMeal;
+  };
 }
 
-function cookedMeal(servingsProduced: number): PlannerMeal {
+function cookedMeal(servingsProduced: number): MealPlanEntry {
   return mealWith({
-    foods: [{
+    components: [{
       id: 'c1',
       item_kind: 'recipe',
       recipe_id: 'r1',
       item_name: 'Curry',
       amount: { kind: 'servings', value: 4 },
-      cooked: { prepared_batch_id: 'b1', prepared_at: '2026-08-25T17:00:00Z', servings_produced: servingsProduced },
-      shortage: false,
+      nutrition: {},
+      quality: 'known',
+      preparation: { prepared: { kind: 'servings', value: '4' }, shortage: false },
+      status: 'planned',
+      subject_status: 'planned',
+      position: 0,
+      revision: 1,
+      needs_cooking: true,
+      cooked: { prepared_batch_id: 'b1', prepared_at: '2026-08-25T17:00:00Z', servings_produced: servingsProduced, revision: 2 },
     }],
-    people: [
-      { member_id: 'm1', display_name: 'Alex', status: 'planned', can_record: true, allocations: [{ component_id: 'c1', allocated: { kind: 'servings', value: '1' }, status: 'planned' }] },
-      { member_id: 'm2', display_name: 'Morgan', status: 'planned', can_record: true, allocations: [{ component_id: 'c1', allocated: { kind: 'servings', value: '1' }, status: 'planned' }] },
+    participants: [
+      { member_id: 'm1', display_name: 'Alex', status: 'planned', nutrition, allocations: [{ component_id: 'c1', allocated: { kind: 'servings', value: '1' }, status: 'planned' }] },
+      { member_id: 'm2', display_name: 'Morgan', status: 'planned', nutrition, allocations: [{ component_id: 'c1', allocated: { kind: 'servings', value: '1' }, status: 'planned' }] },
     ],
-  } as Partial<PlannerMeal>);
+  });
 }
 
-function renderDialog(meal: PlannerMeal) {
+function renderDialog(meal: MealPlanEntry) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   const onClose = vi.fn();
   render(
     <QueryClientProvider client={qc}>
-      <MealOutcomeDialog meal={meal} onClose={onClose} />
+      <MealOutcomeDialog meal={meal} canRecord canRecordGuests onClose={onClose} />
     </QueryClientProvider>,
   );
   return onClose;
@@ -133,6 +161,7 @@ describe('MealOutcomeDialog', () => {
 
     expect(mocks.place).toHaveBeenCalledWith({
       id: 'b1',
+      revision: 2,
       body: { placements: [{ storage_location: 'frozen', servings: 2 }] },
     });
   });
@@ -149,6 +178,7 @@ describe('MealOutcomeDialog', () => {
 
     expect(mocks.place).toHaveBeenCalledWith({
       id: 'b1',
+      revision: 2,
       body: {
         placements: [
           { storage_location: 'chilled', servings: 1 },
@@ -169,8 +199,8 @@ describe('MealOutcomeDialog', () => {
 
   it('shows nothing to record once everyone is resolved', () => {
     renderDialog(mealWith({
-      people: [
-        { member_id: 'm1', display_name: 'Alex', status: 'eaten', can_record: true, allocations: [{ component_id: 'c1', allocated: { kind: 'measure', value: '300', unit: 'g' }, status: 'eaten' }] },
+      participants: [
+        { member_id: 'm1', display_name: 'Alex', status: 'eaten', nutrition, allocations: [{ component_id: 'c1', allocated: { kind: 'measure', value: '300', unit: 'g' }, status: 'eaten' }] },
       ],
     }));
     expect(screen.getByText(/already been recorded/i)).toBeInTheDocument();

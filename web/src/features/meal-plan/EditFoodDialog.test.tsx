@@ -67,6 +67,18 @@ const loggedItem: MealItem = {
   revision: 1,
 };
 
+const editablePlannedItem: MealItem = {
+  ...plannedItem,
+  status: 'partially_resolved',
+};
+
+const eatenPlannedItem: MealItem = {
+  ...plannedItem,
+  status: 'eaten',
+  linked_record_id: 'record-4',
+  record_revision: 2,
+};
+
 function renderDialog(item: MealItem) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -112,6 +124,10 @@ describe('EditFoodDialog', () => {
     const onClose = renderDialog(loggedItem);
     const user = userEvent.setup();
 
+    expect(screen.getByLabelText('Day')).toBeInTheDocument();
+    expect(screen.getByLabelText('Time eaten')).toBeInTheDocument();
+    expect(screen.getByLabelText('Meal')).toBeInTheDocument();
+
     const amount = screen.getByRole('textbox', { name: 'Amount' });
     await user.clear(amount);
     await user.type(amount, '300');
@@ -125,6 +141,38 @@ describe('EditFoodDialog', () => {
       }),
     );
     expect(onClose).toHaveBeenCalled();
+  });
+
+  it('still records when a planned meal was eaten', async () => {
+    mocks.updateConsumption.mockResolvedValue({});
+    renderDialog(eatenPlannedItem);
+
+    expect(screen.getByLabelText('Day')).toBeInTheDocument();
+    expect(screen.getByLabelText('Time eaten')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Meal')).not.toBeInTheDocument();
+  });
+
+  it('keeps the occasion fields out of a planned item edit', async () => {
+    mocks.updateEntry.mockResolvedValue({});
+    renderDialog(editablePlannedItem);
+    const user = userEvent.setup();
+
+    expect(screen.queryByLabelText('Day')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Time eaten')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Meal')).not.toBeInTheDocument();
+
+    const amount = screen.getByRole('textbox', { name: 'Amount' });
+    await user.clear(amount);
+    await user.type(amount, '300');
+    await user.click(screen.getByRole('button', { name: 'Save changes' }));
+
+    expect(mocks.updateEntry).toHaveBeenCalledWith({
+      id: 'entry-1',
+      revision: 3,
+      body: {
+        components: [{ product_id: 'product-2', amount: { kind: 'measure', value: 300, unit: 'ml' } }],
+      },
+    });
   });
 
   it('removes directly logged food', async () => {

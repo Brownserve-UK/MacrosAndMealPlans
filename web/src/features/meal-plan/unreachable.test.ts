@@ -7,9 +7,9 @@ function claim(entryId: string) {
     subject: { kind: 'ingredient' as const, ingredient_id: 'i1' },
     quantity: { amount: 1, unit: 'g' as const },
     entry_id: entryId,
+    group_name: 'Sausage casserole',
     planned_on: '2026-09-08',
     slot: 'dinner' as const,
-    scope: 'household' as const,
     assumed: false,
   };
 }

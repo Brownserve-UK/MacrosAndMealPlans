@@ -6,9 +6,9 @@ const claim = (amount: number, unit: Unit = 'ml'): DemandClaim => ({
   subject: { kind: 'ingredient', ingredient_id: 'milk' },
   quantity: { amount, unit },
   entry_id: 'e1',
+  group_name: 'Porridge',
   planned_on: '2026-09-07',
   slot: 'breakfast',
-  scope: 'member',
   assumed: false,
 });
 
