@@ -1,8 +1,8 @@
 use mmp_core::domain::{
     Availability, AvailabilityReport, Confidence, CookedFoodAvailability, DemandClaim, DemandGap,
-    DemandSubject, IngredientAvailability, MealPlanScope, MealSlot, NewStockItem, Patch,
-    ProductAvailability, Shortfall, SourceDate, SourceDateKind, StockEvent, StockItem, StockItemId,
-    StockItemPatch, StockLevel, StockOutcome, StorageLocation, TrackingMode, UsabilityDeadline,
+    DemandSubject, IngredientAvailability, MealSlot, NewStockItem, Patch, ProductAvailability,
+    Shortfall, SourceDate, SourceDateKind, StockEvent, StockItem, StockItemId, StockItemPatch,
+    StockLevel, StockOutcome, StorageLocation, TrackingMode, UsabilityDeadline,
 };
 use mmp_core::services::StockOutcomeView;
 use serde::{Deserialize, Serialize};
@@ -625,7 +625,7 @@ pub struct DemandClaimDto {
     #[schema(value_type = String, format = Date)]
     pub planned_on: Date,
     pub slot: MealSlot,
-    pub scope: MealPlanScope,
+    pub group_name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub recipe_name: Option<String>,
     pub assumed: bool,
@@ -639,7 +639,7 @@ impl From<DemandClaim> for DemandClaimDto {
             entry_id: value.entry_id.as_uuid(),
             planned_on: value.planned_on,
             slot: value.slot,
-            scope: value.scope,
+            group_name: value.group_name,
             recipe_name: value.recipe_name,
             assumed: value.assumed,
         }

@@ -76,7 +76,6 @@ async fn app() -> Router {
         Arc::new(meal_plans.clone()),
         recipes_repo.clone(),
         batches.clone(),
-        Arc::new(members.clone()),
         Arc::new(settings_repo.clone()),
         clock.clone(),
     );
@@ -1363,6 +1362,24 @@ fn measured_amount(grams: f64) -> serde_json::Value {
     json!({"kind": "measure", "value": grams, "unit": "g"})
 }
 
+async fn create_occasion(app: &Router, planned_on: &str, slot: &str, components: Value) -> Value {
+    let (status, occasion, _) = send(
+        app,
+        Call::new("POST", "/api/v1/planner/occasions").body(json!({
+            "planned_on": planned_on,
+            "slot": slot,
+            "group": { "components": components },
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{occasion}");
+    occasion
+}
+
+fn group(occasion: &Value) -> &Value {
+    &occasion["groups"][0]
+}
+
 #[tokio::test]
 async fn creates_a_consumption_record_with_scaled_nutrition() {
     let app = app().await;
@@ -1733,30 +1750,25 @@ async fn a_meal_plan_entry_round_trips_through_the_week() {
     let member_id = me["member_id"].as_str().unwrap();
     let product = create_milk_product(&app).await;
 
-    let (status, entry, headers) = send(
+    let occasion = create_occasion(
         &app,
-        Call::new("POST", "/api/v1/meal-plan-entries").body(json!({
-            "planned_on": "2026-08-25",
-            "planned_time": "18:30",
-            "slot": "dinner",
-            "components": [
-                {"product_id": product["id"], "amount": measured_amount(150.0)},
-                {"product_id": product["id"], "amount": measured_amount(50.0)}
-            ]
-        })),
+        "2026-08-25",
+        "dinner",
+        json!([
+            {"product_id": product["id"], "amount": measured_amount(150.0)},
+            {"product_id": product["id"], "amount": measured_amount(50.0)}
+        ]),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{entry}");
-    assert_eq!(etag(&headers), "1");
-    assert_eq!(entry["member_id"], member_id);
-    assert_eq!(entry["status"], "planned");
-    assert_eq!(entry["components"].as_array().unwrap().len(), 2);
-    assert_eq!(entry["planned"]["nutrition"]["energy_kcal"], json!(128.0));
+    let created = group(&occasion);
+    assert_eq!(created["everyone"], true);
+    assert_eq!(created["components"].as_array().unwrap().len(), 2);
 
     let (status, week, _) = send(&app, Call::new("GET", "/api/v1/meal-plan/2026-08-24")).await;
     assert_eq!(status, StatusCode::OK, "{week}");
     assert_eq!(week["days"].as_array().unwrap().len(), 7);
-    assert_eq!(week["days"][1]["entries"][0]["id"], entry["id"]);
+    assert_eq!(week["days"][1]["entries"][0]["id"], created["id"]);
+    assert_eq!(week["member_id"], member_id);
     assert_eq!(
         week["remaining_planned"]["nutrition"]["energy_kcal"],
         json!(128.0)
@@ -1765,104 +1777,94 @@ async fn a_meal_plan_entry_round_trips_through_the_week() {
 }
 
 #[tokio::test]
-async fn a_meal_gains_household_participants_with_per_component_allocations() {
+async fn a_meal_gains_a_variation_through_an_explicit_participant() {
     let app = app().await;
     let me = send(&app, Call::new("GET", "/api/v1/auth/me")).await.1;
     let member_id = me["member_id"].as_str().unwrap().to_owned();
     let product = create_milk_product(&app).await;
 
-    let (status, entry, headers) = send(
+    let occasion = create_occasion(
         &app,
-        Call::new("POST", "/api/v1/meal-plan-entries").body(json!({
-            "planned_on": "2026-08-25",
-            "planned_time": "18:30",
-            "slot": "dinner",
-            "components": [{"product_id": product["id"], "amount": measured_amount(600.0)}]
-        })),
+        "2026-08-25",
+        "dinner",
+        json!([{"product_id": product["id"], "amount": measured_amount(600.0)}]),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{entry}");
-    let entry_id = entry["id"].as_str().unwrap().to_owned();
-    let component_id = entry["components"][0]["id"].as_str().unwrap().to_owned();
+    let created = group(&occasion);
+    let group_id = created["id"].as_str().unwrap().to_owned();
+    let revision = created["revision"].as_i64().unwrap();
 
     let (status, updated, _) = send(
         &app,
-        Call::new(
-            "PUT",
-            format!("/api/v1/meal-plan-entries/{entry_id}/participants"),
-        )
-        .if_match(etag(&headers))
-        .body(json!({
-            "participants": [
-                {"member_id": member_id, "allocations": [
-                    {"component_id": component_id, "amount": measured_amount(400.0)}
-                ]}
-            ]
-        })),
+        Call::new("PATCH", format!("/api/v1/planner/groups/{group_id}"))
+            .if_match(revision)
+            .body(json!({
+                "everyone": false,
+                "participants": [{"member_id": member_id, "note": "extra hungry"}]
+            })),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{updated}");
+    assert_eq!(updated["everyone"], false);
     assert_eq!(updated["participants"].as_array().unwrap().len(), 1);
-    assert_eq!(
-        updated["components"][0]["preparation"]["leftover"]["value"],
-        json!("200")
-    );
-    assert_eq!(
-        updated["components"][0]["preparation"]["shortage"],
-        json!(false)
-    );
+    assert_eq!(updated["participants"][0]["note"], "extra hungry");
 }
 
 #[tokio::test]
-async fn the_planner_returns_meal_focused_data_and_reviews_household_outcomes() {
+async fn the_planner_shows_a_group_with_guests_and_reviews_the_household_outcome() {
     let app = app().await;
     let member_id = send(&app, Call::new("GET", "/api/v1/auth/me")).await.1["member_id"]
         .as_str()
         .unwrap()
         .to_owned();
     let product = create_milk_product(&app).await;
-    let component_id = uuid::Uuid::now_v7();
 
-    let (status, entry, headers) = send(
+    let occasion = create_occasion(
         &app,
-        Call::new("POST", "/api/v1/meal-plan-entries").body(json!({
-            "household": true,
-            "planned_on": "2026-08-25",
-            "planned_time": "18:30",
-            "slot": "dinner",
-            "components": [{
-                "id": component_id,
-                "product_id": product["id"],
-                "amount": measured_amount(200.0)
-            }],
-            "participants": [{
-                "member_id": member_id,
-                "allocations": [{"component_id": component_id, "amount": measured_amount(100.0)}]
-            }],
-            "guest_count": 1,
-            "guest_allocations": [{"component_id": component_id, "amount": measured_amount(100.0)}]
-        })),
+        "2026-08-25",
+        "dinner",
+        json!([{"product_id": product["id"], "amount": measured_amount(200.0)}]),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{entry}");
+    let created = group(&occasion);
+    let group_id = created["id"].as_str().unwrap().to_owned();
+    let revision = created["revision"].as_i64().unwrap();
+
+    let (status, with_guest, _) = send(
+        &app,
+        Call::new("PATCH", format!("/api/v1/planner/groups/{group_id}"))
+            .if_match(revision)
+            .body(json!({"guest_count": 1})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{with_guest}");
+    assert_eq!(with_guest["guest_count"], 1);
+    assert_eq!(with_guest["serves"], 2);
 
     let (status, planner, _) = send(&app, Call::new("GET", "/api/v1/planner/2026-08-24")).await;
     assert_eq!(status, StatusCode::OK, "{planner}");
-    let meal = &planner["meals"][0];
-    assert_eq!(meal["foods"][0]["amount"]["value"], 200.0);
-    assert_eq!(meal["people"].as_array().unwrap().len(), 1);
-    assert_eq!(meal["guest_groups"][0]["count"], 1);
-    assert!(meal.get("planned").is_none(), "{meal}");
+    let planner_group = &planner["days"][1]["occasions"][2]["groups"][0];
+    assert_eq!(planner_group["id"], group_id);
+    assert_eq!(planner_group["guest_count"], 1);
+    assert_eq!(planner_group["components"][0]["amount"]["value"], 200.0);
 
-    let entry_id = entry["id"].as_str().unwrap();
-    let guest_group_id = entry["guest_groups"][0]["id"].as_str().unwrap();
+    let guest_group_id = send(
+        &app,
+        Call::new("GET", format!("/api/v1/meal-plan-entries/{group_id}")),
+    )
+    .await
+    .1["guest_groups"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
     let (status, reviewed, _) = send(
         &app,
         Call::new(
             "POST",
-            format!("/api/v1/meal-plan-entries/{entry_id}/outcomes"),
+            format!("/api/v1/meal-plan-entries/{group_id}/outcomes"),
         )
-        .if_match(etag(&headers))
+        .if_match(with_guest["revision"].as_i64().unwrap())
         .body(json!({
             "consumed_on": "2026-08-25",
             "members": [{"member_id": member_id, "result": "as_planned"}],
@@ -1877,7 +1879,7 @@ async fn the_planner_returns_meal_focused_data_and_reviews_household_outcomes() 
 }
 
 #[tokio::test]
-async fn a_member_opts_out_of_a_household_meal_and_rejoins_from_their_own_planner() {
+async fn a_member_marks_themselves_eating_elsewhere_and_reverses_it() {
     let app = app().await;
     let member_id = send(&app, Call::new("GET", "/api/v1/auth/me")).await.1["member_id"]
         .as_str()
@@ -1885,229 +1887,138 @@ async fn a_member_opts_out_of_a_household_meal_and_rejoins_from_their_own_planne
         .to_owned();
     let product = create_milk_product(&app).await;
 
-    let component_id = uuid::Uuid::now_v7();
-    let (status, entry, headers) = send(
+    let occasion = create_occasion(
         &app,
-        Call::new("POST", "/api/v1/meal-plan-entries").body(json!({
-            "household": true,
-            "planned_on": "2026-08-25",
-            "planned_time": "18:30",
-            "slot": "dinner",
-            "components": [{"id": component_id, "product_id": product["id"], "amount": measured_amount(600.0)}],
-            "participants": [{"member_id": member_id, "allocations": []}]
-        })),
+        "2026-08-25",
+        "dinner",
+        json!([{"product_id": product["id"], "amount": measured_amount(600.0)}]),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{entry}");
-    let entry_id = entry["id"].as_str().unwrap().to_owned();
-    assert_eq!(entry["participants"].as_array().unwrap().len(), 1);
+    let occasion_id = occasion["id"].as_str().unwrap().to_owned();
 
-    let (status, opted_out, _) = send(
+    let (status, elsewhere, _) = send(
         &app,
         Call::new(
-            "POST",
-            format!("/api/v1/meal-plan-entries/{entry_id}/opt-out"),
+            "PUT",
+            format!("/api/v1/planner/occasions/{occasion_id}/attendance/{member_id}"),
         )
-        .if_match(etag(&headers)),
+        .body(json!({"attendance": {"kind": "elsewhere"}})),
     )
     .await;
-    assert_eq!(status, StatusCode::OK, "{opted_out}");
-    assert!(opted_out["participants"].as_array().unwrap().is_empty());
-    assert_eq!(opted_out["opted_out"][0]["member_id"], member_id);
+    assert_eq!(status, StatusCode::OK, "{elsewhere}");
+    assert_eq!(elsewhere["absent_member_ids"], json!([member_id]));
+    assert!(
+        elsewhere["groups"][0]["participants"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
 
     let (status, week, _) = send(&app, Call::new("GET", "/api/v1/meal-plan/2026-08-24")).await;
     assert_eq!(status, StatusCode::OK, "{week}");
-    let mine = week["days"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .flat_map(|day| day["entries"].as_array().unwrap())
-        .find(|candidate| candidate["id"] == entry_id.as_str());
-    assert_eq!(mine.unwrap()["opted_out"][0]["member_id"], member_id);
+    assert!(week["days"][1]["entries"].as_array().unwrap().is_empty());
 
-    let revision = opted_out["revision"].as_i64().unwrap();
-    let (status, rejoined, _) = send(
+    let group_id = elsewhere["groups"][0]["id"].as_str().unwrap();
+    let (status, back, _) = send(
         &app,
         Call::new(
-            "DELETE",
-            format!("/api/v1/meal-plan-entries/{entry_id}/opt-out"),
+            "PUT",
+            format!("/api/v1/planner/occasions/{occasion_id}/attendance/{member_id}"),
         )
-        .if_match(revision),
+        .body(json!({"attendance": {"kind": "eating", "group_id": group_id}})),
     )
     .await;
-    assert_eq!(status, StatusCode::OK, "{rejoined}");
-    assert_eq!(rejoined["participants"][0]["member_id"], member_id);
-    assert!(
-        rejoined
-            .get("opted_out")
-            .and_then(|value| value.as_array())
-            .is_none_or(|list| list.is_empty()),
-        "{rejoined}"
-    );
+    assert_eq!(status, StatusCode::OK, "{back}");
+    assert!(back["absent_member_ids"].as_array().unwrap().is_empty());
+    assert_eq!(back["groups"][0]["participants"][0]["member_id"], member_id);
 }
 
 #[tokio::test]
-async fn household_planner_attendance_still_needs_household_write() {
-    let app = app().await;
-    create_user(&app, "sam", &["basic_user"]).await;
-
-    let (status, _, _) = send(
-        &app,
-        Call::new(
-            "GET",
-            "/api/v1/household/planner/attendance/2026-09-10/dinner",
-        )
-        .signed_in_as("sam"),
-    )
-    .await;
-    assert_eq!(status, StatusCode::FORBIDDEN);
-}
-
-#[tokio::test]
-async fn planner_feed_is_personal_for_members_and_complete_for_household_managers() {
+async fn setting_someone_elses_attendance_needs_household_write() {
     let app = app().await;
     let sam = create_member(&app, "Sam").await;
-    let morgan = create_member(&app, "Morgan").await;
-    let sam_user = create_user(&app, "sam", &["basic_user"]).await;
-    let manager_user = create_user(&app, "manager", &["household_manager"]).await;
-    for (member, user) in [(&sam, &sam_user), (&morgan, &manager_user)] {
-        let (status, body, _) = send(
-            &app,
-            Call::new(
-                "PUT",
-                format!("/api/v1/members/{}/account", member["id"].as_str().unwrap()),
-            )
-            .if_match(member["revision"].as_i64().unwrap())
-            .body(json!({"user_id": user["id"]})),
+    let user = create_user(&app, "sam", &["basic_user"]).await;
+    send(
+        &app,
+        Call::new(
+            "PUT",
+            format!("/api/v1/members/{}/account", sam["id"].as_str().unwrap()),
         )
-        .await;
-        assert_eq!(status, StatusCode::OK, "{body}");
-    }
+        .if_match(sam["revision"].as_i64().unwrap())
+        .body(json!({"user_id": user["id"]})),
+    )
+    .await;
     let product = create_milk_product(&app).await;
 
-    let (status, sam_personal, _) = send(
+    let occasion = create_occasion(
         &app,
-        Call::new("POST", "/api/v1/meal-plan-entries").body(json!({
-            "member_id": sam["id"],
-            "planned_on": "2026-08-26",
-            "planned_time": "08:00",
-            "slot": "breakfast",
-            "components": [{"product_id": product["id"], "amount": measured_amount(100.0)}]
-        })),
+        "2026-08-25",
+        "dinner",
+        json!([{"product_id": product["id"], "amount": measured_amount(600.0)}]),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{sam_personal}");
+    let occasion_id = occasion["id"].as_str().unwrap();
+    let admin_id = my_member_id(&app).await;
+    let _ = &sam;
 
-    let (status, manager_personal, _) = send(
+    let (status, body, _) = send(
         &app,
-        Call::new("POST", "/api/v1/meal-plan-entries").body(json!({
-            "member_id": morgan["id"],
-            "planned_on": "2026-08-26",
-            "planned_time": "12:30",
-            "slot": "lunch",
-            "components": [{"product_id": product["id"], "amount": measured_amount(100.0)}]
-        })),
+        Call::new(
+            "PUT",
+            format!("/api/v1/planner/occasions/{occasion_id}/attendance/{admin_id}"),
+        )
+        .signed_in_as("sam")
+        .body(json!({"attendance": {"kind": "elsewhere"}})),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{manager_personal}");
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+}
 
-    let (status, sam_household, _) = send(
+#[tokio::test]
+async fn any_signed_in_member_can_read_and_plan_the_household_week() {
+    let app = app().await;
+    let sam = create_member(&app, "Sam").await;
+    let user = create_user(&app, "sam", &["basic_user"]).await;
+    send(
         &app,
-        Call::new("POST", "/api/v1/meal-plan-entries").body(json!({
-            "household": true,
-            "planned_on": "2026-08-26",
-            "planned_time": "18:00",
-            "slot": "dinner",
-            "components": [{"product_id": product["id"], "amount": measured_amount(100.0)}],
-            "participants": [{"member_id": sam["id"], "allocations": []}]
-        })),
+        Call::new(
+            "PUT",
+            format!("/api/v1/members/{}/account", sam["id"].as_str().unwrap()),
+        )
+        .if_match(sam["revision"].as_i64().unwrap())
+        .body(json!({"user_id": user["id"]})),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{sam_household}");
+    let product = create_milk_product(&app).await;
 
-    let (status, manager_household, _) = send(
+    let occasion = create_occasion(
         &app,
-        Call::new("POST", "/api/v1/meal-plan-entries").body(json!({
-            "household": true,
-            "planned_on": "2026-08-27",
-            "planned_time": "18:00",
-            "slot": "dinner",
-            "components": [{"product_id": product["id"], "amount": measured_amount(100.0)}],
-            "participants": [{"member_id": morgan["id"], "allocations": []}]
-        })),
+        "2026-08-26",
+        "dinner",
+        json!([{"product_id": product["id"], "amount": measured_amount(100.0)}]),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{manager_household}");
 
-    let (status, personal_feed, _) = send(
+    let (status, sam_view, _) = send(
         &app,
         Call::new("GET", "/api/v1/planner/2026-08-24").signed_in_as("sam"),
     )
     .await;
-    assert_eq!(status, StatusCode::OK, "{personal_feed}");
-    let personal_meals = personal_feed["meals"].as_array().unwrap();
-    assert_eq!(personal_meals.len(), 2, "{personal_feed}");
-    assert!(personal_meals.iter().all(|meal| meal["mine"] == true));
-    assert!(
-        personal_meals
-            .iter()
-            .any(|meal| meal["id"] == sam_personal["id"])
-    );
-    assert!(
-        personal_meals
-            .iter()
-            .any(|meal| meal["id"] == sam_household["id"])
-    );
-    assert_eq!(personal_feed["days"].as_array().unwrap().len(), 7);
-    for field in ["actual", "remaining_planned", "projected"] {
-        assert!(personal_feed.get(field).is_some(), "{personal_feed}");
-        assert!(
-            personal_feed["days"][0].get(field).is_some(),
-            "{personal_feed}"
-        );
-    }
+    assert_eq!(status, StatusCode::OK, "{sam_view}");
+    assert_eq!(sam_view["days"][2]["occasions"][2]["id"], occasion["id"]);
 
-    let (status, manager_feed, _) = send(
+    let (status, added, _) = send(
         &app,
-        Call::new("GET", "/api/v1/planner/2026-08-24").signed_in_as("manager"),
+        Call::new("POST", "/api/v1/planner/occasions")
+            .signed_in_as("sam")
+            .body(json!({
+                "planned_on": "2026-08-27",
+                "slot": "lunch",
+                "group": {"components": [{"product_id": product["id"], "amount": measured_amount(50.0)}]},
+            })),
     )
     .await;
-    assert_eq!(status, StatusCode::OK, "{manager_feed}");
-    let manager_meals = manager_feed["meals"].as_array().unwrap();
-    assert_eq!(manager_meals.len(), 4, "{manager_feed}");
-    let meal = |id: &Value| manager_meals.iter().find(|meal| meal["id"] == *id).unwrap();
-
-    let sam_personal_view = meal(&sam_personal["id"]);
-    assert_eq!(sam_personal_view["mine"], false);
-    assert_eq!(sam_personal_view["owner_name"], "Sam");
-    assert_eq!(sam_personal_view["can_opt_out"], false);
-    assert_eq!(sam_personal_view["can_join"], false);
-    assert_eq!(sam_personal_view["capabilities"]["can_edit"], false);
-
-    let manager_personal_view = meal(&manager_personal["id"]);
-    assert_eq!(manager_personal_view["mine"], true);
-    assert_eq!(manager_personal_view["owner_name"], "Morgan");
-    assert_eq!(manager_personal_view["can_opt_out"], false);
-    assert_eq!(manager_personal_view["can_join"], false);
-
-    let sam_household_view = meal(&sam_household["id"]);
-    assert_eq!(sam_household_view["mine"], false);
-    assert!(sam_household_view["owner_name"].is_null());
-    assert_eq!(sam_household_view["can_opt_out"], false);
-    assert_eq!(sam_household_view["can_join"], true);
-
-    let manager_household_view = meal(&manager_household["id"]);
-    assert_eq!(manager_household_view["mine"], true);
-    assert!(manager_household_view["owner_name"].is_null());
-    assert_eq!(manager_household_view["can_opt_out"], true);
-    assert_eq!(manager_household_view["can_join"], false);
-    assert_eq!(
-        manager_household_view["capabilities"]["can_record_guests"],
-        true
-    );
-
-    let (status, _, _) = send(&app, Call::new("GET", "/api/v1/planner/2026-08-24")).await;
-    assert_eq!(status, StatusCode::OK);
+    assert_eq!(status, StatusCode::CREATED, "{added}");
 }
 
 #[tokio::test]
@@ -2224,80 +2135,69 @@ async fn meal_times_default_for_main_meals_and_remain_optional_for_snacks() {
     let app = app().await;
     let product = create_milk_product(&app).await;
 
-    let (status, dinner, _) = send(
+    let dinner = create_occasion(
         &app,
-        Call::new("POST", "/api/v1/meal-plan-entries").body(json!({
-            "planned_on": "2026-08-27",
-            "slot": "dinner",
-            "components": [{"product_id": product["id"], "amount": measured_amount(150.0)}]
-        })),
+        "2026-08-27",
+        "dinner",
+        json!([{"product_id": product["id"], "amount": measured_amount(150.0)}]),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{dinner}");
-    assert_eq!(dinner["planned_time"], "18:00");
+    assert!(dinner["planned_time"].is_null(), "{dinner}");
+    assert_eq!(dinner["effective_time"], "18:00");
 
-    let (status, timed_snack, _) = send(
+    let untimed_snack = create_occasion(
         &app,
-        Call::new("POST", "/api/v1/meal-plan-entries").body(json!({
-            "planned_on": "2026-08-27",
-            "planned_time": "20:45",
-            "slot": "snacks",
-            "components": [{"product_id": product["id"], "amount": measured_amount(20.0)}]
-        })),
+        "2026-08-27",
+        "snacks",
+        json!([{"product_id": product["id"], "amount": measured_amount(20.0)}]),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{timed_snack}");
-    assert_eq!(timed_snack["planned_time"], "20:45");
-
-    let (status, untimed_snack, _) = send(
-        &app,
-        Call::new("POST", "/api/v1/meal-plan-entries").body(json!({
-            "planned_on": "2026-08-27",
-            "slot": "snacks",
-            "components": [{"product_id": product["id"], "amount": measured_amount(20.0)}]
-        })),
-    )
-    .await;
-    assert_eq!(status, StatusCode::CREATED, "{untimed_snack}");
-    assert_eq!(untimed_snack["planned_time"], Value::Null);
+    assert!(untimed_snack["planned_time"].is_null(), "{untimed_snack}");
+    assert!(untimed_snack["effective_time"].is_null(), "{untimed_snack}");
 }
 
 #[tokio::test]
 async fn an_explicit_planned_time_is_kept_over_the_default() {
     let app = app().await;
     let product = create_milk_product(&app).await;
-    let (_, entry, _) = send(
+    let occasion = create_occasion(
         &app,
-        Call::new("POST", "/api/v1/meal-plan-entries").body(json!({
-            "planned_on": "2026-08-27",
-            "planned_time": "20:45",
-            "slot": "dinner",
-            "components": [{"product_id": product["id"], "amount": measured_amount(150.0)}]
-        })),
+        "2026-08-27",
+        "dinner",
+        json!([{"product_id": product["id"], "amount": measured_amount(150.0)}]),
     )
     .await;
-    assert_eq!(entry["planned_time"], "20:45");
+    let occasion_id = occasion["id"].as_str().unwrap();
+    let revision = occasion["revision"].as_i64().unwrap();
+
+    let (status, updated, _) = send(
+        &app,
+        Call::new("PATCH", format!("/api/v1/planner/occasions/{occasion_id}"))
+            .if_match(revision)
+            .body(json!({"planned_time": "20:45"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{updated}");
+    assert_eq!(updated["planned_time"], "20:45");
+    assert_eq!(updated["effective_time"], "20:45");
 }
 
 #[tokio::test]
 async fn confirming_one_component_leaves_the_rest_of_the_meal_pending() {
     let app = app().await;
     let product = create_milk_product(&app).await;
-    let entry = send(
+    let occasion = create_occasion(
         &app,
-        Call::new("POST", "/api/v1/meal-plan-entries").body(json!({
-            "planned_on": "2026-08-25",
-            "planned_time": "08:00",
-            "slot": "breakfast",
-            "components": [
-                {"product_id": product["id"], "amount": measured_amount(80.0)},
-                {"product_id": product["id"], "amount": measured_amount(250.0)},
-                {"product_id": product["id"], "amount": measured_amount(100.0)}
-            ]
-        })),
+        "2026-08-25",
+        "breakfast",
+        json!([
+            {"product_id": product["id"], "amount": measured_amount(80.0)},
+            {"product_id": product["id"], "amount": measured_amount(250.0)},
+            {"product_id": product["id"], "amount": measured_amount(100.0)}
+        ]),
     )
-    .await
-    .1;
+    .await;
+    let entry = group(&occasion);
     let entry_id = entry["id"].as_str().unwrap();
     let component_id = entry["components"][2]["id"].as_str().unwrap();
 
@@ -2342,17 +2242,14 @@ async fn confirming_a_planned_component_draws_stock_and_warns_on_a_shortfall() {
     .await;
     assert_eq!(status, StatusCode::CREATED);
 
-    let (status, entry, _) = send(
+    let occasion = create_occasion(
         &app,
-        Call::new("POST", "/api/v1/meal-plan-entries").body(json!({
-            "planned_on": "2026-08-25",
-            "planned_time": "18:00",
-            "slot": "dinner",
-            "components": [{"product_id": product_id, "amount": measured_amount(400.0)}]
-        })),
+        "2026-08-25",
+        "dinner",
+        json!([{"product_id": product_id, "amount": measured_amount(400.0)}]),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{entry}");
+    let entry = group(&occasion);
     let entry_id = entry["id"].as_str().unwrap();
     let component_id = entry["components"][0]["id"].as_str().unwrap();
 
@@ -2412,17 +2309,13 @@ async fn the_week_slots_projection_flattens_planned_and_logged_food_together() {
         .to_owned();
     let product = create_milk_product(&app).await;
 
-    let (status, entry, _) = send(
+    create_occasion(
         &app,
-        Call::new("POST", "/api/v1/meal-plan-entries").body(json!({
-            "planned_on": "2026-08-25",
-            "planned_time": "08:00",
-            "slot": "breakfast",
-            "components": [{"product_id": product["id"], "amount": measured_amount(150.0)}]
-        })),
+        "2026-08-25",
+        "breakfast",
+        json!([{"product_id": product["id"], "amount": measured_amount(150.0)}]),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{entry}");
 
     let (status, logged, _) = send(
         &app,
@@ -2465,16 +2358,14 @@ async fn confirming_a_planned_meal_creates_locked_consumption_records() {
     let me = send(&app, Call::new("GET", "/api/v1/auth/me")).await.1;
     let member_id = me["member_id"].as_str().unwrap();
     let product = create_milk_product(&app).await;
-    let entry = send(
+    let occasion = create_occasion(
         &app,
-        Call::new("POST", "/api/v1/meal-plan-entries").body(json!({
-            "planned_on": "2026-08-25",
-            "slot": "lunch",
-            "components": [{"product_id": product["id"], "amount": measured_amount(150.0)}]
-        })),
+        "2026-08-25",
+        "lunch",
+        json!([{"product_id": product["id"], "amount": measured_amount(150.0)}]),
     )
-    .await
-    .1;
+    .await;
+    let entry = group(&occasion);
     let entry_id = entry["id"].as_str().unwrap();
     let component_id = entry["components"][0]["id"].as_str().unwrap();
 
@@ -2526,16 +2417,14 @@ async fn reopening_a_confirmed_meal_removes_the_consumption_entries_and_allows_r
     let me = send(&app, Call::new("GET", "/api/v1/auth/me")).await.1;
     let member_id = me["member_id"].as_str().unwrap();
     let product = create_milk_product(&app).await;
-    let entry = send(
+    let occasion = create_occasion(
         &app,
-        Call::new("POST", "/api/v1/meal-plan-entries").body(json!({
-            "planned_on": "2026-08-25",
-            "slot": "lunch",
-            "components": [{"product_id": product["id"], "amount": measured_amount(150.0)}]
-        })),
+        "2026-08-25",
+        "lunch",
+        json!([{"product_id": product["id"], "amount": measured_amount(150.0)}]),
     )
-    .await
-    .1;
+    .await;
+    let entry = group(&occasion);
     let entry_id = entry["id"].as_str().unwrap();
     let component_id = entry["components"][0]["id"].as_str().unwrap();
 
@@ -2597,16 +2486,14 @@ async fn reopening_a_confirmed_meal_removes_the_consumption_entries_and_allows_r
 async fn a_planned_meal_cannot_be_reopened() {
     let app = app().await;
     let product = create_milk_product(&app).await;
-    let entry = send(
+    let occasion = create_occasion(
         &app,
-        Call::new("POST", "/api/v1/meal-plan-entries").body(json!({
-            "planned_on": "2026-08-25",
-            "slot": "lunch",
-            "components": [{"product_id": product["id"], "amount": measured_amount(150.0)}]
-        })),
+        "2026-08-25",
+        "lunch",
+        json!([{"product_id": product["id"], "amount": measured_amount(150.0)}]),
     )
-    .await
-    .1;
+    .await;
+    let entry = group(&occasion);
     let entry_id = entry["id"].as_str().unwrap();
 
     let (status, body, _) = send(
@@ -2622,63 +2509,6 @@ async fn a_planned_meal_cannot_be_reopened() {
 }
 
 #[tokio::test]
-async fn another_members_meal_cannot_be_reopened() {
-    let app = app().await;
-    let product = create_milk_product(&app).await;
-    let entry = send(
-        &app,
-        Call::new("POST", "/api/v1/meal-plan-entries").body(json!({
-            "planned_on": "2026-08-25",
-            "slot": "lunch",
-            "components": [{"product_id": product["id"], "amount": measured_amount(150.0)}]
-        })),
-    )
-    .await
-    .1;
-    let entry_id = entry["id"].as_str().unwrap();
-    let component_id = entry["components"][0]["id"].as_str().unwrap();
-    send(
-        &app,
-        Call::new(
-            "POST",
-            format!("/api/v1/meal-plan-entries/{entry_id}/eaten"),
-        )
-        .if_match(1)
-        .body(json!({
-            "consumed_on": "2026-08-26",
-            "consumed_at": "2026-08-26T19:15:00Z",
-            "components": [{"component_id": component_id, "amount": measured_amount(150.0)}]
-        })),
-    )
-    .await;
-
-    let member = create_member(&app, "Joe").await;
-    let user = create_user(&app, "joe", &["basic_user"]).await;
-    send(
-        &app,
-        Call::new(
-            "PUT",
-            format!("/api/v1/members/{}/account", member["id"].as_str().unwrap()),
-        )
-        .if_match(member["revision"].as_i64().unwrap())
-        .body(json!({"user_id": user["id"]})),
-    )
-    .await;
-
-    let (status, body, _) = send(
-        &app,
-        Call::new(
-            "POST",
-            format!("/api/v1/meal-plan-entries/{entry_id}/reopen"),
-        )
-        .if_match(2)
-        .signed_in_as("joe"),
-    )
-    .await;
-    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
-}
-
-#[tokio::test]
 async fn a_meal_plan_week_must_start_on_monday() {
     let app = app().await;
 
@@ -2687,19 +2517,19 @@ async fn a_meal_plan_week_must_start_on_monday() {
 }
 
 #[tokio::test]
-async fn an_unlinked_user_cannot_use_a_personal_meal_plan() {
+async fn an_unlinked_user_cannot_plan_a_meal() {
     let app = app().await;
     create_user(&app, "joe", &["basic_user"]).await;
     let product = create_milk_product(&app).await;
 
     let (status, body, _) = send(
         &app,
-        Call::new("POST", "/api/v1/meal-plan-entries")
+        Call::new("POST", "/api/v1/planner/occasions")
             .signed_in_as("joe")
             .body(json!({
                 "planned_on": "2026-08-25",
                 "slot": "breakfast",
-                "components": [{"product_id": product["id"], "amount": measured_amount(100.0)}]
+                "group": {"components": [{"product_id": product["id"], "amount": measured_amount(100.0)}]},
             })),
     )
     .await;
@@ -2711,19 +2541,17 @@ async fn an_unlinked_user_cannot_use_a_personal_meal_plan() {
 }
 
 #[tokio::test]
-async fn a_personal_meal_plan_cannot_be_opened_by_another_member() {
+async fn any_household_member_can_open_any_groups_details() {
     let app = app().await;
     let product = create_milk_product(&app).await;
-    let entry = send(
+    let occasion = create_occasion(
         &app,
-        Call::new("POST", "/api/v1/meal-plan-entries").body(json!({
-            "planned_on": "2026-08-25",
-            "slot": "breakfast",
-            "components": [{"product_id": product["id"], "amount": measured_amount(100.0)}]
-        })),
+        "2026-08-25",
+        "breakfast",
+        json!([{"product_id": product["id"], "amount": measured_amount(100.0)}]),
     )
-    .await
-    .1;
+    .await;
+    let entry_id = group(&occasion)["id"].as_str().unwrap();
 
     let member = create_member(&app, "Joe").await;
     let user = create_user(&app, "joe", &["basic_user"]).await;
@@ -2740,58 +2568,7 @@ async fn a_personal_meal_plan_cannot_be_opened_by_another_member() {
 
     let (status, body, _) = send(
         &app,
-        Call::new(
-            "GET",
-            format!(
-                "/api/v1/meal-plan-entries/{}",
-                entry["id"].as_str().unwrap()
-            ),
-        )
-        .signed_in_as("joe"),
-    )
-    .await;
-    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
-}
-
-#[tokio::test]
-async fn the_trusted_admin_can_open_another_members_entry() {
-    let app = app().await;
-    let member = create_member(&app, "Joe").await;
-    let user = create_user(&app, "joe", &["basic_user"]).await;
-    send(
-        &app,
-        Call::new(
-            "PUT",
-            format!("/api/v1/members/{}/account", member["id"].as_str().unwrap()),
-        )
-        .if_match(member["revision"].as_i64().unwrap())
-        .body(json!({"user_id": user["id"]})),
-    )
-    .await;
-
-    let product = create_milk_product(&app).await;
-    let entry = send(
-        &app,
-        Call::new("POST", "/api/v1/meal-plan-entries")
-            .signed_in_as("joe")
-            .body(json!({
-                "planned_on": "2026-08-25",
-                "slot": "breakfast",
-                "components": [{"product_id": product["id"], "amount": measured_amount(100.0)}]
-            })),
-    )
-    .await
-    .1;
-
-    let (status, body, _) = send(
-        &app,
-        Call::new(
-            "GET",
-            format!(
-                "/api/v1/meal-plan-entries/{}",
-                entry["id"].as_str().unwrap()
-            ),
-        ),
+        Call::new("GET", format!("/api/v1/meal-plan-entries/{entry_id}")).signed_in_as("joe"),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
@@ -3140,10 +2917,10 @@ async fn the_meal_plan_week_carries_a_resolved_target() {
 
     let (status, planner, _) = send(&app, Call::new("GET", "/api/v1/planner/2026-08-24")).await;
     assert_eq!(status, StatusCode::OK, "{planner}");
-    assert_eq!(planner["target"]["energy_kcal"], 14000.0);
-    assert_eq!(planner["calorie_direction"], "at_least");
-    assert_eq!(planner["days"][0]["target"]["energy_kcal"], 2000.0);
-    assert_eq!(planner["days"][0]["calorie_direction"], "at_least");
+    assert!(
+        planner.get("target").is_none(),
+        "the planner carries no personal nutrition figures: {planner}"
+    );
 }
 
 #[tokio::test]
@@ -3634,19 +3411,16 @@ async fn stock_availability_nets_off_planned_demand() {
     )
     .await;
 
-    let (status, plan, _) = send(
+    create_occasion(
         &app,
-        Call::new("POST", "/api/v1/meal-plan-entries").body(json!({
-            "planned_on": "2026-08-27",
-            "slot": "dinner",
-            "components": [{
-                "product_id": product_id,
-                "amount": {"kind": "measure", "value": 250.0, "unit": "g"}
-            }]
-        })),
+        "2026-08-27",
+        "dinner",
+        json!([{
+            "product_id": product_id,
+            "amount": {"kind": "measure", "value": 250.0, "unit": "g"}
+        }]),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{plan}");
 
     let (status, rows, _) = send(
         &app,
@@ -4186,16 +3960,14 @@ async fn deleting_a_saved_meal_removes_it() {
 async fn saving_a_meal_from_an_entry_creates_a_saved_meal() {
     let app = app().await;
     let product = create_milk_product(&app).await;
-    let entry = send(
+    let occasion = create_occasion(
         &app,
-        Call::new("POST", "/api/v1/meal-plan-entries").body(json!({
-            "planned_on": "2026-08-25",
-            "slot": "breakfast",
-            "components": [{"product_id": product["id"], "amount": measured_amount(100.0)}]
-        })),
+        "2026-08-25",
+        "breakfast",
+        json!([{"product_id": product["id"], "amount": measured_amount(100.0)}]),
     )
-    .await
-    .1;
+    .await;
+    let entry = group(&occasion);
 
     let (status, created, _) = send(
         &app,

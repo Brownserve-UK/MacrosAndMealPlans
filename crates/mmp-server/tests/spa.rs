@@ -73,7 +73,6 @@ fn app_with_web(dist: &std::path::Path) -> axum::Router {
         Arc::new(InMemoryMealPlanRepository::default()),
         recipes_repo.clone(),
         Arc::new(InMemoryPreparedBatchRepository::new()),
-        Arc::new(InMemoryHouseholdMemberRepository::new()),
         Arc::new(InMemoryHouseholdSettingsRepository::new()),
         Arc::new(SystemClock),
     );
@@ -292,7 +291,6 @@ async fn without_a_web_build_the_api_still_works() {
         Arc::new(InMemoryMealPlanRepository::default()),
         recipes_repo.clone(),
         Arc::new(InMemoryPreparedBatchRepository::new()),
-        Arc::new(InMemoryHouseholdMemberRepository::new()),
         Arc::new(InMemoryHouseholdSettingsRepository::new()),
         Arc::new(SystemClock),
     );

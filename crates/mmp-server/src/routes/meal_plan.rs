@@ -1,8 +1,13 @@
+use std::collections::{HashMap, HashSet};
+
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
-use mmp_core::domain::{HouseholdMemberId, MealPlanComponentId, MealPlanEntryId, Role};
-use time::{Date, Duration, Weekday};
+use mmp_core::domain::{
+    HouseholdMemberId, MealOccasionId, MealPlanComponentId, MealPlanEntryId, Permission,
+};
+use mmp_core::services::{MealGroupView, MealOccasionView};
+use time::{Date, Weekday};
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
 use uuid::Uuid;
@@ -10,10 +15,10 @@ use uuid::Uuid;
 use crate::auth::Principal;
 use crate::dto::common::iso_date;
 use crate::dto::{
-    CookedDto, CreateMealPlanEntryRequest, MarkMealPlanComponentEatenRequest,
-    MarkMealPlanEatenRequest, MealGuestGroupDto, MealPlanEntryDto, MealPlanWeekDto,
-    PlannerCapabilitiesDto, PlannerFoodDto, PlannerMealDto, PlannerPersonDto, PlannerWeekDto,
-    ReviewMealOutcomesRequest, SetMealPlanParticipantsRequest, UpdateMealPlanEntryRequest,
+    CreateOccasionRequest, GroupPatchRequest, GroupViewDto, MarkMealPlanComponentEatenRequest,
+    MarkMealPlanEatenRequest, MealPlanEntryDto, MealPlanWeekDto, MoveOrCopyOccasionRequest,
+    NewGroupRequest, OccasionPatchRequest, OccasionViewDto, PlannerWeekDto,
+    ReviewMealOutcomesRequest, SetAttendanceRequest, UpdateMealPlanEntryRequest,
 };
 use crate::error::{ApiError, ApiResult};
 use crate::http::{Created, IfMatch, Tagged};
@@ -23,7 +28,14 @@ pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(get_week))
         .routes(routes!(get_planner_week))
-        .routes(routes!(create))
+        .routes(routes!(create_occasion))
+        .routes(routes!(update_occasion, delete_occasion))
+        .routes(routes!(move_occasion))
+        .routes(routes!(copy_occasion))
+        .routes(routes!(add_group))
+        .routes(routes!(update_group, delete_group))
+        .routes(routes!(set_attendance))
+        .routes(routes!(copy_week))
         .routes(routes!(get_one, update, delete))
         .routes(routes!(mark_eaten))
         .routes(routes!(mark_not_eaten))
@@ -31,9 +43,6 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(mark_component_eaten))
         .routes(routes!(mark_component_not_eaten))
         .routes(routes!(reopen_component))
-        .routes(routes!(set_participants))
-        .routes(routes!(opt_out, opt_in))
-        .routes(routes!(household_slot_attendance))
         .routes(routes!(review_outcomes))
 }
 
@@ -43,6 +52,10 @@ fn entry_id(id: Uuid) -> MealPlanEntryId {
 
 fn component_id(id: Uuid) -> MealPlanComponentId {
     id.into()
+}
+
+fn not_found(what: &str) -> ApiError {
+    ApiError::new(StatusCode::NOT_FOUND, "not-found", "Not found", what)
 }
 
 pub(crate) async fn personal_member(
@@ -69,88 +82,20 @@ pub(crate) async fn personal_member(
     Ok(member_id)
 }
 
-async fn require_entry_access(
-    state: &AppState,
-    principal: &Principal,
-    entry: &mmp_core::domain::MealPlanEntry,
-) -> ApiResult<()> {
-    if principal.roles.contains(&Role::Admin) {
-        return Ok(());
-    }
-    if let Some(entry_member_id) = entry.member_id {
-        let member = state.household.get_member(entry_member_id).await?;
-        if member.is_archived() {
-            return Err(ApiError::new(
-                StatusCode::CONFLICT,
-                "archived-member",
-                "Archived member",
-                "Archived household members cannot have their meal plan changed.",
-            ));
-        }
-        if principal.member_id == Some(entry_member_id) {
-            return Ok(());
-        }
-    }
-    let participating = principal
-        .member_id
-        .is_some_and(|member_id| entry.participant_for(member_id).is_some());
-    if participating || principal.roles.contains(&Role::HouseholdManager) {
-        Ok(())
-    } else {
-        Err(ApiError::new(
-            StatusCode::FORBIDDEN,
-            "forbidden",
-            "Forbidden",
-            "This meal does not belong to your plan.",
-        ))
-    }
-}
-
 async fn can_manage_personal_meal(
     state: &AppState,
     principal: &Principal,
     member_id: HouseholdMemberId,
 ) -> ApiResult<bool> {
-    if principal.roles.contains(&Role::Admin) || principal.member_id == Some(member_id) {
+    if principal.roles.contains(&mmp_core::domain::Role::Admin)
+        || principal.member_id == Some(member_id)
+    {
         return Ok(true);
     }
     Ok(state
         .household
         .can_manage_member_meal_plan(principal.user_id, member_id)
         .await?)
-}
-
-async fn require_plan_edit_access(
-    state: &AppState,
-    principal: &Principal,
-    entry: &mmp_core::domain::MealPlanEntry,
-) -> ApiResult<()> {
-    let allowed = match entry.scope {
-        mmp_core::domain::MealPlanScope::Member => {
-            let member_id = entry.member_id.ok_or_else(|| {
-                ApiError::new(
-                    StatusCode::CONFLICT,
-                    "invalid-meal",
-                    "Meal unavailable",
-                    "This personal meal has no owner.",
-                )
-            })?;
-            can_manage_personal_meal(state, principal, member_id).await?
-        }
-        mmp_core::domain::MealPlanScope::Household => {
-            principal.has(mmp_core::domain::Permission::HouseholdWrite)
-        }
-    };
-    if allowed {
-        Ok(())
-    } else {
-        Err(ApiError::new(
-            StatusCode::FORBIDDEN,
-            "forbidden",
-            "Forbidden",
-            "You cannot edit this meal.",
-        ))
-    }
 }
 
 async fn require_outcome_access(
@@ -177,6 +122,31 @@ fn parse_week_start(raw: &str) -> ApiResult<Date> {
         return Err(ApiError::bad_request("The week must start on a Monday."));
     }
     Ok(date)
+}
+
+async fn to_buy_counts(state: &AppState) -> ApiResult<HashMap<Uuid, i64>> {
+    let list = state.shopping.requirements(None).await?;
+    let mut counts: HashMap<Uuid, i64> = HashMap::new();
+    for requirement in &list.requirements {
+        if !requirement.purchases.is_empty() {
+            continue;
+        }
+        let mut seen = HashSet::new();
+        for claim in &requirement.claims {
+            if seen.insert(claim.entry_id) {
+                *counts.entry(claim.entry_id.as_uuid()).or_insert(0) += 1;
+            }
+        }
+    }
+    Ok(counts)
+}
+
+fn group_in(view: &MealOccasionView, id: MealPlanEntryId) -> ApiResult<MealGroupView> {
+    view.groups
+        .iter()
+        .find(|group| group.entry.entry.id == id)
+        .cloned()
+        .ok_or_else(|| not_found("That meal could not be found."))
 }
 
 #[utoipa::path(
@@ -211,7 +181,7 @@ async fn get_week(
 #[utoipa::path(
     get,
     path = "/api/v1/planner/{week_start}",
-    operation_id = "getHouseholdPlannerWeek",
+    operation_id = "getPlannerWeek",
     params(("week_start" = String, Path, example = "2026-08-24")),
     responses((status = 200, body = PlannerWeekDto)),
     tag = "meal-plan",
@@ -223,195 +193,323 @@ async fn get_planner_week(
     Path(week_start): Path<String>,
 ) -> ApiResult<Json<PlannerWeekDto>> {
     let week_start = parse_week_start(&week_start)?;
-    let member_id = personal_member(&state, &principal).await?;
-    let include_household = principal.has(mmp_core::domain::Permission::HouseholdWrite);
-    let views = state.meal_plan.planner_entries(week_start).await?;
-    let nutrition = state.meal_plan.week(member_id, week_start).await?;
-    let objective = state
-        .weight
-        .goal(member_id)
-        .await?
-        .map(|goal| goal.objective);
-    let nutrition = MealPlanWeekDto::from(nutrition).with_calorie_direction(objective);
-    let mut meals = Vec::new();
-    for view in &views {
-        let mine = view.entry.participant_for(member_id).is_some();
-        if !mine && (!include_household || view.entry.slot == mmp_core::domain::MealSlot::Snacks) {
-            continue;
-        }
-        let mut people = Vec::with_capacity(view.participants.len());
-        for participant in &view.participants {
-            let can_record = principal.member_id == Some(participant.member_id)
-                || principal.has(mmp_core::domain::Permission::AccountAdmin)
-                || state
-                    .household
-                    .can_manage_member_meal_plan(principal.user_id, participant.member_id)
-                    .await?;
-            people.push(PlannerPersonDto {
-                member_id: participant.member_id.as_uuid(),
-                display_name: participant.display_name.clone(),
-                status: participant.status,
-                allocations: participant
-                    .allocations
-                    .clone()
-                    .into_iter()
-                    .map(Into::into)
-                    .collect(),
-                can_record,
-            });
-        }
-        let can_opt_out = view.entry.scope == mmp_core::domain::MealPlanScope::Household
-            && view
-                .entry
-                .participant_for(member_id)
-                .is_some_and(|participant| {
-                    participant
-                        .allocations
-                        .iter()
-                        .all(|allocation| !allocation.status.is_resolved())
-                });
-        let can_join = view.entry.scope == mmp_core::domain::MealPlanScope::Household
-            && !mine
-            && !views.iter().any(|candidate| {
-                candidate.entry.id != view.entry.id
-                    && candidate.entry.planned_on == view.entry.planned_on
-                    && candidate.entry.slot == view.entry.slot
-                    && (view.entry.slot != mmp_core::domain::MealSlot::Snacks
-                        || candidate.entry.planned_time == view.entry.planned_time)
-                    && (candidate.entry.member_id == Some(member_id)
-                        || candidate.entry.participant_for(member_id).is_some())
-            });
-        let can_edit = match view.entry.scope {
-            mmp_core::domain::MealPlanScope::Member => {
-                can_manage_personal_meal(
-                    &state,
-                    &principal,
-                    view.entry.member_id.ok_or_else(|| {
-                        ApiError::new(
-                            StatusCode::CONFLICT,
-                            "invalid-meal",
-                            "Meal unavailable",
-                            "This personal meal has no owner.",
-                        )
-                    })?,
-                )
-                .await?
-            }
-            mmp_core::domain::MealPlanScope::Household => include_household,
-        } && view.status.is_unresolved();
-        let owner_name = if let Some(owner_id) = view.entry.member_id {
-            Some(state.household.get_member(owner_id).await?.display_name)
-        } else {
-            None
-        };
-        let foods = view
-            .components
-            .iter()
-            .map(|component| PlannerFoodDto {
-                id: component.component.id.as_uuid(),
-                item: component.component.item.into(),
-                item_name: component.item_name.clone(),
-                amount: component.component.amount.into(),
-                shortage: component.preparation.shortage,
-                needs_cooking: component.component.item.is_recipe() && component.cooked.is_none(),
-                cooked: component.cooked.as_ref().map(|batch| CookedDto {
-                    prepared_batch_id: batch.id.as_uuid(),
-                    prepared_at: batch.prepared_at,
-                    servings_produced: batch.servings_produced,
-                    revision: batch.revision.get(),
-                }),
-            })
-            .collect();
-        meals.push(PlannerMealDto {
-            id: view.entry.id.as_uuid(),
-            mine,
-            scope: view.entry.scope,
-            member_id: view.entry.member_id.map(|id| id.as_uuid()),
-            owner_name,
-            planned_on: view.entry.planned_on,
-            planned_time: view.entry.planned_time,
-            slot: view.entry.slot,
-            status: view.status,
-            foods,
-            people,
-            guest_groups: view
-                .entry
-                .guest_groups
-                .clone()
-                .into_iter()
-                .map(|group| MealGuestGroupDto::build(group, view.assumption))
-                .collect(),
-            opted_out: view
-                .entry
-                .opted_out
-                .clone()
-                .into_iter()
-                .map(Into::into)
-                .collect(),
-            can_opt_out,
-            can_join,
-            capabilities: PlannerCapabilitiesDto {
-                can_edit,
-                can_delete: can_edit,
-                can_record_guests: include_household,
-            },
-            revision: view.entry.revision.get(),
-        });
-    }
-    Ok(Json(PlannerWeekDto {
-        week_start,
-        week_end: week_start + Duration::days(6),
-        days: nutrition.days.into_iter().map(Into::into).collect(),
-        actual: nutrition.actual,
-        remaining_planned: nutrition.remaining_planned,
-        projected: nutrition.projected,
-        target: nutrition.target,
-        calorie_direction: nutrition.calorie_direction,
-        meals,
-    }))
+    personal_member(&state, &principal).await?;
+    let week = state.meal_plan.planner_week(week_start).await?;
+    let to_buy = to_buy_counts(&state).await?;
+    Ok(Json(PlannerWeekDto::build(week, |id| {
+        *to_buy.get(&id).unwrap_or(&0)
+    })))
 }
 
 #[utoipa::path(
     post,
-    path = "/api/v1/meal-plan-entries",
-    operation_id = "createMealPlanEntry",
-    request_body = CreateMealPlanEntryRequest,
-    responses((status = 201, body = MealPlanEntryDto)),
+    path = "/api/v1/planner/occasions",
+    operation_id = "createPlannerOccasion",
+    request_body = CreateOccasionRequest,
+    responses((status = 201, body = OccasionViewDto)),
     tag = "meal-plan",
     security(("basic" = []))
 )]
-async fn create(
+async fn create_occasion(
     State(state): State<AppState>,
     principal: Principal,
-    Json(body): Json<CreateMealPlanEntryRequest>,
-) -> ApiResult<Created<MealPlanEntryDto>> {
-    let member = personal_member(&state, &principal).await?;
-    if body.household {
-        if !principal.has(mmp_core::domain::Permission::HouseholdWrite) {
-            return Err(ApiError::new(
-                StatusCode::FORBIDDEN,
-                "forbidden",
-                "Forbidden",
-                "You cannot plan a household meal.",
-            ));
-        }
-    } else if let Some(requested) = body.member_id
-        && !can_manage_personal_meal(&state, &principal, requested.into()).await?
-    {
+    Json(body): Json<CreateOccasionRequest>,
+) -> ApiResult<Created<OccasionViewDto>> {
+    personal_member(&state, &principal).await?;
+    let input = body.into_domain(principal.user_id);
+    let view = state.meal_plan.create_occasion(input).await?;
+    let to_buy = to_buy_counts(&state).await?;
+    let revision = view.occasion.revision;
+    Ok(Created(
+        revision,
+        OccasionViewDto::build(view, |id| *to_buy.get(&id).unwrap_or(&0)),
+    ))
+}
+
+#[utoipa::path(
+    patch,
+    path = "/api/v1/planner/occasions/{id}",
+    operation_id = "updatePlannerOccasion",
+    params(("id" = Uuid, Path), ("If-Match" = String, Header)),
+    request_body = OccasionPatchRequest,
+    responses((status = 200, body = OccasionViewDto)),
+    tag = "meal-plan",
+    security(("basic" = []))
+)]
+async fn update_occasion(
+    State(state): State<AppState>,
+    principal: Principal,
+    Path(id): Path<Uuid>,
+    IfMatch(revision): IfMatch,
+    Json(body): Json<OccasionPatchRequest>,
+) -> ApiResult<Tagged<OccasionViewDto>> {
+    personal_member(&state, &principal).await?;
+    let patch = body.into_domain().map_err(|message| {
+        let mut errors = mmp_core::ValidationErrors::new();
+        errors.push("planned_time", message);
+        mmp_core::CoreError::Validation(errors)
+    })?;
+    let view: MealOccasionView = state
+        .meal_plan
+        .update_occasion(MealOccasionId::from(id), revision, patch, principal.user_id)
+        .await?;
+    let to_buy = to_buy_counts(&state).await?;
+    let out_revision = view.occasion.revision;
+    Ok(Tagged(
+        out_revision,
+        OccasionViewDto::build(view, |gid| *to_buy.get(&gid).unwrap_or(&0)),
+    ))
+}
+
+#[utoipa::path(
+    delete,
+    path = "/api/v1/planner/occasions/{id}",
+    operation_id = "deletePlannerOccasion",
+    params(("id" = Uuid, Path), ("If-Match" = String, Header)),
+    responses((status = 204)),
+    tag = "meal-plan",
+    security(("basic" = []))
+)]
+async fn delete_occasion(
+    State(state): State<AppState>,
+    principal: Principal,
+    Path(id): Path<Uuid>,
+    IfMatch(revision): IfMatch,
+) -> ApiResult<StatusCode> {
+    personal_member(&state, &principal).await?;
+    state
+        .meal_plan
+        .delete_occasion(MealOccasionId::from(id), revision)
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/planner/occasions/{id}/move",
+    operation_id = "movePlannerOccasion",
+    params(("id" = Uuid, Path)),
+    request_body = MoveOrCopyOccasionRequest,
+    responses((status = 200, body = OccasionViewDto)),
+    tag = "meal-plan",
+    security(("basic" = []))
+)]
+async fn move_occasion(
+    State(state): State<AppState>,
+    principal: Principal,
+    Path(id): Path<Uuid>,
+    Json(body): Json<MoveOrCopyOccasionRequest>,
+) -> ApiResult<Json<OccasionViewDto>> {
+    personal_member(&state, &principal).await?;
+    let occasion_id = MealOccasionId::from(id);
+    let current = state.meal_plan.get_occasion(occasion_id).await?;
+    let view = state
+        .meal_plan
+        .move_occasion(
+            occasion_id,
+            current.occasion.revision,
+            body.planned_on,
+            body.slot,
+            principal.user_id,
+        )
+        .await?;
+    let to_buy = to_buy_counts(&state).await?;
+    Ok(Json(OccasionViewDto::build(view, |gid| {
+        *to_buy.get(&gid).unwrap_or(&0)
+    })))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/planner/occasions/{id}/copy",
+    operation_id = "copyPlannerOccasion",
+    params(("id" = Uuid, Path)),
+    request_body = MoveOrCopyOccasionRequest,
+    responses((status = 200, body = OccasionViewDto)),
+    tag = "meal-plan",
+    security(("basic" = []))
+)]
+async fn copy_occasion(
+    State(state): State<AppState>,
+    principal: Principal,
+    Path(id): Path<Uuid>,
+    Json(body): Json<MoveOrCopyOccasionRequest>,
+) -> ApiResult<Json<OccasionViewDto>> {
+    personal_member(&state, &principal).await?;
+    let view = state
+        .meal_plan
+        .copy_occasion(
+            MealOccasionId::from(id),
+            body.planned_on,
+            body.slot,
+            principal.user_id,
+        )
+        .await?;
+    let to_buy = to_buy_counts(&state).await?;
+    Ok(Json(OccasionViewDto::build(view, |gid| {
+        *to_buy.get(&gid).unwrap_or(&0)
+    })))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/planner/occasions/{id}/groups",
+    operation_id = "addPlannerGroup",
+    params(("id" = Uuid, Path)),
+    request_body = NewGroupRequest,
+    responses((status = 201, body = GroupViewDto)),
+    tag = "meal-plan",
+    security(("basic" = []))
+)]
+async fn add_group(
+    State(state): State<AppState>,
+    principal: Principal,
+    Path(id): Path<Uuid>,
+    Json(body): Json<NewGroupRequest>,
+) -> ApiResult<Created<GroupViewDto>> {
+    personal_member(&state, &principal).await?;
+    let group_input = body.into_domain();
+    let group_id = group_input
+        .id
+        .expect("group id is always pre-assigned by the request DTO");
+    let view = state
+        .meal_plan
+        .add_group(MealOccasionId::from(id), group_input, principal.user_id)
+        .await?;
+    let group = group_in(&view, group_id)?;
+    let to_buy = to_buy_counts(&state).await?;
+    let revision = group.entry.entry.revision;
+    Ok(Created(
+        revision,
+        GroupViewDto::build(group, *to_buy.get(&group_id.as_uuid()).unwrap_or(&0)),
+    ))
+}
+
+#[utoipa::path(
+    patch,
+    path = "/api/v1/planner/groups/{id}",
+    operation_id = "updatePlannerGroup",
+    params(("id" = Uuid, Path), ("If-Match" = String, Header)),
+    request_body = GroupPatchRequest,
+    responses((status = 200, body = GroupViewDto)),
+    tag = "meal-plan",
+    security(("basic" = []))
+)]
+async fn update_group(
+    State(state): State<AppState>,
+    principal: Principal,
+    Path(id): Path<Uuid>,
+    IfMatch(revision): IfMatch,
+    Json(body): Json<GroupPatchRequest>,
+) -> ApiResult<Tagged<GroupViewDto>> {
+    personal_member(&state, &principal).await?;
+    let group_id = entry_id(id);
+    let patch = body.into_domain();
+    let view = state
+        .meal_plan
+        .update_group(group_id, revision, patch, principal.user_id)
+        .await?;
+    let group = group_in(&view, group_id)?;
+    let to_buy = to_buy_counts(&state).await?;
+    let out_revision = group.entry.entry.revision;
+    Ok(Tagged(
+        out_revision,
+        GroupViewDto::build(group, *to_buy.get(&id).unwrap_or(&0)),
+    ))
+}
+
+#[utoipa::path(
+    delete,
+    path = "/api/v1/planner/groups/{id}",
+    operation_id = "deletePlannerGroup",
+    params(("id" = Uuid, Path), ("If-Match" = String, Header)),
+    responses((status = 204)),
+    tag = "meal-plan",
+    security(("basic" = []))
+)]
+async fn delete_group(
+    State(state): State<AppState>,
+    principal: Principal,
+    Path(id): Path<Uuid>,
+    IfMatch(revision): IfMatch,
+) -> ApiResult<StatusCode> {
+    personal_member(&state, &principal).await?;
+    state
+        .meal_plan
+        .delete_group(entry_id(id), revision, principal.user_id)
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[utoipa::path(
+    put,
+    path = "/api/v1/planner/occasions/{id}/attendance/{member_id}",
+    operation_id = "setPlannerAttendance",
+    params(("id" = Uuid, Path), ("member_id" = Uuid, Path)),
+    request_body = SetAttendanceRequest,
+    responses((status = 200, body = OccasionViewDto)),
+    tag = "meal-plan",
+    security(("basic" = []))
+)]
+async fn set_attendance(
+    State(state): State<AppState>,
+    principal: Principal,
+    Path((id, member_id)): Path<(Uuid, Uuid)>,
+    Json(body): Json<SetAttendanceRequest>,
+) -> ApiResult<Json<OccasionViewDto>> {
+    personal_member(&state, &principal).await?;
+    let target: HouseholdMemberId = member_id.into();
+    if principal.member_id != Some(target) && !principal.has(Permission::HouseholdWrite) {
         return Err(ApiError::new(
             StatusCode::FORBIDDEN,
             "forbidden",
             "Forbidden",
-            "You cannot plan this person's meal.",
+            "You cannot set someone else's attendance.",
         ));
     }
-    let mut new_entry = body.into_domain(member, principal.user_id);
-    if new_entry.planned_time.is_none() {
-        let settings = state.household_settings.get().await?;
-        new_entry.planned_time = settings.meal_times.for_slot(new_entry.slot);
-    }
-    let created = state.meal_plan.create(new_entry).await?;
-    Ok(Created(created.entry.revision, created.into()))
+    let view = state
+        .meal_plan
+        .set_attendance(
+            MealOccasionId::from(id),
+            target,
+            body.attendance.into_domain(),
+            principal.user_id,
+        )
+        .await?;
+    let to_buy = to_buy_counts(&state).await?;
+    Ok(Json(OccasionViewDto::build(view, |gid| {
+        *to_buy.get(&gid).unwrap_or(&0)
+    })))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/planner/{week_start}/copy-from/{source_week_start}",
+    operation_id = "copyPlannerWeek",
+    params(
+        ("week_start" = String, Path, example = "2026-08-24"),
+        ("source_week_start" = String, Path, example = "2026-08-17"),
+    ),
+    responses((status = 200, body = PlannerWeekDto)),
+    tag = "meal-plan",
+    security(("basic" = []))
+)]
+async fn copy_week(
+    State(state): State<AppState>,
+    principal: Principal,
+    Path((week_start, source_week_start)): Path<(String, String)>,
+) -> ApiResult<Json<PlannerWeekDto>> {
+    personal_member(&state, &principal).await?;
+    let week_start = parse_week_start(&week_start)?;
+    let source_week_start = parse_week_start(&source_week_start)?;
+    let week = state
+        .meal_plan
+        .copy_week(week_start, source_week_start, principal.user_id)
+        .await?;
+    let to_buy = to_buy_counts(&state).await?;
+    Ok(Json(PlannerWeekDto::build(week, |id| {
+        *to_buy.get(&id).unwrap_or(&0)
+    })))
 }
 
 #[utoipa::path(
@@ -428,8 +526,8 @@ async fn get_one(
     principal: Principal,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Tagged<MealPlanEntryDto>> {
+    personal_member(&state, &principal).await?;
     let entry = state.meal_plan.get(entry_id(id)).await?;
-    require_entry_access(&state, &principal, &entry.entry).await?;
     Ok(Tagged(entry.entry.revision, entry.into()))
 }
 
@@ -450,18 +548,14 @@ async fn update(
     IfMatch(revision): IfMatch,
     Json(body): Json<UpdateMealPlanEntryRequest>,
 ) -> ApiResult<Tagged<MealPlanEntryDto>> {
+    personal_member(&state, &principal).await?;
     let id = entry_id(id);
-    let current = state.meal_plan.get(id).await?;
-    require_plan_edit_access(&state, &principal, &current.entry).await?;
-    let patch = body.into_domain().map_err(|message| {
-        let mut errors = mmp_core::ValidationErrors::new();
-        errors.push("planned_time", message);
-        mmp_core::CoreError::Validation(errors)
-    })?;
-    let updated = state
+    let patch = body.into_domain();
+    state
         .meal_plan
-        .update(id, revision, patch, principal.user_id)
+        .update_group(id, revision, patch, principal.user_id)
         .await?;
+    let updated = state.meal_plan.get(id).await?;
     Ok(Tagged(updated.entry.revision, updated.into()))
 }
 
@@ -480,10 +574,12 @@ async fn delete(
     Path(id): Path<Uuid>,
     IfMatch(revision): IfMatch,
 ) -> ApiResult<StatusCode> {
+    personal_member(&state, &principal).await?;
     let id = entry_id(id);
-    let current = state.meal_plan.get(id).await?;
-    require_plan_edit_access(&state, &principal, &current.entry).await?;
-    state.meal_plan.delete(id, revision).await?;
+    state
+        .meal_plan
+        .delete_group(id, revision, principal.user_id)
+        .await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -505,14 +601,12 @@ async fn mark_eaten(
     Json(body): Json<MarkMealPlanEatenRequest>,
 ) -> ApiResult<Tagged<MealPlanEntryDto>> {
     let id = entry_id(id);
-    let current = state.meal_plan.get(id).await?;
     let subject = body
         .member_id
         .map(Into::into)
         .or(principal.member_id)
         .ok_or_else(|| ApiError::bad_request("Choose whose meal to record."))?;
     require_outcome_access(&state, &principal, subject).await?;
-    require_entry_access(&state, &principal, &current.entry).await?;
     let updated = state
         .meal_plan
         .mark_eaten(id, revision, body.into_domain(principal.user_id))
@@ -536,12 +630,10 @@ async fn mark_not_eaten(
     IfMatch(revision): IfMatch,
 ) -> ApiResult<Tagged<MealPlanEntryDto>> {
     let id = entry_id(id);
-    let current = state.meal_plan.get(id).await?;
     let subject = principal.member_id.ok_or_else(|| {
         ApiError::bad_request("Your account is not linked to a household member.")
     })?;
     require_outcome_access(&state, &principal, subject).await?;
-    require_entry_access(&state, &principal, &current.entry).await?;
     let updated = state
         .meal_plan
         .mark_not_eaten(
@@ -572,12 +664,10 @@ async fn reopen(
     IfMatch(revision): IfMatch,
 ) -> ApiResult<Tagged<MealPlanEntryDto>> {
     let id = entry_id(id);
-    let current = state.meal_plan.get(id).await?;
     let subject = principal.member_id.ok_or_else(|| {
         ApiError::bad_request("Your account is not linked to a household member.")
     })?;
     require_outcome_access(&state, &principal, subject).await?;
-    require_entry_access(&state, &principal, &current.entry).await?;
     let updated = state
         .meal_plan
         .reopen(
@@ -610,14 +700,12 @@ async fn mark_component_eaten(
     Json(body): Json<MarkMealPlanComponentEatenRequest>,
 ) -> ApiResult<Json<MealPlanEntryDto>> {
     let id = entry_id(id);
-    let current = state.meal_plan.get(id).await?;
     let subject = body
         .member_id
         .map(Into::into)
         .or(principal.member_id)
         .ok_or_else(|| ApiError::bad_request("Choose whose meal to record."))?;
     require_outcome_access(&state, &principal, subject).await?;
-    require_entry_access(&state, &principal, &current.entry).await?;
     let updated = state
         .meal_plan
         .mark_component_eaten(
@@ -646,12 +734,10 @@ async fn mark_component_not_eaten(
     IfMatch(revision): IfMatch,
 ) -> ApiResult<Json<MealPlanEntryDto>> {
     let id = entry_id(id);
-    let current = state.meal_plan.get(id).await?;
     let subject = principal.member_id.ok_or_else(|| {
         ApiError::bad_request("Your account is not linked to a household member.")
     })?;
     require_outcome_access(&state, &principal, subject).await?;
-    require_entry_access(&state, &principal, &current.entry).await?;
     let updated = state
         .meal_plan
         .mark_component_not_eaten(
@@ -683,12 +769,10 @@ async fn reopen_component(
     IfMatch(revision): IfMatch,
 ) -> ApiResult<Json<MealPlanEntryDto>> {
     let id = entry_id(id);
-    let current = state.meal_plan.get(id).await?;
     let subject = principal.member_id.ok_or_else(|| {
         ApiError::bad_request("Your account is not linked to a household member.")
     })?;
     require_outcome_access(&state, &principal, subject).await?;
-    require_entry_access(&state, &principal, &current.entry).await?;
     let updated = state
         .meal_plan
         .reopen_component(
@@ -702,130 +786,6 @@ async fn reopen_component(
         )
         .await?;
     Ok(Json(updated.into()))
-}
-
-#[utoipa::path(
-    put,
-    path = "/api/v1/meal-plan-entries/{id}/participants",
-    operation_id = "setMealPlanParticipants",
-    params(("id" = Uuid, Path), ("If-Match" = String, Header)),
-    request_body = SetMealPlanParticipantsRequest,
-    responses((status = 200, body = MealPlanEntryDto)),
-    tag = "meal-plan",
-    security(("basic" = []))
-)]
-async fn set_participants(
-    State(state): State<AppState>,
-    principal: Principal,
-    Path(id): Path<Uuid>,
-    IfMatch(revision): IfMatch,
-    Json(body): Json<SetMealPlanParticipantsRequest>,
-) -> ApiResult<Tagged<MealPlanEntryDto>> {
-    let id = entry_id(id);
-    let current = state.meal_plan.get(id).await?;
-    require_plan_edit_access(&state, &principal, &current.entry).await?;
-    let updated = state
-        .meal_plan
-        .set_participants(id, revision, body.into_domain(principal.user_id))
-        .await?;
-    Ok(Tagged(updated.entry.revision, updated.into()))
-}
-
-#[utoipa::path(
-    post,
-    path = "/api/v1/meal-plan-entries/{id}/opt-out",
-    operation_id = "optOutOfMealPlanEntry",
-    params(("id" = Uuid, Path), ("If-Match" = String, Header)),
-    responses((status = 200, body = MealPlanEntryDto)),
-    tag = "meal-plan",
-    security(("basic" = []))
-)]
-async fn opt_out(
-    State(state): State<AppState>,
-    principal: Principal,
-    Path(id): Path<Uuid>,
-    IfMatch(revision): IfMatch,
-) -> ApiResult<Tagged<MealPlanEntryDto>> {
-    let id = entry_id(id);
-    let member = personal_member(&state, &principal).await?;
-    let updated = state
-        .meal_plan
-        .opt_out(id, revision, principal.user_id, member)
-        .await?;
-    Ok(Tagged(updated.entry.revision, updated.into()))
-}
-
-#[utoipa::path(
-    delete,
-    path = "/api/v1/meal-plan-entries/{id}/opt-out",
-    operation_id = "rejoinMealPlanEntry",
-    params(("id" = Uuid, Path), ("If-Match" = String, Header)),
-    responses((status = 200, body = MealPlanEntryDto)),
-    tag = "meal-plan",
-    security(("basic" = []))
-)]
-async fn opt_in(
-    State(state): State<AppState>,
-    principal: Principal,
-    Path(id): Path<Uuid>,
-    IfMatch(revision): IfMatch,
-) -> ApiResult<Tagged<MealPlanEntryDto>> {
-    let id = entry_id(id);
-    let member = personal_member(&state, &principal).await?;
-    let updated = state
-        .meal_plan
-        .opt_in(id, revision, principal.user_id, member)
-        .await?;
-    Ok(Tagged(updated.entry.revision, updated.into()))
-}
-
-#[utoipa::path(
-    get,
-    path = "/api/v1/household/planner/attendance/{date}/{slot}",
-    operation_id = "getHouseholdSlotAttendance",
-    params(
-        ("date" = String, Path, example = "2026-09-10"),
-        ("slot" = String, Path, example = "dinner"),
-        ("exclude_entry" = Option<Uuid>, Query)
-    ),
-    responses((status = 200, body = [crate::dto::SlotAttendanceDto])),
-    tag = "meal-plan",
-    security(("basic" = []))
-)]
-async fn household_slot_attendance(
-    State(state): State<AppState>,
-    principal: Principal,
-    Path((date, slot)): Path<(String, String)>,
-    axum::extract::Query(query): axum::extract::Query<AttendanceQuery>,
-) -> ApiResult<Json<Vec<crate::dto::SlotAttendanceDto>>> {
-    principal.require(mmp_core::domain::Permission::HouseholdWrite)?;
-    let date = iso_date::parse(&date).map_err(|_| {
-        ApiError::bad_request(format!("`{date}` is not a valid date (YYYY-MM-DD)."))
-    })?;
-    let slot: mmp_core::domain::MealSlot = slot
-        .parse()
-        .map_err(|_| ApiError::bad_request(format!("`{slot}` is not a meal slot.")))?;
-    let rows = state
-        .meal_plan
-        .slot_attendance(date, slot, query.exclude_entry.map(entry_id))
-        .await?;
-    let mut out = Vec::with_capacity(rows.len());
-    for (member_id, attendance, claimed_time) in rows {
-        let member = state.household.get_member(member_id).await?;
-        out.push(crate::dto::SlotAttendanceDto {
-            member_id: member_id.as_uuid(),
-            display_name: member.display_name,
-            attendance,
-            claimed_time,
-        });
-    }
-    Ok(Json(out))
-}
-
-#[derive(serde::Deserialize)]
-struct AttendanceQuery {
-    #[serde(default)]
-    exclude_entry: Option<Uuid>,
 }
 
 #[utoipa::path(
@@ -846,7 +806,6 @@ async fn review_outcomes(
     Json(body): Json<ReviewMealOutcomesRequest>,
 ) -> ApiResult<Tagged<MealPlanEntryDto>> {
     let id = entry_id(id);
-    let current = state.meal_plan.get(id).await?;
     for member in &body.members {
         let member_id: HouseholdMemberId = member.member_id.into();
         let allowed = principal.member_id == Some(member_id)
@@ -872,7 +831,6 @@ async fn review_outcomes(
             "You cannot record guest meals.",
         ));
     }
-    require_entry_access(&state, &principal, &current.entry).await?;
     let updated = state
         .meal_plan
         .review_outcomes(id, revision, body.into_domain(principal.user_id))

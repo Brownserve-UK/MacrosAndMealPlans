@@ -144,7 +144,6 @@ pub fn app_state(config: &Config, pool: &PgPool) -> AppState {
         Arc::new(PgMealPlanRepository::new(pool.clone())),
         recipes_repo.clone(),
         Arc::new(PgPreparedBatchRepository::new(pool.clone())),
-        Arc::new(PgHouseholdMemberRepository::new(pool.clone())),
         Arc::new(PgHouseholdSettingsRepository::new(pool.clone())),
         Arc::new(SystemClock),
     );

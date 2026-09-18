@@ -269,8 +269,9 @@ impl MealPlanService {
         }
         if let Some(participants) = patch.participants {
             validate_participants(&participants, &group.components)?;
-            self.ensure_members_active(participants.iter().map(|p| p.member_id))
-                .await?;
+            let requested_member_ids: Vec<HouseholdMemberId> =
+                participants.iter().map(|p| p.member_id).collect();
+            self.ensure_members_active(requested_member_ids).await?;
             if let Some(removed) = group.participants.iter().find(|existing| {
                 !participants
                     .iter()
@@ -480,8 +481,9 @@ impl MealPlanService {
         }
         let components = make_components(input.components);
         validate_participants(&input.participants, &components)?;
-        self.ensure_members_active(input.participants.iter().map(|p| p.member_id))
-            .await?;
+        let requested_member_ids: Vec<HouseholdMemberId> =
+            input.participants.iter().map(|p| p.member_id).collect();
+        self.ensure_members_active(requested_member_ids).await?;
         validate_guest_groups(&input.guest_groups, &components)?;
         let explicit = has_explicit_allocations(&input.participants);
         let participants = input

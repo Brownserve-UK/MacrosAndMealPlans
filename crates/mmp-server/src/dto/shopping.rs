@@ -1,9 +1,9 @@
 use mmp_core::domain::{
-    Assignment, Certainty, DemandSubject, NewPurchase, NewShoppingCadence, NewShoppingListItem,
-    OpportunityState, Patch, Purchase, PurchasePatch, PurchaseState, ShoppingCadence,
-    ShoppingListItem, ShoppingListItemPatch, ShoppingOpportunity, ShoppingRequirement,
-    ShoppingSection, ShoppingTrip, ShoppingTripRow, SuggestionReason, TripState,
-    week_day_from_number, week_day_number,
+    Assignment, Certainty, DemandSubject, MealReference, MealSlot, NewPurchase, NewShoppingCadence,
+    NewShoppingListItem, OpportunityState, Patch, Purchase, PurchasePatch, PurchaseState,
+    ShoppingCadence, ShoppingListItem, ShoppingListItemPatch, ShoppingOpportunity,
+    ShoppingRequirement, ShoppingSection, ShoppingTrip, ShoppingTripRow, SuggestionReason,
+    TripState, week_day_from_number, week_day_number,
 };
 use mmp_core::services::{FinishedShop, ShopCount, ShoppingList, UnfinishedShop};
 use serde::{Deserialize, Serialize};
@@ -207,6 +207,25 @@ impl From<Assignment> for AssignmentDto {
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct MealReferenceDto {
+    pub name: String,
+    #[serde(with = "iso_date")]
+    #[schema(value_type = String, format = Date)]
+    pub planned_on: Date,
+    pub slot: MealSlot,
+}
+
+impl From<MealReference> for MealReferenceDto {
+    fn from(value: MealReference) -> Self {
+        Self {
+            name: value.name,
+            planned_on: value.planned_on,
+            slot: value.slot,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct ShoppingRequirementDto {
     pub subject: DemandSubjectDto,
     pub name: String,
@@ -234,6 +253,8 @@ pub struct ShoppingRequirementDto {
     pub gaps: Vec<DemandGapDto>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub purchases: Vec<PurchaseDto>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub for_meals: Vec<MealReferenceDto>,
 }
 
 impl From<ShoppingRequirement> for ShoppingRequirementDto {
@@ -250,6 +271,7 @@ impl From<ShoppingRequirement> for ShoppingRequirementDto {
             claims: value.claims.into_iter().map(Into::into).collect(),
             gaps: value.gaps.into_iter().map(Into::into).collect(),
             purchases: value.purchases.into_iter().map(Into::into).collect(),
+            for_meals: value.for_meals.into_iter().map(Into::into).collect(),
         }
     }
 }
@@ -306,6 +328,7 @@ pub struct ShopCountDto {
     #[schema(value_type = String, format = Date, example = "2026-09-05")]
     pub date: Date,
     pub items: i64,
+    pub planned_count: i64,
 }
 
 impl From<ShopCount> for ShopCountDto {
@@ -313,6 +336,7 @@ impl From<ShopCount> for ShopCountDto {
         Self {
             date: value.date,
             items: value.items as i64,
+            planned_count: value.planned as i64,
         }
     }
 }
