@@ -5,29 +5,29 @@ use mmp_core::domain::{
     ACTIVITY_SOURCE_SELF_REPORTED, AccessScope, Assumption, CALORIE_FORMULA, CalorieCalculation,
     CalorieCalculationId, CatalogueOrigin, ConsumedAmount, ConsumedNutrition, ConsumptionRecord,
     ConsumptionRecordId, ExceptionState, HabitualActivity, HouseholdMember, HouseholdMemberId,
-    Ingredient, IngredientId, MealCategory, MealGuestAllocation, MealGuestAllocationId,
-    MealGuestGroup, MealGuestGroupId, MealItemRef, MealParticipant, MealParticipantAllocation,
-    MealParticipantAllocationId, MealParticipantId, MealPlanComponent, MealPlanComponentId,
-    MealPlanComponentSnapshot, MealPlanEntry, MealPlanEntryId, MealPlanScope, MealPlanStatus,
-    MealSlot, MealTemplate, MealTemplateComponent, MealTemplateComponentId, MealTemplateId,
-    MemberAccessGrant, MemberBodyProfile, NewStockEvent, NutritionEmphasis, NutritionFacts,
-    NutritionGoals, NutritionQuality, NutritionTarget, NutritionTargetId, OpportunityException,
-    ParticipantStatus, PreparationSource, PreparedBatch, PreparedBatchId, PreparedMeal,
-    PreparedMealId, Product, ProductId, Provenance, Purchase, PurchaseId, PurchaseState, Quantity,
-    Recipe, RecipeComponent, RecipeComponentId, RecipeId, RecipeInstruction, RecipeInstructionId,
-    RecipePhoto, RecipePhotoDerivatives, RecipeRequirement, RecipeVisibility, Revision, Role,
-    SectionOrder, Sex, ShoppingCadence, ShoppingListItem, ShoppingListItemId,
-    ShoppingOpportunityId, ShoppingSection, ShoppingTrip, ShoppingTripId, ShoppingTripRow,
-    ShoppingTripRowId, StockEventKind, StockItem, StockItemId, StockLevel, StockSubject,
-    StorageLocation, TargetSource, TripState, Unit, User, UserId, WeightDisplay, WeightGoal,
-    WeightGoalId, WeightObjective, WeightRecord, WeightRecordId, WeightSource,
+    Ingredient, IngredientId, MealAbsence, MealCategory, MealGuestAllocation,
+    MealGuestAllocationId, MealGuestGroup, MealGuestGroupId, MealItemRef, MealOccasion,
+    MealOccasionId, MealParticipant, MealParticipantAllocation, MealParticipantAllocationId,
+    MealParticipantId, MealPlanComponent, MealPlanComponentId, MealPlanComponentSnapshot,
+    MealPlanEntry, MealPlanEntryId, MealPlanStatus, MealSlot, MealTemplate, MealTemplateComponent,
+    MealTemplateComponentId, MealTemplateId, MemberAccessGrant, MemberBodyProfile, NewStockEvent,
+    NutritionEmphasis, NutritionFacts, NutritionGoals, NutritionQuality, NutritionTarget,
+    NutritionTargetId, OpportunityException, ParticipantStatus, PreparationSource, PreparedBatch,
+    PreparedBatchId, PreparedMeal, PreparedMealId, Product, ProductId, Provenance, Purchase,
+    PurchaseId, PurchaseState, Quantity, Recipe, RecipeComponent, RecipeComponentId, RecipeId,
+    RecipeInstruction, RecipeInstructionId, RecipePhoto, RecipePhotoDerivatives, RecipeRequirement,
+    RecipeVisibility, Revision, Role, SectionOrder, Sex, ShoppingCadence, ShoppingListItem,
+    ShoppingListItemId, ShoppingOpportunityId, ShoppingSection, ShoppingTrip, ShoppingTripId,
+    ShoppingTripRow, ShoppingTripRowId, StockEventKind, StockItem, StockItemId, StockLevel,
+    StockSubject, StorageLocation, TargetSource, TripState, Unit, User, UserId, WeightDisplay,
+    WeightGoal, WeightGoalId, WeightObjective, WeightRecord, WeightRecordId, WeightSource,
 };
 use mmp_core::domain::{DeductionTarget, StockEffectSource, StockEventSource};
 use mmp_core::ports::{
     AccessGrantRepository, CalorieCalculationRepository, ConsumptionQuery,
     ConsumptionRecordRepository, FinishShopRepository, FinishedPurchase, FinishedShoppingTrip,
     HouseholdMemberRepository, HouseholdSettingsRepository, IngredientQuery, IngredientRepository,
-    IngredientSort, MealPlanComponentUpdate, MealPlanQuery, MealPlanRepository, MealTemplateQuery,
+    IngredientSort, MealPlanComponentUpdate, MealPlanRepository, MealTemplateQuery,
     MealTemplateRepository, MemberBodyProfileRepository, MemberQuery, NewStockFromPurchase,
     NutritionTargetRepository, PageRequest, PreparedBatchRepository, PreparedMealRepository,
     ProductQuery, ProductRepository, PurchaseRepository, RecipeQuery, RecipeRepository,
@@ -1276,34 +1276,22 @@ async fn seed_meal_plan_dependencies(pool: &PgPool) -> (HouseholdMemberId, Produ
     (member_id, product_id, actor.id)
 }
 
-fn meal_plan_entry(
-    member_id: HouseholdMemberId,
-    product_id: ProductId,
-    actor_id: UserId,
-) -> MealPlanEntry {
+fn timestamp_now() -> OffsetDateTime {
     let now = OffsetDateTime::now_utc();
-    let now = now
-        .replace_nanosecond(now.nanosecond() / 1_000 * 1_000)
-        .unwrap();
-    MealPlanEntry {
-        id: MealPlanEntryId::new(),
-        scope: MealPlanScope::Member,
-        member_id: Some(member_id),
-        planned_on: date!(2026 - 08 - 25),
+    now.replace_nanosecond(now.nanosecond() / 1_000 * 1_000)
+        .unwrap()
+}
+
+fn new_meal_occasion(planned_on: Date, slot: MealSlot, actor_id: UserId) -> MealOccasion {
+    let now = timestamp_now();
+    MealOccasion {
+        id: MealOccasionId::new(),
+        planned_on,
+        slot,
         planned_time: Some(time::macros::time!(18:30)),
-        slot: MealSlot::Dinner,
-        components: vec![MealPlanComponent {
-            id: MealPlanComponentId::new(),
-            item: MealItemRef::product(product_id),
-            amount: ConsumedAmount::Measure(Quantity::new(Decimal::new(150, 0), Unit::Millilitre)),
-            position: 0,
-            snapshot: None,
-            revision: Revision::INITIAL,
-            display_order: Uuid::now_v7(),
-        }],
-        participants: Vec::<MealParticipant>::new(),
-        guest_groups: Vec::new(),
-        opted_out: Vec::new(),
+        note: None,
+        groups: Vec::new(),
+        absences: Vec::new(),
         created_by: actor_id,
         updated_by: actor_id,
         revision: Revision::INITIAL,
@@ -1312,101 +1300,267 @@ fn meal_plan_entry(
     }
 }
 
-fn household_snack_entry(
-    member_id: HouseholdMemberId,
-    product_id: ProductId,
-    actor_id: UserId,
-    planned_time: Option<time::Time>,
-) -> MealPlanEntry {
-    let mut entry = meal_plan_entry(member_id, product_id, actor_id);
-    entry.scope = MealPlanScope::Household;
-    entry.member_id = None;
-    entry.slot = MealSlot::Snacks;
-    entry.planned_time = planned_time;
-    let component_id = entry.components[0].id;
-    entry.participants = vec![MealParticipant {
-        id: MealParticipantId::new(),
-        member_id,
-        allocations: vec![MealParticipantAllocation {
-            id: MealParticipantAllocationId::new(),
-            component_id,
-            allocated: entry.components[0].amount,
-            status: ParticipantStatus::Planned,
-            consumption_record_id: None,
-            resolved_by: None,
-            resolved_at: None,
-        }],
-        revision: Revision::INITIAL,
-        created_at: entry.created_at,
-        updated_at: entry.updated_at,
-    }];
-    entry
+fn dinner_occasion(actor_id: UserId) -> MealOccasion {
+    new_meal_occasion(date!(2026 - 08 - 25), MealSlot::Dinner, actor_id)
 }
 
-fn household_dinner_entry(
+async fn seed_dinner_occasion(pool: &PgPool, actor_id: UserId) -> MealOccasion {
+    let occasion = dinner_occasion(actor_id);
+    PgMealPlanRepository::new(pool.clone())
+        .insert_occasion(&occasion)
+        .await
+        .unwrap();
+    occasion
+}
+
+fn meal_plan_group(
+    occasion: &MealOccasion,
     member_id: HouseholdMemberId,
     product_id: ProductId,
     actor_id: UserId,
 ) -> MealPlanEntry {
-    let mut entry = household_snack_entry(member_id, product_id, actor_id, None);
-    entry.slot = MealSlot::Dinner;
-    entry.planned_time = Some(time::macros::time!(18:30));
-    entry
+    let now = timestamp_now();
+    let component_id = MealPlanComponentId::new();
+    let amount = ConsumedAmount::Measure(Quantity::new(Decimal::new(150, 0), Unit::Millilitre));
+    MealPlanEntry {
+        id: MealPlanEntryId::new(),
+        occasion_id: occasion.id,
+        planned_on: occasion.planned_on,
+        planned_time: occasion.planned_time,
+        slot: occasion.slot,
+        label: None,
+        ad_hoc: None,
+        components: vec![MealPlanComponent {
+            id: component_id,
+            item: MealItemRef::product(product_id),
+            amount,
+            position: 0,
+            snapshot: None,
+            revision: Revision::INITIAL,
+            display_order: Uuid::now_v7(),
+        }],
+        everyone: true,
+        participants: vec![MealParticipant {
+            id: MealParticipantId::new(),
+            member_id,
+            note: Some("no dairy".to_owned()),
+            allocations: vec![MealParticipantAllocation {
+                id: MealParticipantAllocationId::new(),
+                component_id,
+                allocated: amount,
+                status: ParticipantStatus::Planned,
+                consumption_record_id: None,
+                resolved_by: None,
+                resolved_at: None,
+            }],
+            revision: Revision::INITIAL,
+            created_at: now,
+            updated_at: now,
+        }],
+        guest_groups: Vec::new(),
+        cooking_servings: None,
+        created_by: actor_id,
+        updated_by: actor_id,
+        revision: Revision::INITIAL,
+        created_at: now,
+        updated_at: now,
+    }
 }
 
 #[sqlx::test]
-async fn opting_out_replaces_the_participant_with_a_marker_and_cascades_on_delete(pool: PgPool) {
+async fn round_trips_an_occasion_with_a_group_and_an_absence(pool: PgPool) {
     let (member_id, product_id, actor_id) = seed_meal_plan_dependencies(&pool).await;
-    let repo = PgMealPlanRepository::new(pool.clone());
-    let mut entry = household_dinner_entry(member_id, product_id, actor_id);
-    repo.insert(&entry).await.unwrap();
-
-    entry.participants.clear();
-    entry.opted_out.push(mmp_core::domain::MealOptOut {
-        member_id,
+    let other_member = member("Someone else");
+    PgHouseholdMemberRepository::new(pool.clone())
+        .insert(&other_member)
+        .await
+        .unwrap();
+    let repo = PgMealPlanRepository::new(pool);
+    let mut occasion = dinner_occasion(actor_id);
+    let group = meal_plan_group(&occasion, member_id, product_id, actor_id);
+    occasion.groups = vec![group.clone()];
+    occasion.absences = vec![MealAbsence {
+        member_id: other_member.id,
         created_by: actor_id,
-        created_at: entry.updated_at,
-    });
-    entry.revision = entry.revision.next();
+        created_at: occasion.created_at,
+    }];
+
+    repo.insert_occasion(&occasion).await.unwrap();
+
+    let loaded = repo.get_occasion(occasion.id).await.unwrap().unwrap();
+    assert_eq!(loaded.groups, vec![group]);
+    assert_eq!(loaded.absences, occasion.absences);
+
+    let found = repo
+        .find_occasion(occasion.planned_on, occasion.slot)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(found.id, occasion.id);
+}
+
+#[sqlx::test]
+async fn inserting_a_second_occasion_in_the_same_slot_is_a_duplicate(pool: PgPool) {
+    let (_, _, actor_id) = seed_meal_plan_dependencies(&pool).await;
+    let repo = PgMealPlanRepository::new(pool);
+    let first = dinner_occasion(actor_id);
+    repo.insert_occasion(&first).await.unwrap();
+
+    let second = dinner_occasion(actor_id);
+    let error = repo.insert_occasion(&second).await.unwrap_err();
+    assert!(matches!(error, CoreError::Duplicate { .. }), "{error:?}");
+}
+
+#[sqlx::test]
+async fn list_occasions_filters_by_date_range(pool: PgPool) {
+    let (_, _, actor_id) = seed_meal_plan_dependencies(&pool).await;
+    let repo = PgMealPlanRepository::new(pool);
+    let in_range = dinner_occasion(actor_id);
+    let out_of_range = new_meal_occasion(date!(2020 - 01 - 01), MealSlot::Dinner, actor_id);
+    repo.insert_occasion(&in_range).await.unwrap();
+    repo.insert_occasion(&out_of_range).await.unwrap();
+
+    let listed = repo
+        .list_occasions(date!(2026 - 08 - 24), date!(2026 - 08 - 30))
+        .await
+        .unwrap();
+    assert_eq!(
+        listed.iter().map(|o| o.id).collect::<Vec<_>>(),
+        vec![in_range.id]
+    );
+
+    let through = repo
+        .list_occasions_through(date!(2026 - 09 - 02))
+        .await
+        .unwrap();
+    assert_eq!(
+        through.iter().map(|o| o.id).collect::<Vec<_>>(),
+        vec![out_of_range.id, in_range.id]
+    );
+}
+
+#[sqlx::test]
+async fn updating_an_occasion_replaces_its_groups_and_absences(pool: PgPool) {
+    let (member_id, product_id, actor_id) = seed_meal_plan_dependencies(&pool).await;
+    let other_member = member("Someone else");
+    PgHouseholdMemberRepository::new(pool.clone())
+        .insert(&other_member)
+        .await
+        .unwrap();
+    let repo = PgMealPlanRepository::new(pool);
+    let mut occasion = dinner_occasion(actor_id);
+    let kept_group = meal_plan_group(&occasion, member_id, product_id, actor_id);
+    occasion.groups = vec![kept_group.clone()];
+    repo.insert_occasion(&occasion).await.unwrap();
+
+    let mut updated = occasion.clone();
+    updated.note = Some("Family dinner".to_owned());
+    updated.absences = vec![MealAbsence {
+        member_id: other_member.id,
+        created_by: actor_id,
+        created_at: occasion.updated_at,
+    }];
+    updated.revision = updated.revision.next();
+
     let outcome = repo
-        .set_participants(&entry, Revision::INITIAL)
+        .update_occasion(&updated, occasion.revision)
         .await
         .unwrap();
     assert_eq!(outcome, UpdateOutcome::Updated);
 
-    let loaded = repo.get(entry.id).await.unwrap().unwrap();
-    assert!(loaded.participants.is_empty());
-    assert_eq!(loaded.opted_out.len(), 1);
-    assert_eq!(loaded.opted_out[0].member_id, member_id);
+    let loaded = repo.get_occasion(occasion.id).await.unwrap().unwrap();
+    assert_eq!(loaded.note.as_deref(), Some("Family dinner"));
+    assert_eq!(loaded.absences.len(), 1);
+    assert_eq!(loaded.groups, vec![kept_group.clone()]);
 
-    let outcome = repo.delete(entry.id, loaded.revision).await.unwrap();
+    let mut removed = loaded.clone();
+    removed.groups.clear();
+    removed.revision = removed.revision.next();
+    let outcome = repo
+        .update_occasion(&removed, loaded.revision)
+        .await
+        .unwrap();
     assert_eq!(outcome, UpdateOutcome::Updated);
-    let remaining: (i64,) =
-        sqlx::query_as("SELECT count(*) FROM meal_plan_opt_out WHERE entry_id = $1")
-            .bind(entry.id.as_uuid())
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-    assert_eq!(remaining.0, 0);
+    let after_removal = repo.get_occasion(occasion.id).await.unwrap().unwrap();
+    assert!(after_removal.groups.is_empty());
+    assert!(repo.get(kept_group.id).await.unwrap().is_none());
+}
+
+#[sqlx::test]
+async fn updating_an_occasion_with_a_stale_revision_is_refused(pool: PgPool) {
+    let (_, _, actor_id) = seed_meal_plan_dependencies(&pool).await;
+    let repo = PgMealPlanRepository::new(pool);
+    let occasion = dinner_occasion(actor_id);
+    repo.insert_occasion(&occasion).await.unwrap();
+
+    let mut stale = occasion.clone();
+    stale.note = Some("Too late".to_owned());
+    stale.revision = stale.revision.next();
+
+    let outcome = repo
+        .update_occasion(&stale, Revision::INITIAL.next())
+        .await
+        .unwrap();
+    assert_eq!(
+        outcome,
+        UpdateOutcome::RevisionMismatch {
+            actual: occasion.revision
+        }
+    );
+}
+
+#[sqlx::test]
+async fn deleting_an_occasion_cascades_to_its_groups_and_absences(pool: PgPool) {
+    let (member_id, product_id, actor_id) = seed_meal_plan_dependencies(&pool).await;
+    let repo = PgMealPlanRepository::new(pool.clone());
+    let mut occasion = dinner_occasion(actor_id);
+    let group = meal_plan_group(&occasion, member_id, product_id, actor_id);
+    occasion.groups = vec![group.clone()];
+    occasion.absences = vec![MealAbsence {
+        member_id,
+        created_by: actor_id,
+        created_at: occasion.created_at,
+    }];
+    repo.insert_occasion(&occasion).await.unwrap();
+
+    let outcome = repo
+        .delete_occasion(occasion.id, occasion.revision)
+        .await
+        .unwrap();
+    assert_eq!(outcome, UpdateOutcome::Updated);
+    assert!(repo.get_occasion(occasion.id).await.unwrap().is_none());
+    assert!(repo.get(group.id).await.unwrap().is_none());
+
+    let remaining_absences: i64 = sqlx::query_scalar("SELECT count(*) FROM meal_occasion_absence")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(remaining_absences, 0);
+}
+
+#[sqlx::test]
+async fn deleting_an_unknown_occasion_reports_not_found(pool: PgPool) {
+    let repo = PgMealPlanRepository::new(pool);
+    let outcome = repo
+        .delete_occasion(MealOccasionId::new(), Revision::INITIAL)
+        .await
+        .unwrap();
+    assert_eq!(outcome, UpdateOutcome::NotFound);
 }
 
 #[sqlx::test]
 async fn round_trips_a_planned_meal_with_components(pool: PgPool) {
     let (member_id, product_id, actor_id) = seed_meal_plan_dependencies(&pool).await;
+    let occasion = seed_dinner_occasion(&pool, actor_id).await;
     let repo = PgMealPlanRepository::new(pool);
-    let original = meal_plan_entry(member_id, product_id, actor_id);
+    let original = meal_plan_group(&occasion, member_id, product_id, actor_id);
 
     repo.insert(&original).await.unwrap();
     let loaded = repo.get(original.id).await.unwrap().unwrap();
 
     assert_eq!(loaded, original);
     let listed = repo
-        .list(&MealPlanQuery {
-            member_id,
-            from: date!(2026 - 08 - 24),
-            to: date!(2026 - 08 - 30),
-            include_participating: false,
-        })
+        .list_all(date!(2026 - 08 - 24), date!(2026 - 08 - 30))
         .await
         .unwrap();
     assert_eq!(listed, vec![original]);
@@ -1416,19 +1570,20 @@ async fn round_trips_a_planned_meal_with_components(pool: PgPool) {
 async fn lists_review_entries_without_a_lower_date_bound(pool: PgPool) {
     let (member_id, product_id, actor_id) = seed_meal_plan_dependencies(&pool).await;
     let repo = PgMealPlanRepository::new(pool);
-    let mut original = meal_plan_entry(member_id, product_id, actor_id);
-    original.planned_on = date!(2020 - 01 - 01);
+    let occasion = new_meal_occasion(date!(2020 - 01 - 01), MealSlot::Dinner, actor_id);
+    repo.insert_occasion(&occasion).await.unwrap();
+    let original = meal_plan_group(&occasion, member_id, product_id, actor_id);
     repo.insert(&original).await.unwrap();
 
-    let personal = repo
-        .list_through(member_id, date!(2026 - 09 - 02))
+    let occasions = repo
+        .list_occasions_through(date!(2026 - 09 - 02))
         .await
         .unwrap();
     let all = repo.list_all_through(date!(2026 - 09 - 02)).await.unwrap();
 
     assert_eq!(
-        personal.iter().map(|entry| entry.id).collect::<Vec<_>>(),
-        vec![original.id]
+        occasions.iter().map(|o| o.id).collect::<Vec<_>>(),
+        vec![occasion.id]
     );
     assert_eq!(
         all.iter().map(|entry| entry.id).collect::<Vec<_>>(),
@@ -1437,46 +1592,11 @@ async fn lists_review_entries_without_a_lower_date_bound(pool: PgPool) {
 }
 
 #[sqlx::test]
-async fn household_snacks_allow_distinct_times_and_one_untimed_occurrence(pool: PgPool) {
-    let (member_id, product_id, actor_id) = seed_meal_plan_dependencies(&pool).await;
-    let repo = PgMealPlanRepository::new(pool.clone());
-
-    let morning = household_snack_entry(
-        member_id,
-        product_id,
-        actor_id,
-        Some(time::macros::time!(10:00)),
-    );
-    let afternoon = household_snack_entry(
-        member_id,
-        product_id,
-        actor_id,
-        Some(time::macros::time!(14:00)),
-    );
-    let untimed = household_snack_entry(member_id, product_id, actor_id, None);
-    repo.insert(&morning).await.unwrap();
-    repo.insert(&afternoon).await.unwrap();
-    repo.insert(&untimed).await.unwrap();
-
-    assert_eq!(repo.get(morning.id).await.unwrap(), Some(morning));
-    assert_eq!(repo.get(afternoon.id).await.unwrap(), Some(afternoon));
-    assert_eq!(repo.get(untimed.id).await.unwrap(), Some(untimed));
-
-    let duplicate = household_snack_entry(
-        member_id,
-        product_id,
-        actor_id,
-        Some(time::macros::time!(10:00)),
-    );
-    let error = repo.insert(&duplicate).await.unwrap_err();
-    assert!(matches!(error, CoreError::Duplicate { field: "time", .. }));
-}
-
-#[sqlx::test]
 async fn round_trips_counted_guest_allocations(pool: PgPool) {
     let (member_id, product_id, actor_id) = seed_meal_plan_dependencies(&pool).await;
+    let occasion = seed_dinner_occasion(&pool, actor_id).await;
     let repo = PgMealPlanRepository::new(pool);
-    let mut original = meal_plan_entry(member_id, product_id, actor_id);
+    let mut original = meal_plan_group(&occasion, member_id, product_id, actor_id);
     original.guest_groups = vec![MealGuestGroup {
         id: MealGuestGroupId::new(),
         count: 2,
@@ -1505,9 +1625,10 @@ async fn round_trips_counted_guest_allocations(pool: PgPool) {
 #[sqlx::test]
 async fn resolving_a_meal_freezes_components_and_links_consumption(pool: PgPool) {
     let (member_id, product_id, actor_id) = seed_meal_plan_dependencies(&pool).await;
+    let occasion = seed_dinner_occasion(&pool, actor_id).await;
     let plans = PgMealPlanRepository::new(pool.clone());
     let consumption = PgConsumptionRecordRepository::new(pool);
-    let original = meal_plan_entry(member_id, product_id, actor_id);
+    let original = meal_plan_group(&occasion, member_id, product_id, actor_id);
     plans.insert(&original).await.unwrap();
 
     let mut resolved = original.clone();
@@ -1517,6 +1638,7 @@ async fn resolving_a_meal_freezes_components_and_links_consumption(pool: PgPool)
     resolved.participants = vec![MealParticipant {
         id: MealParticipantId::new(),
         member_id,
+        note: None,
         allocations: vec![MealParticipantAllocation {
             id: MealParticipantAllocationId::new(),
             component_id: resolved.components[0].id,
@@ -1565,9 +1687,10 @@ async fn resolving_a_meal_freezes_components_and_links_consumption(pool: PgPool)
 #[sqlx::test]
 async fn resolving_and_reopening_one_component_preserves_its_sibling(pool: PgPool) {
     let (member_id, product_id, actor_id) = seed_meal_plan_dependencies(&pool).await;
+    let occasion = seed_dinner_occasion(&pool, actor_id).await;
     let plans = PgMealPlanRepository::new(pool.clone());
     let consumption = PgConsumptionRecordRepository::new(pool);
-    let mut original = meal_plan_entry(member_id, product_id, actor_id);
+    let mut original = meal_plan_group(&occasion, member_id, product_id, actor_id);
     let mut sibling = original.components[0].clone();
     sibling.id = MealPlanComponentId::new();
     sibling.position = 1;
@@ -1590,6 +1713,7 @@ async fn resolving_and_reopening_one_component_preserves_its_sibling(pool: PgPoo
     let eaten_participant = MealParticipant {
         id: participant_id,
         member_id,
+        note: None,
         allocations: vec![
             MealParticipantAllocation {
                 id: MealParticipantAllocationId::new(),
@@ -1698,9 +1822,10 @@ async fn reopening_a_component_removes_its_linked_record_without_tripping_the_al
     pool: PgPool,
 ) {
     let (member_id, product_id, actor_id) = seed_meal_plan_dependencies(&pool).await;
+    let occasion = seed_dinner_occasion(&pool, actor_id).await;
     let plans = PgMealPlanRepository::new(pool.clone());
     let consumption = PgConsumptionRecordRepository::new(pool);
-    let original = meal_plan_entry(member_id, product_id, actor_id);
+    let original = meal_plan_group(&occasion, member_id, product_id, actor_id);
     plans.insert(&original).await.unwrap();
 
     let component_id = original.components[0].id;
@@ -1715,6 +1840,7 @@ async fn reopening_a_component_removes_its_linked_record_without_tripping_the_al
     let eaten_participant = MealParticipant {
         id: participant_id,
         member_id,
+        note: None,
         allocations: vec![MealParticipantAllocation {
             id: MealParticipantAllocationId::new(),
             component_id,
@@ -1813,8 +1939,9 @@ async fn updating_a_meal_plan_entry_replaces_its_components(pool: PgPool) {
         .insert(&other_product)
         .await
         .unwrap();
+    let occasion = seed_dinner_occasion(&pool, actor_id).await;
     let repo = PgMealPlanRepository::new(pool);
-    let original = meal_plan_entry(member_id, product_id, actor_id);
+    let original = meal_plan_group(&occasion, member_id, product_id, actor_id);
     repo.insert(&original).await.unwrap();
 
     let mut updated = original.clone();
@@ -1838,6 +1965,7 @@ async fn updating_a_meal_plan_entry_replaces_its_components(pool: PgPool) {
             display_order: Uuid::now_v7(),
         },
     ];
+    updated.participants.clear();
     updated.revision = updated.revision.next();
 
     let outcome = repo.update(&updated, original.revision).await.unwrap();
@@ -1858,8 +1986,9 @@ async fn updating_a_meal_plan_entry_replaces_its_components(pool: PgPool) {
 #[sqlx::test]
 async fn updating_a_meal_plan_entry_with_a_stale_revision_is_refused(pool: PgPool) {
     let (member_id, product_id, actor_id) = seed_meal_plan_dependencies(&pool).await;
+    let occasion = seed_dinner_occasion(&pool, actor_id).await;
     let repo = PgMealPlanRepository::new(pool);
-    let original = meal_plan_entry(member_id, product_id, actor_id);
+    let original = meal_plan_group(&occasion, member_id, product_id, actor_id);
     repo.insert(&original).await.unwrap();
 
     let mut stale = original.clone();
@@ -1878,9 +2007,10 @@ async fn updating_a_meal_plan_entry_with_a_stale_revision_is_refused(pool: PgPoo
 #[sqlx::test]
 async fn resolving_with_a_stale_revision_leaves_the_entry_untouched(pool: PgPool) {
     let (member_id, product_id, actor_id) = seed_meal_plan_dependencies(&pool).await;
+    let occasion = seed_dinner_occasion(&pool, actor_id).await;
     let plans = PgMealPlanRepository::new(pool.clone());
     let consumption = PgConsumptionRecordRepository::new(pool);
-    let original = meal_plan_entry(member_id, product_id, actor_id);
+    let original = meal_plan_group(&occasion, member_id, product_id, actor_id);
     plans.insert(&original).await.unwrap();
 
     let mut resolved = original.clone();
@@ -1911,8 +2041,9 @@ async fn resolving_with_a_stale_revision_leaves_the_entry_untouched(pool: PgPool
 #[sqlx::test]
 async fn deleting_a_meal_plan_entry_cascades_to_its_components(pool: PgPool) {
     let (member_id, product_id, actor_id) = seed_meal_plan_dependencies(&pool).await;
+    let occasion = seed_dinner_occasion(&pool, actor_id).await;
     let repo = PgMealPlanRepository::new(pool.clone());
-    let original = meal_plan_entry(member_id, product_id, actor_id);
+    let original = meal_plan_group(&occasion, member_id, product_id, actor_id);
     repo.insert(&original).await.unwrap();
 
     let outcome = repo.delete(original.id, original.revision).await.unwrap();
@@ -1939,9 +2070,10 @@ async fn deleting_an_unknown_meal_plan_entry_reports_not_found(pool: PgPool) {
 #[sqlx::test]
 async fn reopening_a_meal_clears_the_snapshot(pool: PgPool) {
     let (member_id, product_id, actor_id) = seed_meal_plan_dependencies(&pool).await;
+    let occasion = seed_dinner_occasion(&pool, actor_id).await;
     let plans = PgMealPlanRepository::new(pool.clone());
     let consumption = PgConsumptionRecordRepository::new(pool);
-    let original = meal_plan_entry(member_id, product_id, actor_id);
+    let original = meal_plan_group(&occasion, member_id, product_id, actor_id);
     plans.insert(&original).await.unwrap();
 
     let mut resolved = original.clone();
@@ -1951,6 +2083,7 @@ async fn reopening_a_meal_clears_the_snapshot(pool: PgPool) {
     resolved.participants = vec![MealParticipant {
         id: MealParticipantId::new(),
         member_id,
+        note: None,
         allocations: vec![MealParticipantAllocation {
             id: MealParticipantAllocationId::new(),
             component_id: resolved.components[0].id,
@@ -1999,8 +2132,9 @@ async fn reopening_a_meal_clears_the_snapshot(pool: PgPool) {
 #[sqlx::test]
 async fn a_component_cannot_be_confirmed_by_two_consumption_records(pool: PgPool) {
     let (member_id, product_id, actor_id) = seed_meal_plan_dependencies(&pool).await;
+    let occasion = seed_dinner_occasion(&pool, actor_id).await;
     let plans = PgMealPlanRepository::new(pool.clone());
-    let original = meal_plan_entry(member_id, product_id, actor_id);
+    let original = meal_plan_group(&occasion, member_id, product_id, actor_id);
     plans.insert(&original).await.unwrap();
 
     let mut resolved = original.clone();
@@ -2010,6 +2144,7 @@ async fn a_component_cannot_be_confirmed_by_two_consumption_records(pool: PgPool
     resolved.participants = vec![MealParticipant {
         id: MealParticipantId::new(),
         member_id,
+        note: None,
         allocations: vec![MealParticipantAllocation {
             id: MealParticipantAllocationId::new(),
             component_id: resolved.components[0].id,
@@ -2603,8 +2738,9 @@ async fn prepared_batches_round_trip_and_list_by_id_and_date(pool: PgPool) {
 #[sqlx::test]
 async fn prepared_batches_are_found_for_meal_plan_components(pool: PgPool) {
     let (member_id, product_id, actor_id) = seed_meal_plan_dependencies(&pool).await;
+    let occasion = seed_dinner_occasion(&pool, actor_id).await;
     let plans = PgMealPlanRepository::new(pool.clone());
-    let entry = meal_plan_entry(member_id, product_id, actor_id);
+    let entry = meal_plan_group(&occasion, member_id, product_id, actor_id);
     let component_id = entry.components[0].id;
     plans.insert(&entry).await.unwrap();
 
@@ -3056,8 +3192,9 @@ async fn round_trips_a_meal_plan_entry_with_a_recipe_component(pool: PgPool) {
     let dish = recipe(actor_id, vec![recipe_component(product_id, 0)]);
     recipes.insert(&dish).await.unwrap();
 
+    let occasion = seed_dinner_occasion(&pool, actor_id).await;
     let repo = PgMealPlanRepository::new(pool.clone());
-    let mut entry = meal_plan_entry(member_id, product_id, actor_id);
+    let mut entry = meal_plan_group(&occasion, member_id, product_id, actor_id);
     entry.components = vec![MealPlanComponent {
         id: MealPlanComponentId::new(),
         item: MealItemRef::recipe(dish.id),
@@ -3067,6 +3204,7 @@ async fn round_trips_a_meal_plan_entry_with_a_recipe_component(pool: PgPool) {
         revision: Revision::INITIAL,
         display_order: Uuid::now_v7(),
     }];
+    entry.participants.clear();
     repo.insert(&entry).await.unwrap();
 
     let loaded = repo.get(entry.id).await.unwrap().unwrap();
@@ -3081,8 +3219,9 @@ async fn round_trips_a_meal_plan_entry_with_a_recipe_component(pool: PgPool) {
 #[sqlx::test]
 async fn a_recipe_component_referencing_a_missing_recipe_is_rejected(pool: PgPool) {
     let (member_id, product_id, actor_id) = seed_meal_plan_dependencies(&pool).await;
+    let occasion = seed_dinner_occasion(&pool, actor_id).await;
     let repo = PgMealPlanRepository::new(pool.clone());
-    let mut entry = meal_plan_entry(member_id, product_id, actor_id);
+    let mut entry = meal_plan_group(&occasion, member_id, product_id, actor_id);
     entry.components = vec![MealPlanComponent {
         id: MealPlanComponentId::new(),
         item: MealItemRef::recipe(RecipeId::new()),
@@ -3092,6 +3231,7 @@ async fn a_recipe_component_referencing_a_missing_recipe_is_rejected(pool: PgPoo
         revision: Revision::INITIAL,
         display_order: Uuid::now_v7(),
     }];
+    entry.participants.clear();
 
     let error = repo.insert(&entry).await.unwrap_err();
     assert!(

@@ -596,7 +596,6 @@ pub struct HouseholdSettingsRow {
     pub dinner_time: Time,
     pub timezone: String,
     pub missing_stock_interpretation: String,
-    pub default_all_members_participate: bool,
     pub assume_eaten_when_time_passes: bool,
     pub shopping_section_order: Vec<String>,
     pub revision: i64,
@@ -639,7 +638,6 @@ impl TryFrom<HouseholdSettingsRow> for HouseholdSettings {
                     &row.missing_stock_interpretation,
                 )
             })?,
-            default_all_members_participate: row.default_all_members_participate,
             assume_eaten_when_time_passes: row.assume_eaten_when_time_passes,
             section_order: section_order_from(&row.shopping_section_order)?,
             revision: Revision::new(row.revision),

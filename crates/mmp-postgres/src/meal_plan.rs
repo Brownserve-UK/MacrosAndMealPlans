@@ -5,16 +5,15 @@ use async_trait::async_trait;
 use mmp_core::Result;
 use mmp_core::domain::StockOutcome;
 use mmp_core::domain::{
-    ConsumptionRecord, ConsumptionRecordId, IngredientId, MealGuestAllocation,
-    MealGuestAllocationId, MealGuestGroup, MealGuestGroupId, MealItemRef, MealOptOut,
-    MealParticipant, MealParticipantAllocation, MealParticipantAllocationId, MealParticipantId,
-    MealPlanComponent, MealPlanComponentId, MealPlanComponentSnapshot, MealPlanEntry,
-    MealPlanEntryId, MealPlanScope, MealSlot, NutritionFacts, NutritionQuality, ParticipantStatus,
-    PreparedMealId, ProductId, RecipeId, Revision, UserId,
+    AdHocKind, ConsumptionRecord, ConsumptionRecordId, IngredientId, MealAbsence,
+    MealGuestAllocation, MealGuestAllocationId, MealGuestGroup, MealGuestGroupId, MealItemRef,
+    MealOccasion, MealOccasionId, MealParticipant, MealParticipantAllocation,
+    MealParticipantAllocationId, MealParticipantId, MealPlanComponent, MealPlanComponentId,
+    MealPlanComponentSnapshot, MealPlanEntry, MealPlanEntryId, MealSlot, NutritionFacts,
+    NutritionQuality, ParticipantStatus, PreparedMealId, ProductId, RecipeId, Revision, UserId,
 };
 use mmp_core::ports::{
-    MealPlanComponentUpdate, MealPlanQuery, MealPlanRepository, SnapshotOp, StockWrite,
-    UpdateOutcome,
+    MealPlanComponentUpdate, MealPlanRepository, SnapshotOp, StockWrite, UpdateOutcome,
 };
 
 use crate::stock::apply_stock_write;
@@ -32,13 +31,62 @@ use crate::rows::{
 type Extra = Json<BTreeMap<String, Decimal>>;
 
 #[derive(Debug, sqlx::FromRow)]
+struct OccasionRow {
+    id: Uuid,
+    planned_on: Date,
+    slot: String,
+    planned_time: Option<Time>,
+    note: Option<String>,
+    created_by: Uuid,
+    updated_by: Uuid,
+    revision: i64,
+    created_at: OffsetDateTime,
+    updated_at: OffsetDateTime,
+}
+
+impl OccasionRow {
+    fn into_domain(
+        self,
+        groups: Vec<MealPlanEntry>,
+        absences: Vec<MealAbsence>,
+    ) -> Result<MealOccasion> {
+        let slot = MealSlot::from_str(&self.slot).map_err(|_| bad_value("slot", &self.slot))?;
+        Ok(MealOccasion {
+            id: MealOccasionId::from(self.id),
+            planned_on: self.planned_on,
+            slot,
+            planned_time: self.planned_time,
+            note: self.note,
+            groups,
+            absences,
+            created_by: UserId::from(self.created_by),
+            updated_by: UserId::from(self.updated_by),
+            revision: Revision::new(self.revision),
+            created_at: self.created_at,
+            updated_at: self.updated_at,
+        })
+    }
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct AbsenceRow {
+    occasion_id: Uuid,
+    member_id: Uuid,
+    created_by: Uuid,
+    created_at: OffsetDateTime,
+}
+
+#[derive(Debug, sqlx::FromRow)]
 struct EntryRow {
     id: Uuid,
-    scope: String,
-    member_id: Option<Uuid>,
+    occasion_id: Uuid,
     planned_on: Date,
     planned_time: Option<Time>,
     slot: String,
+    label: Option<String>,
+    ad_hoc: Option<String>,
+    everyone: bool,
+    cooking_servings: Option<i32>,
     created_by: Uuid,
     updated_by: Uuid,
     revision: i64,
@@ -128,6 +176,7 @@ struct ParticipantRow {
     id: Uuid,
     entry_id: Uuid,
     member_id: Uuid,
+    note: Option<String>,
     revision: i64,
     created_at: OffsetDateTime,
     updated_at: OffsetDateTime,
@@ -145,14 +194,6 @@ struct AllocationRow {
     consumption_record_id: Option<Uuid>,
     resolved_by: Option<Uuid>,
     resolved_at: Option<OffsetDateTime>,
-}
-
-#[derive(Debug, sqlx::FromRow)]
-struct OptOutRow {
-    entry_id: Uuid,
-    member_id: Uuid,
-    created_by: Uuid,
-    created_at: OffsetDateTime,
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -229,20 +270,25 @@ fn assemble(
     components: Vec<MealPlanComponent>,
     participants: Vec<MealParticipant>,
     guest_groups: Vec<MealGuestGroup>,
-    opted_out: Vec<MealOptOut>,
 ) -> Result<MealPlanEntry> {
     let slot = MealSlot::from_str(&row.slot).map_err(|_| bad_value("slot", &row.slot))?;
+    let ad_hoc = match row.ad_hoc {
+        Some(code) => Some(AdHocKind::from_str(&code).map_err(|_| bad_value("ad_hoc", &code))?),
+        None => None,
+    };
     Ok(MealPlanEntry {
         id: MealPlanEntryId::from(row.id),
-        scope: MealPlanScope::from_str(&row.scope).map_err(|_| bad_value("scope", &row.scope))?,
-        member_id: row.member_id.map(Into::into),
+        occasion_id: MealOccasionId::from(row.occasion_id),
         planned_on: row.planned_on,
         planned_time: row.planned_time,
         slot,
+        label: row.label,
+        ad_hoc,
         components,
+        everyone: row.everyone,
         participants,
         guest_groups,
-        opted_out,
+        cooking_servings: row.cooking_servings,
         created_by: UserId::from(row.created_by),
         updated_by: UserId::from(row.updated_by),
         revision: Revision::new(row.revision),
@@ -251,15 +297,20 @@ fn assemble(
     })
 }
 
-const GET_ENTRY: &str = "SELECT id, scope, member_id, planned_on, planned_time, slot, created_by, updated_by, revision, created_at, updated_at FROM meal_plan_entry WHERE id = $1";
-const LIST_ENTRIES: &str = "SELECT id, scope, member_id, planned_on, planned_time, slot, created_by, updated_by, revision, created_at, updated_at FROM meal_plan_entry WHERE (member_id = $1 OR ($4 AND (EXISTS (SELECT 1 FROM meal_plan_participant p WHERE p.entry_id = meal_plan_entry.id AND p.member_id = $1) OR EXISTS (SELECT 1 FROM meal_plan_opt_out o WHERE o.entry_id = meal_plan_entry.id AND o.member_id = $1)))) AND planned_on >= $2 AND planned_on <= $3 ORDER BY planned_on, CASE slot WHEN 'breakfast' THEN 0 WHEN 'lunch' THEN 1 WHEN 'dinner' THEN 2 ELSE 3 END, planned_time NULLS LAST, created_at, id";
-const LIST_ALL_ENTRIES: &str = "SELECT id, scope, member_id, planned_on, planned_time, slot, created_by, updated_by, revision, created_at, updated_at FROM meal_plan_entry WHERE planned_on >= $1 AND planned_on <= $2 ORDER BY planned_on, CASE slot WHEN 'breakfast' THEN 0 WHEN 'lunch' THEN 1 WHEN 'dinner' THEN 2 ELSE 3 END, planned_time NULLS LAST, created_at, id";
-const LIST_ENTRIES_THROUGH: &str = "SELECT id, scope, member_id, planned_on, planned_time, slot, created_by, updated_by, revision, created_at, updated_at FROM meal_plan_entry WHERE (member_id = $1 OR EXISTS (SELECT 1 FROM meal_plan_participant p WHERE p.entry_id = meal_plan_entry.id AND p.member_id = $1)) AND planned_on <= $2 ORDER BY planned_on, CASE slot WHEN 'breakfast' THEN 0 WHEN 'lunch' THEN 1 WHEN 'dinner' THEN 2 ELSE 3 END, planned_time NULLS LAST, created_at, id";
-const LIST_ALL_ENTRIES_THROUGH: &str = "SELECT id, scope, member_id, planned_on, planned_time, slot, created_by, updated_by, revision, created_at, updated_at FROM meal_plan_entry WHERE planned_on <= $1 ORDER BY planned_on, CASE slot WHEN 'breakfast' THEN 0 WHEN 'lunch' THEN 1 WHEN 'dinner' THEN 2 ELSE 3 END, planned_time NULLS LAST, created_at, id";
+const GET_OCCASION: &str = "SELECT id, planned_on, slot, planned_time, note, created_by, updated_by, revision, created_at, updated_at FROM meal_occasion WHERE id = $1";
+const FIND_OCCASION: &str = "SELECT id, planned_on, slot, planned_time, note, created_by, updated_by, revision, created_at, updated_at FROM meal_occasion WHERE planned_on = $1 AND slot = $2";
+const LIST_OCCASIONS: &str = "SELECT id, planned_on, slot, planned_time, note, created_by, updated_by, revision, created_at, updated_at FROM meal_occasion WHERE planned_on >= $1 AND planned_on <= $2 ORDER BY planned_on, CASE slot WHEN 'breakfast' THEN 0 WHEN 'lunch' THEN 1 WHEN 'dinner' THEN 2 ELSE 3 END";
+const LIST_OCCASIONS_THROUGH: &str = "SELECT id, planned_on, slot, planned_time, note, created_by, updated_by, revision, created_at, updated_at FROM meal_occasion WHERE planned_on <= $1 ORDER BY planned_on, CASE slot WHEN 'breakfast' THEN 0 WHEN 'lunch' THEN 1 WHEN 'dinner' THEN 2 ELSE 3 END";
+const LIST_ABSENCES: &str = "SELECT occasion_id, member_id, created_by, created_at FROM meal_occasion_absence WHERE occasion_id = ANY($1) ORDER BY occasion_id, created_at";
+
+const GET_ENTRY: &str = "SELECT e.id, e.occasion_id, o.planned_on, o.planned_time, o.slot, e.label, e.ad_hoc, e.everyone, e.cooking_servings, e.created_by, e.updated_by, e.revision, e.created_at, e.updated_at FROM meal_plan_entry e JOIN meal_occasion o ON o.id = e.occasion_id WHERE e.id = $1";
+const LIST_ENTRIES_FOR_OCCASIONS: &str = "SELECT e.id, e.occasion_id, o.planned_on, o.planned_time, o.slot, e.label, e.ad_hoc, e.everyone, e.cooking_servings, e.created_by, e.updated_by, e.revision, e.created_at, e.updated_at FROM meal_plan_entry e JOIN meal_occasion o ON o.id = e.occasion_id WHERE e.occasion_id = ANY($1) ORDER BY e.occasion_id, e.created_at, e.id";
+const LIST_ALL_ENTRIES: &str = "SELECT e.id, e.occasion_id, o.planned_on, o.planned_time, o.slot, e.label, e.ad_hoc, e.everyone, e.cooking_servings, e.created_by, e.updated_by, e.revision, e.created_at, e.updated_at FROM meal_plan_entry e JOIN meal_occasion o ON o.id = e.occasion_id WHERE o.planned_on >= $1 AND o.planned_on <= $2 ORDER BY o.planned_on, CASE o.slot WHEN 'breakfast' THEN 0 WHEN 'lunch' THEN 1 WHEN 'dinner' THEN 2 ELSE 3 END, o.planned_time NULLS LAST, e.created_at, e.id";
+const LIST_ALL_ENTRIES_THROUGH: &str = "SELECT e.id, e.occasion_id, o.planned_on, o.planned_time, o.slot, e.label, e.ad_hoc, e.everyone, e.cooking_servings, e.created_by, e.updated_by, e.revision, e.created_at, e.updated_at FROM meal_plan_entry e JOIN meal_occasion o ON o.id = e.occasion_id WHERE o.planned_on <= $1 ORDER BY o.planned_on, CASE o.slot WHEN 'breakfast' THEN 0 WHEN 'lunch' THEN 1 WHEN 'dinner' THEN 2 ELSE 3 END, o.planned_time NULLS LAST, e.created_at, e.id";
+
 const LIST_COMPONENTS: &str = "SELECT id, entry_id, position, item_kind, product_id, recipe_id, ingredient_id, prepared_meal_id, amount_kind, amount_value, amount_unit, frozen_item_name, nutrition_basis_amount, nutrition_basis_unit, energy_kcal, protein_g, carbohydrate_g, sugar_g, fat_g, saturated_fat_g, fibre_g, salt_g, cholesterol_mg, nutrition_extra, nutrition_quality, revision, display_order FROM meal_plan_component WHERE entry_id = ANY($1) ORDER BY entry_id, position";
-const LIST_PARTICIPANTS: &str = "SELECT id, entry_id, member_id, revision, created_at, updated_at FROM meal_plan_participant WHERE entry_id = ANY($1) ORDER BY entry_id, created_at, id";
+const LIST_PARTICIPANTS: &str = "SELECT id, entry_id, member_id, note, revision, created_at, updated_at FROM meal_plan_participant WHERE entry_id = ANY($1) ORDER BY entry_id, created_at, id";
 const LIST_ALLOCATIONS: &str = "SELECT id, participant_id, component_id, allocated_kind, allocated_value, allocated_unit, status, consumption_record_id, resolved_by, resolved_at FROM meal_plan_participant_allocation WHERE participant_id = ANY($1)";
-const LIST_OPT_OUTS: &str = "SELECT entry_id, member_id, created_by, created_at FROM meal_plan_opt_out WHERE entry_id = ANY($1) ORDER BY entry_id, created_at";
 const LIST_GUEST_GROUPS: &str = "SELECT id, entry_id, guest_count, revision, created_at, updated_at FROM meal_guest_group WHERE entry_id = ANY($1) ORDER BY entry_id, created_at, id";
 const LIST_GUEST_ALLOCATIONS: &str = "SELECT id, guest_group_id, component_id, allocated_kind, allocated_value, allocated_unit, status, confirmed_kind, confirmed_value, confirmed_unit, resolved_by, resolved_at FROM meal_guest_allocation WHERE guest_group_id = ANY($1)";
 
@@ -331,31 +382,12 @@ impl PgMealPlanRepository {
                 .push(MealParticipant {
                     id: MealParticipantId::from(row.id),
                     member_id: row.member_id.into(),
+                    note: row.note,
                     allocations,
                     revision: Revision::new(row.revision),
                     created_at: row.created_at,
                     updated_at: row.updated_at,
                 });
-        }
-        Ok(grouped)
-    }
-
-    async fn opt_outs_for(&self, ids: &[Uuid]) -> Result<HashMap<Uuid, Vec<MealOptOut>>> {
-        if ids.is_empty() {
-            return Ok(HashMap::new());
-        }
-        let rows: Vec<OptOutRow> = sqlx::query_as(LIST_OPT_OUTS)
-            .bind(ids)
-            .fetch_all(&self.pool)
-            .await
-            .map_err(|error| repository_error("loading meal opt-outs", error))?;
-        let mut grouped: HashMap<Uuid, Vec<MealOptOut>> = HashMap::new();
-        for row in rows {
-            grouped.entry(row.entry_id).or_default().push(MealOptOut {
-                member_id: row.member_id.into(),
-                created_by: UserId::from(row.created_by),
-                created_at: row.created_at,
-            });
         }
         Ok(grouped)
     }
@@ -404,12 +436,34 @@ impl PgMealPlanRepository {
         Ok(grouped)
     }
 
+    async fn absences_for(&self, ids: &[Uuid]) -> Result<HashMap<Uuid, Vec<MealAbsence>>> {
+        if ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let rows: Vec<AbsenceRow> = sqlx::query_as(LIST_ABSENCES)
+            .bind(ids)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|error| repository_error("loading meal occasion absences", error))?;
+        let mut grouped: HashMap<Uuid, Vec<MealAbsence>> = HashMap::new();
+        for row in rows {
+            grouped
+                .entry(row.occasion_id)
+                .or_default()
+                .push(MealAbsence {
+                    member_id: row.member_id.into(),
+                    created_by: UserId::from(row.created_by),
+                    created_at: row.created_at,
+                });
+        }
+        Ok(grouped)
+    }
+
     async fn hydrate(&self, rows: Vec<EntryRow>) -> Result<Vec<MealPlanEntry>> {
         let ids: Vec<Uuid> = rows.iter().map(|row| row.id).collect();
         let mut components = self.components_for(&ids).await?;
         let mut participants = self.participants_for(&ids).await?;
         let mut guests = self.guests_for(&ids).await?;
-        let mut opt_outs = self.opt_outs_for(&ids).await?;
         rows.into_iter()
             .map(|row| {
                 let id = row.id;
@@ -418,7 +472,43 @@ impl PgMealPlanRepository {
                     components.remove(&id).unwrap_or_default(),
                     participants.remove(&id).unwrap_or_default(),
                     guests.remove(&id).unwrap_or_default(),
-                    opt_outs.remove(&id).unwrap_or_default(),
+                )
+            })
+            .collect()
+    }
+
+    async fn groups_for_occasions(
+        &self,
+        occasion_ids: &[Uuid],
+    ) -> Result<HashMap<Uuid, Vec<MealPlanEntry>>> {
+        if occasion_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let rows: Vec<EntryRow> = sqlx::query_as(LIST_ENTRIES_FOR_OCCASIONS)
+            .bind(occasion_ids)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|error| repository_error("loading meal groups", error))?;
+        let mut grouped: HashMap<Uuid, Vec<MealPlanEntry>> = HashMap::new();
+        for group in self.hydrate(rows).await? {
+            grouped
+                .entry(group.occasion_id.as_uuid())
+                .or_default()
+                .push(group);
+        }
+        Ok(grouped)
+    }
+
+    async fn assemble_occasions(&self, rows: Vec<OccasionRow>) -> Result<Vec<MealOccasion>> {
+        let ids: Vec<Uuid> = rows.iter().map(|row| row.id).collect();
+        let mut groups = self.groups_for_occasions(&ids).await?;
+        let mut absences = self.absences_for(&ids).await?;
+        rows.into_iter()
+            .map(|row| {
+                let id = row.id;
+                row.into_domain(
+                    groups.remove(&id).unwrap_or_default(),
+                    absences.remove(&id).unwrap_or_default(),
                 )
             })
             .collect()
@@ -427,6 +517,137 @@ impl PgMealPlanRepository {
 
 #[async_trait]
 impl MealPlanRepository for PgMealPlanRepository {
+    async fn get_occasion(&self, id: MealOccasionId) -> Result<Option<MealOccasion>> {
+        let row: Option<OccasionRow> = sqlx::query_as(GET_OCCASION)
+            .bind(id.as_uuid())
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|error| repository_error("loading a meal occasion", error))?;
+        let Some(row) = row else {
+            return Ok(None);
+        };
+        Ok(self.assemble_occasions(vec![row]).await?.into_iter().next())
+    }
+
+    async fn find_occasion(
+        &self,
+        planned_on: Date,
+        slot: MealSlot,
+    ) -> Result<Option<MealOccasion>> {
+        let row: Option<OccasionRow> = sqlx::query_as(FIND_OCCASION)
+            .bind(planned_on)
+            .bind(slot.code())
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|error| repository_error("finding a meal occasion", error))?;
+        let Some(row) = row else {
+            return Ok(None);
+        };
+        Ok(self.assemble_occasions(vec![row]).await?.into_iter().next())
+    }
+
+    async fn list_occasions(&self, from: Date, to: Date) -> Result<Vec<MealOccasion>> {
+        let rows: Vec<OccasionRow> = sqlx::query_as(LIST_OCCASIONS)
+            .bind(from)
+            .bind(to)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|error| repository_error("listing meal occasions", error))?;
+        self.assemble_occasions(rows).await
+    }
+
+    async fn list_occasions_through(&self, to: Date) -> Result<Vec<MealOccasion>> {
+        let rows: Vec<OccasionRow> = sqlx::query_as(LIST_OCCASIONS_THROUGH)
+            .bind(to)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|error| repository_error("listing meal occasions", error))?;
+        self.assemble_occasions(rows).await
+    }
+
+    async fn insert_occasion(&self, occasion: &MealOccasion) -> Result<()> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|error| repository_error("starting a meal occasion transaction", error))?;
+        insert_occasion_row(&mut tx, occasion).await?;
+        for group in &occasion.groups {
+            insert_group_full(&mut tx, group).await?;
+        }
+        for absence in &occasion.absences {
+            insert_absence(&mut tx, occasion.id, absence).await?;
+        }
+        tx.commit()
+            .await
+            .map_err(|error| repository_error("committing a meal occasion", error))?;
+        Ok(())
+    }
+
+    async fn update_occasion(
+        &self,
+        occasion: &MealOccasion,
+        expected: Revision,
+    ) -> Result<UpdateOutcome> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|error| repository_error("starting a meal occasion update", error))?;
+        let outcome = update_occasion_row(&mut tx, occasion, expected).await?;
+        if outcome != UpdateOutcome::Updated {
+            tx.rollback()
+                .await
+                .map_err(|error| repository_error("rolling back a meal occasion update", error))?;
+            return Ok(outcome);
+        }
+        let keep_ids: Vec<Uuid> = occasion
+            .groups
+            .iter()
+            .map(|group| group.id.as_uuid())
+            .collect();
+        sqlx::query("DELETE FROM meal_plan_entry WHERE occasion_id = $1 AND NOT (id = ANY($2))")
+            .bind(occasion.id.as_uuid())
+            .bind(&keep_ids)
+            .execute(&mut *tx)
+            .await
+            .map_err(|error| map_db_error(error, "removing meals no longer on this occasion"))?;
+        for group in &occasion.groups {
+            upsert_group_full(&mut tx, group).await?;
+        }
+        sqlx::query("DELETE FROM meal_occasion_absence WHERE occasion_id = $1")
+            .bind(occasion.id.as_uuid())
+            .execute(&mut *tx)
+            .await
+            .map_err(|error| map_db_error(error, "clearing meal occasion absences"))?;
+        for absence in &occasion.absences {
+            insert_absence(&mut tx, occasion.id, absence).await?;
+        }
+        tx.commit()
+            .await
+            .map_err(|error| repository_error("committing a meal occasion update", error))?;
+        Ok(UpdateOutcome::Updated)
+    }
+
+    async fn delete_occasion(
+        &self,
+        id: MealOccasionId,
+        expected: Revision,
+    ) -> Result<UpdateOutcome> {
+        let affected = sqlx::query("DELETE FROM meal_occasion WHERE id = $1 AND revision = $2")
+            .bind(id.as_uuid())
+            .bind(expected.get())
+            .execute(&self.pool)
+            .await
+            .map_err(|error| map_db_error(error, "deleting a meal occasion"))?
+            .rows_affected();
+        if affected == 1 {
+            Ok(UpdateOutcome::Updated)
+        } else {
+            current_occasion_outcome(&self.pool, id).await
+        }
+    }
+
     async fn get(&self, id: MealPlanEntryId) -> Result<Option<MealPlanEntry>> {
         let row: Option<EntryRow> = sqlx::query_as(GET_ENTRY)
             .bind(id.as_uuid())
@@ -439,18 +660,6 @@ impl MealPlanRepository for PgMealPlanRepository {
         Ok(self.hydrate(vec![row]).await?.into_iter().next())
     }
 
-    async fn list(&self, query: &MealPlanQuery) -> Result<Vec<MealPlanEntry>> {
-        let rows: Vec<EntryRow> = sqlx::query_as(LIST_ENTRIES)
-            .bind(query.member_id.as_uuid())
-            .bind(query.from)
-            .bind(query.to)
-            .bind(query.include_participating)
-            .fetch_all(&self.pool)
-            .await
-            .map_err(|error| repository_error("listing meal plan entries", error))?;
-        self.hydrate(rows).await
-    }
-
     async fn list_all(&self, from: Date, to: Date) -> Result<Vec<MealPlanEntry>> {
         let rows: Vec<EntryRow> = sqlx::query_as(LIST_ALL_ENTRIES)
             .bind(from)
@@ -458,20 +667,6 @@ impl MealPlanRepository for PgMealPlanRepository {
             .fetch_all(&self.pool)
             .await
             .map_err(|error| repository_error("listing Planner meals", error))?;
-        self.hydrate(rows).await
-    }
-
-    async fn list_through(
-        &self,
-        member_id: mmp_core::domain::HouseholdMemberId,
-        to: Date,
-    ) -> Result<Vec<MealPlanEntry>> {
-        let rows: Vec<EntryRow> = sqlx::query_as(LIST_ENTRIES_THROUGH)
-            .bind(member_id.as_uuid())
-            .bind(to)
-            .fetch_all(&self.pool)
-            .await
-            .map_err(|error| repository_error("listing meal plan review entries", error))?;
         self.hydrate(rows).await
     }
 
@@ -490,11 +685,7 @@ impl MealPlanRepository for PgMealPlanRepository {
             .begin()
             .await
             .map_err(|error| repository_error("starting a meal plan transaction", error))?;
-        insert_entry(&mut tx, entry).await?;
-        insert_components(&mut tx, entry).await?;
-        insert_participants(&mut tx, entry).await?;
-        insert_guests(&mut tx, entry.id, &entry.guest_groups).await?;
-        insert_opt_outs(&mut tx, entry.id, &entry.opted_out).await?;
+        insert_group_full(&mut tx, entry).await?;
         tx.commit()
             .await
             .map_err(|error| repository_error("committing a meal plan entry", error))?;
@@ -514,25 +705,7 @@ impl MealPlanRepository for PgMealPlanRepository {
                 .map_err(|error| repository_error("rolling back a meal plan update", error))?;
             return Ok(outcome);
         }
-        sqlx::query("DELETE FROM meal_plan_participant WHERE entry_id = $1")
-            .bind(entry.id.as_uuid())
-            .execute(&mut *tx)
-            .await
-            .map_err(|error| map_db_error(error, "clearing meal plan participants"))?;
-        sqlx::query("DELETE FROM meal_guest_group WHERE entry_id = $1")
-            .bind(entry.id.as_uuid())
-            .execute(&mut *tx)
-            .await
-            .map_err(|error| map_db_error(error, "clearing meal guests"))?;
-        sqlx::query("DELETE FROM meal_plan_component WHERE entry_id = $1")
-            .bind(entry.id.as_uuid())
-            .execute(&mut *tx)
-            .await
-            .map_err(|error| map_db_error(error, "replacing meal plan components"))?;
-        insert_components(&mut tx, entry).await?;
-        insert_participants(&mut tx, entry).await?;
-        insert_guests(&mut tx, entry.id, &entry.guest_groups).await?;
-        sync_opt_outs(&mut tx, entry.id, &entry.opted_out).await?;
+        replace_group_children(&mut tx, entry).await?;
         tx.commit()
             .await
             .map_err(|error| repository_error("committing a meal plan update", error))?;
@@ -637,7 +810,6 @@ impl MealPlanRepository for PgMealPlanRepository {
         }
         replace_participants(&mut tx, entry.id, &entry.participants).await?;
         replace_guests(&mut tx, entry.id, &entry.guest_groups).await?;
-        sync_opt_outs(&mut tx, entry.id, &entry.opted_out).await?;
         tx.commit()
             .await
             .map_err(|error| repository_error("committing a participant update", error))?;
@@ -711,6 +883,153 @@ impl MealPlanRepository for PgMealPlanRepository {
     }
 }
 
+async fn insert_occasion_row(
+    tx: &mut Transaction<'_, Postgres>,
+    occasion: &MealOccasion,
+) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO meal_occasion (id, planned_on, slot, planned_time, note, created_by, updated_by, revision, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+    )
+    .bind(occasion.id.as_uuid())
+    .bind(occasion.planned_on)
+    .bind(occasion.slot.code())
+    .bind(occasion.planned_time)
+    .bind(&occasion.note)
+    .bind(occasion.created_by.as_uuid())
+    .bind(occasion.updated_by.as_uuid())
+    .bind(occasion.revision.get())
+    .bind(occasion.created_at)
+    .bind(occasion.updated_at)
+    .execute(&mut **tx)
+    .await
+    .map_err(|error| map_db_error(error, "creating a meal occasion"))?;
+    Ok(())
+}
+
+async fn update_occasion_row(
+    tx: &mut Transaction<'_, Postgres>,
+    occasion: &MealOccasion,
+    expected: Revision,
+) -> Result<UpdateOutcome> {
+    let affected = sqlx::query(
+        "UPDATE meal_occasion SET planned_on = $2, slot = $3, planned_time = $4, note = $5, updated_by = $6, revision = $7, updated_at = $8 WHERE id = $1 AND revision = $9",
+    )
+    .bind(occasion.id.as_uuid())
+    .bind(occasion.planned_on)
+    .bind(occasion.slot.code())
+    .bind(occasion.planned_time)
+    .bind(&occasion.note)
+    .bind(occasion.updated_by.as_uuid())
+    .bind(occasion.revision.get())
+    .bind(occasion.updated_at)
+    .bind(expected.get())
+    .execute(&mut **tx)
+    .await
+    .map_err(|error| map_db_error(error, "updating a meal occasion"))?
+    .rows_affected();
+    if affected == 1 {
+        return Ok(UpdateOutcome::Updated);
+    }
+    current_occasion_outcome(&mut **tx, occasion.id).await
+}
+
+async fn insert_absence(
+    tx: &mut Transaction<'_, Postgres>,
+    occasion_id: MealOccasionId,
+    absence: &MealAbsence,
+) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO meal_occasion_absence (occasion_id, member_id, created_by, created_at) VALUES ($1, $2, $3, $4)",
+    )
+    .bind(occasion_id.as_uuid())
+    .bind(absence.member_id.as_uuid())
+    .bind(absence.created_by.as_uuid())
+    .bind(absence.created_at)
+    .execute(&mut **tx)
+    .await
+    .map_err(|error| map_db_error(error, "recording a meal occasion absence"))?;
+    Ok(())
+}
+
+async fn current_occasion_outcome<'e, E>(executor: E, id: MealOccasionId) -> Result<UpdateOutcome>
+where
+    E: sqlx::Executor<'e, Database = Postgres>,
+{
+    let current: Option<(i64,)> =
+        sqlx::query_as("SELECT revision FROM meal_occasion WHERE id = $1")
+            .bind(id.as_uuid())
+            .fetch_optional(executor)
+            .await
+            .map_err(|error| repository_error("re-reading a meal occasion revision", error))?;
+    Ok(match current {
+        Some((actual,)) => UpdateOutcome::RevisionMismatch {
+            actual: Revision::new(actual),
+        },
+        None => UpdateOutcome::NotFound,
+    })
+}
+
+async fn insert_group_full(
+    tx: &mut Transaction<'_, Postgres>,
+    entry: &MealPlanEntry,
+) -> Result<()> {
+    insert_entry(tx, entry).await?;
+    insert_components(tx, entry).await?;
+    insert_participants(tx, entry).await?;
+    insert_guests(tx, entry.id, &entry.guest_groups).await?;
+    Ok(())
+}
+
+async fn upsert_group_full(
+    tx: &mut Transaction<'_, Postgres>,
+    entry: &MealPlanEntry,
+) -> Result<()> {
+    let affected = sqlx::query(
+        "UPDATE meal_plan_entry SET label = $2, ad_hoc = $3, everyone = $4, cooking_servings = $5, updated_by = $6, revision = $7, updated_at = $8 WHERE id = $1",
+    )
+    .bind(entry.id.as_uuid())
+    .bind(&entry.label)
+    .bind(entry.ad_hoc.map(|kind| kind.code()))
+    .bind(entry.everyone)
+    .bind(entry.cooking_servings)
+    .bind(entry.updated_by.as_uuid())
+    .bind(entry.revision.get())
+    .bind(entry.updated_at)
+    .execute(&mut **tx)
+    .await
+    .map_err(|error| map_db_error(error, "updating a meal group"))?
+    .rows_affected();
+    if affected == 0 {
+        insert_entry(tx, entry).await?;
+    }
+    replace_group_children(tx, entry).await
+}
+
+async fn replace_group_children(
+    tx: &mut Transaction<'_, Postgres>,
+    entry: &MealPlanEntry,
+) -> Result<()> {
+    sqlx::query("DELETE FROM meal_plan_participant WHERE entry_id = $1")
+        .bind(entry.id.as_uuid())
+        .execute(&mut **tx)
+        .await
+        .map_err(|error| map_db_error(error, "clearing meal plan participants"))?;
+    sqlx::query("DELETE FROM meal_guest_group WHERE entry_id = $1")
+        .bind(entry.id.as_uuid())
+        .execute(&mut **tx)
+        .await
+        .map_err(|error| map_db_error(error, "clearing meal guests"))?;
+    sqlx::query("DELETE FROM meal_plan_component WHERE entry_id = $1")
+        .bind(entry.id.as_uuid())
+        .execute(&mut **tx)
+        .await
+        .map_err(|error| map_db_error(error, "replacing meal plan components"))?;
+    insert_components(tx, entry).await?;
+    insert_participants(tx, entry).await?;
+    insert_guests(tx, entry.id, &entry.guest_groups).await?;
+    Ok(())
+}
+
 async fn archive_consumption(
     tx: &mut Transaction<'_, Postgres>,
     id: ConsumptionRecordId,
@@ -729,14 +1048,14 @@ async fn archive_consumption(
 
 async fn insert_entry(tx: &mut Transaction<'_, Postgres>, entry: &MealPlanEntry) -> Result<()> {
     sqlx::query(
-        "INSERT INTO meal_plan_entry (id, scope, member_id, planned_on, planned_time, slot, created_by, updated_by, revision, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
+        "INSERT INTO meal_plan_entry (id, occasion_id, label, ad_hoc, everyone, cooking_servings, created_by, updated_by, revision, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
     )
     .bind(entry.id.as_uuid())
-    .bind(entry.scope.code())
-    .bind(entry.member_id.map(|id| id.as_uuid()))
-    .bind(entry.planned_on)
-    .bind(entry.planned_time)
-    .bind(entry.slot.code())
+    .bind(entry.occasion_id.as_uuid())
+    .bind(&entry.label)
+    .bind(entry.ad_hoc.map(|kind| kind.code()))
+    .bind(entry.everyone)
+    .bind(entry.cooking_servings)
     .bind(entry.created_by.as_uuid())
     .bind(entry.updated_by.as_uuid())
     .bind(entry.revision.get())
@@ -754,12 +1073,13 @@ async fn update_entry(
     expected: Revision,
 ) -> Result<UpdateOutcome> {
     let affected = sqlx::query(
-        "UPDATE meal_plan_entry SET planned_on = $2, planned_time = $3, slot = $4, updated_by = $5, revision = $6, updated_at = $7 WHERE id = $1 AND revision = $8",
+        "UPDATE meal_plan_entry SET label = $2, ad_hoc = $3, everyone = $4, cooking_servings = $5, updated_by = $6, revision = $7, updated_at = $8 WHERE id = $1 AND revision = $9",
     )
     .bind(entry.id.as_uuid())
-    .bind(entry.planned_on)
-    .bind(entry.planned_time)
-    .bind(entry.slot.code())
+    .bind(&entry.label)
+    .bind(entry.ad_hoc.map(|kind| kind.code()))
+    .bind(entry.everyone)
+    .bind(entry.cooking_servings)
     .bind(entry.updated_by.as_uuid())
     .bind(entry.revision.get())
     .bind(entry.updated_at)
@@ -985,13 +1305,11 @@ async fn insert_participants(
     entry: &MealPlanEntry,
 ) -> Result<()> {
     for participant in &entry.participants {
-        sqlx::query("INSERT INTO meal_plan_participant (id, entry_id, member_id, planned_on, planned_time, slot, revision, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)")
+        sqlx::query("INSERT INTO meal_plan_participant (id, entry_id, member_id, note, revision, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7)")
             .bind(participant.id.as_uuid())
             .bind(entry.id.as_uuid())
             .bind(participant.member_id.as_uuid())
-            .bind(entry.planned_on)
-            .bind(entry.planned_time)
-            .bind(entry.slot.code())
+            .bind(&participant.note)
             .bind(participant.revision.get())
             .bind(participant.created_at)
             .bind(participant.updated_at)
@@ -1034,25 +1352,17 @@ async fn replace_participants(
     entry_id: MealPlanEntryId,
     participants: &[MealParticipant],
 ) -> Result<()> {
-    let row: (Date, Option<Time>, String) =
-        sqlx::query_as("SELECT planned_on, planned_time, slot FROM meal_plan_entry WHERE id = $1")
-            .bind(entry_id.as_uuid())
-            .fetch_one(&mut **tx)
-            .await
-            .map_err(|error| repository_error("reading a meal plan occurrence", error))?;
     sqlx::query("DELETE FROM meal_plan_participant WHERE entry_id = $1")
         .bind(entry_id.as_uuid())
         .execute(&mut **tx)
         .await
         .map_err(|error| map_db_error(error, "clearing meal plan participants"))?;
     for participant in participants {
-        sqlx::query("INSERT INTO meal_plan_participant (id, entry_id, member_id, planned_on, planned_time, slot, revision, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)")
+        sqlx::query("INSERT INTO meal_plan_participant (id, entry_id, member_id, note, revision, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7)")
             .bind(participant.id.as_uuid())
             .bind(entry_id.as_uuid())
             .bind(participant.member_id.as_uuid())
-            .bind(row.0)
-            .bind(row.1)
-            .bind(&row.2)
+            .bind(&participant.note)
             .bind(participant.revision.get())
             .bind(participant.created_at)
             .bind(participant.updated_at)
@@ -1062,38 +1372,6 @@ async fn replace_participants(
         insert_allocations(tx, entry_id, participant).await?;
     }
     Ok(())
-}
-
-async fn insert_opt_outs(
-    tx: &mut Transaction<'_, Postgres>,
-    entry_id: MealPlanEntryId,
-    opt_outs: &[MealOptOut],
-) -> Result<()> {
-    for opt_out in opt_outs {
-        sqlx::query("INSERT INTO meal_plan_opt_out (id, entry_id, member_id, created_by, created_at) VALUES ($1, $2, $3, $4, $5)")
-            .bind(Uuid::now_v7())
-            .bind(entry_id.as_uuid())
-            .bind(opt_out.member_id.as_uuid())
-            .bind(opt_out.created_by.as_uuid())
-            .bind(opt_out.created_at)
-            .execute(&mut **tx)
-            .await
-            .map_err(|error| map_db_error(error, "recording a meal opt-out"))?;
-    }
-    Ok(())
-}
-
-async fn sync_opt_outs(
-    tx: &mut Transaction<'_, Postgres>,
-    entry_id: MealPlanEntryId,
-    opt_outs: &[MealOptOut],
-) -> Result<()> {
-    sqlx::query("DELETE FROM meal_plan_opt_out WHERE entry_id = $1")
-        .bind(entry_id.as_uuid())
-        .execute(&mut **tx)
-        .await
-        .map_err(|error| map_db_error(error, "clearing meal opt-outs"))?;
-    insert_opt_outs(tx, entry_id, opt_outs).await
 }
 
 async fn insert_guests(

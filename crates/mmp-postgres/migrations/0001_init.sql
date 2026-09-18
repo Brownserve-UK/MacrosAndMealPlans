@@ -209,7 +209,6 @@ CREATE TABLE household_settings (
     dinner_time     TIME NOT NULL,
     timezone        TEXT NOT NULL DEFAULT 'Etc/UTC',
     missing_stock_interpretation TEXT NOT NULL DEFAULT 'unknown',
-    default_all_members_participate BOOLEAN NOT NULL DEFAULT TRUE,
     assume_eaten_when_time_passes BOOLEAN NOT NULL DEFAULT TRUE,
     shopping_section_order shopping_section_code[] NOT NULL
         DEFAULT ARRAY['fresh_produce', 'meat_fish', 'dairy', 'bakery', 'frozen', 'ambient',
@@ -408,27 +407,54 @@ CREATE TABLE recipe_photo (
         CHECK (octet_length(hero_jpeg) > 0 AND octet_length(card_jpeg) > 0)
 );
 
-CREATE TABLE meal_plan_entry (
+CREATE TABLE meal_occasion (
     id            UUID PRIMARY KEY,
-    scope         TEXT NOT NULL DEFAULT 'member',
-    member_id     UUID REFERENCES household_member (id) ON DELETE CASCADE,
     planned_on    DATE NOT NULL,
-    planned_time  TIME,
     slot          TEXT NOT NULL,
+    planned_time  TIME,
+    note          TEXT,
     created_by    UUID NOT NULL REFERENCES app_user (id) ON DELETE RESTRICT,
     updated_by    UUID NOT NULL REFERENCES app_user (id) ON DELETE RESTRICT,
     revision      BIGINT NOT NULL DEFAULT 1,
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
 
-    CONSTRAINT meal_plan_entry_slot_valid
+    CONSTRAINT meal_occasion_slot_valid
         CHECK (slot IN ('breakfast', 'lunch', 'dinner', 'snacks')),
-    CONSTRAINT meal_plan_entry_scope_valid
-        CHECK (scope IN ('member', 'household')),
-    CONSTRAINT meal_plan_entry_owner_matches_scope
-        CHECK ((scope = 'member') = (member_id IS NOT NULL)),
-    CONSTRAINT meal_plan_entry_id_day_slot_unique
-        UNIQUE (id, planned_on, slot)
+    CONSTRAINT meal_occasion_note_not_blank
+        CHECK (note IS NULL OR btrim(note) <> ''),
+    CONSTRAINT meal_occasion_planned_on_slot_unique
+        UNIQUE (planned_on, slot)
+);
+
+CREATE TABLE meal_occasion_absence (
+    occasion_id   UUID NOT NULL REFERENCES meal_occasion (id) ON DELETE CASCADE,
+    member_id     UUID NOT NULL REFERENCES household_member (id) ON DELETE CASCADE,
+    created_by    UUID NOT NULL REFERENCES app_user (id) ON DELETE RESTRICT,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    PRIMARY KEY (occasion_id, member_id)
+);
+
+CREATE TABLE meal_plan_entry (
+    id                UUID PRIMARY KEY,
+    occasion_id       UUID NOT NULL REFERENCES meal_occasion (id) ON DELETE CASCADE,
+    label             TEXT,
+    ad_hoc            TEXT,
+    everyone          BOOLEAN NOT NULL DEFAULT TRUE,
+    cooking_servings  INTEGER,
+    created_by        UUID NOT NULL REFERENCES app_user (id) ON DELETE RESTRICT,
+    updated_by        UUID NOT NULL REFERENCES app_user (id) ON DELETE RESTRICT,
+    revision          BIGINT NOT NULL DEFAULT 1,
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    CONSTRAINT meal_plan_entry_ad_hoc_valid
+        CHECK (ad_hoc IS NULL OR ad_hoc IN ('eating_out', 'takeaway', 'fend_for_yourself')),
+    CONSTRAINT meal_plan_entry_label_not_blank
+        CHECK (label IS NULL OR btrim(label) <> ''),
+    CONSTRAINT meal_plan_entry_cooking_servings_positive
+        CHECK (cooking_servings IS NULL OR cooking_servings > 0)
 );
 
 CREATE TABLE meal_plan_component (
@@ -605,22 +631,16 @@ CREATE TABLE consumption_record (
 
 CREATE TABLE meal_plan_participant (
     id          UUID PRIMARY KEY,
-    entry_id    UUID NOT NULL,
+    entry_id    UUID NOT NULL REFERENCES meal_plan_entry (id) ON DELETE CASCADE,
     member_id   UUID NOT NULL REFERENCES household_member (id) ON DELETE CASCADE,
-    planned_on  DATE NOT NULL,
-    planned_time TIME,
-    slot        TEXT NOT NULL,
+    note        TEXT,
 
     revision    BIGINT NOT NULL DEFAULT 1,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
 
-    CONSTRAINT meal_plan_participant_slot_valid
-        CHECK (slot IN ('breakfast', 'lunch', 'dinner', 'snacks')),
-    CONSTRAINT meal_plan_participant_entry_occurrence_fk
-        FOREIGN KEY (entry_id, planned_on, slot)
-        REFERENCES meal_plan_entry (id, planned_on, slot)
-        ON UPDATE CASCADE ON DELETE CASCADE,
+    CONSTRAINT meal_plan_participant_note_not_blank
+        CHECK (note IS NULL OR btrim(note) <> ''),
     CONSTRAINT meal_plan_participant_entry_member_unique
         UNIQUE (entry_id, member_id),
     CONSTRAINT meal_plan_participant_entry_id_unique
@@ -717,16 +737,6 @@ CREATE TABLE meal_guest_allocation (
         CHECK (confirmed_value IS NULL OR confirmed_value > 0),
     CONSTRAINT meal_guest_allocation_resolution_complete
         CHECK ((status = 'planned') = (resolved_by IS NULL AND resolved_at IS NULL))
-);
-
-CREATE TABLE meal_plan_opt_out (
-    id          UUID PRIMARY KEY,
-    entry_id    UUID NOT NULL REFERENCES meal_plan_entry (id) ON DELETE CASCADE,
-    member_id   UUID NOT NULL REFERENCES household_member (id) ON DELETE CASCADE,
-    created_by  UUID NOT NULL REFERENCES app_user (id) ON DELETE RESTRICT,
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-
-    CONSTRAINT meal_plan_opt_out_entry_member_unique UNIQUE (entry_id, member_id)
 );
 
 CREATE TABLE prepared_batch (
@@ -1246,19 +1256,9 @@ CREATE INDEX consumption_record_member_day ON consumption_record (member_id, con
 
 CREATE INDEX consumption_record_product ON consumption_record (product_id);
 
-CREATE INDEX meal_plan_entry_member_day
-    ON meal_plan_entry (member_id, planned_on, slot, planned_time);
+CREATE INDEX meal_plan_entry_occasion ON meal_plan_entry (occasion_id);
 
-CREATE UNIQUE INDEX meal_plan_entry_member_day_slot_unique
-    ON meal_plan_entry (member_id, planned_on, slot)
-    WHERE member_id IS NOT NULL AND slot <> 'snacks';
-
-CREATE UNIQUE INDEX meal_plan_entry_member_day_snack_time_unique
-    ON meal_plan_entry (member_id, planned_on, slot, planned_time) NULLS NOT DISTINCT
-    WHERE member_id IS NOT NULL AND slot = 'snacks';
-
-CREATE INDEX meal_plan_entry_scope_day
-    ON meal_plan_entry (scope, planned_on);
+CREATE INDEX meal_occasion_absence_member ON meal_occasion_absence (member_id);
 
 CREATE INDEX meal_plan_component_entry ON meal_plan_component (entry_id, position);
 
@@ -1301,14 +1301,6 @@ CREATE INDEX meal_plan_participant_entry ON meal_plan_participant (entry_id);
 
 CREATE INDEX meal_plan_participant_member ON meal_plan_participant (member_id);
 
-CREATE UNIQUE INDEX meal_plan_participant_member_occurrence_unique
-    ON meal_plan_participant (member_id, planned_on, slot)
-    WHERE slot <> 'snacks';
-
-CREATE UNIQUE INDEX meal_plan_participant_member_snack_time_unique
-    ON meal_plan_participant (member_id, planned_on, slot, planned_time) NULLS NOT DISTINCT
-    WHERE slot = 'snacks';
-
 CREATE INDEX meal_plan_participant_allocation_participant
     ON meal_plan_participant_allocation (participant_id);
 
@@ -1320,10 +1312,6 @@ CREATE INDEX meal_guest_group_entry ON meal_guest_group (entry_id);
 CREATE INDEX meal_guest_allocation_group ON meal_guest_allocation (guest_group_id);
 
 CREATE INDEX meal_guest_allocation_component ON meal_guest_allocation (component_id);
-
-CREATE INDEX meal_plan_opt_out_entry ON meal_plan_opt_out (entry_id);
-
-CREATE INDEX meal_plan_opt_out_member ON meal_plan_opt_out (member_id);
 
 CREATE UNIQUE INDEX stock_effect_active_source_item_unique
     ON stock_effect (source_kind, source_id, source_detail_id, stock_item_id)
@@ -1415,6 +1403,12 @@ CREATE INDEX meal_plan_entry_created_by ON meal_plan_entry (created_by);
 
 CREATE INDEX meal_plan_entry_updated_by ON meal_plan_entry (updated_by);
 
+CREATE INDEX meal_occasion_created_by ON meal_occasion (created_by);
+
+CREATE INDEX meal_occasion_updated_by ON meal_occasion (updated_by);
+
+CREATE INDEX meal_occasion_absence_created_by ON meal_occasion_absence (created_by);
+
 CREATE INDEX recipe_created_by ON recipe (created_by);
 
 CREATE INDEX recipe_updated_by ON recipe (updated_by);
@@ -1424,8 +1418,6 @@ CREATE INDEX stock_event_actor_user_id ON stock_event (actor_user_id);
 CREATE INDEX meal_plan_participant_allocation_resolved_by ON meal_plan_participant_allocation (resolved_by);
 
 CREATE INDEX meal_guest_allocation_resolved_by ON meal_guest_allocation (resolved_by);
-
-CREATE INDEX meal_plan_opt_out_created_by ON meal_plan_opt_out (created_by);
 
 CREATE INDEX prepared_batch_created_by ON prepared_batch (created_by);
 

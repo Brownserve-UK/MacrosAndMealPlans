@@ -41,7 +41,7 @@ pub fn map_db_error(error: sqlx::Error, context: &str) -> CoreError {
     }
 }
 
-const UNIQUE_CONSTRAINTS: [(&str, &str, &str); 43] = [
+const UNIQUE_CONSTRAINTS: [(&str, &str, &str); 41] = [
     ("ingredient_name_unique", "ingredient", "name"),
     ("ingredient_seed_key_unique", "ingredient", "seed_key"),
     ("ingredient_pkey", "ingredient", "id"),
@@ -60,36 +60,22 @@ const UNIQUE_CONSTRAINTS: [(&str, &str, &str); 43] = [
     ),
     ("consumption_record_pkey", "consumption record", "id"),
     ("meal_plan_entry_pkey", "meal plan entry", "id"),
+    ("meal_occasion_pkey", "meal occasion", "id"),
     (
-        "meal_plan_entry_member_day_slot_unique",
-        "meal plan entry",
+        "meal_occasion_planned_on_slot_unique",
+        "meal occasion",
         "slot",
     ),
     (
-        "meal_plan_entry_member_day_snack_time_unique",
-        "meal plan entry",
-        "time",
-    ),
-    ("meal_plan_component_pkey", "meal plan component", "id"),
-    (
-        "meal_plan_opt_out_entry_member_unique",
-        "meal plan opt-out",
+        "meal_occasion_absence_pkey",
+        "meal occasion absence",
         "member",
     ),
+    ("meal_plan_component_pkey", "meal plan component", "id"),
     (
         "consumption_record_meal_plan_component_member_unique",
         "consumption record",
         "meal_plan_component_id",
-    ),
-    (
-        "meal_plan_participant_member_occurrence_unique",
-        "meal plan participant",
-        "slot",
-    ),
-    (
-        "meal_plan_participant_member_snack_time_unique",
-        "meal plan participant",
-        "time",
     ),
     (
         "meal_plan_participant_entry_member_unique",
@@ -185,6 +171,9 @@ fn unique_violation(constraint: &str) -> Option<(&'static str, &'static str)> {
 }
 
 fn foreign_key_target(constraint: &str) -> &'static str {
+    if constraint.contains("occasion_id") {
+        return "meal occasion";
+    }
     if constraint.contains("recipe_id") {
         return "recipe";
     }
