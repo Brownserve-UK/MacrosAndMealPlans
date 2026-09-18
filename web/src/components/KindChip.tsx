@@ -24,12 +24,15 @@ export function KindChip({ kind }: { kind: Kind }) {
         tone === 'neutral'
           ? {
               backgroundColor: 'transparent',
-              border: `1px solid ${theme.palette.divider}`,
-              color: theme.palette.text.secondary,
+              border: '1px solid',
+              borderColor: 'divider',
+              color: 'text.secondary',
             }
           : {
-              backgroundColor: alpha(theme.palette[tone].main, 0.12),
-              color: theme.palette[tone].main,
+              backgroundColor: theme.vars
+                ? `rgba(${theme.vars.palette[tone].mainChannel} / 0.12)`
+                : alpha(theme.palette[tone].main, 0.12),
+              color: `${tone}.main`,
             }
       }
     />

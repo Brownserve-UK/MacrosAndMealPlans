@@ -285,16 +285,16 @@ function OutIcon() {
   return (
     <Box
       aria-hidden
-      sx={(theme) => ({
+      sx={{
         width: 34,
         height: 34,
         flexShrink: 0,
         borderRadius: '10px',
         display: 'grid',
         placeItems: 'center',
-        backgroundColor: theme.palette.background.default,
-        color: theme.palette.text.secondary,
-      })}
+        backgroundColor: 'background.default',
+        color: 'text.secondary',
+      }}
     >
       <StorefrontIcon sx={{ fontSize: 17 }} />
     </Box>
@@ -744,15 +744,15 @@ export function MealPlanPage({ weekStart, day }: { weekStart: string; day: strin
             icon={
               <Box
                 aria-hidden
-                sx={(theme) => ({
+                sx={{
                   width: 34,
                   height: 34,
                   borderRadius: '10px',
                   display: 'grid',
                   placeItems: 'center',
-                  backgroundColor: theme.palette.background.default,
-                  color: theme.palette.text.secondary,
-                })}
+                  backgroundColor: 'background.default',
+                  color: 'text.secondary',
+                }}
               >
                 <EditIcon sx={{ fontSize: 17 }} />
               </Box>

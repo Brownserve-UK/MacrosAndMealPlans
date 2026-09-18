@@ -24,9 +24,11 @@ export function IconTile({
         placeItems: 'center',
         backgroundColor:
           tone === 'neutral'
-            ? theme.palette.background.default
-            : alpha(theme.palette[tone].main, 0.12),
-        color: tone === 'neutral' ? theme.palette.text.secondary : theme.palette[tone].main,
+            ? 'background.default'
+            : theme.vars
+              ? `rgba(${theme.vars.palette[tone].mainChannel} / 0.12)`
+              : alpha(theme.palette[tone].main, 0.12),
+        color: tone === 'neutral' ? 'text.secondary' : `${tone}.main`,
       })}
     >
       <ConceptIcon concept={concept} size={Math.round(size / 2)} />
