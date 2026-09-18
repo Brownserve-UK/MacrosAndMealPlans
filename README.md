@@ -85,3 +85,7 @@ docker compose run --rm sample-data full --week-start 2026-08-24
 ```
 
 Use `minimal` instead of `full` for a smaller dataset.
+
+The full dataset puts a planner walkthrough in the following week: a meal everyone shares, a
+variation note, a separate leftovers group, an absence, guests, extra cooking for leftovers,
+eating out, a name-only meal, and a Saturday cake in Snacks.

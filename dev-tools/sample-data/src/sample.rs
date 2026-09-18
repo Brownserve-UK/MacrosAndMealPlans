@@ -5,19 +5,19 @@ use std::str::FromStr;
 use anyhow::{Context, bail};
 use mmp_core::CoreError;
 use mmp_core::domain::{
-    AccessScope, ActualMealPlanComponent, Assumption, ConfirmMealPlanComponent,
+    AccessScope, ActualMealPlanComponent, AdHocKind, Assumption, ConfirmMealPlanComponent,
     ConfirmMealPlanEntry, ConsumedAmount, ConsumptionRecordId, HabitualActivity, HouseholdMember,
-    HouseholdMemberId, HouseholdSettingsPatch, IngredientId, MacroTargets, MealCategory,
-    MealItemRef, MealPlanEntryId, MealPlanScope, MealPlanStatus, MealSlot, MealTemplateId,
-    NewConsumptionRecord, NewHouseholdMember, NewMealGuestAllocation, NewMealGuestGroup,
-    NewMealParticipant, NewMealParticipantAllocation, NewMealPlanComponent, NewMealPlanEntry,
-    NewMealTemplate, NewMealTemplateComponent, NewNutritionTarget, NewProduct, NewPurchase,
-    NewRecipe, NewRecipeComponent, NewRecipeInstruction, NewShoppingCadence, NewShoppingListItem,
-    NewStockItem, NewUser, NewWeightGoal, NewWeightRecord, NutritionEmphasis, NutritionFacts,
-    NutritionGoals, OutcomeActor, Pace, Patch, PreparedMealId, ProductId, Provenance, Quantity,
-    RecipeId, RecipePatch, RecipeRequirement, Revision, Role, SectionOrder, Sex, ShoppingSection,
-    SourceDate, SourceDateKind, StockLevel, StockSubject, StorageLocation, Unit, UsabilityDeadline,
-    User, UserId, WeightObjective, WeightSource,
+    HouseholdMemberId, HouseholdSettingsPatch, IngredientId, MacroTargets, MealAttendance,
+    MealCategory, MealItemRef, MealOccasionId, MealPlanEntryId, MealPlanStatus, MealSlot,
+    MealTemplateId, NewConsumptionRecord, NewHouseholdMember, NewMealGroup, NewMealGuestAllocation,
+    NewMealGuestGroup, NewMealOccasion, NewMealParticipant, NewMealParticipantAllocation,
+    NewMealPlanComponent, NewMealTemplate, NewMealTemplateComponent, NewNutritionTarget,
+    NewProduct, NewPurchase, NewRecipe, NewRecipeComponent, NewRecipeInstruction,
+    NewShoppingCadence, NewShoppingListItem, NewStockItem, NewUser, NewWeightGoal, NewWeightRecord,
+    NutritionEmphasis, NutritionFacts, NutritionGoals, OutcomeActor, Pace, Patch, PreparedMealId,
+    ProductId, Provenance, Quantity, RecipeId, RecipePatch, RecipeRequirement, Revision, Role,
+    SectionOrder, Sex, ShoppingSection, SourceDate, SourceDateKind, StockLevel, StockSubject,
+    StorageLocation, Unit, UsabilityDeadline, User, UserId, WeightObjective, WeightSource,
 };
 use mmp_core::services::NutritionPlanAnswers;
 use mmp_server::state::AppState;
@@ -799,7 +799,7 @@ impl Loader<'_> {
             for day_offset in 0..7 {
                 let date = week + Duration::days(day_offset);
                 for slot in MealSlot::ALL {
-                    self.ensure_meal(date, slot, Outcome::Eaten { varied: false })
+                    self.ensure_filler_meal(date, slot, Outcome::Eaten { varied: false })
                         .await?;
                 }
             }
@@ -816,9 +816,193 @@ impl Loader<'_> {
         self.load_assumed_meals().await?;
         self.load_pooled_ingredient_demand().await?;
         self.load_batch_cook().await?;
+        self.load_planner_showcase().await?;
         self.load_shopping().await?;
         self.load_generic_food_showcase().await?;
         self.load_planning_horizon().await
+    }
+
+    async fn load_planner_showcase(&mut self) -> anyhow::Result<()> {
+        let week = self.week_start + Duration::weeks(1);
+        let manager = HouseholdMemberId::from_uuid(sample_uuid("household-member", "manager"));
+        let basic = HouseholdMemberId::from_uuid(sample_uuid("household-member", "basic-user"));
+
+        let monday = week;
+        let curry_id = showcase_group_id(monday, MealSlot::Dinner, "family-curry");
+        self.ensure_showcase_group(
+            monday,
+            MealSlot::Dinner,
+            Some("Defrost the chicken in the morning"),
+            NewMealGroup {
+                id: Some(curry_id),
+                label: Some("Family curry".to_owned()),
+                ad_hoc: None,
+                components: vec![NewMealPlanComponent {
+                    id: None,
+                    item: MealItemRef::recipe(recipe_id("chicken-and-rice")),
+                    amount: servings(4),
+                }],
+                everyone: true,
+                participants: Vec::new(),
+                guest_groups: Vec::new(),
+                cooking_servings: Some(4),
+            },
+        )
+        .await?;
+        self.state
+            .meal_plan
+            .set_attendance(
+                occasion_id(monday, MealSlot::Dinner),
+                basic,
+                MealAttendance::Eating {
+                    group_id: curry_id,
+                    note: Some("mild".to_owned()),
+                },
+                self.actor.id,
+            )
+            .await?;
+        let leftovers_id = showcase_group_id(monday, MealSlot::Dinner, "leftovers");
+        if matches!(
+            self.state.meal_plan.get(leftovers_id).await,
+            Err(CoreError::NotFound { .. })
+        ) {
+            self.state
+                .meal_plan
+                .add_group(
+                    occasion_id(monday, MealSlot::Dinner),
+                    NewMealGroup {
+                        id: Some(leftovers_id),
+                        label: Some("Leftover chicken and rice".to_owned()),
+                        ad_hoc: None,
+                        components: vec![NewMealPlanComponent {
+                            id: None,
+                            item: MealItemRef::dish(recipe_id("chicken-and-rice")),
+                            amount: servings(1),
+                        }],
+                        everyone: false,
+                        participants: vec![NewMealParticipant::member(manager)],
+                        guest_groups: Vec::new(),
+                        cooking_servings: None,
+                    },
+                    self.actor.id,
+                )
+                .await?;
+            self.report.meals_created += 1;
+        }
+
+        let tuesday = week + Duration::days(1);
+        self.ensure_showcase_group(
+            tuesday,
+            MealSlot::Dinner,
+            None,
+            everyone_recipe_group(
+                tuesday,
+                MealSlot::Dinner,
+                "tuesday-dinner",
+                "chicken-and-rice",
+            ),
+        )
+        .await?;
+        self.state
+            .meal_plan
+            .set_attendance(
+                occasion_id(tuesday, MealSlot::Dinner),
+                manager,
+                MealAttendance::Elsewhere,
+                self.actor.id,
+            )
+            .await?;
+
+        let wednesday = week + Duration::days(2);
+        let mut guests = everyone_recipe_group(
+            wednesday,
+            MealSlot::Lunch,
+            "lunch-with-guests",
+            "chicken-and-rice",
+        );
+        guests.guest_groups = vec![NewMealGuestGroup::of(2)];
+        self.ensure_showcase_group(wednesday, MealSlot::Lunch, None, guests)
+            .await?;
+
+        let thursday = week + Duration::days(3);
+        self.ensure_showcase_group(
+            thursday,
+            MealSlot::Dinner,
+            None,
+            NewMealGroup {
+                id: Some(showcase_group_id(thursday, MealSlot::Dinner, "eating-out")),
+                label: None,
+                ad_hoc: Some(AdHocKind::EatingOut),
+                components: Vec::new(),
+                everyone: true,
+                participants: Vec::new(),
+                guest_groups: Vec::new(),
+                cooking_servings: None,
+            },
+        )
+        .await?;
+
+        let friday = week + Duration::days(4);
+        self.ensure_showcase_group(
+            friday,
+            MealSlot::Dinner,
+            None,
+            NewMealGroup {
+                id: Some(showcase_group_id(friday, MealSlot::Dinner, "pizza")),
+                label: Some("Pizza night".to_owned()),
+                ad_hoc: None,
+                components: Vec::new(),
+                everyone: true,
+                participants: Vec::new(),
+                guest_groups: Vec::new(),
+                cooking_servings: None,
+            },
+        )
+        .await?;
+
+        let saturday = week + Duration::days(5);
+        let mut cake =
+            everyone_recipe_group(saturday, MealSlot::Snacks, "saturday-cake", "saturday-cake");
+        cake.cooking_servings = Some(8);
+        self.ensure_showcase_group(saturday, MealSlot::Snacks, None, cake)
+            .await?;
+
+        let sunday = week + Duration::days(6);
+        self.ensure_showcase_group(
+            sunday,
+            MealSlot::Breakfast,
+            None,
+            everyone_recipe_group(sunday, MealSlot::Breakfast, "everyone-pancakes", "porridge"),
+        )
+        .await?;
+        Ok(())
+    }
+
+    async fn ensure_showcase_group(
+        &mut self,
+        date: Date,
+        slot: MealSlot,
+        note: Option<&str>,
+        group: NewMealGroup,
+    ) -> anyhow::Result<()> {
+        let group_id = group.id.context("showcase group needs a stable id")?;
+        if self.state.meal_plan.get(group_id).await.is_ok() {
+            return Ok(());
+        }
+        self.state
+            .meal_plan
+            .create_occasion_backdated(NewMealOccasion {
+                id: Some(occasion_id(date, slot)),
+                planned_on: date,
+                slot,
+                planned_time: slot_time(slot),
+                note: note.map(str::to_owned),
+                group,
+                actor_id: self.actor.id,
+            })
+            .await?;
+        self.report.meals_created += 1;
+        Ok(())
     }
 
     async fn load_generic_food_showcase(&mut self) -> anyhow::Result<()> {
@@ -993,23 +1177,29 @@ impl Loader<'_> {
         self.report.meals_created += 1;
         self.state
             .meal_plan
-            .create_backdated(NewMealPlanEntry {
-                id: Some(id),
-                scope: MealPlanScope::Member,
-                member_id: Some(self.member.id),
+            .create_occasion_backdated(NewMealOccasion {
+                id: Some(occasion_id(date, slot)),
                 planned_on: date,
                 planned_time: Some(planned_time),
                 slot,
-                components: components
-                    .into_iter()
-                    .map(|(item, amount)| NewMealPlanComponent {
-                        id: None,
-                        item,
-                        amount,
-                    })
-                    .collect(),
-                participants: None,
-                guest_groups: Vec::new(),
+                note: None,
+                group: NewMealGroup {
+                    id: Some(id),
+                    label: None,
+                    ad_hoc: None,
+                    components: components
+                        .into_iter()
+                        .map(|(item, amount)| NewMealPlanComponent {
+                            id: None,
+                            item,
+                            amount,
+                        })
+                        .collect(),
+                    everyone: false,
+                    participants: vec![NewMealParticipant::member(self.member.id)],
+                    guest_groups: Vec::new(),
+                    cooking_servings: None,
+                },
                 actor_id: self.actor.id,
             })
             .await?;
@@ -1291,22 +1481,19 @@ impl Loader<'_> {
         }
         self.state
             .meal_plan
-            .create_backdated(NewMealPlanEntry {
-                id: Some(id),
-                scope: MealPlanScope::Member,
-                member_id: Some(self.member.id),
-                planned_on: date,
-                planned_time: slot_time(MealSlot::Breakfast),
-                slot: MealSlot::Breakfast,
-                components: vec![NewMealPlanComponent {
+            .create_occasion_backdated(member_occasion(
+                self.actor.id,
+                self.member.id,
+                date,
+                MealSlot::Breakfast,
+                slot_time(MealSlot::Breakfast),
+                id,
+                vec![NewMealPlanComponent {
                     id: None,
                     item: MealItemRef::recipe(recipe_id("porridge")),
                     amount: servings(2),
                 }],
-                participants: None,
-                guest_groups: Vec::new(),
-                actor_id: self.actor.id,
-            })
+            ))
             .await?;
         self.report.meals_created += 1;
         Ok(())
@@ -1738,15 +1925,13 @@ impl Loader<'_> {
             thursday,
             MealSlot::Lunch,
             "chicken-and-rice",
-            servings(4),
-            &[(owner, 1), (manager, 1), (basic, 1)],
+            servings(3),
+            &[(manager, 1), (basic, 1)],
             1,
         )
         .await?;
 
         let friday = self.week_start + Duration::days(4);
-        self.ensure_personal_meal(friday, MealSlot::Lunch, owner, "self-catered")
-            .await?;
         self.ensure_household_meal(
             friday,
             MealSlot::Lunch,
@@ -1767,8 +1952,6 @@ impl Loader<'_> {
             0,
         )
         .await?;
-        self.ensure_opt_out_with_own_meal(saturday, MealSlot::Lunch, owner)
-            .await?;
 
         let sunday = self.week_start + Duration::days(6);
         self.ensure_household_meal(
@@ -1780,7 +1963,6 @@ impl Loader<'_> {
             2,
         )
         .await?;
-        self.ensure_opt_out(sunday, MealSlot::Lunch, basic).await?;
 
         let next_wed = self.week_start + Duration::weeks(1) + Duration::days(2);
         self.ensure_household_meal(
@@ -1805,81 +1987,6 @@ impl Loader<'_> {
         )
         .await?;
 
-        Ok(())
-    }
-
-    async fn ensure_opt_out_with_own_meal(
-        &mut self,
-        date: Date,
-        slot: MealSlot,
-        member_id: HouseholdMemberId,
-    ) -> anyhow::Result<()> {
-        self.ensure_opt_out(date, slot, member_id).await?;
-        self.ensure_personal_meal(date, slot, member_id, "opted-out")
-            .await
-    }
-
-    async fn ensure_opt_out(
-        &mut self,
-        date: Date,
-        slot: MealSlot,
-        member_id: HouseholdMemberId,
-    ) -> anyhow::Result<()> {
-        let entry_id = meal_id(date, slot);
-        let view = self.state.meal_plan.get(entry_id).await?;
-        if view.entry.scope != MealPlanScope::Household {
-            return Ok(());
-        }
-        if view.entry.has_opted_out(member_id) {
-            return Ok(());
-        }
-        self.state
-            .meal_plan
-            .opt_out(entry_id, view.entry.revision, self.actor.id, member_id)
-            .await?;
-        self.report.household_participants_created =
-            self.report.household_participants_created.saturating_sub(1);
-        Ok(())
-    }
-
-    async fn ensure_personal_meal(
-        &mut self,
-        date: Date,
-        slot: MealSlot,
-        member_id: HouseholdMemberId,
-        key: &str,
-    ) -> anyhow::Result<()> {
-        let id = MealPlanEntryId::from_uuid(sample_uuid(
-            "meal-plan-entry",
-            &format!("{date}:{slot}:member:{key}"),
-        ));
-        if !matches!(
-            self.state.meal_plan.get(id).await,
-            Err(CoreError::NotFound { .. })
-        ) {
-            return Ok(());
-        }
-        let created = self
-            .state
-            .meal_plan
-            .create_backdated(NewMealPlanEntry {
-                id: Some(id),
-                scope: MealPlanScope::Member,
-                member_id: Some(member_id),
-                planned_on: date,
-                planned_time: slot_time(slot),
-                slot,
-                components: components_for(slot),
-                participants: None,
-                guest_groups: Vec::new(),
-                actor_id: self.actor.id,
-            })
-            .await;
-        match created {
-            Ok(_) => self.report.meals_created += 1,
-            Err(CoreError::Conflict { .. }) => return Ok(()),
-            Err(other) => return Err(other.into()),
-        }
         Ok(())
     }
 
@@ -1938,6 +2045,7 @@ impl Loader<'_> {
             .map(|(member_id, count)| NewMealParticipant {
                 id: None,
                 member_id: *member_id,
+                note: None,
                 allocations: vec![NewMealParticipantAllocation {
                     component_id,
                     allocated: servings(*count),
@@ -1947,30 +2055,36 @@ impl Loader<'_> {
         let created = self
             .state
             .meal_plan
-            .create_backdated(NewMealPlanEntry {
-                id: Some(id),
-                scope: MealPlanScope::Household,
-                member_id: None,
+            .create_occasion_backdated(NewMealOccasion {
+                id: Some(occasion_id(date, slot)),
                 planned_on: date,
                 planned_time,
                 slot,
-                components: vec![NewMealPlanComponent {
-                    id: Some(component_id),
-                    item: MealItemRef::recipe(recipe_id(recipe_key)),
-                    amount: prepared,
-                }],
-                participants: Some(participants),
-                guest_groups: if guest_count > 0 {
-                    vec![NewMealGuestGroup {
-                        id: None,
-                        count: guest_count,
-                        allocations: vec![NewMealGuestAllocation {
-                            component_id,
-                            allocated: servings(1),
-                        }],
-                    }]
-                } else {
-                    Vec::new()
+                note: None,
+                group: NewMealGroup {
+                    id: Some(id),
+                    label: None,
+                    ad_hoc: None,
+                    components: vec![NewMealPlanComponent {
+                        id: Some(component_id),
+                        item: MealItemRef::recipe(recipe_id(recipe_key)),
+                        amount: prepared,
+                    }],
+                    everyone: false,
+                    participants,
+                    guest_groups: if guest_count > 0 {
+                        vec![NewMealGuestGroup {
+                            id: None,
+                            count: guest_count,
+                            allocations: vec![NewMealGuestAllocation {
+                                component_id,
+                                allocated: servings(1),
+                            }],
+                        }]
+                    } else {
+                        Vec::new()
+                    },
+                    cooking_servings: None,
                 },
                 actor_id: self.actor.id,
             })
@@ -1992,21 +2106,21 @@ impl Loader<'_> {
         for day_offset in 0..2 {
             let date = week + Duration::days(day_offset);
             for slot in MealSlot::ALL {
-                self.ensure_meal(date, slot, Outcome::Eaten { varied: true })
+                self.ensure_filler_meal(date, slot, Outcome::Eaten { varied: true })
                     .await?;
             }
         }
 
         let wednesday = week + Duration::days(2);
-        self.ensure_meal(
+        self.ensure_filler_meal(
             wednesday,
             MealSlot::Breakfast,
             Outcome::PartiallyEaten { component_index: 1 },
         )
         .await?;
-        self.ensure_meal(wednesday, MealSlot::Lunch, Outcome::Eaten { varied: true })
+        self.ensure_filler_meal(wednesday, MealSlot::Lunch, Outcome::Eaten { varied: true })
             .await?;
-        self.ensure_meal(wednesday, MealSlot::Dinner, Outcome::NotEaten)
+        self.ensure_filler_meal(wednesday, MealSlot::Dinner, Outcome::NotEaten)
             .await?;
 
         let thursday = week + Duration::days(3);
@@ -2028,7 +2142,7 @@ impl Loader<'_> {
         .await?;
 
         let friday = week + Duration::days(4);
-        self.ensure_meal(friday, MealSlot::Dinner, Outcome::Planned)
+        self.ensure_filler_meal(friday, MealSlot::Dinner, Outcome::Planned)
             .await
     }
 
@@ -2038,23 +2152,23 @@ impl Loader<'_> {
         let mut date = self.week_start;
         while date < self.today {
             for slot in MealSlot::ALL {
-                self.ensure_meal(date, slot, Outcome::Eaten { varied: true })
+                self.ensure_filler_meal(date, slot, Outcome::Eaten { varied: true })
                     .await?;
             }
             date += Duration::days(1);
         }
 
-        self.ensure_meal(
+        self.ensure_filler_meal(
             self.today,
             MealSlot::Breakfast,
             Outcome::Eaten { varied: true },
         )
         .await?;
-        self.ensure_meal(self.today, MealSlot::Lunch, Outcome::Eaten { varied: true })
+        self.ensure_filler_meal(self.today, MealSlot::Lunch, Outcome::Eaten { varied: true })
             .await?;
-        self.ensure_meal(self.today, MealSlot::Dinner, Outcome::Planned)
+        self.ensure_filler_meal(self.today, MealSlot::Dinner, Outcome::Planned)
             .await?;
-        self.ensure_meal(self.today, MealSlot::Snacks, Outcome::Planned)
+        self.ensure_filler_meal(self.today, MealSlot::Snacks, Outcome::Planned)
             .await?;
         self.ensure_timed_snack(
             self.today,
@@ -2093,7 +2207,8 @@ impl Loader<'_> {
         let mut date = self.today + Duration::days(1);
         while date <= week_end {
             for slot in [MealSlot::Breakfast, MealSlot::Dinner] {
-                self.ensure_meal(date, slot, Outcome::Planned).await?;
+                self.ensure_filler_meal(date, slot, Outcome::Planned)
+                    .await?;
             }
             date += Duration::days(1);
         }
@@ -2128,22 +2243,19 @@ impl Loader<'_> {
         self.report.meals_created += 1;
         self.state
             .meal_plan
-            .create_backdated(NewMealPlanEntry {
-                id: Some(id),
-                scope: MealPlanScope::Member,
-                member_id: Some(self.member.id),
-                planned_on: date,
-                planned_time: Some(planned_time),
+            .create_occasion_backdated(member_occasion(
+                self.actor.id,
+                self.member.id,
+                date,
                 slot,
-                components: vec![NewMealPlanComponent {
+                Some(planned_time),
+                id,
+                vec![NewMealPlanComponent {
                     id: None,
                     item: MealItemRef::product(product_id(product_key)),
                     amount,
                 }],
-                participants: None,
-                guest_groups: Vec::new(),
-                actor_id: self.actor.id,
-            })
+            ))
             .await?;
         Ok(())
     }
@@ -2166,22 +2278,19 @@ impl Loader<'_> {
         self.report.meals_created += 1;
         self.state
             .meal_plan
-            .create_backdated(NewMealPlanEntry {
-                id: Some(id),
-                scope: MealPlanScope::Member,
-                member_id: Some(self.member.id),
-                planned_on: date,
-                planned_time: Some(planned_time),
-                slot: MealSlot::Snacks,
-                components: vec![NewMealPlanComponent {
+            .create_occasion_backdated(member_occasion(
+                self.actor.id,
+                self.member.id,
+                date,
+                MealSlot::Snacks,
+                Some(planned_time),
+                id,
+                vec![NewMealPlanComponent {
                     id: None,
                     item: MealItemRef::product(product_id(product_key)),
                     amount,
                 }],
-                participants: None,
-                guest_groups: Vec::new(),
-                actor_id: self.actor.id,
-            })
+            ))
             .await?;
         Ok(())
     }
@@ -2204,19 +2313,17 @@ impl Loader<'_> {
                 self.report.meals_created += 1;
                 self.state
                     .meal_plan
-                    .create_backdated(NewMealPlanEntry {
-                        id: Some(id),
-                        scope: MealPlanScope::Member,
-                        member_id: Some(self.member.id),
-                        planned_on: date,
-                        planned_time: slot_time(slot),
+                    .create_occasion_backdated(member_occasion(
+                        self.actor.id,
+                        self.member.id,
+                        date,
                         slot,
-                        components: components_for(slot),
-                        participants: None,
-                        guest_groups: Vec::new(),
-                        actor_id: self.actor.id,
-                    })
-                    .await?
+                        slot_time(slot),
+                        id,
+                        components_for(slot),
+                    ))
+                    .await?;
+                self.state.meal_plan.get(id).await?
             }
             Err(error) => return Err(error.into()),
         };
@@ -2321,6 +2428,18 @@ impl Loader<'_> {
         Ok(())
     }
 
+    async fn ensure_filler_meal(
+        &mut self,
+        date: Date,
+        slot: MealSlot,
+        outcome: Outcome,
+    ) -> anyhow::Result<()> {
+        if is_reserved_occasion(self.today, date, slot) {
+            return Ok(());
+        }
+        self.ensure_meal(date, slot, outcome).await
+    }
+
     async fn count_stock_effects(
         &mut self,
         entry: &mmp_core::domain::MealPlanEntry,
@@ -2359,22 +2478,19 @@ impl Loader<'_> {
         self.report.meals_created += 1;
         self.state
             .meal_plan
-            .create_backdated(NewMealPlanEntry {
-                id: Some(id),
-                scope: MealPlanScope::Member,
-                member_id: Some(self.member.id),
-                planned_on: date,
-                planned_time: slot_time(slot),
+            .create_occasion_backdated(member_occasion(
+                self.actor.id,
+                self.member.id,
+                date,
                 slot,
-                components: vec![NewMealPlanComponent {
+                slot_time(slot),
+                id,
+                vec![NewMealPlanComponent {
                     id: None,
                     item: MealItemRef::recipe(recipe_id(recipe_key)),
                     amount,
                 }],
-                participants: None,
-                guest_groups: Vec::new(),
-                actor_id: self.actor.id,
-            })
+            ))
             .await?;
         Ok(())
     }
@@ -2938,7 +3054,112 @@ fn recipe_specs() -> Vec<RecipeSpec> {
             tags: vec!["Quick"],
             photo: false,
         },
+        RecipeSpec {
+            key: "saturday-cake",
+            name: "Saturday Cake",
+            servings: 8,
+            description: "A simple cake for sharing on Saturday afternoon.",
+            preparation_minutes: 20,
+            cooking_minutes: 50,
+            notes: "Leave it to cool before serving.",
+            components: vec![
+                (
+                    RecipeLineSpec::Ingredient("rolled-oats"),
+                    ConsumedAmount::Measure(quantity(300, Unit::Gram)),
+                ),
+                (
+                    RecipeLineSpec::Ingredient("whole-milk"),
+                    ConsumedAmount::Measure(quantity(250, Unit::Millilitre)),
+                ),
+                (
+                    RecipeLineSpec::Ingredient("banana"),
+                    ConsumedAmount::Measure(quantity(3, Unit::Item)),
+                ),
+                (
+                    RecipeLineSpec::Ingredient("cinnamon"),
+                    ConsumedAmount::Measure(quantity(2, Unit::Teaspoon)),
+                ),
+            ],
+            instructions: vec![
+                "Mix the ingredients into a smooth batter.",
+                "Bake until golden and set in the middle.",
+                "Cool before slicing into eight pieces.",
+            ],
+            meal_categories: vec![MealCategory::Snack],
+            country_categories: vec!["GB"],
+            tags: vec!["Baking", "Vegetarian"],
+            photo: false,
+        },
     ]
+}
+
+fn everyone_recipe_group(date: Date, slot: MealSlot, key: &str, recipe_key: &str) -> NewMealGroup {
+    NewMealGroup {
+        id: Some(showcase_group_id(date, slot, key)),
+        label: None,
+        ad_hoc: None,
+        components: vec![NewMealPlanComponent {
+            id: None,
+            item: MealItemRef::recipe(recipe_id(recipe_key)),
+            amount: servings(3),
+        }],
+        everyone: true,
+        participants: Vec::new(),
+        guest_groups: Vec::new(),
+        cooking_servings: None,
+    }
+}
+
+fn showcase_group_id(date: Date, slot: MealSlot, key: &str) -> MealPlanEntryId {
+    MealPlanEntryId::from_uuid(sample_uuid(
+        "meal-plan-entry",
+        &format!("{date}:{slot}:showcase:{key}"),
+    ))
+}
+
+fn member_occasion(
+    actor_id: UserId,
+    member_id: HouseholdMemberId,
+    planned_on: Date,
+    slot: MealSlot,
+    planned_time: Option<Time>,
+    group_id: MealPlanEntryId,
+    components: Vec<NewMealPlanComponent>,
+) -> NewMealOccasion {
+    NewMealOccasion {
+        id: Some(occasion_id(planned_on, slot)),
+        planned_on,
+        slot,
+        planned_time,
+        note: None,
+        group: NewMealGroup {
+            id: Some(group_id),
+            label: None,
+            ad_hoc: None,
+            components,
+            everyone: false,
+            participants: vec![NewMealParticipant::member(member_id)],
+            guest_groups: Vec::new(),
+            cooking_servings: None,
+        },
+        actor_id,
+    }
+}
+
+fn occasion_id(date: Date, slot: MealSlot) -> MealOccasionId {
+    MealOccasionId::from_uuid(sample_uuid("meal-occasion", &format!("{date}:{slot}")))
+}
+
+fn is_reserved_occasion(today: Date, date: Date, slot: MealSlot) -> bool {
+    match slot {
+        MealSlot::Dinner => {
+            date == today - Duration::days(2) || date == today - Duration::days(5)
+        }
+        MealSlot::Snacks => {
+            date == today - Duration::days(3) || date == today - Duration::days(10)
+        }
+        _ => false,
+    }
 }
 
 fn meal_id(date: Date, slot: MealSlot) -> MealPlanEntryId {
@@ -3032,6 +3253,46 @@ mod tests {
             meal_id(date!(2026 - 08 - 24), MealSlot::Breakfast),
             meal_id(date!(2026 - 08 - 25), MealSlot::Breakfast)
         );
+    }
+
+    #[test]
+    fn filler_meals_leave_the_assumed_occasions_unclaimed() {
+        let today = date!(2026 - 09 - 18);
+        assert!(is_reserved_occasion(
+            today,
+            date!(2026 - 09 - 16),
+            MealSlot::Dinner
+        ));
+        assert!(is_reserved_occasion(
+            today,
+            date!(2026 - 09 - 13),
+            MealSlot::Dinner
+        ));
+        assert!(is_reserved_occasion(
+            today,
+            date!(2026 - 09 - 15),
+            MealSlot::Snacks
+        ));
+        assert!(is_reserved_occasion(
+            today,
+            date!(2026 - 09 - 08),
+            MealSlot::Snacks
+        ));
+        assert!(!is_reserved_occasion(
+            today,
+            date!(2026 - 09 - 16),
+            MealSlot::Lunch
+        ));
+        assert!(!is_reserved_occasion(
+            today,
+            date!(2026 - 09 - 15),
+            MealSlot::Dinner
+        ));
+        assert!(!is_reserved_occasion(
+            today,
+            date!(2026 - 09 - 16),
+            MealSlot::Snacks
+        ));
     }
 
     #[test]
