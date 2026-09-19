@@ -920,9 +920,31 @@ impl Loader<'_> {
             "lunch-with-guests",
             "chicken-and-rice",
         );
-        guests.guest_groups = vec![NewMealGuestGroup::of(2)];
+        guests.guest_groups = vec![NewMealGuestGroup {
+            name: Some("Alex".to_owned()),
+            ..NewMealGuestGroup::of(1)
+        }];
         self.ensure_showcase_group(wednesday, MealSlot::Lunch, None, guests)
             .await?;
+        for (key, label, names) in [
+            ("vegetarian-guest", "Vegetarian lunch", [Some("Morgan"), None]),
+            ("children-guests", "Pizza and garlic bread", [Some("Charlie"), Some("Robin")]),
+        ] {
+            self.ensure_showcase_group(wednesday, MealSlot::Lunch, None, NewMealGroup {
+                id: Some(showcase_group_id(wednesday, MealSlot::Lunch, key)),
+                label: Some(label.to_owned()),
+                ad_hoc: None,
+                components: Vec::new(),
+                everyone: false,
+                participants: Vec::new(),
+                guest_groups: names.into_iter().flatten().map(|name| NewMealGuestGroup {
+                    name: Some(name.to_owned()),
+                    note: (name == "Charlie").then(|| "No cheese".to_owned()),
+                    ..NewMealGuestGroup::of(1)
+                }).collect(),
+                cooking_servings: None,
+            }).await?;
+        }
 
         let thursday = week + Duration::days(3);
         self.ensure_showcase_group(
@@ -2076,6 +2098,8 @@ impl Loader<'_> {
                         vec![NewMealGuestGroup {
                             id: None,
                             count: guest_count,
+                            name: None,
+                            note: None,
                             allocations: vec![NewMealGuestAllocation {
                                 component_id,
                                 allocated: servings(1),

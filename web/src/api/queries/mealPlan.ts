@@ -147,6 +147,54 @@ export function useAddGroup() {
   });
 }
 
+type GuestTarget = { group_id: string; new_group?: never } | { new_group: NewGroup; group_id?: never };
+
+export function useAddPlannerGuest() {
+  const invalidate = useMealPlanInvalidation();
+  return useMutation({
+    mutationFn: async (input: { occasionId: string; revision: number; name: string | null; note?: string | null; target: GuestTarget }) =>
+      unwrap(await planner.POST('/api/v1/planner/occasions/{id}/guests', {
+        params: { path: { id: input.occasionId }, header: ifMatch(input.revision) },
+        body: { name: input.name, note: input.note, ...input.target },
+      })) as OccasionView,
+    onSuccess: invalidate,
+  });
+}
+
+export function useChangePlannerGuest() {
+  const invalidate = useMealPlanInvalidation();
+  return useMutation({
+    mutationFn: async (input: { occasionId: string; guestId: string; revision: number; name?: string | null; note?: string | null; target?: GuestTarget }) =>
+      unwrap(await planner.PATCH('/api/v1/planner/occasions/{id}/guests/{guest_id}', {
+        params: { path: { id: input.occasionId, guest_id: input.guestId }, header: ifMatch(input.revision) },
+        body: { ...(input.name !== undefined ? { name: input.name } : {}), ...(input.note !== undefined ? { note: input.note } : {}), ...input.target },
+      })) as OccasionView,
+    onSuccess: invalidate,
+  });
+}
+
+export function useRemovePlannerGuest() {
+  const invalidate = useMealPlanInvalidation();
+  return useMutation({
+    mutationFn: async (input: { occasionId: string; guestId: string; revision: number }) =>
+      unwrap(await planner.DELETE('/api/v1/planner/occasions/{id}/guests/{guest_id}', {
+        params: { path: { id: input.occasionId, guest_id: input.guestId }, header: ifMatch(input.revision) },
+      })) as OccasionView,
+    onSuccess: invalidate,
+  });
+}
+
+export function useSplitPlannerGuests() {
+  const invalidate = useMealPlanInvalidation();
+  return useMutation({
+    mutationFn: async (input: { occasionId: string; guestId: string; revision: number }) =>
+      unwrap(await planner.POST('/api/v1/planner/occasions/{id}/guests/{guest_id}/split', {
+        params: { path: { id: input.occasionId, guest_id: input.guestId }, header: ifMatch(input.revision) },
+      })) as OccasionView,
+    onSuccess: invalidate,
+  });
+}
+
 export function useUpdateGroup() {
   const invalidate = useMealPlanInvalidation();
   return useMutation({

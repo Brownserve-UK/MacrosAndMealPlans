@@ -3,7 +3,7 @@ import Typography from '@mui/material/Typography';
 import { GuestRows } from './GuestRow';
 import { MemberRow } from './MemberRow';
 import { groupDiners, memberStatus } from './plannerWeek';
-import type { GroupView, OccasionView, PlannerMember, PlannerWeek } from './types';
+import type { GroupView, OccasionView, PlannerGuest, PlannerMember, PlannerWeek } from './types';
 
 function summary(occasion: OccasionView, members: PlannerMember[]): string {
   if (occasion.unaccounted_member_ids.length > 0) {
@@ -28,13 +28,15 @@ export function Roster({
   onOpenMember,
   onAddGuest,
   onOpenGuests,
+  onRenameGuest,
 }: {
   occasion: OccasionView;
   week: PlannerWeek;
   busy: boolean;
   onOpenMember: (member: PlannerMember, anchor: HTMLElement) => void;
-  onAddGuest: (group: GroupView) => void;
-  onOpenGuests: (group: GroupView, anchor: HTMLElement) => void;
+  onAddGuest: (anchor: HTMLElement) => void;
+  onOpenGuests: (group: GroupView, guest: PlannerGuest, anchor: HTMLElement) => void;
+  onRenameGuest: (guest: PlannerGuest, name: string | null) => void;
 }) {
   const members = week.members;
   return (
@@ -60,7 +62,7 @@ export function Roster({
           onOpen={(anchor) => onOpenMember(member, anchor)}
         />
       ))}
-      <GuestRows occasion={occasion} onAdd={onAddGuest} onOpen={onOpenGuests} />
+      <GuestRows occasion={occasion} onAdd={onAddGuest} onOpen={onOpenGuests} onRename={onRenameGuest} />
     </Stack>
   );
 }

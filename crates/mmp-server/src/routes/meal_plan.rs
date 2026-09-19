@@ -4,10 +4,14 @@ use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use mmp_core::domain::{
-    HouseholdMemberId, MealOccasionId, MealPlanComponentId, MealPlanEntryId, Permission,
+    HouseholdMemberId, MealGuestGroupId, MealOccasionId, MealPlanComponentId, MealPlanEntryId,
+    Patch, Permission,
 };
+use mmp_core::services::{GuestChange, GuestMealTarget};
 use mmp_core::services::{MealGroupView, MealOccasionView};
+use serde::Deserialize;
 use time::{Date, Weekday};
+use utoipa::ToSchema;
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
 use uuid::Uuid;
@@ -33,6 +37,9 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(move_occasion))
         .routes(routes!(copy_occasion))
         .routes(routes!(add_group))
+        .routes(routes!(add_guest))
+        .routes(routes!(change_guest, remove_guest))
+        .routes(routes!(split_guests))
         .routes(routes!(update_group, delete_group))
         .routes(routes!(set_attendance))
         .routes(routes!(copy_week))
@@ -44,6 +51,185 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(mark_component_not_eaten))
         .routes(routes!(reopen_component))
         .routes(routes!(review_outcomes))
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+struct AddGuestRequest {
+    name: Option<String>,
+    note: Option<String>,
+    group_id: Option<Uuid>,
+    new_group: Option<NewGroupRequest>,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+struct ChangeGuestRequest {
+    #[serde(default)]
+    #[schema(value_type = Option<String>)]
+    name: Patch<String>,
+    #[serde(default)]
+    #[schema(value_type = Option<String>)]
+    note: Patch<String>,
+    group_id: Option<Uuid>,
+    new_group: Option<NewGroupRequest>,
+}
+
+fn guest_target(
+    group_id: Option<Uuid>,
+    new_group: Option<NewGroupRequest>,
+) -> ApiResult<GuestMealTarget> {
+    match (group_id, new_group) {
+        (Some(id), None) => Ok(GuestMealTarget::Existing(id.into())),
+        (None, Some(group)) => Ok(GuestMealTarget::New(group.into_domain())),
+        _ => Err(ApiError::bad_request("Choose one existing or new meal.")),
+    }
+}
+
+async fn guest_occasion_response(
+    state: &AppState,
+    view: MealOccasionView,
+) -> ApiResult<Tagged<OccasionViewDto>> {
+    let revision = view.occasion.revision;
+    let to_buy = to_buy_counts(state).await?;
+    Ok(Tagged(
+        revision,
+        OccasionViewDto::build(view, |gid| *to_buy.get(&gid).unwrap_or(&0)),
+    ))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/planner/occasions/{id}/guests",
+    operation_id = "addPlannerGuest",
+    params(("id" = Uuid, Path), ("If-Match" = String, Header)),
+    request_body = AddGuestRequest,
+    responses((status = 200, body = OccasionViewDto)),
+    tag = "meal-plan",
+    security(("basic" = []))
+)]
+async fn add_guest(
+    State(state): State<AppState>,
+    principal: Principal,
+    Path(id): Path<Uuid>,
+    IfMatch(revision): IfMatch,
+    Json(body): Json<AddGuestRequest>,
+) -> ApiResult<Tagged<OccasionViewDto>> {
+    personal_member(&state, &principal).await?;
+    let target = guest_target(body.group_id, body.new_group)?;
+    let view = state
+        .meal_plan
+        .add_guest(
+            id.into(),
+            revision,
+            body.name,
+            body.note,
+            target,
+            principal.user_id,
+        )
+        .await?;
+    guest_occasion_response(&state, view).await
+}
+
+#[utoipa::path(
+    patch,
+    path = "/api/v1/planner/occasions/{id}/guests/{guest_id}",
+    operation_id = "changePlannerGuest",
+    params(("id" = Uuid, Path), ("guest_id" = Uuid, Path), ("If-Match" = String, Header)),
+    request_body = ChangeGuestRequest,
+    responses((status = 200, body = OccasionViewDto)),
+    tag = "meal-plan",
+    security(("basic" = []))
+)]
+async fn change_guest(
+    State(state): State<AppState>,
+    principal: Principal,
+    Path((id, guest_id)): Path<(Uuid, Uuid)>,
+    IfMatch(revision): IfMatch,
+    Json(body): Json<ChangeGuestRequest>,
+) -> ApiResult<Tagged<OccasionViewDto>> {
+    personal_member(&state, &principal).await?;
+    let target = if body.group_id.is_some() || body.new_group.is_some() {
+        Some(guest_target(body.group_id, body.new_group)?)
+    } else {
+        None
+    };
+    let name = match body.name {
+        Patch::Unchanged => None,
+        Patch::Clear => Some(None),
+        Patch::Set(value) => Some(Some(value)),
+    };
+    let note = match body.note {
+        Patch::Unchanged => None,
+        Patch::Clear => Some(None),
+        Patch::Set(value) => Some(Some(value)),
+    };
+    let view = state
+        .meal_plan
+        .change_guest(
+            id.into(),
+            revision,
+            MealGuestGroupId::from(guest_id),
+            GuestChange::Update { name, note, target },
+            principal.user_id,
+        )
+        .await?;
+    guest_occasion_response(&state, view).await
+}
+
+#[utoipa::path(
+    delete,
+    path = "/api/v1/planner/occasions/{id}/guests/{guest_id}",
+    operation_id = "removePlannerGuest",
+    params(("id" = Uuid, Path), ("guest_id" = Uuid, Path), ("If-Match" = String, Header)),
+    responses((status = 200, body = OccasionViewDto)),
+    tag = "meal-plan",
+    security(("basic" = []))
+)]
+async fn remove_guest(
+    State(state): State<AppState>,
+    principal: Principal,
+    Path((id, guest_id)): Path<(Uuid, Uuid)>,
+    IfMatch(revision): IfMatch,
+) -> ApiResult<Tagged<OccasionViewDto>> {
+    personal_member(&state, &principal).await?;
+    let view = state
+        .meal_plan
+        .change_guest(
+            id.into(),
+            revision,
+            MealGuestGroupId::from(guest_id),
+            GuestChange::Remove,
+            principal.user_id,
+        )
+        .await?;
+    guest_occasion_response(&state, view).await
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/planner/occasions/{id}/guests/{guest_id}/split",
+    operation_id = "splitPlannerGuests",
+    params(("id" = Uuid, Path), ("guest_id" = Uuid, Path), ("If-Match" = String, Header)),
+    responses((status = 200, body = OccasionViewDto)),
+    tag = "meal-plan",
+    security(("basic" = []))
+)]
+async fn split_guests(
+    State(state): State<AppState>,
+    principal: Principal,
+    Path((id, guest_id)): Path<(Uuid, Uuid)>,
+    IfMatch(revision): IfMatch,
+) -> ApiResult<Tagged<OccasionViewDto>> {
+    personal_member(&state, &principal).await?;
+    let view = state
+        .meal_plan
+        .split_guests(
+            id.into(),
+            revision,
+            MealGuestGroupId::from(guest_id),
+            principal.user_id,
+        )
+        .await?;
+    guest_occasion_response(&state, view).await
 }
 
 fn entry_id(id: Uuid) -> MealPlanEntryId {

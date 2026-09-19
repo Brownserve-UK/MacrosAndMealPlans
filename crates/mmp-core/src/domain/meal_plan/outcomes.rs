@@ -172,6 +172,7 @@ pub fn build_guest_results(
             .iter()
             .map(|allocation| allocation.component_id)
             .collect();
+        let preserves_identity = reviewed.len() == 1;
         for reviewed in reviewed {
             let actual = match &reviewed.outcome {
                 ReviewedMealOutcome::AsPlanned => source
@@ -190,8 +191,14 @@ pub fn build_guest_results(
                 }
             };
             results.push(MealGuestGroup {
-                id: Default::default(),
+                id: if preserves_identity {
+                    source.id
+                } else {
+                    Default::default()
+                },
                 count: reviewed.count,
+                name: source.name.clone(),
+                note: source.note.clone(),
                 allocations: source
                     .allocations
                     .iter()

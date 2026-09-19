@@ -205,6 +205,8 @@ impl From<MealParticipantView> for MealParticipantDto {
 pub struct MealGuestGroupDto {
     pub id: Uuid,
     pub count: i32,
+    pub name: Option<String>,
+    pub note: Option<String>,
     pub status: MealPlanStatus,
     pub allocations: Vec<MealParticipantAllocationDto>,
 }
@@ -215,6 +217,8 @@ impl MealGuestGroupDto {
         Self {
             id: value.id.as_uuid(),
             count: value.count,
+            name: value.name,
+            note: value.note,
             status,
             allocations: value
                 .allocations
@@ -824,6 +828,8 @@ fn guest_groups_of(guest_count: i32) -> Vec<NewMealGuestGroup> {
         .then(|| NewMealGuestGroup {
             id: None,
             count: guest_count,
+            name: None,
+            note: None,
             allocations: Vec::new(),
         })
         .into_iter()
@@ -1017,6 +1023,14 @@ impl From<MealDiner> for GroupParticipantDto {
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct PlannerGuestDto {
+    pub id: Uuid,
+    pub name: Option<String>,
+    pub note: Option<String>,
+    pub count: i32,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct GroupViewDto {
     pub id: Uuid,
     pub name: String,
@@ -1026,6 +1040,7 @@ pub struct GroupViewDto {
     pub everyone: bool,
     pub participants: Vec<GroupParticipantDto>,
     pub guest_count: i32,
+    pub guests: Vec<PlannerGuestDto>,
     pub serves: i32,
     pub cooking_servings: Option<i32>,
     pub effective_cooking_servings: i32,
@@ -1046,6 +1061,16 @@ impl GroupViewDto {
             everyone: value.entry.entry.everyone,
             participants: value.diners.into_iter().map(Into::into).collect(),
             guest_count: value.guest_count,
+            guests: value
+                .guests
+                .into_iter()
+                .map(|guest| PlannerGuestDto {
+                    id: guest.id.as_uuid(),
+                    name: guest.name,
+                    note: guest.note,
+                    count: guest.count,
+                })
+                .collect(),
             serves: value.serves,
             cooking_servings: value.cooking_servings,
             effective_cooking_servings: value.effective_cooking_servings,

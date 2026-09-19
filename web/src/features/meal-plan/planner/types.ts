@@ -21,6 +21,13 @@ export type GroupParticipant = {
   note: string | null;
 };
 
+export type PlannerGuest = {
+  id: string;
+  name: string | null;
+  note: string | null;
+  count: number;
+};
+
 export type GroupView = {
   id: string;
   name: string;
@@ -30,6 +37,7 @@ export type GroupView = {
   everyone: boolean;
   participants: GroupParticipant[];
   guest_count: number;
+  guests: PlannerGuest[];
   serves: number;
   cooking_servings: number | null;
   effective_cooking_servings: number;

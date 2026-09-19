@@ -804,6 +804,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/planner/occasions/{id}/guests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["addPlannerGuest"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/planner/occasions/{id}/guests/{guest_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete: operations["removePlannerGuest"];
+        options?: never;
+        head?: never;
+        patch: operations["changePlannerGuest"];
+        trace?: never;
+    };
+    "/api/v1/planner/occasions/{id}/guests/{guest_id}/split": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["splitPlannerGuests"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/planner/occasions/{id}/move": {
         parameters: {
             query?: never;
@@ -1681,6 +1729,13 @@ export interface components {
         };
         /** @enum {string} */
         AdHocKind: "eating_out" | "takeaway" | "fend_for_yourself";
+        AddGuestRequest: {
+            /** Format: uuid */
+            group_id?: string | null;
+            name?: string | null;
+            new_group?: null | components["schemas"]["NewGroupRequest"];
+            note?: string | null;
+        };
         AmountDto: {
             /** @enum {string} */
             kind: "measure";
@@ -1841,6 +1896,13 @@ export interface components {
             /** @enum {string} */
             kind: "suggested";
             reason: components["schemas"]["SuggestionReasonDto"];
+        };
+        ChangeGuestRequest: {
+            /** Format: uuid */
+            group_id?: string | null;
+            name?: string | null;
+            new_group?: null | components["schemas"]["NewGroupRequest"];
+            note?: string | null;
         };
         /** @enum {string} */
         ComponentNutritionSource: "known" | "estimated" | "none";
@@ -2208,6 +2270,7 @@ export interface components {
             everyone: boolean;
             /** Format: int32 */
             guest_count: number;
+            guests: components["schemas"]["PlannerGuestDto"][];
             /** Format: uuid */
             id: string;
             label?: string | null;
@@ -2389,6 +2452,8 @@ export interface components {
             count: number;
             /** Format: uuid */
             id: string;
+            name?: string | null;
+            note?: string | null;
             status: components["schemas"]["MealPlanStatus"];
         };
         MealItemDto: components["schemas"]["MealItemSourceDto"] & components["schemas"]["MealItemRefDto"] & {
@@ -2859,6 +2924,14 @@ export interface components {
             /** Format: date */
             date: string;
             occasions: (null | components["schemas"]["OccasionViewDto"])[];
+        };
+        PlannerGuestDto: {
+            /** Format: int32 */
+            count: number;
+            /** Format: uuid */
+            id: string;
+            name?: string | null;
+            note?: string | null;
         };
         PlannerMemberDto: {
             /** Format: uuid */
@@ -6372,6 +6445,109 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["GroupViewDto"];
+                };
+            };
+        };
+    };
+    addPlannerGuest: {
+        parameters: {
+            query?: never;
+            header: {
+                "If-Match": string;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AddGuestRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OccasionViewDto"];
+                };
+            };
+        };
+    };
+    removePlannerGuest: {
+        parameters: {
+            query?: never;
+            header: {
+                "If-Match": string;
+            };
+            path: {
+                id: string;
+                guest_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OccasionViewDto"];
+                };
+            };
+        };
+    };
+    changePlannerGuest: {
+        parameters: {
+            query?: never;
+            header: {
+                "If-Match": string;
+            };
+            path: {
+                id: string;
+                guest_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChangeGuestRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OccasionViewDto"];
+                };
+            };
+        };
+    };
+    splitPlannerGuests: {
+        parameters: {
+            query?: never;
+            header: {
+                "If-Match": string;
+            };
+            path: {
+                id: string;
+                guest_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OccasionViewDto"];
                 };
             };
         };

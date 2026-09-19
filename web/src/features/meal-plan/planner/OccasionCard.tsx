@@ -13,18 +13,18 @@ import Stack from '@mui/material/Stack';
 import Typography from '@mui/material/Typography';
 import { useState } from 'react';
 import { ApiError } from '../../../api/client';
-import { useAddGroup, useSetAttendance, useUpdateGroup, useUpdateOccasion } from '../../../api/queries';
+import { useAddGroup, useAddPlannerGuest, useChangePlannerGuest, useRemovePlannerGuest, useSetAttendance, useSplitPlannerGuests, useUpdateGroup, useUpdateOccasion } from '../../../api/queries';
 import { FormDialog } from '../../../components/FormDialog';
 import { CookingList } from './CookingList';
-import { GuestMenu } from './GuestMenu';
+import { GuestMenu, type GuestTarget } from './GuestMenu';
 import { PersonPicker } from './PersonPicker';
 import { Roster } from './Roster';
 import { memberStatus, occasionTitle, shortDate } from './plannerWeek';
-import type { GroupView, NewGroup, OccasionView, PlannerMember, PlannerWeek } from './types';
+import type { GroupView, NewGroup, OccasionView, PlannerGuest, PlannerMember, PlannerWeek } from './types';
 
 type Picker =
   | { anchor: HTMLElement; kind: 'member'; member: PlannerMember }
-  | { anchor: HTMLElement; kind: 'guests'; group: GroupView };
+  | { anchor: HTMLElement; kind: 'guests'; group: GroupView | null; guest: PlannerGuest | null };
 
 export function OccasionCard({
   occasion,
@@ -47,6 +47,10 @@ export function OccasionCard({
   const updateGroup = useUpdateGroup();
   const addGroup = useAddGroup();
   const setAttendance = useSetAttendance();
+  const addGuest = useAddPlannerGuest();
+  const changeGuest = useChangePlannerGuest();
+  const removeGuest = useRemovePlannerGuest();
+  const splitGuests = useSplitPlannerGuests();
   const [error, setError] = useState<string | null>(null);
   const [editingTime, setEditingTime] = useState(false);
   const [timeText, setTimeText] = useState('');
@@ -54,7 +58,7 @@ export function OccasionCard({
   const [noteText, setNoteText] = useState('');
   const [picker, setPicker] = useState<Picker | null>(null);
 
-  const busy = updateOccasion.isPending || updateGroup.isPending || addGroup.isPending || setAttendance.isPending;
+  const busy = updateOccasion.isPending || updateGroup.isPending || addGroup.isPending || setAttendance.isPending || addGuest.isPending || changeGuest.isPending || removeGuest.isPending || splitGuests.isPending;
   const members = week.members;
   const toBuy = occasion.groups.reduce((total, group) => total + group.to_buy, 0);
   const hasFood = occasion.groups.some((group) => group.components.length > 0);
@@ -87,13 +91,6 @@ export function OccasionCard({
     );
   }
 
-  function guests(group: GroupView, count: number) {
-    void run(
-      () => updateGroup.mutateAsync({ id: group.id, body: { guest_count: count, revision: group.revision } }),
-      'Could not change the guests.',
-    );
-  }
-
   function cooking(group: GroupView, value: number | null) {
     void run(
       () => updateGroup.mutateAsync({ id: group.id, body: { cooking_servings: value, revision: group.revision } }),
@@ -120,17 +117,14 @@ export function OccasionCard({
     );
   }
 
-  function moveGuests(from: GroupView, to: GroupView) {
-    if (from.id === to.id) return;
-    const moving = from.guest_count;
-    if (moving === 0) return;
-    void run(async () => {
-      await updateGroup.mutateAsync({ id: from.id, body: { guest_count: 0, revision: from.revision } });
-      await updateGroup.mutateAsync({
-        id: to.id,
-        body: { guest_count: to.guest_count + moving, revision: to.revision },
-      });
-    }, 'Could not move the guests.');
+  function chooseGuest(target: GuestTarget) {
+    if (picker?.kind !== 'guests') return;
+    const guest = picker.guest;
+    setPicker(null);
+    void run(() => guest
+      ? changeGuest.mutateAsync({ occasionId: occasion.id, guestId: guest.id, revision: occasion.revision, target })
+      : addGuest.mutateAsync({ occasionId: occasion.id, revision: occasion.revision, name: null, target }),
+    'Could not change the guest.');
   }
 
   function commitTime() {
@@ -214,8 +208,9 @@ export function OccasionCard({
         week={week}
         busy={busy}
         onOpenMember={(member, anchor) => setPicker({ anchor, kind: 'member', member })}
-        onAddGuest={(group) => guests(group, group.guest_count + 1)}
-        onOpenGuests={(group, anchor) => setPicker({ anchor, kind: 'guests', group })}
+        onAddGuest={(anchor) => setPicker({ anchor, kind: 'guests', group: null, guest: null })}
+        onOpenGuests={(group, guest, anchor) => setPicker({ anchor, kind: 'guests', group, guest })}
+        onRenameGuest={(guest, name) => { void run(() => changeGuest.mutateAsync({ occasionId: occasion.id, guestId: guest.id, revision: occasion.revision, name }), 'Could not change the guest name.'); }}
       />
       <CookingList occasion={occasion} members={members} busy={busy} onCooking={(group, value) => cooking(group, value)} />
       <Stack>
@@ -307,17 +302,19 @@ export function OccasionCard({
         anchorEl={picker?.anchor ?? null}
         sheet={sheet}
         group={picker?.kind === 'guests' ? picker.group : null}
+        guest={picker?.kind === 'guests' ? picker.guest : null}
         groups={occasion.groups}
-        onMove={(target) => {
-          if (picker?.kind === 'guests') moveGuests(picker.group, target);
-          setPicker(null);
-        }}
-        onAdd={() => {
-          if (picker?.kind === 'guests') guests(picker.group, picker.group.guest_count + 1);
+        onSelect={chooseGuest}
+        onVariation={(note) => {
+          if (picker?.kind === 'guests' && picker.guest) void run(() => changeGuest.mutateAsync({ occasionId: occasion.id, guestId: picker.guest!.id, revision: occasion.revision, note }), 'Could not save the variation.');
           setPicker(null);
         }}
         onRemove={() => {
-          if (picker?.kind === 'guests') guests(picker.group, Math.max(0, picker.group.guest_count - 1));
+          if (picker?.kind === 'guests' && picker.guest) void run(() => removeGuest.mutateAsync({ occasionId: occasion.id, guestId: picker.guest!.id, revision: occasion.revision }), 'Could not remove the guest.');
+          setPicker(null);
+        }}
+        onSplit={() => {
+          if (picker?.kind === 'guests' && picker.guest) void run(() => splitGuests.mutateAsync({ occasionId: occasion.id, guestId: picker.guest!.id, revision: occasion.revision }), 'Could not split the guests.');
           setPicker(null);
         }}
         onClose={() => setPicker(null)}

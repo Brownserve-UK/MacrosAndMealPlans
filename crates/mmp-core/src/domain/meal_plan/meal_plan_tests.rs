@@ -47,6 +47,8 @@ fn guest_group(allocations: Vec<MealGuestAllocation>) -> MealGuestGroup {
     MealGuestGroup {
         id: MealGuestGroupId::new(),
         count: 1,
+        name: None,
+        note: None,
         allocations,
         revision: Revision::INITIAL,
         created_at: OffsetDateTime::UNIX_EPOCH,

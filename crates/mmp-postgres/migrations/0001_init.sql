@@ -690,6 +690,8 @@ CREATE TABLE meal_guest_group (
     id          UUID PRIMARY KEY,
     entry_id    UUID NOT NULL REFERENCES meal_plan_entry (id) ON DELETE CASCADE,
     guest_count INTEGER NOT NULL,
+    name        TEXT,
+    note        TEXT,
     revision    BIGINT NOT NULL DEFAULT 1,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),

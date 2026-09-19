@@ -201,6 +201,8 @@ struct GuestGroupRow {
     id: Uuid,
     entry_id: Uuid,
     guest_count: i32,
+    name: Option<String>,
+    note: Option<String>,
     revision: i64,
     created_at: OffsetDateTime,
     updated_at: OffsetDateTime,
@@ -311,7 +313,7 @@ const LIST_ALL_ENTRIES_THROUGH: &str = "SELECT e.id, e.occasion_id, o.planned_on
 const LIST_COMPONENTS: &str = "SELECT id, entry_id, position, item_kind, product_id, recipe_id, ingredient_id, prepared_meal_id, amount_kind, amount_value, amount_unit, frozen_item_name, nutrition_basis_amount, nutrition_basis_unit, energy_kcal, protein_g, carbohydrate_g, sugar_g, fat_g, saturated_fat_g, fibre_g, salt_g, cholesterol_mg, nutrition_extra, nutrition_quality, revision, display_order FROM meal_plan_component WHERE entry_id = ANY($1) ORDER BY entry_id, position";
 const LIST_PARTICIPANTS: &str = "SELECT id, entry_id, member_id, note, revision, created_at, updated_at FROM meal_plan_participant WHERE entry_id = ANY($1) ORDER BY entry_id, created_at, id";
 const LIST_ALLOCATIONS: &str = "SELECT id, participant_id, component_id, allocated_kind, allocated_value, allocated_unit, status, consumption_record_id, resolved_by, resolved_at FROM meal_plan_participant_allocation WHERE participant_id = ANY($1)";
-const LIST_GUEST_GROUPS: &str = "SELECT id, entry_id, guest_count, revision, created_at, updated_at FROM meal_guest_group WHERE entry_id = ANY($1) ORDER BY entry_id, created_at, id";
+const LIST_GUEST_GROUPS: &str = "SELECT id, entry_id, guest_count, name, note, revision, created_at, updated_at FROM meal_guest_group WHERE entry_id = ANY($1) ORDER BY entry_id, created_at, id";
 const LIST_GUEST_ALLOCATIONS: &str = "SELECT id, guest_group_id, component_id, allocated_kind, allocated_value, allocated_unit, status, confirmed_kind, confirmed_value, confirmed_unit, resolved_by, resolved_at FROM meal_guest_allocation WHERE guest_group_id = ANY($1)";
 
 pub struct PgMealPlanRepository {
@@ -427,6 +429,8 @@ impl PgMealPlanRepository {
                 .push(MealGuestGroup {
                     id: MealGuestGroupId::from(row.id),
                     count: row.guest_count,
+                    name: row.name,
+                    note: row.note,
                     allocations: allocations_by_group.remove(&row.id).unwrap_or_default(),
                     revision: Revision::new(row.revision),
                     created_at: row.created_at,
@@ -612,6 +616,13 @@ impl MealPlanRepository for PgMealPlanRepository {
             .execute(&mut *tx)
             .await
             .map_err(|error| map_db_error(error, "removing meals no longer on this occasion"))?;
+        sqlx::query("DELETE FROM meal_guest_group WHERE entry_id = ANY($1)")
+            .bind(&keep_ids)
+            .execute(&mut *tx)
+            .await
+            .map_err(|error| {
+                map_db_error(error, "clearing meal guests before updating the occasion")
+            })?;
         for group in &occasion.groups {
             upsert_group_full(&mut tx, group).await?;
         }
@@ -1380,10 +1391,12 @@ async fn insert_guests(
     groups: &[MealGuestGroup],
 ) -> Result<()> {
     for group in groups {
-        sqlx::query("INSERT INTO meal_guest_group (id, entry_id, guest_count, revision, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6)")
+        sqlx::query("INSERT INTO meal_guest_group (id, entry_id, guest_count, name, note, revision, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)")
             .bind(group.id.as_uuid())
             .bind(entry_id.as_uuid())
             .bind(group.count)
+            .bind(&group.name)
+            .bind(&group.note)
             .bind(group.revision.get())
             .bind(group.created_at)
             .bind(group.updated_at)

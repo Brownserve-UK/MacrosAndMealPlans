@@ -669,6 +669,8 @@ pub struct MealGuestAllocation {
 pub struct MealGuestGroup {
     pub id: MealGuestGroupId,
     pub count: i32,
+    pub name: Option<String>,
+    pub note: Option<String>,
     pub allocations: Vec<MealGuestAllocation>,
     pub revision: Revision,
     pub created_at: OffsetDateTime,
@@ -685,6 +687,8 @@ pub struct NewMealGuestAllocation {
 pub struct NewMealGuestGroup {
     pub id: Option<MealGuestGroupId>,
     pub count: i32,
+    pub name: Option<String>,
+    pub note: Option<String>,
     pub allocations: Vec<NewMealGuestAllocation>,
 }
 
@@ -693,6 +697,8 @@ impl NewMealGuestGroup {
         Self {
             id: None,
             count,
+            name: None,
+            note: None,
             allocations: Vec::new(),
         }
     }

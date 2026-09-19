@@ -91,11 +91,20 @@ pub struct MealGroupView {
     pub name: String,
     pub diners: Vec<MealDiner>,
     pub guest_count: i32,
+    pub guests: Vec<MealGuestView>,
     pub serves: i32,
     pub cooking_servings: Option<i32>,
     pub effective_cooking_servings: i32,
     pub cook_minutes: Option<i32>,
     pub leftover_servings_available: Option<Decimal>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct MealGuestView {
+    pub id: crate::domain::MealGuestGroupId,
+    pub name: Option<String>,
+    pub note: Option<String>,
+    pub count: i32,
 }
 
 #[derive(Debug, Clone)]
@@ -460,6 +469,16 @@ impl MealPlanService {
                 name,
                 diners,
                 guest_count: group.guest_count(),
+                guests: group
+                    .guest_groups
+                    .iter()
+                    .map(|guest| MealGuestView {
+                        id: guest.id,
+                        name: guest.name.clone(),
+                        note: guest.note.clone(),
+                        count: guest.count,
+                    })
+                    .collect(),
                 serves: group.serves(),
                 cooking_servings: group.cooking_servings,
                 effective_cooking_servings: group.effective_cooking_servings(),

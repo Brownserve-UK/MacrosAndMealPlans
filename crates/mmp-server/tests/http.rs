@@ -1879,6 +1879,265 @@ async fn the_planner_shows_a_group_with_guests_and_reviews_the_household_outcome
 }
 
 #[tokio::test]
+async fn guests_can_have_individual_meals() {
+    let app = app().await;
+    let product = create_milk_product(&app).await;
+    let occasion = create_occasion(
+        &app,
+        "2026-08-25",
+        "dinner",
+        json!([{"product_id": product["id"], "amount": measured_amount(200.0)}]),
+    )
+    .await;
+    let occasion_id = occasion["id"].as_str().unwrap();
+    let curry_id = occasion["groups"][0]["id"].as_str().unwrap();
+    let mut revision = occasion["revision"].as_i64().unwrap();
+
+    let (status, with_curry_guest, _) = send(
+        &app,
+        Call::new(
+            "POST",
+            format!("/api/v1/planner/occasions/{occasion_id}/guests"),
+        )
+        .if_match(revision)
+        .body(json!({"name": "Alex", "note": "Mild", "group_id": curry_id})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{with_curry_guest}");
+    revision = with_curry_guest["revision"].as_i64().unwrap();
+    let alex_id = with_curry_guest["groups"][0]["guests"][0]["id"]
+        .as_str()
+        .unwrap();
+    assert_eq!(with_curry_guest["groups"][0]["guests"][0]["note"], "Mild");
+
+    let (status, with_vegetarian, _) = send(
+        &app,
+        Call::new(
+            "POST",
+            format!("/api/v1/planner/occasions/{occasion_id}/guests"),
+        )
+        .if_match(revision)
+        .body(json!({"name": "Morgan", "new_group": {"label": "Vegetarian dinner", "components": [{"product_id": product["id"], "amount": measured_amount(200.0)}]}})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{with_vegetarian}");
+    revision = with_vegetarian["revision"].as_i64().unwrap();
+    let vegetarian_id = with_vegetarian["groups"][1]["id"].as_str().unwrap();
+    let vegetarian_entry = send(
+        &app,
+        Call::new("GET", format!("/api/v1/meal-plan-entries/{vegetarian_id}")),
+    )
+    .await
+    .1;
+    assert_eq!(
+        vegetarian_entry["guest_groups"][0]["allocations"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+
+    let (status, with_first_child, _) = send(
+        &app,
+        Call::new(
+            "POST",
+            format!("/api/v1/planner/occasions/{occasion_id}/guests"),
+        )
+        .if_match(revision)
+        .body(json!({"name": "Charlie", "new_group": {"label": "Pizza and garlic bread"}})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{with_first_child}");
+    revision = with_first_child["revision"].as_i64().unwrap();
+    let pizza_id = with_first_child["groups"][2]["id"].as_str().unwrap();
+
+    let (status, with_four_guests, _) = send(
+        &app,
+        Call::new(
+            "POST",
+            format!("/api/v1/planner/occasions/{occasion_id}/guests"),
+        )
+        .if_match(revision)
+        .body(json!({"name": "Robin", "group_id": pizza_id})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{with_four_guests}");
+    revision = with_four_guests["revision"].as_i64().unwrap();
+    assert_eq!(with_four_guests["groups"].as_array().unwrap().len(), 3);
+    assert_eq!(with_four_guests["groups"][2]["guest_count"], 2);
+    assert_eq!(
+        with_four_guests["groups"][2]["guests"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+
+    let (status, missing_target, _) = send(
+        &app,
+        Call::new(
+            "PATCH",
+            format!("/api/v1/planner/occasions/{occasion_id}/guests/{alex_id}"),
+        )
+        .if_match(revision)
+        .body(json!({"group_id": uuid::Uuid::nil()})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{missing_target}");
+
+    let (status, stale, _) = send(
+        &app,
+        Call::new(
+            "PATCH",
+            format!("/api/v1/planner/occasions/{occasion_id}/guests/{alex_id}"),
+        )
+        .if_match(revision - 1)
+        .body(json!({"group_id": vegetarian_id})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{stale}");
+
+    let (status, moved, _) = send(
+        &app,
+        Call::new(
+            "PATCH",
+            format!("/api/v1/planner/occasions/{occasion_id}/guests/{alex_id}"),
+        )
+        .if_match(revision)
+        .body(json!({"group_id": vegetarian_id, "name": "Alexandra"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{moved}");
+    assert_eq!(moved["groups"][0]["guest_count"], 0);
+    assert_eq!(moved["groups"][1]["guest_count"], 2);
+    assert_eq!(moved["groups"][1]["guests"][1]["name"], "Alexandra");
+    assert_eq!(moved["groups"][1]["guests"][1]["note"], "Mild");
+    let (status, changed_variation, _) = send(
+        &app,
+        Call::new(
+            "PATCH",
+            format!("/api/v1/planner/occasions/{occasion_id}/guests/{alex_id}"),
+        )
+        .if_match(moved["revision"].as_i64().unwrap())
+        .body(json!({"note": "No chilli"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{changed_variation}");
+    assert_eq!(
+        changed_variation["groups"][1]["guests"][1]["note"],
+        "No chilli"
+    );
+}
+
+#[tokio::test]
+async fn planned_guest_counts_can_be_split_into_individual_guests() {
+    let app = app().await;
+    let product = create_milk_product(&app).await;
+    let occasion = create_occasion(
+        &app,
+        "2026-08-25",
+        "dinner",
+        json!([{"product_id": product["id"], "amount": measured_amount(200.0)}]),
+    )
+    .await;
+    let occasion_id = occasion["id"].as_str().unwrap();
+    let group_id = occasion["groups"][0]["id"].as_str().unwrap();
+    let (status, counted, _) = send(
+        &app,
+        Call::new("PATCH", format!("/api/v1/planner/groups/{group_id}"))
+            .if_match(occasion["groups"][0]["revision"].as_i64().unwrap())
+            .body(json!({"guest_count": 2})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{counted}");
+    let planner = send(&app, Call::new("GET", "/api/v1/planner/2026-08-24"))
+        .await
+        .1;
+    let view = &planner["days"][1]["occasions"][2];
+    let guest_id = view["groups"][0]["guests"][0]["id"].as_str().unwrap();
+    let (status, split, _) = send(
+        &app,
+        Call::new(
+            "POST",
+            format!("/api/v1/planner/occasions/{occasion_id}/guests/{guest_id}/split"),
+        )
+        .if_match(view["revision"].as_i64().unwrap()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{split}");
+    assert_eq!(split["groups"][0]["guest_count"], 2);
+    assert_eq!(split["groups"][0]["guests"].as_array().unwrap().len(), 2);
+    assert!(
+        split["groups"][0]["guests"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|guest| guest["count"] == 1)
+    );
+}
+
+#[tokio::test]
+async fn individual_guests_can_have_different_outcomes() {
+    let app = app().await;
+    let product = create_milk_product(&app).await;
+    let occasion = create_occasion(
+        &app,
+        "2026-08-25",
+        "dinner",
+        json!([{"product_id": product["id"], "amount": measured_amount(200.0)}]),
+    )
+    .await;
+    let occasion_id = occasion["id"].as_str().unwrap().to_owned();
+    let group_id = occasion["groups"][0]["id"].as_str().unwrap().to_owned();
+    let mut current = occasion;
+    for name in ["Alex", "Morgan"] {
+        let (status, updated, _) = send(
+            &app,
+            Call::new(
+                "POST",
+                format!("/api/v1/planner/occasions/{occasion_id}/guests"),
+            )
+            .if_match(current["revision"].as_i64().unwrap())
+            .body(json!({"name": name, "group_id": group_id})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{updated}");
+        current = updated;
+    }
+    let guests = current["groups"][0]["guests"].as_array().unwrap();
+    let (status, reviewed, _) = send(
+        &app,
+        Call::new(
+            "POST",
+            format!("/api/v1/meal-plan-entries/{group_id}/outcomes"),
+        )
+        .if_match(current["groups"][0]["revision"].as_i64().unwrap())
+        .body(json!({
+            "consumed_on": "2026-08-25",
+            "guests": [
+                {"source_group_id": guests[0]["id"], "count": 1, "result": "as_planned"},
+                {"source_group_id": guests[1]["id"], "count": 1, "result": "not_eaten"}
+            ]
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{reviewed}");
+    let outcomes = reviewed["guest_groups"].as_array().unwrap();
+    assert!(outcomes.iter().any(|guest| guest["id"] == guests[0]["id"]));
+    assert!(outcomes.iter().any(|guest| guest["id"] == guests[1]["id"]));
+    assert!(
+        outcomes
+            .iter()
+            .any(|guest| guest["name"] == "Alex" && guest["status"] == "eaten")
+    );
+    assert!(
+        outcomes
+            .iter()
+            .any(|guest| guest["name"] == "Morgan" && guest["status"] == "not_eaten")
+    );
+}
+
+#[tokio::test]
 async fn a_member_marks_themselves_eating_elsewhere_and_reverses_it() {
     let app = app().await;
     let member_id = send(&app, Call::new("GET", "/api/v1/auth/me")).await.1["member_id"]

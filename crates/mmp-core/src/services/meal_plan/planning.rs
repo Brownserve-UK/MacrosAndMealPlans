@@ -4,18 +4,32 @@ use time::{Date, Duration, OffsetDateTime};
 
 use crate::domain::{
     HouseholdMemberId, MEAL_OCCASION, MEAL_PLAN_ENTRY, MealAbsence, MealAttendance, MealGroupPatch,
-    MealOccasion, MealOccasionId, MealOccasionPatch, MealPlanEntry, MealPlanEntryId, MealSlot,
-    NewMealGroup, NewMealOccasion, NewMealParticipant, NewMealPlanComponent, ParticipantStatus,
-    Revision, UserId, apply_equal_shares, has_explicit_allocations, make_components,
-    merge_components, merge_guest_group, merge_participant, require_editable, require_planned,
-    sync_allocations, validate_components, validate_group_shape, validate_guest_groups,
-    validate_participants,
+    MealGuestAllocationId, MealGuestGroupId, MealOccasion, MealOccasionId, MealOccasionPatch,
+    MealPlanEntry, MealPlanEntryId, MealSlot, NewMealGroup, NewMealGuestGroup, NewMealOccasion,
+    NewMealParticipant, NewMealPlanComponent, ParticipantStatus, Revision, UserId,
+    apply_equal_shares, has_explicit_allocations, make_components, merge_components,
+    merge_guest_group, merge_participant, require_editable, require_planned, sync_allocations,
+    validate_components, validate_group_shape, validate_guest_groups, validate_participants,
 };
 use crate::error::{CoreError, Result, ValidationErrors};
 
 use super::view::{MealOccasionView, PlannerWeek};
 use super::{MealPlanService, ensure_not_past};
 use crate::services::revision::{commit_outcome, require_revision};
+
+pub enum GuestMealTarget {
+    Existing(MealPlanEntryId),
+    New(NewMealGroup),
+}
+
+pub enum GuestChange {
+    Update {
+        name: Option<Option<String>>,
+        note: Option<Option<String>>,
+        target: Option<GuestMealTarget>,
+    },
+    Remove,
+}
 
 impl MealPlanService {
     pub async fn create_occasion(&self, input: NewMealOccasion) -> Result<MealOccasionView> {
@@ -194,6 +208,215 @@ impl MealPlanService {
         let group = self.build_group(&occasion, input, actor_id, now).await?;
         let expected = occasion.revision;
         attach_group(&mut occasion, group)?;
+        self.commit_occasion(&mut occasion, expected, actor_id, now)
+            .await?;
+        self.get_occasion(occasion_id).await
+    }
+
+    pub async fn add_guest(
+        &self,
+        occasion_id: MealOccasionId,
+        expected: Revision,
+        name: Option<String>,
+        note: Option<String>,
+        target: GuestMealTarget,
+        actor_id: UserId,
+    ) -> Result<MealOccasionView> {
+        let mut occasion = self.load_occasion(occasion_id).await?;
+        require_revision(MEAL_OCCASION, occasion_id, expected, occasion.revision)?;
+        let now = self.clock.now();
+        let name = normalise_note(name);
+        let note = normalise_note(note);
+        match target {
+            GuestMealTarget::Existing(group_id) => {
+                let group = occasion
+                    .groups
+                    .iter_mut()
+                    .find(|group| group.id == group_id)
+                    .ok_or_else(|| CoreError::not_found(MEAL_PLAN_ENTRY, group_id))?;
+                require_planned(group)?;
+                group.guest_groups.push(merge_guest_group(
+                    &[],
+                    &NewMealGuestGroup {
+                        id: None,
+                        count: 1,
+                        name,
+                        note,
+                        allocations: Vec::new(),
+                    },
+                    now,
+                ));
+                sync_allocations(group, now);
+                apply_equal_shares(group);
+                group.revision = group.revision.next();
+                group.updated_by = actor_id;
+                group.updated_at = now;
+            }
+            GuestMealTarget::New(mut input) => {
+                input.everyone = false;
+                input.participants.clear();
+                input.guest_groups = vec![NewMealGuestGroup {
+                    id: None,
+                    count: 1,
+                    name,
+                    note,
+                    allocations: Vec::new(),
+                }];
+                let group = self.build_group(&occasion, input, actor_id, now).await?;
+                attach_group(&mut occasion, group)?;
+            }
+        }
+        self.commit_occasion(&mut occasion, expected, actor_id, now)
+            .await?;
+        self.get_occasion(occasion_id).await
+    }
+
+    pub async fn change_guest(
+        &self,
+        occasion_id: MealOccasionId,
+        expected: Revision,
+        guest_id: MealGuestGroupId,
+        change: GuestChange,
+        actor_id: UserId,
+    ) -> Result<MealOccasionView> {
+        let (name, note, target, remove) = match change {
+            GuestChange::Update { name, note, target } => (name, note, target, false),
+            GuestChange::Remove => (None, None, None, true),
+        };
+        let mut occasion = self.load_occasion(occasion_id).await?;
+        require_revision(MEAL_OCCASION, occasion_id, expected, occasion.revision)?;
+        let now = self.clock.now();
+        let source_index = occasion
+            .groups
+            .iter()
+            .position(|group| group.guest_groups.iter().any(|guest| guest.id == guest_id))
+            .ok_or_else(|| CoreError::not_found("guest", guest_id))?;
+        let source = &mut occasion.groups[source_index];
+        require_planned(source)?;
+        let guest_index = source
+            .guest_groups
+            .iter()
+            .position(|guest| guest.id == guest_id)
+            .ok_or_else(|| CoreError::not_found("guest", guest_id))?;
+        let guest = &source.guest_groups[guest_index];
+        if guest.count != 1 {
+            return Err(CoreError::conflict(
+                "Split this guest count before editing one guest.",
+            ));
+        }
+        if guest
+            .allocations
+            .iter()
+            .any(|allocation| allocation.status.is_resolved())
+        {
+            return Err(CoreError::conflict(
+                "A guest result has already been recorded.",
+            ));
+        }
+        let mut guest = source.guest_groups.remove(guest_index);
+        if let Some(name) = name {
+            guest.name = normalise_note(name);
+        }
+        if let Some(note) = note {
+            guest.note = normalise_note(note);
+        }
+        guest.revision = guest.revision.next();
+        guest.updated_at = now;
+        apply_equal_shares(source);
+        source.revision = source.revision.next();
+        source.updated_by = actor_id;
+        source.updated_at = now;
+        if !remove {
+            match target {
+                Some(GuestMealTarget::Existing(group_id)) if group_id != source.id => {
+                    let destination = occasion
+                        .groups
+                        .iter_mut()
+                        .find(|group| group.id == group_id)
+                        .ok_or_else(|| CoreError::not_found(MEAL_PLAN_ENTRY, group_id))?;
+                    require_planned(destination)?;
+                    guest.allocations.clear();
+                    destination.guest_groups.push(guest);
+                    sync_allocations(destination, now);
+                    apply_equal_shares(destination);
+                    destination.revision = destination.revision.next();
+                    destination.updated_by = actor_id;
+                    destination.updated_at = now;
+                }
+                Some(GuestMealTarget::New(mut input)) => {
+                    input.everyone = false;
+                    input.participants.clear();
+                    input.guest_groups.clear();
+                    let mut destination = self.build_group(&occasion, input, actor_id, now).await?;
+                    guest.allocations.clear();
+                    destination.guest_groups.push(guest);
+                    sync_allocations(&mut destination, now);
+                    apply_equal_shares(&mut destination);
+                    attach_group(&mut occasion, destination)?;
+                }
+                _ => {
+                    let source = &mut occasion.groups[source_index];
+                    source.guest_groups.push(guest);
+                    apply_equal_shares(source);
+                }
+            }
+        }
+        drop_orphaned_groups(&mut occasion);
+        self.commit_occasion(&mut occasion, expected, actor_id, now)
+            .await?;
+        self.get_occasion(occasion_id).await
+    }
+
+    pub async fn split_guests(
+        &self,
+        occasion_id: MealOccasionId,
+        expected: Revision,
+        guest_id: MealGuestGroupId,
+        actor_id: UserId,
+    ) -> Result<MealOccasionView> {
+        let mut occasion = self.load_occasion(occasion_id).await?;
+        require_revision(MEAL_OCCASION, occasion_id, expected, occasion.revision)?;
+        let group = occasion
+            .groups
+            .iter_mut()
+            .find(|group| group.guest_groups.iter().any(|guest| guest.id == guest_id))
+            .ok_or_else(|| CoreError::not_found("guest", guest_id))?;
+        let guest_index = group
+            .guest_groups
+            .iter()
+            .position(|guest| guest.id == guest_id)
+            .ok_or_else(|| CoreError::not_found("guest", guest_id))?;
+        let source = group.guest_groups[guest_index].clone();
+        let now = self.clock.now();
+        if source
+            .allocations
+            .iter()
+            .any(|allocation| allocation.status.is_resolved())
+        {
+            return Err(CoreError::conflict("Recorded guests cannot be split."));
+        }
+        if source.count <= 1 {
+            return self.get_occasion(occasion_id).await;
+        }
+        group.guest_groups[guest_index].count = 1;
+        group.guest_groups[guest_index].revision = group.guest_groups[guest_index].revision.next();
+        group.guest_groups[guest_index].updated_at = now;
+        for _ in 1..source.count {
+            let mut guest = source.clone();
+            guest.id = MealGuestGroupId::new();
+            guest.count = 1;
+            guest.name = None;
+            guest.note = None;
+            guest.revision = Revision::INITIAL;
+            guest.updated_at = now;
+            for allocation in &mut guest.allocations {
+                allocation.id = MealGuestAllocationId::new();
+            }
+            group.guest_groups.push(guest);
+        }
+        group.revision = group.revision.next();
+        group.updated_by = actor_id;
+        group.updated_at = now;
         self.commit_occasion(&mut occasion, expected, actor_id, now)
             .await?;
         self.get_occasion(occasion_id).await
@@ -516,6 +739,7 @@ impl MealPlanService {
             created_at: now,
             updated_at: now,
         };
+        sync_allocations(&mut group, now);
         if !explicit {
             apply_equal_shares(&mut group);
         }

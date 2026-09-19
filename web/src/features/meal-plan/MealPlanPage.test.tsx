@@ -158,6 +158,7 @@ const breakfastGroup: GroupView = {
   everyone: true,
   participants: [{ member_id: 'member-1', name: 'Sam', note: 'extra honey' }],
   guest_count: 0,
+  guests: [],
   serves: 2,
   cooking_servings: null,
   effective_cooking_servings: 2,

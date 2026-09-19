@@ -75,8 +75,8 @@ export function MealOutcomeDialog({
     })),
     ...pendingGuests.map((group) => ({
       key: `guest:${group.id}`,
-      name: group.count === 1 ? '1 guest' : `${group.count} guests`,
-      avatarName: 'Guest',
+      name: group.name ?? (group.count === 1 ? 'Guest' : `${group.count} guests`),
+      avatarName: group.name ?? 'Guest',
       heads: group.count,
       allocations: group.allocations.filter((a) => a.status === 'planned') as Allocation[],
     })),

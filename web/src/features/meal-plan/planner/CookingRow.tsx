@@ -26,7 +26,7 @@ export function CookingRow({
 
   const kind = groupKind(group);
   const diners = groupDiners(occasion, group, members);
-  const variations = group.participants.filter((participant) => participant.note != null).length;
+  const variations = group.participants.filter((participant) => participant.note != null).length + group.guests.filter((guest) => guest.note != null).length;
   const captionParts = [groupCaption(group)];
   if (variations > 0) captionParts.push(`${variations} ${variations === 1 ? 'variation' : 'variations'}`);
   const caption = captionParts.filter((part): part is string => Boolean(part)).join(' · ');

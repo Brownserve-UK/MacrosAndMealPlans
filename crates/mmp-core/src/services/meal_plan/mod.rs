@@ -19,6 +19,7 @@ use crate::services::PreparationService;
 mod catalogue;
 mod outcomes;
 mod planning;
+pub use planning::{GuestChange, GuestMealTarget};
 mod view;
 
 pub use view::{

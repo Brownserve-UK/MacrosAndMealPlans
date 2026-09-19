@@ -1487,6 +1487,61 @@ async fn updating_an_occasion_replaces_its_groups_and_absences(pool: PgPool) {
 }
 
 #[sqlx::test]
+async fn moving_a_guest_to_an_earlier_group_keeps_their_identity(pool: PgPool) {
+    let (member_id, product_id, actor_id) = seed_meal_plan_dependencies(&pool).await;
+    let repo = PgMealPlanRepository::new(pool);
+    let mut occasion = dinner_occasion(actor_id);
+    let first = meal_plan_group(&occasion, member_id, product_id, actor_id);
+    let mut second = meal_plan_group(&occasion, member_id, product_id, actor_id);
+    let guest_id = MealGuestGroupId::new();
+    second.guest_groups = vec![MealGuestGroup {
+        id: guest_id,
+        count: 1,
+        name: Some("Pat".to_owned()),
+        note: Some("Mild".to_owned()),
+        allocations: vec![MealGuestAllocation {
+            id: MealGuestAllocationId::new(),
+            component_id: second.components[0].id,
+            allocated: second.components[0].amount,
+            status: ParticipantStatus::Planned,
+            confirmed: None,
+            resolved_by: None,
+            resolved_at: None,
+        }],
+        revision: Revision::INITIAL,
+        created_at: second.created_at,
+        updated_at: second.updated_at,
+    }];
+    occasion.groups = vec![first.clone(), second.clone()];
+    repo.insert_occasion(&occasion).await.unwrap();
+
+    let mut updated = occasion.clone();
+    let mut guest = updated.groups[1].guest_groups.remove(0);
+    guest.allocations[0].id = MealGuestAllocationId::new();
+    guest.allocations[0].component_id = updated.groups[0].components[0].id;
+    updated.groups[0].guest_groups.push(guest);
+    updated.revision = updated.revision.next();
+
+    assert_eq!(
+        repo.update_occasion(&updated, occasion.revision)
+            .await
+            .unwrap(),
+        UpdateOutcome::Updated
+    );
+    let loaded = repo.get_occasion(occasion.id).await.unwrap().unwrap();
+    assert_eq!(loaded.groups[0].guest_groups[0].id, guest_id);
+    assert_eq!(
+        loaded.groups[0].guest_groups[0].name.as_deref(),
+        Some("Pat")
+    );
+    assert_eq!(
+        loaded.groups[0].guest_groups[0].note.as_deref(),
+        Some("Mild")
+    );
+    assert!(loaded.groups[1].guest_groups.is_empty());
+}
+
+#[sqlx::test]
 async fn updating_an_occasion_with_a_stale_revision_is_refused(pool: PgPool) {
     let (_, _, actor_id) = seed_meal_plan_dependencies(&pool).await;
     let repo = PgMealPlanRepository::new(pool);
@@ -1600,6 +1655,8 @@ async fn round_trips_counted_guest_allocations(pool: PgPool) {
     original.guest_groups = vec![MealGuestGroup {
         id: MealGuestGroupId::new(),
         count: 2,
+        name: Some("Visitors".to_owned()),
+        note: None,
         allocations: vec![MealGuestAllocation {
             id: MealGuestAllocationId::new(),
             component_id: original.components[0].id,

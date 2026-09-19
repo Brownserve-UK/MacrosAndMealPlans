@@ -12,6 +12,7 @@ import { useState } from 'react';
 import { ApiError, type MealSlot } from '../../../api/client';
 import {
   useAddGroup,
+  useAddPlannerGuest,
   useCopyOccasion,
   useCopyWeek,
   useCreateOccasion,
@@ -53,6 +54,7 @@ export function PlannerPage({ weekStart }: { weekStart: string }) {
   const copy = useCopyOccasion();
   const copyWeek = useCopyWeek();
   const addGroup = useAddGroup();
+  const addGuest = useAddPlannerGuest();
   const updateOccasion = useUpdateOccasion();
   const setAttendance = useSetAttendance();
 
@@ -100,21 +102,40 @@ export function PlannerPage({ weekStart }: { weekStart: string }) {
     const created = await create.mutateAsync({
       planned_on: occasion.planned_on,
       slot: occasion.slot,
-      group: { ...toNewGroup(first), guest_count: first.guest_count, cooking_servings: first.cooking_servings },
+      group: { ...toNewGroup(first), cooking_servings: first.cooking_servings },
     });
+    let revision = created.revision;
+    async function restoreGuests(group: (typeof occasion.groups)[number], groupId: string) {
+      for (const guest of group.guests) {
+        for (let index = 0; index < guest.count; index += 1) {
+          const updated = await addGuest.mutateAsync({
+            occasionId: created.id,
+            revision,
+            name: guest.name,
+            note: guest.note,
+            target: { group_id: groupId },
+          });
+          revision = updated.revision;
+        }
+      }
+    }
+    await restoreGuests(first, created.groups[0]!.id);
     for (const group of rest) {
-      await addGroup.mutateAsync({
+      const added = await addGroup.mutateAsync({
         occasionId: created.id,
-        body: { ...toNewGroup(group), guest_count: group.guest_count, cooking_servings: group.cooking_servings },
+        body: { ...toNewGroup(group), cooking_servings: group.cooking_servings },
       });
+      revision += 1;
+      await restoreGuests(group, added.id);
     }
     for (const memberId of occasion.absent_member_ids) {
-      await setAttendance.mutateAsync({ occasionId: created.id, memberId, attendance: { kind: 'elsewhere' } });
+      const updated = await setAttendance.mutateAsync({ occasionId: created.id, memberId, attendance: { kind: 'elsewhere' } });
+      revision = updated.revision;
     }
     if (occasion.planned_time || occasion.note) {
       await updateOccasion.mutateAsync({
         id: created.id,
-        body: { planned_time: occasion.planned_time, note: occasion.note, revision: created.revision },
+        body: { planned_time: occasion.planned_time, note: occasion.note, revision },
       });
     }
   }

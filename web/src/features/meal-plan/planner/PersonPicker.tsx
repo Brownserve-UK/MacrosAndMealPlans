@@ -2,14 +2,11 @@ import CheckIcon from '@mui/icons-material/CheckOutlined';
 import CloseIcon from '@mui/icons-material/CloseOutlined';
 import EditIcon from '@mui/icons-material/EditOutlined';
 import Drawer from '@mui/material/Drawer';
-import InputBase from '@mui/material/InputBase';
 import Popover from '@mui/material/Popover';
 import Stack from '@mui/material/Stack';
-import Typography from '@mui/material/Typography';
-import { alpha } from '@mui/material/styles';
 import type { KeyboardEvent, ReactNode } from 'react';
 import { useMemo, useState } from 'react';
-import { PickerRowButton, PickerSearchField, SectionHeading, type PickerRowContent } from './pickerParts';
+import { PickerPromptStep, PickerRowButton, PickerSearchField, SectionHeading, type PickerRowContent } from './pickerParts';
 import { conceptFor, dishLabel, type MemberStatus, memberVariation } from './plannerWeek';
 import type { GroupView, NewGroup, PlannerMember } from './types';
 import { leftoversRow, useFridgeDishes, usePickerRows } from './usePickerRows';
@@ -21,57 +18,6 @@ type Row = PickerRowContent & {
   ticked?: boolean;
   onSelect: () => void;
 };
-
-function PromptStep({
-  prompt,
-  onClose,
-}: {
-  prompt: { label: string; initial: string; onSubmit: (value: string | null) => void };
-  onClose: () => void;
-}) {
-  const [text, setText] = useState(prompt.initial);
-
-  function commit() {
-    const trimmed = text.trim();
-    prompt.onSubmit(trimmed === '' ? null : trimmed);
-    onClose();
-  }
-
-  return (
-    <Stack spacing={1} sx={{ p: 1 }}>
-      <Typography variant="caption" sx={{ px: 0.5, letterSpacing: '0.06em', textTransform: 'uppercase', fontWeight: 600, color: 'text.secondary' }}>
-        {prompt.label}
-      </Typography>
-      <InputBase
-        autoFocus
-        value={text}
-        onChange={(event) => setText(event.target.value)}
-        inputProps={{ 'aria-label': prompt.label }}
-        onKeyDown={(event) => {
-          if (event.key === 'Enter') {
-            event.preventDefault();
-            commit();
-          }
-          if (event.key === 'Escape') onClose();
-        }}
-        sx={(theme) => ({
-          px: 1.5,
-          py: 1,
-          borderRadius: '10px',
-          border: '1px solid',
-          borderColor: 'primary.main',
-          boxShadow: theme.vars
-            ? `0 0 0 3px rgba(${theme.vars.palette.primary.mainChannel} / 0.12)`
-            : `0 0 0 3px ${alpha(theme.palette.primary.main, 0.12)}`,
-          fontWeight: 500,
-        })}
-      />
-      <Typography variant="caption" color="text.secondary" sx={{ px: 0.5 }}>
-        Press Enter to save, Escape to cancel.
-      </Typography>
-    </Stack>
-  );
-}
 
 function PersonPickerBody({
   member,
@@ -210,12 +156,10 @@ function PersonPickerBody({
   if (prompting && status.kind === 'eating') {
     const group = status.group;
     return (
-      <PromptStep
-        prompt={{
-          label: `How ${member.name} has it`,
-          initial: note ?? '',
-          onSubmit: (value) => onVariation(group, value),
-        }}
+      <PickerPromptStep
+        label={`How ${member.name} has it`}
+        initial={note ?? ''}
+        onSubmit={(value) => onVariation(group, value)}
         onClose={onClose}
       />
     );

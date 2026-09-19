@@ -5,9 +5,10 @@ import StorefrontIcon from '@mui/icons-material/StorefrontOutlined';
 import Box from '@mui/material/Box';
 import ButtonBase from '@mui/material/ButtonBase';
 import InputBase from '@mui/material/InputBase';
+import Stack from '@mui/material/Stack';
 import Typography from '@mui/material/Typography';
 import { alpha } from '@mui/material/styles';
-import type { KeyboardEvent, ReactNode } from 'react';
+import { useState, type KeyboardEvent, type ReactNode } from 'react';
 import { IconTile } from '../../../components/IconTile';
 import type { PickerRow } from './types';
 
@@ -148,4 +149,56 @@ export function PickerSearchField({
       })}
     />
   );
+}
+
+export function PickerPromptStep({
+  label,
+  initial,
+  onSubmit,
+  onClose,
+}: {
+  label: string;
+  initial: string;
+  onSubmit: (value: string | null) => void;
+  onClose: () => void;
+}) {
+  const [text, setText] = useState(initial);
+
+  function commit() {
+    onSubmit(text.trim() || null);
+    onClose();
+  }
+
+  return <Stack spacing={1} sx={{ p: 1 }}>
+    <Typography variant="caption" sx={{ px: 0.5, letterSpacing: '0.06em', textTransform: 'uppercase', fontWeight: 600, color: 'text.secondary' }}>
+      {label}
+    </Typography>
+    <InputBase
+      autoFocus
+      value={text}
+      onChange={(event) => setText(event.target.value)}
+      inputProps={{ 'aria-label': label }}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          commit();
+        }
+        if (event.key === 'Escape') onClose();
+      }}
+      sx={(theme) => ({
+        px: 1.5,
+        py: 1,
+        borderRadius: '10px',
+        border: '1px solid',
+        borderColor: 'primary.main',
+        boxShadow: theme.vars
+          ? `0 0 0 3px rgba(${theme.vars.palette.primary.mainChannel} / 0.12)`
+          : `0 0 0 3px ${alpha(theme.palette.primary.main, 0.12)}`,
+        fontWeight: 500,
+      })}
+    />
+    <Typography variant="caption" color="text.secondary" sx={{ px: 0.5 }}>
+      Press Enter to save, Escape to cancel.
+    </Typography>
+  </Stack>;
 }

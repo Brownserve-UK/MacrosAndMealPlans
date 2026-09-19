@@ -184,6 +184,8 @@ pub fn merge_guest_group(
             .or(new_group.id)
             .unwrap_or_default(),
         count: new_group.count,
+        name: new_group.name.clone(),
+        note: new_group.note.clone(),
         allocations,
         revision: previous
             .map(|group| group.revision.next())

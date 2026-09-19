@@ -79,6 +79,7 @@ function group(id: string, name: string, components: MealPlanComponent[], extra:
     everyone: true,
     participants: [],
     guest_count: 0,
+    guests: [],
     serves: 4,
     cooking_servings: null,
     effective_cooking_servings: 4,
