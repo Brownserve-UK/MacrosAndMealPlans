@@ -27,6 +27,9 @@ specification or ADRs.
 
 ## Meal planning and consumption
 
+- [ ] Decide whether a product's planned amount should scale with the head count the way a recipe's
+      servings do. Today a recipe follows `serves()` while a product's amount is fixed and each
+      share shrinks, which reads inconsistently once both sit in the same Cooking list.
 - [ ] Batch the per-entry `records_for_entry` calls in `needs_review`.
 - [ ] "Ate something else" currently resolves the member's whole meal. Add per-component
       replacements.
