@@ -27,4 +27,5 @@ An ADR does NOT need to be written for implementation detail, only if that detai
 - When deferring tasks store them in `.ai/deferred.md` so they are not lost between sessions.
 - When running inside the `bsdev` devcontainer Playwright is installed globally with the Chromium driver for driving UI tests. Screenshots from this should be stored in `.ai/screenshots` so a human can review them
 - Mock-up's should be stored under the `.ai/mockups` directory
+- Store any plans in the `.ai/plans` directory to ensure they are not lost between sessions
 - Docker is available in the `bsdev` devcontainer, you are welcome to blow away any running `sample-data` builds as these are only ever used for development
