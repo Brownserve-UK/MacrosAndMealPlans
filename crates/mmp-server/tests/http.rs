@@ -1811,6 +1811,42 @@ async fn a_meal_gains_a_variation_through_an_explicit_participant() {
 }
 
 #[tokio::test]
+async fn editing_a_meal_keeps_the_component_ids_it_was_given() {
+    let app = app().await;
+    let product = create_milk_product(&app).await;
+
+    let occasion = create_occasion(
+        &app,
+        "2026-08-25",
+        "dinner",
+        json!([{"product_id": product["id"], "amount": measured_amount(600.0)}]),
+    )
+    .await;
+    let created = group(&occasion);
+    let group_id = created["id"].as_str().unwrap().to_owned();
+    let revision = created["revision"].as_i64().unwrap();
+    let component_id = created["components"][0]["id"].as_str().unwrap().to_owned();
+
+    let (status, updated, _) = send(
+        &app,
+        Call::new("PATCH", format!("/api/v1/planner/groups/{group_id}"))
+            .if_match(revision)
+            .body(json!({
+                "components": [{
+                    "id": component_id,
+                    "product_id": product["id"],
+                    "amount": measured_amount(400.0),
+                }]
+            })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{updated}");
+    assert_eq!(updated["components"].as_array().unwrap().len(), 1);
+    assert_eq!(updated["components"][0]["id"], component_id);
+    assert_eq!(updated["components"][0]["amount"]["value"], json!(400.0));
+}
+
+#[tokio::test]
 async fn the_planner_shows_a_group_with_guests_and_reviews_the_household_outcome() {
     let app = app().await;
     let member_id = send(&app, Call::new("GET", "/api/v1/auth/me")).await.1["member_id"]

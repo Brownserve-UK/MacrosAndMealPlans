@@ -26,6 +26,7 @@ const productComponent: MealPlanEntry['components'][number] = {
   status: 'planned',
   subject_status: 'planned',
   position: 0,
+  effective_cooking_servings: 2,
   revision: 1,
   needs_cooking: false,
 };
@@ -70,6 +71,7 @@ function cookedMeal(servingsProduced: number): MealPlanEntry {
       status: 'planned',
       subject_status: 'planned',
       position: 0,
+      effective_cooking_servings: 2,
       revision: 1,
       needs_cooking: true,
       cooked: { prepared_batch_id: 'b1', prepared_at: '2026-08-25T17:00:00Z', servings_produced: servingsProduced, revision: 2 },

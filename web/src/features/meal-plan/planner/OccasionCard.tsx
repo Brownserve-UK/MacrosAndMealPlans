@@ -13,10 +13,11 @@ import Stack from '@mui/material/Stack';
 import Typography from '@mui/material/Typography';
 import { useState } from 'react';
 import { ApiError } from '../../../api/client';
-import { useAddGroup, useAddPlannerGuest, useChangePlannerGuest, useRemovePlannerGuest, useSetAttendance, useSplitPlannerGuests, useUpdateGroup, useUpdateOccasion } from '../../../api/queries';
+import { useAddGroup, useAddPlannerGuest, useChangePlannerGuest, useRemovePlannerGuest, useSetAttendance, useSplitPlannerGuests, useUpdateOccasion } from '../../../api/queries';
 import { FormDialog } from '../../../components/FormDialog';
 import { CookingList } from './CookingList';
 import { GuestMenu, type GuestTarget } from './GuestMenu';
+import { MealSheet } from './MealSheet';
 import { PersonPicker } from './PersonPicker';
 import { Roster } from './Roster';
 import { memberStatus, occasionTitle, shortDate } from './plannerWeek';
@@ -44,7 +45,6 @@ export function OccasionCard({
   onDelete: () => void;
 }) {
   const updateOccasion = useUpdateOccasion();
-  const updateGroup = useUpdateGroup();
   const addGroup = useAddGroup();
   const setAttendance = useSetAttendance();
   const addGuest = useAddPlannerGuest();
@@ -57,8 +57,10 @@ export function OccasionCard({
   const [editingNote, setEditingNote] = useState(false);
   const [noteText, setNoteText] = useState('');
   const [picker, setPicker] = useState<Picker | null>(null);
+  const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
 
-  const busy = updateOccasion.isPending || updateGroup.isPending || addGroup.isPending || setAttendance.isPending || addGuest.isPending || changeGuest.isPending || removeGuest.isPending || splitGuests.isPending;
+  const busy = updateOccasion.isPending || addGroup.isPending || setAttendance.isPending || addGuest.isPending || changeGuest.isPending || removeGuest.isPending || splitGuests.isPending;
+  const editingGroup = occasion.groups.find((group) => group.id === editingGroupId) ?? null;
   const members = week.members;
   const toBuy = occasion.groups.reduce((total, group) => total + group.to_buy, 0);
   const hasFood = occasion.groups.some((group) => group.components.length > 0);
@@ -88,13 +90,6 @@ export function OccasionCard({
           attendance: { kind: 'eating', group_id: group.id, note },
         }),
       'Could not save the variation.',
-    );
-  }
-
-  function cooking(group: GroupView, value: number | null) {
-    void run(
-      () => updateGroup.mutateAsync({ id: group.id, body: { cooking_servings: value, revision: group.revision } }),
-      'Could not change how much is being cooked.',
     );
   }
 
@@ -211,8 +206,9 @@ export function OccasionCard({
         onAddGuest={(anchor) => setPicker({ anchor, kind: 'guests', group: null, guest: null })}
         onOpenGuests={(group, guest, anchor) => setPicker({ anchor, kind: 'guests', group, guest })}
         onRenameGuest={(guest, name) => { void run(() => changeGuest.mutateAsync({ occasionId: occasion.id, guestId: guest.id, revision: occasion.revision, name }), 'Could not change the guest name.'); }}
+        onEditMeal={(group) => setEditingGroupId(group.id)}
       />
-      <CookingList occasion={occasion} members={members} busy={busy} onCooking={(group, value) => cooking(group, value)} />
+      <CookingList occasion={occasion} members={members} />
       <Stack>
         <Stack direction="row" sx={{ justifyContent: 'space-between', gap: 2, py: 1.5, borderTop: '1px solid', borderColor: 'divider' }}>
           <Typography variant="body2" color="text.secondary">
@@ -295,7 +291,18 @@ export function OccasionCard({
           if (picker?.kind === 'member') variation(group, picker.member, note);
           setPicker(null);
         }}
+        onEditMeal={(group) => {
+          setEditingGroupId(group.id);
+          setPicker(null);
+        }}
         onClose={() => setPicker(null)}
+      />
+      <MealSheet
+        open={editingGroupId !== null}
+        group={editingGroup}
+        occasion={occasion}
+        sheet={sheet}
+        onClose={() => setEditingGroupId(null)}
       />
       <GuestMenu
         open={picker?.kind === 'guests'}

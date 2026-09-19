@@ -456,6 +456,7 @@ impl MealPlanService {
         if let Some(components) = patch.components {
             validate_group_shape(group.label.as_deref(), group.ad_hoc, &components)?;
             validate_components(&components)?;
+            validate_component_cooking_servings(&components)?;
             let existing_items = group
                 .components
                 .iter()
@@ -474,6 +475,7 @@ impl MealPlanService {
                     id: Some(component.id),
                     item: component.item,
                     amount: component.amount,
+                    cooking_servings: component.cooking_servings,
                 })
                 .collect();
             validate_group_shape(group.label.as_deref(), group.ad_hoc, &shape)?;
@@ -528,10 +530,6 @@ impl MealPlanService {
                 .collect();
             sync_allocations(&mut group, now);
             reshare = true;
-        }
-        if let Some(cooking_servings) = patch.cooking_servings {
-            validate_cooking_servings(cooking_servings)?;
-            group.cooking_servings = cooking_servings;
         }
         if reshare {
             apply_equal_shares(&mut group);
@@ -691,9 +689,9 @@ impl MealPlanService {
     ) -> Result<MealPlanEntry> {
         validate_group_shape(input.label.as_deref(), input.ad_hoc, &input.components)?;
         validate_components(&input.components)?;
+        validate_component_cooking_servings(&input.components)?;
         self.validate_component_items(&input.components, &HashSet::new(), actor_id)
             .await?;
-        validate_cooking_servings(input.cooking_servings)?;
         if input.everyone
             && occasion
                 .everyone_group()
@@ -732,7 +730,6 @@ impl MealPlanService {
             everyone: input.everyone,
             participants,
             guest_groups,
-            cooking_servings: input.cooking_servings,
             created_by: actor_id,
             updated_by: actor_id,
             revision: Revision::INITIAL,
@@ -778,13 +775,17 @@ fn normalise_note(value: Option<String>) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
-fn validate_cooking_servings(value: Option<i32>) -> Result<()> {
-    if value.is_some_and(|value| value <= 0) {
-        let mut errors = ValidationErrors::new();
-        errors.push("cooking_servings", "Cook at least one serving");
-        return errors.into_result();
+fn validate_component_cooking_servings(components: &[NewMealPlanComponent]) -> Result<()> {
+    let mut errors = ValidationErrors::new();
+    for (index, component) in components.iter().enumerate() {
+        if component.cooking_servings.is_some_and(|value| value <= 0) {
+            errors.push(
+                format!("components.{index}.cooking_servings"),
+                "Cook at least one serving",
+            );
+        }
     }
-    Ok(())
+    errors.into_result()
 }
 
 fn attach_group(occasion: &mut MealOccasion, group: MealPlanEntry) -> Result<()> {
@@ -887,6 +888,7 @@ fn copy_of(
                         id: None,
                         item: component.item,
                         amount: component.amount,
+                        cooking_servings: None,
                     })
                     .collect(),
             );
@@ -919,7 +921,6 @@ fn copy_of(
                 everyone: group.everyone,
                 participants,
                 guest_groups: Vec::new(),
-                cooking_servings: None,
                 created_by: actor_id,
                 updated_by: actor_id,
                 revision: Revision::INITIAL,

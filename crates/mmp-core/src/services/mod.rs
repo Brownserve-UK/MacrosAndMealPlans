@@ -22,10 +22,10 @@ pub use consumption::{ConsumptionDay, ConsumptionEntry, ConsumptionService, DayT
 pub use household::HouseholdService;
 pub use household_settings::HouseholdSettingsService;
 pub use meal_plan::{
-    GuestChange, GuestMealTarget, MealDiner, MealGroupView, MealItem, MealItemSource,
-    MealOccasionView, MealParticipantView, MealPlanComponentView, MealPlanDay, MealPlanEntryView,
-    MealPlanService, MealPlanWeek, MealSlotView, NeedsReview, NutritionSummary, PlannerDay,
-    PlannerMember, PlannerWeek,
+    CookingItemKind, CookingItemView, GuestChange, GuestMealTarget, MealDiner, MealGroupView,
+    MealItem, MealItemSource, MealOccasionView, MealParticipantView, MealPlanComponentView,
+    MealPlanDay, MealPlanEntryView, MealPlanService, MealPlanWeek, MealSlotView, NeedsReview,
+    NutritionSummary, PlannerDay, PlannerMember, PlannerWeek,
 };
 pub use meal_template::MealTemplateService;
 pub use nutrition_plan::{

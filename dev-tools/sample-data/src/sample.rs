@@ -841,11 +841,11 @@ impl Loader<'_> {
                     id: None,
                     item: MealItemRef::recipe(recipe_id("chicken-and-rice")),
                     amount: servings(4),
+                    cooking_servings: Some(4),
                 }],
                 everyone: true,
                 participants: Vec::new(),
                 guest_groups: Vec::new(),
-                cooking_servings: Some(4),
             },
         )
         .await?;
@@ -878,11 +878,11 @@ impl Loader<'_> {
                             id: None,
                             item: MealItemRef::dish(recipe_id("chicken-and-rice")),
                             amount: servings(1),
+                            cooking_servings: None,
                         }],
                         everyone: false,
                         participants: vec![NewMealParticipant::member(manager)],
                         guest_groups: Vec::new(),
-                        cooking_servings: None,
                     },
                     self.actor.id,
                 )
@@ -942,7 +942,6 @@ impl Loader<'_> {
                     note: (name == "Charlie").then(|| "No cheese".to_owned()),
                     ..NewMealGuestGroup::of(1)
                 }).collect(),
-                cooking_servings: None,
             }).await?;
         }
 
@@ -959,7 +958,6 @@ impl Loader<'_> {
                 everyone: true,
                 participants: Vec::new(),
                 guest_groups: Vec::new(),
-                cooking_servings: None,
             },
         )
         .await?;
@@ -977,7 +975,6 @@ impl Loader<'_> {
                 everyone: true,
                 participants: Vec::new(),
                 guest_groups: Vec::new(),
-                cooking_servings: None,
             },
         )
         .await?;
@@ -985,7 +982,8 @@ impl Loader<'_> {
         let saturday = week + Duration::days(5);
         let mut cake =
             everyone_recipe_group(saturday, MealSlot::Snacks, "saturday-cake", "saturday-cake");
-        cake.cooking_servings = Some(8);
+        cake.components[0].cooking_servings = Some(8);
+        cake.components[0].amount = servings(8);
         self.ensure_showcase_group(saturday, MealSlot::Snacks, None, cake)
             .await?;
 
@@ -997,6 +995,76 @@ impl Loader<'_> {
             everyone_recipe_group(sunday, MealSlot::Breakfast, "everyone-pancakes", "porridge"),
         )
         .await?;
+
+        let shared_food_day = saturday;
+        let manager_meal_id =
+            showcase_group_id(shared_food_day, MealSlot::Lunch, "fish-fingers-and-chips");
+        self.ensure_showcase_group(
+            shared_food_day,
+            MealSlot::Lunch,
+            None,
+            NewMealGroup {
+                id: Some(manager_meal_id),
+                label: None,
+                ad_hoc: None,
+                components: vec![
+                    NewMealPlanComponent {
+                        id: None,
+                        item: MealItemRef::product(product_id("fish-fingers")),
+                        amount: ConsumedAmount::Packs(decimal(1)),
+                        cooking_servings: None,
+                    },
+                    NewMealPlanComponent {
+                        id: None,
+                        item: MealItemRef::product(product_id("chips")),
+                        amount: measured(150, Unit::Gram),
+                        cooking_servings: None,
+                    },
+                ],
+                everyone: false,
+                participants: vec![NewMealParticipant::member(manager)],
+                guest_groups: Vec::new(),
+            },
+        )
+        .await?;
+        let basic_meal_id =
+            showcase_group_id(shared_food_day, MealSlot::Lunch, "salmon-and-chips");
+        if matches!(
+            self.state.meal_plan.get(basic_meal_id).await,
+            Err(CoreError::NotFound { .. })
+        ) {
+            self.state
+                .meal_plan
+                .add_group(
+                    occasion_id(shared_food_day, MealSlot::Lunch),
+                    NewMealGroup {
+                        id: Some(basic_meal_id),
+                        label: None,
+                        ad_hoc: None,
+                        components: vec![
+                            NewMealPlanComponent {
+                                id: None,
+                                item: MealItemRef::product(product_id("salmon-fillet")),
+                                amount: measured(150, Unit::Gram),
+                                cooking_servings: None,
+                            },
+                            NewMealPlanComponent {
+                                id: None,
+                                item: MealItemRef::product(product_id("chips")),
+                                amount: measured(150, Unit::Gram),
+                                cooking_servings: None,
+                            },
+                        ],
+                        everyone: false,
+                        participants: vec![NewMealParticipant::member(basic)],
+                        guest_groups: Vec::new(),
+                    },
+                    self.actor.id,
+                )
+                .await?;
+            self.report.meals_created += 1;
+        }
+
         Ok(())
     }
 
@@ -1215,12 +1283,12 @@ impl Loader<'_> {
                             id: None,
                             item,
                             amount,
+                            cooking_servings: None,
                         })
                         .collect(),
                     everyone: false,
                     participants: vec![NewMealParticipant::member(self.member.id)],
                     guest_groups: Vec::new(),
-                    cooking_servings: None,
                 },
                 actor_id: self.actor.id,
             })
@@ -1514,6 +1582,7 @@ impl Loader<'_> {
                     id: None,
                     item: MealItemRef::recipe(recipe_id("porridge")),
                     amount: servings(2),
+                    cooking_servings: None,
                 }],
             ))
             .await?;
@@ -2091,6 +2160,7 @@ impl Loader<'_> {
                         id: Some(component_id),
                         item: MealItemRef::recipe(recipe_id(recipe_key)),
                         amount: prepared,
+                        cooking_servings: None,
                     }],
                     everyone: false,
                     participants,
@@ -2108,7 +2178,6 @@ impl Loader<'_> {
                     } else {
                         Vec::new()
                     },
-                    cooking_servings: None,
                 },
                 actor_id: self.actor.id,
             })
@@ -2278,6 +2347,7 @@ impl Loader<'_> {
                     id: None,
                     item: MealItemRef::product(product_id(product_key)),
                     amount,
+                    cooking_servings: None,
                 }],
             ))
             .await?;
@@ -2313,6 +2383,7 @@ impl Loader<'_> {
                     id: None,
                     item: MealItemRef::product(product_id(product_key)),
                     amount,
+                    cooking_servings: None,
                 }],
             ))
             .await?;
@@ -2513,6 +2584,7 @@ impl Loader<'_> {
                     id: None,
                     item: MealItemRef::recipe(recipe_id(recipe_key)),
                     amount,
+                    cooking_servings: None,
                 }],
             ))
             .await?;
@@ -2875,6 +2947,7 @@ fn components_for(slot: MealSlot) -> Vec<NewMealPlanComponent> {
             id: None,
             item: MealItemRef::product(product_id(key)),
             amount,
+            cooking_servings: None,
         })
         .collect()
 }
@@ -3126,11 +3199,11 @@ fn everyone_recipe_group(date: Date, slot: MealSlot, key: &str, recipe_key: &str
             id: None,
             item: MealItemRef::recipe(recipe_id(recipe_key)),
             amount: servings(3),
+            cooking_servings: None,
         }],
         everyone: true,
         participants: Vec::new(),
         guest_groups: Vec::new(),
-        cooking_servings: None,
     }
 }
 
@@ -3164,7 +3237,6 @@ fn member_occasion(
             everyone: false,
             participants: vec![NewMealParticipant::member(member_id)],
             guest_groups: Vec::new(),
-            cooking_servings: None,
         },
         actor_id,
     }

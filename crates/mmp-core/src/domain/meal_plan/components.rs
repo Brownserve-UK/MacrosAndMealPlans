@@ -14,6 +14,7 @@ pub fn make_components(input: Vec<NewMealPlanComponent>) -> Vec<MealPlanComponen
             amount: component.amount,
             position: i32::try_from(position).unwrap_or(i32::MAX),
             snapshot: None,
+            cooking_servings: component.cooking_servings,
             revision: Revision::INITIAL,
             display_order: uuid::Uuid::now_v7(),
         })
@@ -37,6 +38,7 @@ pub fn merge_components(
                     amount: component.amount,
                     position: i32::try_from(position).unwrap_or(i32::MAX),
                     snapshot: None,
+                    cooking_servings: component.cooking_servings,
                     revision: Revision::INITIAL,
                     display_order: uuid::Uuid::now_v7(),
                 };
@@ -58,6 +60,7 @@ pub fn merge_components(
                     amount: component.amount,
                     position: i32::try_from(position).unwrap_or(i32::MAX),
                     snapshot: None,
+                    cooking_servings: component.cooking_servings,
                     revision: Revision::INITIAL,
                     display_order: uuid::Uuid::now_v7(),
                 };
@@ -65,13 +68,15 @@ pub fn merge_components(
             let position = i32::try_from(position).unwrap_or(i32::MAX);
             let changed = previous.item != component.item
                 || previous.amount != component.amount
-                || previous.position != position;
+                || previous.position != position
+                || previous.cooking_servings != component.cooking_servings;
             MealPlanComponent {
                 id,
                 item: component.item,
                 amount: component.amount,
                 position,
                 snapshot: previous.snapshot.clone(),
+                cooking_servings: component.cooking_servings,
                 revision: if changed {
                     previous.revision.next()
                 } else {

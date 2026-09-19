@@ -133,8 +133,27 @@ export const PlannerCell = forwardRef<HTMLButtonElement, CellProps>(function Pla
     >
       {occasion && summary ? (
         <>
-          <Typography component="span" variant="body1" sx={{ fontWeight: 500, lineHeight: 1.3, color: 'inherit' }}>
+          <Typography
+            component="span"
+            variant="body1"
+            title={summary.tail ? `${summary.name} ${summary.tail}` : summary.name}
+            sx={{
+              fontWeight: 500,
+              lineHeight: 1.3,
+              color: 'inherit',
+              display: '-webkit-box',
+              WebkitBoxOrient: 'vertical',
+              WebkitLineClamp: 3,
+              overflow: 'hidden',
+            }}
+          >
             {summary.name}
+            {summary.tail ? (
+              <Typography component="span" variant="body1" sx={{ color: past ? 'inherit' : 'text.secondary' }}>
+                {' '}
+                {summary.tail}
+              </Typography>
+            ) : null}
           </Typography>
           {summary.meta.length > 0 ? (
             <Stack direction="row" spacing={1.25} sx={{ flexWrap: 'wrap', rowGap: 0.25 }}>

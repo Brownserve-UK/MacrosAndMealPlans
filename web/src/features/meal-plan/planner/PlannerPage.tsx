@@ -102,7 +102,7 @@ export function PlannerPage({ weekStart }: { weekStart: string }) {
     const created = await create.mutateAsync({
       planned_on: occasion.planned_on,
       slot: occasion.slot,
-      group: { ...toNewGroup(first), cooking_servings: first.cooking_servings },
+      group: toNewGroup(first),
     });
     let revision = created.revision;
     async function restoreGuests(group: (typeof occasion.groups)[number], groupId: string) {
@@ -123,7 +123,7 @@ export function PlannerPage({ weekStart }: { weekStart: string }) {
     for (const group of rest) {
       const added = await addGroup.mutateAsync({
         occasionId: created.id,
-        body: { ...toNewGroup(group), cooking_servings: group.cooking_servings },
+        body: toNewGroup(group),
       });
       revision += 1;
       await restoreGuests(group, added.id);

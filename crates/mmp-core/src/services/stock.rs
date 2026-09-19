@@ -841,7 +841,7 @@ impl StockService {
                     .map(|prepared_meal| prepared_meal.name)
                     .unwrap_or_default(),
             };
-            names.insert(entry.id, entry.display_name(|| component_name));
+            names.insert(entry.id, entry.display_name(|| vec![component_name]));
         }
         Ok(names)
     }

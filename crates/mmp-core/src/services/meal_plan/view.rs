@@ -8,9 +8,9 @@ use crate::domain::{
     ConsumptionRecordId, HouseholdMemberId, MealAttendance, MealItemRef, MealOccasion,
     MealOccasionId, MealParticipantAllocation, MealPlanComponent, MealPlanComponentId,
     MealPlanEntry, MealPlanEntryId, MealPlanStatus, MealSlot, MealTimes, NUTRIENT_KEYS,
-    NutritionFacts, NutritionGoals, NutritionQuality, PreparedBatch, Revision, StockLevel, Unit,
-    derive_participant_status, outcomes_for_component, participant_status_to_meal, preparation_for,
-    resolve_on, sum_nutrition,
+    NutritionFacts, NutritionGoals, NutritionQuality, PreparedBatch, Quantity, Revision,
+    StockLevel, Unit, derive_participant_status, outcomes_for_component,
+    participant_status_to_meal, preparation_for, resolve_on, sum_nutrition,
 };
 use crate::error::Result;
 use crate::ports::{MemberQuery, PageRequest};
@@ -71,9 +71,9 @@ impl MealPlanEntryView {
     pub fn name(&self) -> String {
         self.entry.display_name(|| {
             self.components
-                .first()
+                .iter()
                 .map(|component| component.item_name.clone())
-                .unwrap_or_default()
+                .collect()
         })
     }
 }
@@ -93,8 +93,6 @@ pub struct MealGroupView {
     pub guest_count: i32,
     pub guests: Vec<MealGuestView>,
     pub serves: i32,
-    pub cooking_servings: Option<i32>,
-    pub effective_cooking_servings: i32,
     pub cook_minutes: Option<i32>,
     pub leftover_servings_available: Option<Decimal>,
 }
@@ -107,11 +105,31 @@ pub struct MealGuestView {
     pub count: i32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CookingItemKind {
+    Recipe,
+    Food,
+    CookedFood,
+}
+
+#[derive(Debug, Clone)]
+pub struct CookingItemView {
+    pub item: MealItemRef,
+    pub name: String,
+    pub kind: CookingItemKind,
+    pub amount: ConsumedAmount,
+    pub extra_servings: Option<Decimal>,
+    pub member_ids: Vec<HouseholdMemberId>,
+    pub group_ids: Vec<MealPlanEntryId>,
+    pub cook_minutes: Option<i32>,
+}
+
 #[derive(Debug, Clone)]
 pub struct MealOccasionView {
     pub occasion: MealOccasion,
     pub effective_time: Option<Time>,
     pub groups: Vec<MealGroupView>,
+    pub cooking: Vec<CookingItemView>,
     pub absent_member_ids: Vec<HouseholdMemberId>,
     pub unaccounted_member_ids: Vec<HouseholdMemberId>,
 }
@@ -480,8 +498,6 @@ impl MealPlanService {
                     })
                     .collect(),
                 serves: group.serves(),
-                cooking_servings: group.cooking_servings,
-                effective_cooking_servings: group.effective_cooking_servings(),
                 cook_minutes,
                 leftover_servings_available,
                 entry: view,
@@ -498,13 +514,121 @@ impl MealPlanService {
                 !seated.contains(member_id) && !absent_member_ids.contains(member_id)
             })
             .collect();
+        let cooking = self.cooking_items(&groups).await?;
         Ok(MealOccasionView {
             effective_time,
             groups,
+            cooking,
             absent_member_ids,
             unaccounted_member_ids,
             occasion,
         })
+    }
+
+    async fn cooking_items(&self, groups: &[MealGroupView]) -> Result<Vec<CookingItemView>> {
+        struct Bucket {
+            item: MealItemRef,
+            name: String,
+            kind: CookingItemKind,
+            amount_kind: &'static str,
+            unit: Option<Unit>,
+            total: Decimal,
+            extra: Decimal,
+            member_ids: Vec<HouseholdMemberId>,
+            group_ids: Vec<MealPlanEntryId>,
+            cook_minutes: Option<i32>,
+            order: usize,
+        }
+
+        let mut buckets: Vec<Bucket> = Vec::new();
+        for group in groups {
+            if group.entry.entry.ad_hoc.is_some() {
+                continue;
+            }
+            let member_ids: Vec<HouseholdMemberId> =
+                group.diners.iter().map(|diner| diner.member_id).collect();
+            for component in &group.entry.components {
+                let item = component.component.item;
+                let unit = match component.component.amount {
+                    ConsumedAmount::Measure(quantity) => Some(quantity.unit),
+                    _ => None,
+                };
+                let amount_kind = component.component.amount.kind_code();
+                let cook_minutes = if let MealItemRef::Recipe { recipe_id } = item {
+                    self.recipes.get(recipe_id).await?.and_then(|recipe| {
+                        let minutes = recipe.preparation_minutes.unwrap_or(0)
+                            + recipe.cooking_minutes.unwrap_or(0);
+                        (recipe.preparation_minutes.is_some() || recipe.cooking_minutes.is_some())
+                            .then_some(minutes)
+                    })
+                } else {
+                    None
+                };
+                let extra = if matches!(item, MealItemRef::Recipe { .. }) {
+                    let effective = component.component.effective_cooking_servings(group.serves);
+                    Decimal::from((effective - group.serves).max(0))
+                } else {
+                    Decimal::ZERO
+                };
+                let kind = match item {
+                    MealItemRef::Recipe { .. } => CookingItemKind::Recipe,
+                    MealItemRef::Dish { .. } => CookingItemKind::CookedFood,
+                    _ => CookingItemKind::Food,
+                };
+                match buckets.iter_mut().find(|bucket| {
+                    bucket.item == item && bucket.amount_kind == amount_kind && bucket.unit == unit
+                }) {
+                    Some(bucket) => {
+                        bucket.total += component.component.amount.value();
+                        bucket.extra += extra;
+                        for member_id in &member_ids {
+                            if !bucket.member_ids.contains(member_id) {
+                                bucket.member_ids.push(*member_id);
+                            }
+                        }
+                        if !bucket.group_ids.contains(&group.entry.entry.id) {
+                            bucket.group_ids.push(group.entry.entry.id);
+                        }
+                        bucket.cook_minutes = match (bucket.cook_minutes, cook_minutes) {
+                            (Some(a), Some(b)) => Some(a.max(b)),
+                            (Some(a), None) => Some(a),
+                            (None, other) => other,
+                        };
+                    }
+                    None => {
+                        buckets.push(Bucket {
+                            item,
+                            name: component.item_name.clone(),
+                            kind,
+                            amount_kind,
+                            unit,
+                            total: component.component.amount.value(),
+                            extra,
+                            member_ids: member_ids.clone(),
+                            group_ids: vec![group.entry.entry.id],
+                            cook_minutes,
+                            order: buckets.len(),
+                        });
+                    }
+                }
+            }
+        }
+
+        buckets
+            .sort_by_key(|bucket| (if bucket.group_ids.len() > 1 { 0 } else { 1 }, bucket.order));
+        Ok(buckets
+            .into_iter()
+            .map(|bucket| CookingItemView {
+                item: bucket.item,
+                name: bucket.name,
+                kind: bucket.kind,
+                amount: rebuild_amount(bucket.amount_kind, bucket.total, bucket.unit),
+                extra_servings: (bucket.extra > Decimal::ZERO).then_some(bucket.extra),
+                member_ids: bucket.member_ids,
+                group_ids: bucket.group_ids,
+                cook_minutes: bucket.cook_minutes,
+            })
+            .collect())
     }
 
     async fn cook_minutes(&self, group: &MealPlanEntry) -> Result<Option<i32>> {
@@ -736,6 +860,14 @@ impl MealPlanService {
             status,
             subject_status,
         })
+    }
+}
+
+fn rebuild_amount(kind_code: &str, total: Decimal, unit: Option<Unit>) -> ConsumedAmount {
+    match kind_code {
+        "measure" => ConsumedAmount::Measure(Quantity::new(total, unit.unwrap_or(Unit::Gram))),
+        "packs" => ConsumedAmount::Packs(total),
+        _ => ConsumedAmount::Servings(total),
     }
 }
 

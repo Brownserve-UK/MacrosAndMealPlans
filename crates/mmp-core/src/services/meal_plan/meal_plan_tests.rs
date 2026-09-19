@@ -259,6 +259,7 @@ fn measured(product_id: ProductId, grams: i64) -> NewMealPlanComponent {
         id: None,
         item: MealItemRef::product(product_id),
         amount: ConsumedAmount::Measure(Quantity::new(Decimal::new(grams, 0), Unit::Gram)),
+        cooking_servings: None,
     }
 }
 
@@ -304,6 +305,7 @@ fn servings_of(recipe_id: RecipeId, count: i64) -> NewMealPlanComponent {
         id: None,
         item: MealItemRef::recipe(recipe_id),
         amount: ConsumedAmount::Servings(Decimal::new(count, 0)),
+        cooking_servings: None,
     }
 }
 
@@ -752,6 +754,7 @@ async fn editing_one_component_preserves_its_siblings() {
             } else {
                 component.component.amount
             },
+            cooking_servings: component.component.cooking_servings,
         })
         .collect();
 
@@ -809,6 +812,7 @@ async fn later_planned_components_append_after_food_already_logged_in_the_slot()
             id: Some(component.component.id),
             item: component.component.item,
             amount: component.component.amount,
+            cooking_servings: component.component.cooking_servings,
         })
         .collect();
     components.push(measured(latte.id, 250));
@@ -1614,10 +1618,10 @@ async fn planned_nutrition_follows_the_serving_you_eat_not_the_batch_you_make() 
         date!(2026 - 08 - 25),
         Some(time!(18:30)),
         MealSlot::Dinner,
-        NewMealGroup {
+        everyone(vec![NewMealPlanComponent {
             cooking_servings: Some(2),
-            ..everyone(vec![servings_of(curry.id, 2)])
-        },
+            ..servings_of(curry.id, 2)
+        }]),
     )
     .await;
 
@@ -1669,6 +1673,7 @@ async fn a_recipe_component_rejects_a_measured_amount() {
             id: None,
             item: MealItemRef::recipe(curry.id),
             amount: ConsumedAmount::Measure(Quantity::new(Decimal::new(200, 0), Unit::Gram)),
+            cooking_servings: None,
         }]),
     )
     .await
@@ -2014,19 +2019,19 @@ fn dgrams(value: i64) -> Decimal {
 
 async fn household_planned(
     h: &Harness,
-    components: Vec<NewMealPlanComponent>,
+    mut components: Vec<NewMealPlanComponent>,
     members: &[HouseholdMemberId],
     cooking_servings: Option<i32>,
 ) -> MealPlanEntryView {
+    if let Some(first) = components.first_mut() {
+        first.cooking_servings = cooking_servings;
+    }
     plan(
         h,
         date!(2026 - 08 - 25),
         Some(time!(18:30)),
         MealSlot::Dinner,
-        NewMealGroup {
-            cooking_servings,
-            ..only(members, components)
-        },
+        only(members, components),
     )
     .await
 }
@@ -2929,18 +2934,23 @@ async fn copying_an_occasion_resets_guests_and_the_cooking_override() {
         MealSlot::Dinner,
         NewMealGroup {
             guest_groups: vec![NewMealGuestGroup::of(2)],
-            cooking_servings: Some(8),
             participants: vec![NewMealParticipant {
                 note: Some("mild".to_owned()),
                 ..NewMealParticipant::member(taylor)
             }],
-            ..everyone(vec![measured(food.id, 900)])
+            ..everyone(vec![NewMealPlanComponent {
+                cooking_servings: Some(8),
+                ..measured(food.id, 900)
+            }])
         },
     )
     .await;
     assert_eq!(source.entry.guest_count(), 2);
     assert_eq!(source.entry.serves(), 4);
-    assert_eq!(source.entry.effective_cooking_servings(), 8);
+    assert_eq!(
+        source.entry.components[0].effective_cooking_servings(source.entry.serves()),
+        8
+    );
 
     let copy = h
         .service
@@ -2957,9 +2967,14 @@ async fn copying_an_occasion_resets_guests_and_the_cooking_override() {
     let group = &copy.groups[0];
     assert!(group.entry.entry.everyone);
     assert_eq!(group.guest_count, 0);
-    assert_eq!(group.cooking_servings, None);
+    assert_eq!(group.entry.components[0].component.cooking_servings, None);
     assert_eq!(group.serves, 2);
-    assert_eq!(group.effective_cooking_servings, 2);
+    assert_eq!(
+        group.entry.components[0]
+            .component
+            .effective_cooking_servings(group.serves),
+        2
+    );
     let note = group
         .diners
         .iter()
@@ -3078,20 +3093,32 @@ async fn a_recipe_forecast_follows_the_cooking_servings() {
         "two diners, so the forecast is two servings however many the recipe makes"
     );
 
+    let component_id = entry.components[0].component.id;
+    let item = entry.components[0].component.item;
     let updated = h
         .service
         .update_group(
             entry.entry.id,
             entry.entry.revision,
             MealGroupPatch {
-                cooking_servings: Some(Some(6)),
+                components: Some(vec![NewMealPlanComponent {
+                    id: Some(component_id),
+                    item,
+                    amount: ConsumedAmount::Servings(Decimal::new(6, 0)),
+                    cooking_servings: Some(6),
+                }]),
                 ..Default::default()
             },
             h.actor_id,
         )
         .await
         .unwrap();
-    assert_eq!(updated.groups[0].effective_cooking_servings, 6);
+    assert_eq!(
+        updated.groups[0].entry.components[0]
+            .component
+            .effective_cooking_servings(updated.groups[0].serves),
+        6
+    );
     assert_eq!(
         updated.groups[0].entry.components[0].component.amount,
         ConsumedAmount::Servings(Decimal::new(6, 0))
@@ -3118,7 +3145,12 @@ async fn a_recipe_forecast_follows_the_cooking_servings() {
             entry.entry.id,
             updated.groups[0].entry.entry.revision,
             MealGroupPatch {
-                cooking_servings: Some(None),
+                components: Some(vec![NewMealPlanComponent {
+                    id: Some(component_id),
+                    item,
+                    amount: ConsumedAmount::Servings(Decimal::new(6, 0)),
+                    cooking_servings: None,
+                }]),
                 ..Default::default()
             },
             h.actor_id,
@@ -3216,6 +3248,7 @@ async fn one_member_resolving_does_not_freeze_the_meal_for_a_manager() {
                 id: Some(component.id),
                 item: component.item,
                 amount: component.amount,
+                cooking_servings: component.cooking_servings,
             },
             measured(extra.id, 120),
         ],
@@ -3825,6 +3858,7 @@ async fn cooked_food_pools_across_cooks_and_the_oldest_is_eaten_first() {
             id: None,
             item: crate::domain::MealItemRef::dish(curry.id),
             amount: ConsumedAmount::Servings(Decimal::new(3, 0)),
+            cooking_servings: None,
         }],
     )
     .await;
@@ -3869,6 +3903,7 @@ async fn cooked_food_availability_pools_every_cook_and_nets_off_planned_dishes()
             id: None,
             item: crate::domain::MealItemRef::dish(curry.id),
             amount: ConsumedAmount::Servings(Decimal::new(3, 0)),
+            cooking_servings: None,
         }],
     )
     .await;
@@ -3949,6 +3984,7 @@ async fn a_dish_can_be_planned_and_eaten_without_cooking_the_recipe_again() {
             id: None,
             item: crate::domain::MealItemRef::dish(curry.id),
             amount: ConsumedAmount::Servings(Decimal::ONE),
+            cooking_servings: None,
         }],
     )
     .await;
@@ -4019,10 +4055,10 @@ async fn cooking_more_than_planned_leaves_the_surplus_unallocated() {
         date!(2026 - 08 - 25),
         Some(time!(18:30)),
         MealSlot::Dinner,
-        NewMealGroup {
+        everyone(vec![NewMealPlanComponent {
             cooking_servings: Some(2),
-            ..everyone(vec![servings_of(curry.id, 2)])
-        },
+            ..servings_of(curry.id, 2)
+        }]),
     )
     .await;
     let component = entry.components[0].component.clone();
@@ -4175,6 +4211,7 @@ async fn eating_a_generic_food_records_the_product_actually_drawn_not_the_averag
             id: None,
             item: MealItemRef::ingredient(lasagne_id),
             amount: ConsumedAmount::Measure(Quantity::new(Decimal::new(100, 0), Unit::Gram)),
+            cooking_servings: None,
         }],
     )
     .await;

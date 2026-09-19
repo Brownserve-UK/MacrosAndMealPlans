@@ -15,7 +15,7 @@ export const SLOT_ORDER: MealSlot[] = ['breakfast', 'lunch', 'dinner', 'snacks']
 
 export type CellMeta = { text: string; tone: 'quiet' | 'buy' };
 
-export type CellSummary = { name: string; meta: CellMeta[] };
+export type CellSummary = { name: string; tail: string | null; meta: CellMeta[] };
 
 export function weekDates(weekStart: string): string[] {
   return Array.from({ length: 7 }, (_, index) => addDays(weekStart, index));
@@ -58,6 +58,43 @@ export function initialsOf(member: PlannerMember): string {
     .join('');
 }
 
+export type JoinedName = { head: string; tail: string | null };
+
+export function joinFoodNames(names: string[]): JoinedName {
+  if (names.length === 0) return { head: '', tail: null };
+  if (names.length === 1) return { head: names[0]!, tail: null };
+  if (names.length === 2) return { head: names[0]!, tail: `& ${names[1]}` };
+  if (names.length === 3) return { head: `${names[0]}, ${names[1]}`, tail: `& ${names[2]}` };
+  return { head: `${names[0]}, ${names[1]}`, tail: `+${names.length - 2}` };
+}
+
+export function groupDisplayName(group: GroupView): JoinedName {
+  if (group.label && group.label.trim() !== '') return { head: group.label, tail: null };
+  if (group.ad_hoc) return { head: group.name, tail: null };
+  if (isLeftoversGroup(group)) return { head: dishLabel(group), tail: null };
+  return joinFoodNames(group.components.map((component) => component.item_name));
+}
+
+export function groupShortName(group: GroupView): JoinedName {
+  if (group.label && group.label.trim() !== '') return { head: group.label, tail: null };
+  if (group.ad_hoc) return { head: group.name, tail: null };
+  if (isLeftoversGroup(group)) return { head: dishLabel(group), tail: null };
+  const names = group.components.map((component) => component.item_name);
+  if (names.length <= 1) return { head: names[0] ?? group.name, tail: null };
+  return { head: names[0]!, tail: `+${names.length - 1}` };
+}
+
+export function joinFoodNamesPlain(names: string[]): string {
+  const { head, tail } = joinFoodNames(names);
+  return tail ? `${head} ${tail}` : head;
+}
+
+export function groupFoodCaption(group: GroupView): string | null {
+  if (!group.label || group.label.trim() === '') return null;
+  if (group.components.length === 0) return null;
+  return joinFoodNamesPlain(group.components.map((component) => component.item_name));
+}
+
 export function cellSummary(occasion: OccasionView, members: PlannerMember[]): CellSummary {
   const [first, ...rest] = occasion.groups;
   const meta: CellMeta[] = [];
@@ -74,7 +111,8 @@ export function cellSummary(occasion: OccasionView, members: PlannerMember[]): C
   if (first?.cook_minutes) meta.push({ text: formatMinutes(first.cook_minutes), tone: 'quiet' });
   const toBuy = occasion.groups.reduce((total, group) => total + group.to_buy, 0);
   if (toBuy > 0) meta.push({ text: `${toBuy} to buy`, tone: 'buy' });
-  return { name: first?.name ?? 'Nothing planned', meta };
+  const name = first ? groupShortName(first) : { head: 'Nothing planned', tail: null };
+  return { name: name.head, tail: name.tail, meta };
 }
 
 export function occasionTitle(occasion: OccasionView): string {
@@ -195,20 +233,26 @@ export function groupCaption(group: GroupView): string | null {
 
 export function toNewGroupComponent(component: MealPlanComponent): NewGroupComponent | null {
   const amount = component.amount;
+  const cooking_servings = component.cooking_servings ?? null;
   switch (component.item_kind) {
     case 'product':
-      return { product_id: component.product_id, amount };
+      return { product_id: component.product_id, amount, cooking_servings };
     case 'recipe':
-      return { recipe_id: component.recipe_id, amount };
+      return { recipe_id: component.recipe_id, amount, cooking_servings };
     case 'dish':
-      return { dish_recipe_id: component.dish_recipe_id, amount };
+      return { dish_recipe_id: component.dish_recipe_id, amount, cooking_servings };
     case 'ingredient':
-      return { ingredient_id: component.ingredient_id, amount };
+      return { ingredient_id: component.ingredient_id, amount, cooking_servings };
     case 'prepared_meal':
-      return { prepared_meal_id: component.prepared_meal_id, amount };
+      return { prepared_meal_id: component.prepared_meal_id, amount, cooking_servings };
     default:
       return null;
   }
+}
+
+export function toExistingGroupComponent(component: MealPlanComponent): NewGroupComponent | null {
+  const base = toNewGroupComponent(component);
+  return base ? { ...base, id: component.id } : null;
 }
 
 export function toNewGroup(group: GroupView): NewGroup {

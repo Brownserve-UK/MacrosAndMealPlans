@@ -23,9 +23,10 @@ pub use planning::{GuestChange, GuestMealTarget};
 mod view;
 
 pub use view::{
-    MealDiner, MealGroupView, MealItem, MealItemSource, MealOccasionView, MealParticipantView,
-    MealPlanComponentView, MealPlanDay, MealPlanEntryView, MealPlanWeek, MealSlotView, NeedsReview,
-    NutritionSummary, PlannerDay, PlannerMember, PlannerWeek,
+    CookingItemKind, CookingItemView, MealDiner, MealGroupView, MealItem, MealItemSource,
+    MealOccasionView, MealParticipantView, MealPlanComponentView, MealPlanDay, MealPlanEntryView,
+    MealPlanWeek, MealSlotView, NeedsReview, NutritionSummary, PlannerDay, PlannerMember,
+    PlannerWeek,
 };
 
 const PRODUCT: &str = "product";

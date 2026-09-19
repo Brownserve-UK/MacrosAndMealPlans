@@ -86,7 +86,6 @@ struct EntryRow {
     label: Option<String>,
     ad_hoc: Option<String>,
     everyone: bool,
-    cooking_servings: Option<i32>,
     created_by: Uuid,
     updated_by: Uuid,
     revision: i64,
@@ -121,6 +120,7 @@ struct ComponentRow {
     cholesterol_mg: Option<Decimal>,
     nutrition_extra: Option<Extra>,
     nutrition_quality: Option<String>,
+    cooking_servings: Option<i32>,
     revision: i64,
     display_order: Uuid,
 }
@@ -165,6 +165,7 @@ impl ComponentRow {
             amount: parse_amount(&self.amount_kind, self.amount_value, self.amount_unit)?,
             position: self.position,
             snapshot,
+            cooking_servings: self.cooking_servings,
             revision: Revision::new(self.revision),
             display_order: self.display_order,
         })
@@ -290,7 +291,6 @@ fn assemble(
         everyone: row.everyone,
         participants,
         guest_groups,
-        cooking_servings: row.cooking_servings,
         created_by: UserId::from(row.created_by),
         updated_by: UserId::from(row.updated_by),
         revision: Revision::new(row.revision),
@@ -305,12 +305,12 @@ const LIST_OCCASIONS: &str = "SELECT id, planned_on, slot, planned_time, note, c
 const LIST_OCCASIONS_THROUGH: &str = "SELECT id, planned_on, slot, planned_time, note, created_by, updated_by, revision, created_at, updated_at FROM meal_occasion WHERE planned_on <= $1 ORDER BY planned_on, CASE slot WHEN 'breakfast' THEN 0 WHEN 'lunch' THEN 1 WHEN 'dinner' THEN 2 ELSE 3 END";
 const LIST_ABSENCES: &str = "SELECT occasion_id, member_id, created_by, created_at FROM meal_occasion_absence WHERE occasion_id = ANY($1) ORDER BY occasion_id, created_at";
 
-const GET_ENTRY: &str = "SELECT e.id, e.occasion_id, o.planned_on, o.planned_time, o.slot, e.label, e.ad_hoc, e.everyone, e.cooking_servings, e.created_by, e.updated_by, e.revision, e.created_at, e.updated_at FROM meal_plan_entry e JOIN meal_occasion o ON o.id = e.occasion_id WHERE e.id = $1";
-const LIST_ENTRIES_FOR_OCCASIONS: &str = "SELECT e.id, e.occasion_id, o.planned_on, o.planned_time, o.slot, e.label, e.ad_hoc, e.everyone, e.cooking_servings, e.created_by, e.updated_by, e.revision, e.created_at, e.updated_at FROM meal_plan_entry e JOIN meal_occasion o ON o.id = e.occasion_id WHERE e.occasion_id = ANY($1) ORDER BY e.occasion_id, e.created_at, e.id";
-const LIST_ALL_ENTRIES: &str = "SELECT e.id, e.occasion_id, o.planned_on, o.planned_time, o.slot, e.label, e.ad_hoc, e.everyone, e.cooking_servings, e.created_by, e.updated_by, e.revision, e.created_at, e.updated_at FROM meal_plan_entry e JOIN meal_occasion o ON o.id = e.occasion_id WHERE o.planned_on >= $1 AND o.planned_on <= $2 ORDER BY o.planned_on, CASE o.slot WHEN 'breakfast' THEN 0 WHEN 'lunch' THEN 1 WHEN 'dinner' THEN 2 ELSE 3 END, o.planned_time NULLS LAST, e.created_at, e.id";
-const LIST_ALL_ENTRIES_THROUGH: &str = "SELECT e.id, e.occasion_id, o.planned_on, o.planned_time, o.slot, e.label, e.ad_hoc, e.everyone, e.cooking_servings, e.created_by, e.updated_by, e.revision, e.created_at, e.updated_at FROM meal_plan_entry e JOIN meal_occasion o ON o.id = e.occasion_id WHERE o.planned_on <= $1 ORDER BY o.planned_on, CASE o.slot WHEN 'breakfast' THEN 0 WHEN 'lunch' THEN 1 WHEN 'dinner' THEN 2 ELSE 3 END, o.planned_time NULLS LAST, e.created_at, e.id";
+const GET_ENTRY: &str = "SELECT e.id, e.occasion_id, o.planned_on, o.planned_time, o.slot, e.label, e.ad_hoc, e.everyone, e.created_by, e.updated_by, e.revision, e.created_at, e.updated_at FROM meal_plan_entry e JOIN meal_occasion o ON o.id = e.occasion_id WHERE e.id = $1";
+const LIST_ENTRIES_FOR_OCCASIONS: &str = "SELECT e.id, e.occasion_id, o.planned_on, o.planned_time, o.slot, e.label, e.ad_hoc, e.everyone, e.created_by, e.updated_by, e.revision, e.created_at, e.updated_at FROM meal_plan_entry e JOIN meal_occasion o ON o.id = e.occasion_id WHERE e.occasion_id = ANY($1) ORDER BY e.occasion_id, e.created_at, e.id";
+const LIST_ALL_ENTRIES: &str = "SELECT e.id, e.occasion_id, o.planned_on, o.planned_time, o.slot, e.label, e.ad_hoc, e.everyone, e.created_by, e.updated_by, e.revision, e.created_at, e.updated_at FROM meal_plan_entry e JOIN meal_occasion o ON o.id = e.occasion_id WHERE o.planned_on >= $1 AND o.planned_on <= $2 ORDER BY o.planned_on, CASE o.slot WHEN 'breakfast' THEN 0 WHEN 'lunch' THEN 1 WHEN 'dinner' THEN 2 ELSE 3 END, o.planned_time NULLS LAST, e.created_at, e.id";
+const LIST_ALL_ENTRIES_THROUGH: &str = "SELECT e.id, e.occasion_id, o.planned_on, o.planned_time, o.slot, e.label, e.ad_hoc, e.everyone, e.created_by, e.updated_by, e.revision, e.created_at, e.updated_at FROM meal_plan_entry e JOIN meal_occasion o ON o.id = e.occasion_id WHERE o.planned_on <= $1 ORDER BY o.planned_on, CASE o.slot WHEN 'breakfast' THEN 0 WHEN 'lunch' THEN 1 WHEN 'dinner' THEN 2 ELSE 3 END, o.planned_time NULLS LAST, e.created_at, e.id";
 
-const LIST_COMPONENTS: &str = "SELECT id, entry_id, position, item_kind, product_id, recipe_id, ingredient_id, prepared_meal_id, amount_kind, amount_value, amount_unit, frozen_item_name, nutrition_basis_amount, nutrition_basis_unit, energy_kcal, protein_g, carbohydrate_g, sugar_g, fat_g, saturated_fat_g, fibre_g, salt_g, cholesterol_mg, nutrition_extra, nutrition_quality, revision, display_order FROM meal_plan_component WHERE entry_id = ANY($1) ORDER BY entry_id, position";
+const LIST_COMPONENTS: &str = "SELECT id, entry_id, position, item_kind, product_id, recipe_id, ingredient_id, prepared_meal_id, amount_kind, amount_value, amount_unit, frozen_item_name, nutrition_basis_amount, nutrition_basis_unit, energy_kcal, protein_g, carbohydrate_g, sugar_g, fat_g, saturated_fat_g, fibre_g, salt_g, cholesterol_mg, nutrition_extra, nutrition_quality, cooking_servings, revision, display_order FROM meal_plan_component WHERE entry_id = ANY($1) ORDER BY entry_id, position";
 const LIST_PARTICIPANTS: &str = "SELECT id, entry_id, member_id, note, revision, created_at, updated_at FROM meal_plan_participant WHERE entry_id = ANY($1) ORDER BY entry_id, created_at, id";
 const LIST_ALLOCATIONS: &str = "SELECT id, participant_id, component_id, allocated_kind, allocated_value, allocated_unit, status, consumption_record_id, resolved_by, resolved_at FROM meal_plan_participant_allocation WHERE participant_id = ANY($1)";
 const LIST_GUEST_GROUPS: &str = "SELECT id, entry_id, guest_count, name, note, revision, created_at, updated_at FROM meal_guest_group WHERE entry_id = ANY($1) ORDER BY entry_id, created_at, id";
@@ -996,13 +996,12 @@ async fn upsert_group_full(
     entry: &MealPlanEntry,
 ) -> Result<()> {
     let affected = sqlx::query(
-        "UPDATE meal_plan_entry SET label = $2, ad_hoc = $3, everyone = $4, cooking_servings = $5, updated_by = $6, revision = $7, updated_at = $8 WHERE id = $1",
+        "UPDATE meal_plan_entry SET label = $2, ad_hoc = $3, everyone = $4, updated_by = $5, revision = $6, updated_at = $7 WHERE id = $1",
     )
     .bind(entry.id.as_uuid())
     .bind(&entry.label)
     .bind(entry.ad_hoc.map(|kind| kind.code()))
     .bind(entry.everyone)
-    .bind(entry.cooking_servings)
     .bind(entry.updated_by.as_uuid())
     .bind(entry.revision.get())
     .bind(entry.updated_at)
@@ -1059,14 +1058,13 @@ async fn archive_consumption(
 
 async fn insert_entry(tx: &mut Transaction<'_, Postgres>, entry: &MealPlanEntry) -> Result<()> {
     sqlx::query(
-        "INSERT INTO meal_plan_entry (id, occasion_id, label, ad_hoc, everyone, cooking_servings, created_by, updated_by, revision, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
+        "INSERT INTO meal_plan_entry (id, occasion_id, label, ad_hoc, everyone, created_by, updated_by, revision, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
     )
     .bind(entry.id.as_uuid())
     .bind(entry.occasion_id.as_uuid())
     .bind(&entry.label)
     .bind(entry.ad_hoc.map(|kind| kind.code()))
     .bind(entry.everyone)
-    .bind(entry.cooking_servings)
     .bind(entry.created_by.as_uuid())
     .bind(entry.updated_by.as_uuid())
     .bind(entry.revision.get())
@@ -1084,13 +1082,12 @@ async fn update_entry(
     expected: Revision,
 ) -> Result<UpdateOutcome> {
     let affected = sqlx::query(
-        "UPDATE meal_plan_entry SET label = $2, ad_hoc = $3, everyone = $4, cooking_servings = $5, updated_by = $6, revision = $7, updated_at = $8 WHERE id = $1 AND revision = $9",
+        "UPDATE meal_plan_entry SET label = $2, ad_hoc = $3, everyone = $4, updated_by = $5, revision = $6, updated_at = $7 WHERE id = $1 AND revision = $8",
     )
     .bind(entry.id.as_uuid())
     .bind(&entry.label)
     .bind(entry.ad_hoc.map(|kind| kind.code()))
     .bind(entry.everyone)
-    .bind(entry.cooking_servings)
     .bind(entry.updated_by.as_uuid())
     .bind(entry.revision.get())
     .bind(entry.updated_at)
@@ -1234,7 +1231,7 @@ async fn insert_components(
         let (kind, value, unit) = amount_bindings(&component.amount);
         let (item_kind, item_product_id, item_recipe_id, item_ingredient_id, item_prepared_meal_id) =
             item_bindings(&component.item);
-        sqlx::query("INSERT INTO meal_plan_component (id, entry_id, position, product_id, amount_kind, amount_value, amount_unit, revision, display_order, item_kind, recipe_id, ingredient_id, prepared_meal_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)")
+        sqlx::query("INSERT INTO meal_plan_component (id, entry_id, position, product_id, amount_kind, amount_value, amount_unit, revision, display_order, item_kind, recipe_id, ingredient_id, prepared_meal_id, cooking_servings) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)")
             .bind(component.id.as_uuid())
             .bind(entry.id.as_uuid())
             .bind(component.position)
@@ -1248,6 +1245,7 @@ async fn insert_components(
             .bind(item_recipe_id)
             .bind(item_ingredient_id)
             .bind(item_prepared_meal_id)
+            .bind(component.cooking_servings)
             .execute(&mut **tx)
             .await
             .map_err(|error| map_db_error(error, "creating a meal plan component"))?;

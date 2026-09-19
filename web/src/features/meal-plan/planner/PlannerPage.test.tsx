@@ -34,6 +34,8 @@ vi.mock('../../../api/queries', () => ({
   useSplitPlannerGuests: mocks.idle,
   useUpdateOccasion: mocks.idle,
   useUpdateGroup: mocks.idle,
+  useDeleteGroup: mocks.idle,
+  useCreateMealTemplateFromEntry: mocks.idle,
   useSetAttendance: mocks.idle,
   useRecipes: mocks.noItems,
   useMealTemplates: mocks.noItems,

@@ -348,14 +348,19 @@ pub fn diners_for(
 }
 
 pub fn rescale_recipe_components(group: &mut MealPlanEntry) {
-    let servings = Decimal::from(group.effective_cooking_servings().max(0));
-    if servings.is_zero() {
-        return;
-    }
+    let serves = group.serves().max(0);
     for component in &mut group.components {
-        if matches!(component.item, crate::domain::MealItemRef::Recipe { .. }) {
-            component.amount = ConsumedAmount::Servings(servings);
+        if !matches!(component.item, crate::domain::MealItemRef::Recipe { .. }) {
+            continue;
         }
+        if component.cooking_servings.is_some() {
+            continue;
+        }
+        let servings = Decimal::from(serves);
+        if servings.is_zero() {
+            continue;
+        }
+        component.amount = ConsumedAmount::Servings(servings);
     }
 }
 

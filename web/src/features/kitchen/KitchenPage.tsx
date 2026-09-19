@@ -100,7 +100,7 @@ function cookOf(item: Cookable): PlannedCook | null {
     componentId: recipe.id,
     recipeId: recipe.recipe_id,
     name: item.group.name,
-    planned: item.group.effective_cooking_servings,
+    planned: recipe.effective_cooking_servings,
   };
 }
 
@@ -123,10 +123,11 @@ function DayLabel({ date }: { date: string }) {
 }
 
 function Caption({ item, withTime }: { item: Cookable; withTime: boolean }) {
+  const planned = item.recipe?.effective_cooking_servings ?? item.group.components[0]?.effective_cooking_servings ?? item.group.serves;
   const parts = [
     labelForSlot(item.occasion.slot),
     withTime ? item.occasion.effective_time : null,
-    `cooking ${item.group.effective_cooking_servings}`,
+    `cooking ${planned}`,
     item.group.cook_minutes ? formatMinutes(item.group.cook_minutes) : null,
   ].filter((part): part is string => Boolean(part));
   return (

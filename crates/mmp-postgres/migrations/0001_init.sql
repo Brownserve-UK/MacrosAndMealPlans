@@ -442,7 +442,6 @@ CREATE TABLE meal_plan_entry (
     label             TEXT,
     ad_hoc            TEXT,
     everyone          BOOLEAN NOT NULL DEFAULT TRUE,
-    cooking_servings  INTEGER,
     created_by        UUID NOT NULL REFERENCES app_user (id) ON DELETE RESTRICT,
     updated_by        UUID NOT NULL REFERENCES app_user (id) ON DELETE RESTRICT,
     revision          BIGINT NOT NULL DEFAULT 1,
@@ -452,9 +451,7 @@ CREATE TABLE meal_plan_entry (
     CONSTRAINT meal_plan_entry_ad_hoc_valid
         CHECK (ad_hoc IS NULL OR ad_hoc IN ('eating_out', 'takeaway', 'fend_for_yourself')),
     CONSTRAINT meal_plan_entry_label_not_blank
-        CHECK (label IS NULL OR btrim(label) <> ''),
-    CONSTRAINT meal_plan_entry_cooking_servings_positive
-        CHECK (cooking_servings IS NULL OR cooking_servings > 0)
+        CHECK (label IS NULL OR btrim(label) <> '')
 );
 
 CREATE TABLE meal_plan_component (
@@ -483,6 +480,7 @@ CREATE TABLE meal_plan_component (
     cholesterol_mg      NUMERIC(12, 3),
     nutrition_extra     JSONB,
     nutrition_quality   TEXT,
+    cooking_servings    INTEGER,
     revision        BIGINT NOT NULL DEFAULT 1,
     display_order   UUID NOT NULL,
 
@@ -538,6 +536,8 @@ CREATE TABLE meal_plan_component (
         CHECK (salt_g IS NULL OR salt_g >= 0),
     CONSTRAINT meal_plan_component_cholesterol_non_negative
         CHECK (cholesterol_mg IS NULL OR cholesterol_mg >= 0),
+    CONSTRAINT meal_plan_component_cooking_servings_positive
+        CHECK (cooking_servings IS NULL OR cooking_servings > 0),
     CONSTRAINT meal_plan_component_entry_id_position_unique UNIQUE (entry_id, position),
     CONSTRAINT meal_plan_component_entry_id_id_unique UNIQUE (entry_id, id)
 );

@@ -15,6 +15,8 @@ vi.mock('../../../api/queries', () => ({
   useUpdateOccasion: mocks.idle,
   useAddGroup: mocks.idle,
   useUpdateGroup: () => ({ mutateAsync: mocks.updateGroup, isPending: false }),
+  useDeleteGroup: mocks.idle,
+  useCreateMealTemplateFromEntry: mocks.idle,
   useSetAttendance: () => ({ mutateAsync: mocks.setAttendance, isPending: false }),
   useAddPlannerGuest: () => ({ mutateAsync: mocks.addGuest, isPending: false }),
   useChangePlannerGuest: () => ({ mutateAsync: mocks.changeGuest, isPending: false }),
@@ -40,8 +42,6 @@ const curry = occasion({
         { member_id: 'jack', name: 'Jack', note: null },
       ],
       serves: 3,
-      effective_cooking_servings: 5,
-      cooking_servings: 5,
       to_buy: 0,
     }),
   ],
@@ -65,7 +65,6 @@ describe('OccasionCard', () => {
     expect(screen.getByText('1 still to sort')).toBeInTheDocument();
     expect(screen.getByText('Needs a meal')).toBeInTheDocument();
     expect(screen.getByText('· mild')).toBeInTheDocument();
-    expect(screen.getByText('3 eating, +2 spare', { exact: false })).toBeInTheDocument();
 
     const user = userEvent.setup();
     await user.click(screen.getByRole('button', { name: 'Change what Sarah is eating' }));
@@ -151,7 +150,6 @@ describe('OccasionCard', () => {
           everyone: false,
           participants: [{ member_id: 'jack', name: 'Jack', note: null }],
           serves: 1,
-          effective_cooking_servings: 1,
         }),
       ],
     });
@@ -222,5 +220,61 @@ describe('OccasionCard', () => {
     await user.click(screen.getByRole('button', { name: 'Add a variation' }));
     await user.type(screen.getByRole('textbox', { name: 'How Alex has it' }), 'no chilli{Enter}');
     expect(mocks.changeGuest).toHaveBeenCalledWith({ occasionId: 'occasion-1', guestId: 'alex', revision: withGuest.revision, note: 'no chilli' });
+  });
+
+  it('shows a shared food once, added up, with a for column when two meals share it', () => {
+    const pizzaComponent = {
+      id: 'chips-a',
+      item_kind: 'product' as const,
+      product_id: 'chips',
+      item_name: 'Sample Oven Chips',
+      amount: { kind: 'measure' as const, value: 150, unit: 'g' as const },
+      nutrition: {},
+      quality: 'known' as const,
+      preparation: { prepared: { kind: 'measure' as const, value: '150', unit: 'g' as const }, shortage: false },
+      status: 'planned' as const,
+      subject_status: 'planned' as const,
+      position: 0,
+      effective_cooking_servings: 1,
+      revision: 1,
+      needs_cooking: false,
+    };
+    const shared = occasion({
+      groups: [
+        group({ id: 'pizza', name: 'Pizza & chips', everyone: false, components: [pizzaComponent] }),
+        group({ id: 'lasagne', name: 'Lasagne & chips', everyone: false, components: [pizzaComponent] }),
+      ],
+      cooking: [
+        {
+          item_kind: 'product',
+          product_id: 'chips',
+          name: 'Sample Oven Chips',
+          kind: 'food',
+          amount: { kind: 'measure', value: '300', unit: 'g' },
+          member_ids: ['steve', 'emily'],
+          group_ids: ['pizza', 'lasagne'],
+        },
+      ],
+    });
+    render(<OccasionCard occasion={shared} week={week([shared])} sheet={false} onClose={vi.fn()} onMove={vi.fn()} onCopy={vi.fn()} onDelete={vi.fn()} />);
+    expect(screen.getByText('Sample Oven Chips')).toBeInTheDocument();
+    expect(screen.getByText('2 meals')).toBeInTheDocument();
+    expect(screen.getByText('300')).toBeInTheDocument();
+  });
+
+  it('opens the meal sheet from Edit this meal and lets you take food out', async () => {
+    render(
+      <OccasionCard occasion={curry} week={week([curry])} sheet={false} onClose={vi.fn()} onMove={vi.fn()} onCopy={vi.fn()} onDelete={vi.fn()} />,
+    );
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Change what Emily is eating' }));
+    await user.click(screen.getByRole('button', { name: 'Edit this meal' }));
+
+    expect(screen.getByRole('heading', { name: 'Chicken curry' })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Take Chicken curry out of this meal' }));
+    expect(mocks.updateGroup).toHaveBeenCalledWith({
+      id: 'curry',
+      body: { components: [], revision: curry.groups[0]!.revision },
+    });
   });
 });

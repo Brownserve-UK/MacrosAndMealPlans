@@ -1336,6 +1336,7 @@ fn meal_plan_group(
             amount,
             position: 0,
             snapshot: None,
+            cooking_servings: None,
             revision: Revision::INITIAL,
             display_order: Uuid::now_v7(),
         }],
@@ -1358,7 +1359,6 @@ fn meal_plan_group(
             updated_at: now,
         }],
         guest_groups: Vec::new(),
-        cooking_servings: None,
         created_by: actor_id,
         updated_by: actor_id,
         revision: Revision::INITIAL,
@@ -2009,6 +2009,7 @@ async fn updating_a_meal_plan_entry_replaces_its_components(pool: PgPool) {
             amount: ConsumedAmount::Servings(Decimal::new(2, 0)),
             position: 0,
             snapshot: None,
+            cooking_servings: None,
             revision: Revision::INITIAL,
             display_order: Uuid::now_v7(),
         },
@@ -2018,6 +2019,7 @@ async fn updating_a_meal_plan_entry_replaces_its_components(pool: PgPool) {
             amount: ConsumedAmount::Servings(Decimal::new(1, 0)),
             position: 1,
             snapshot: None,
+            cooking_servings: None,
             revision: Revision::INITIAL,
             display_order: Uuid::now_v7(),
         },
@@ -3258,6 +3260,7 @@ async fn round_trips_a_meal_plan_entry_with_a_recipe_component(pool: PgPool) {
         amount: ConsumedAmount::Servings(Decimal::new(2, 0)),
         position: 0,
         snapshot: None,
+        cooking_servings: None,
         revision: Revision::INITIAL,
         display_order: Uuid::now_v7(),
     }];
@@ -3274,6 +3277,41 @@ async fn round_trips_a_meal_plan_entry_with_a_recipe_component(pool: PgPool) {
 }
 
 #[sqlx::test]
+async fn a_component_s_cooking_servings_round_trips(pool: PgPool) {
+    let (member_id, product_id, actor_id) = seed_meal_plan_dependencies(&pool).await;
+    let recipes = PgRecipeRepository::new(pool.clone());
+    let dish = recipe(actor_id, vec![recipe_component(product_id, 0)]);
+    recipes.insert(&dish).await.unwrap();
+
+    let occasion = seed_dinner_occasion(&pool, actor_id).await;
+    let repo = PgMealPlanRepository::new(pool.clone());
+    let mut entry = meal_plan_group(&occasion, member_id, product_id, actor_id);
+    entry.components = vec![MealPlanComponent {
+        id: MealPlanComponentId::new(),
+        item: MealItemRef::recipe(dish.id),
+        amount: ConsumedAmount::Servings(Decimal::new(6, 0)),
+        position: 0,
+        snapshot: None,
+        cooking_servings: Some(6),
+        revision: Revision::INITIAL,
+        display_order: Uuid::now_v7(),
+    }];
+    entry.participants.clear();
+    repo.insert(&entry).await.unwrap();
+
+    let loaded = repo.get(entry.id).await.unwrap().unwrap();
+    assert_eq!(loaded.components[0].cooking_servings, Some(6));
+
+    let mut updated = loaded.clone();
+    updated.components[0].cooking_servings = None;
+    updated.revision = updated.revision.next();
+    repo.update(&updated, loaded.revision).await.unwrap();
+
+    let reloaded = repo.get(entry.id).await.unwrap().unwrap();
+    assert_eq!(reloaded.components[0].cooking_servings, None);
+}
+
+#[sqlx::test]
 async fn a_recipe_component_referencing_a_missing_recipe_is_rejected(pool: PgPool) {
     let (member_id, product_id, actor_id) = seed_meal_plan_dependencies(&pool).await;
     let occasion = seed_dinner_occasion(&pool, actor_id).await;
@@ -3285,6 +3323,7 @@ async fn a_recipe_component_referencing_a_missing_recipe_is_rejected(pool: PgPoo
         amount: ConsumedAmount::Servings(Decimal::ONE),
         position: 0,
         snapshot: None,
+        cooking_servings: None,
         revision: Revision::INITIAL,
         display_order: Uuid::now_v7(),
     }];

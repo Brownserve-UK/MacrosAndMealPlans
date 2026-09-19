@@ -8,9 +8,10 @@ use mmp_core::domain::{
     direction_for,
 };
 use mmp_core::services::{
-    MealDiner, MealGroupView, MealItem, MealItemSource, MealOccasionView, MealParticipantView,
-    MealPlanComponentView, MealPlanDay, MealPlanEntryView, MealPlanWeek, MealSlotView,
-    NutritionSummary, PlannerDay, PlannerMember, PlannerWeek, StockAffected,
+    CookingItemKind, CookingItemView, MealDiner, MealGroupView, MealItem, MealItemSource,
+    MealOccasionView, MealParticipantView, MealPlanComponentView, MealPlanDay, MealPlanEntryView,
+    MealPlanWeek, MealSlotView, NutritionSummary, PlannerDay, PlannerMember, PlannerWeek,
+    StockAffected,
 };
 use rust_decimal::Decimal;
 use rust_decimal::prelude::ToPrimitive;
@@ -246,6 +247,9 @@ pub struct MealPlanComponentDto {
     pub status: MealPlanStatus,
     pub subject_status: MealPlanStatus,
     pub preparation: ComponentPreparationDto,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cooking_servings: Option<i32>,
+    pub effective_cooking_servings: i32,
     pub revision: i64,
     pub needs_cooking: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -254,8 +258,8 @@ pub struct MealPlanComponentDto {
     pub consumption_record: Option<ConsumptionRecordDto>,
 }
 
-impl From<MealPlanComponentView> for MealPlanComponentDto {
-    fn from(value: MealPlanComponentView) -> Self {
+impl MealPlanComponentDto {
+    pub fn build(value: MealPlanComponentView, entry_serves: i32) -> Self {
         Self {
             id: value.component.id.as_uuid(),
             item: value.component.item.into(),
@@ -267,6 +271,8 @@ impl From<MealPlanComponentView> for MealPlanComponentDto {
             status: value.status,
             subject_status: value.subject_status,
             preparation: value.preparation.into(),
+            cooking_servings: value.component.cooking_servings,
+            effective_cooking_servings: value.component.effective_cooking_servings(entry_serves),
             revision: value.component.revision.get(),
             needs_cooking: value.component.item.is_recipe() && value.cooked.is_none(),
             cooked: value.cooked.as_ref().map(|batch| CookedDto {
@@ -323,8 +329,6 @@ pub struct MealPlanEntryDto {
     pub slot: MealSlot,
     pub status: MealPlanStatus,
     pub components: Vec<MealPlanComponentDto>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cooking_servings: Option<i32>,
     pub planned: NutritionSummaryDto,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub actual: Option<NutritionSummaryDto>,
@@ -344,6 +348,7 @@ pub struct MealPlanEntryDto {
 
 impl From<MealPlanEntryView> for MealPlanEntryDto {
     fn from(value: MealPlanEntryView) -> Self {
+        let entry_serves = value.entry.serves();
         Self {
             id: value.entry.id.as_uuid(),
             occasion_id: value.entry.occasion_id.as_uuid(),
@@ -363,8 +368,11 @@ impl From<MealPlanEntryView> for MealPlanEntryDto {
             planned_time: value.entry.planned_time,
             slot: value.entry.slot,
             status: value.status,
-            components: value.components.into_iter().map(Into::into).collect(),
-            cooking_servings: value.entry.cooking_servings,
+            components: value
+                .components
+                .into_iter()
+                .map(|component| MealPlanComponentDto::build(component, entry_serves))
+                .collect(),
             planned: value.planned.into(),
             actual: value.actual.map(Into::into),
             needs_attention: value.needs_attention,
@@ -589,6 +597,8 @@ pub struct MealPlanComponentRequest {
     #[serde(flatten)]
     pub item: ItemRefRequest,
     pub amount: AmountDto,
+    #[serde(default)]
+    pub cooking_servings: Option<i32>,
 }
 
 impl From<MealPlanComponentRequest> for NewMealPlanComponent {
@@ -597,6 +607,7 @@ impl From<MealPlanComponentRequest> for NewMealPlanComponent {
             id: value.id.map(Into::into),
             item: value.item.into(),
             amount: value.amount.into(),
+            cooking_servings: value.cooking_servings,
         }
     }
 }
@@ -790,17 +801,22 @@ fn default_true() -> bool {
 
 #[derive(Debug, Clone, Deserialize, ToSchema)]
 pub struct NewGroupComponentRequest {
+    #[serde(default)]
+    pub id: Option<Uuid>,
     #[serde(flatten)]
     pub item: ItemRefRequest,
     pub amount: AmountDto,
+    #[serde(default)]
+    pub cooking_servings: Option<i32>,
 }
 
 impl From<NewGroupComponentRequest> for NewMealPlanComponent {
     fn from(value: NewGroupComponentRequest) -> Self {
         Self {
-            id: None,
+            id: value.id.map(Into::into),
             item: value.item.into(),
             amount: value.amount.into(),
+            cooking_servings: value.cooking_servings,
         }
     }
 }
@@ -850,8 +866,6 @@ pub struct NewGroupRequest {
     pub participants: Vec<NewGroupParticipantRequest>,
     #[serde(default)]
     pub guest_count: i32,
-    #[serde(default)]
-    pub cooking_servings: Option<i32>,
 }
 
 impl NewGroupRequest {
@@ -864,7 +878,6 @@ impl NewGroupRequest {
             everyone: self.everyone,
             participants: self.participants.into_iter().map(Into::into).collect(),
             guest_groups: guest_groups_of(self.guest_count),
-            cooking_servings: self.cooking_servings,
         }
     }
 }
@@ -952,9 +965,6 @@ pub struct GroupPatchRequest {
     pub participants: Option<Vec<NewGroupParticipantRequest>>,
     #[serde(default)]
     pub guest_count: Option<i32>,
-    #[serde(default)]
-    #[schema(value_type = Option<i32>)]
-    pub cooking_servings: Patch<i32>,
 }
 
 impl GroupPatchRequest {
@@ -970,7 +980,6 @@ impl GroupPatchRequest {
                 .participants
                 .map(|participants| participants.into_iter().map(Into::into).collect()),
             guest_groups: self.guest_count.map(guest_groups_of),
-            cooking_servings: patch_option(self.cooking_servings),
         }
     }
 }
@@ -1042,8 +1051,6 @@ pub struct GroupViewDto {
     pub guest_count: i32,
     pub guests: Vec<PlannerGuestDto>,
     pub serves: i32,
-    pub cooking_servings: Option<i32>,
-    pub effective_cooking_servings: i32,
     pub cook_minutes: Option<i32>,
     pub to_buy: i64,
     pub leftover_servings_available: Option<f64>,
@@ -1052,12 +1059,18 @@ pub struct GroupViewDto {
 
 impl GroupViewDto {
     pub fn build(value: MealGroupView, to_buy: i64) -> Self {
+        let entry_serves = value.serves;
         Self {
             id: value.entry.entry.id.as_uuid(),
             name: value.name,
             label: value.entry.entry.label.clone(),
             ad_hoc: value.entry.entry.ad_hoc,
-            components: value.entry.components.into_iter().map(Into::into).collect(),
+            components: value
+                .entry
+                .components
+                .into_iter()
+                .map(|component| MealPlanComponentDto::build(component, entry_serves))
+                .collect(),
             everyone: value.entry.entry.everyone,
             participants: value.diners.into_iter().map(Into::into).collect(),
             guest_count: value.guest_count,
@@ -1072,14 +1085,64 @@ impl GroupViewDto {
                 })
                 .collect(),
             serves: value.serves,
-            cooking_servings: value.cooking_servings,
-            effective_cooking_servings: value.effective_cooking_servings,
             cook_minutes: value.cook_minutes,
             to_buy,
             leftover_servings_available: value
                 .leftover_servings_available
                 .and_then(|amount| amount.to_f64()),
             revision: value.entry.entry.revision.get(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum CookingItemKindDto {
+    Recipe,
+    Food,
+    CookedFood,
+}
+
+impl From<CookingItemKind> for CookingItemKindDto {
+    fn from(value: CookingItemKind) -> Self {
+        match value {
+            CookingItemKind::Recipe => Self::Recipe,
+            CookingItemKind::Food => Self::Food,
+            CookingItemKind::CookedFood => Self::CookedFood,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct CookingItemDto {
+    #[serde(flatten)]
+    pub item: MealItemRefDto,
+    pub name: String,
+    pub kind: CookingItemKindDto,
+    pub amount: AmountSummaryDto,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extra_servings: Option<i32>,
+    pub member_ids: Vec<Uuid>,
+    pub group_ids: Vec<Uuid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cook_minutes: Option<i32>,
+}
+
+impl From<CookingItemView> for CookingItemDto {
+    fn from(value: CookingItemView) -> Self {
+        Self {
+            item: value.item.into(),
+            name: value.name,
+            kind: value.kind.into(),
+            amount: value.amount.into(),
+            extra_servings: value.extra_servings.and_then(|extra| extra.to_i32()),
+            member_ids: value
+                .member_ids
+                .into_iter()
+                .map(|id| id.as_uuid())
+                .collect(),
+            group_ids: value.group_ids.into_iter().map(|id| id.as_uuid()).collect(),
+            cook_minutes: value.cook_minutes,
         }
     }
 }
@@ -1099,6 +1162,7 @@ pub struct OccasionViewDto {
     pub effective_time: Option<Time>,
     pub note: Option<String>,
     pub groups: Vec<GroupViewDto>,
+    pub cooking: Vec<CookingItemDto>,
     pub absent_member_ids: Vec<Uuid>,
     pub unaccounted_member_ids: Vec<Uuid>,
     pub revision: i64,
@@ -1113,6 +1177,7 @@ impl OccasionViewDto {
             planned_time: value.occasion.planned_time,
             effective_time: value.effective_time,
             note: value.occasion.note.clone(),
+            cooking: value.cooking.into_iter().map(Into::into).collect(),
             groups: value
                 .groups
                 .into_iter()

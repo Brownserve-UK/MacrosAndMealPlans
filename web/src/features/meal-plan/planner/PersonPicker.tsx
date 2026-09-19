@@ -1,13 +1,14 @@
 import CheckIcon from '@mui/icons-material/CheckOutlined';
 import CloseIcon from '@mui/icons-material/CloseOutlined';
 import EditIcon from '@mui/icons-material/EditOutlined';
+import ListAltIcon from '@mui/icons-material/ListAltOutlined';
 import Drawer from '@mui/material/Drawer';
 import Popover from '@mui/material/Popover';
 import Stack from '@mui/material/Stack';
 import type { KeyboardEvent, ReactNode } from 'react';
 import { useMemo, useState } from 'react';
 import { PickerPromptStep, PickerRowButton, PickerSearchField, SectionHeading, type PickerRowContent } from './pickerParts';
-import { conceptFor, dishLabel, type MemberStatus, memberVariation } from './plannerWeek';
+import { conceptFor, groupDisplayName, groupFoodCaption, groupShortName, type MemberStatus, memberVariation } from './plannerWeek';
 import type { GroupView, NewGroup, PlannerMember } from './types';
 import { leftoversRow, useFridgeDishes, usePickerRows } from './usePickerRows';
 
@@ -27,6 +28,7 @@ function PersonPickerBody({
   onElsewhere,
   onAddFor,
   onVariation,
+  onEditMeal,
   onClose,
 }: {
   member: PlannerMember;
@@ -36,6 +38,7 @@ function PersonPickerBody({
   onElsewhere: () => void;
   onAddFor: (group: NewGroup) => void;
   onVariation: (group: GroupView, note: string | null) => void;
+  onEditMeal: (group: GroupView) => void;
   onClose: () => void;
 }) {
   const [query, setQuery] = useState('');
@@ -50,14 +53,20 @@ function PersonPickerBody({
 
   const thisMeal = useMemo<Row[]>(
     () =>
-      groups.map((group) => ({
-        key: `group:${group.id}`,
-        title: dishLabel(group),
-        caption: null,
-        concept: conceptFor(group),
-        ticked: group.id === currentGroupId,
-        onSelect: () => onRetick(group),
-      })),
+      groups.map((group) => {
+        const name = groupShortName(group);
+        const full = groupDisplayName(group);
+        const joined = full.tail ? `${full.head} ${full.tail}` : full.head;
+        const short = name.tail ? `${name.head} ${name.tail}` : name.head;
+        return {
+          key: `group:${group.id}`,
+          title: short,
+          caption: groupFoodCaption(group) ?? (joined === short ? null : joined),
+          concept: conceptFor(group),
+          ticked: group.id === currentGroupId,
+          onSelect: () => onRetick(group),
+        };
+      }),
     [groups, currentGroupId, onRetick],
   );
 
@@ -108,6 +117,24 @@ function PersonPickerBody({
     ];
   }, [typed, dishes, onElsewhere, onAddFor]);
 
+  const editRow = useMemo<Row[]>(() => {
+    if (typed || status.kind !== 'eating') return [];
+    const group = status.group;
+    return [
+      {
+        key: 'edit-meal',
+        title: 'Edit this meal',
+        caption: null,
+        concept: 'meal',
+        icon: <ListAltIcon sx={{ fontSize: 16 }} />,
+        onSelect: () => {
+          onEditMeal(group);
+          onClose();
+        },
+      },
+    ];
+  }, [typed, status, onEditMeal, onClose]);
+
   const variationRows = useMemo<Row[]>(() => {
     if (typed || status.kind !== 'eating') return [];
     const group = status.group;
@@ -135,7 +162,7 @@ function PersonPickerBody({
     return rowsArr;
   }, [typed, status, note, onVariation]);
 
-  const visible = typed ? found : [...thisMeal, ...quick, ...variationRows];
+  const visible = typed ? found : [...thisMeal, ...quick, ...editRow, ...variationRows];
   const current = Math.min(selected, Math.max(0, visible.length - 1));
 
   function keyDown(event: KeyboardEvent<HTMLInputElement>) {
@@ -212,11 +239,21 @@ function PersonPickerBody({
                 </>
               ) : null}
 
-              {variationRows.map((row, index) => (
+              {editRow.map((row, index) => (
                 <PickerRowButton
                   key={row.key}
                   row={row}
                   selected={thisMeal.length + quick.length + index === current}
+                  icon={row.icon}
+                  onPick={row.onSelect}
+                />
+              ))}
+
+              {variationRows.map((row, index) => (
+                <PickerRowButton
+                  key={row.key}
+                  row={row}
+                  selected={thisMeal.length + quick.length + editRow.length + index === current}
                   icon={row.icon}
                   danger={row.danger}
                   onPick={row.onSelect}
@@ -239,6 +276,7 @@ export function PersonPicker({
   onElsewhere,
   onAddFor,
   onVariation,
+  onEditMeal,
   onClose,
 }: {
   open: boolean;
@@ -251,6 +289,7 @@ export function PersonPicker({
   onElsewhere: () => void;
   onAddFor: (group: NewGroup) => void;
   onVariation: (group: GroupView, note: string | null) => void;
+  onEditMeal: (group: GroupView) => void;
   onClose: () => void;
 }) {
   const body =
@@ -263,6 +302,7 @@ export function PersonPicker({
         onElsewhere={onElsewhere}
         onAddFor={onAddFor}
         onVariation={onVariation}
+        onEditMeal={onEditMeal}
         onClose={onClose}
       />
     ) : null;

@@ -149,8 +149,15 @@ pub struct MealPlanComponent {
     pub amount: ConsumedAmount,
     pub position: i32,
     pub snapshot: Option<MealPlanComponentSnapshot>,
+    pub cooking_servings: Option<i32>,
     pub revision: Revision,
     pub display_order: Uuid,
+}
+
+impl MealPlanComponent {
+    pub fn effective_cooking_servings(&self, entry_serves: i32) -> i32 {
+        self.cooking_servings.unwrap_or(entry_serves)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -327,7 +334,6 @@ pub struct MealPlanEntry {
     pub everyone: bool,
     pub participants: Vec<MealParticipant>,
     pub guest_groups: Vec<MealGuestGroup>,
-    pub cooking_servings: Option<i32>,
     pub created_by: UserId,
     pub updated_by: UserId,
     pub revision: Revision,
@@ -353,10 +359,6 @@ impl MealPlanEntry {
         i32::try_from(self.participants.len()).unwrap_or(i32::MAX) + self.guest_count()
     }
 
-    pub fn effective_cooking_servings(&self) -> i32 {
-        self.cooking_servings.unwrap_or_else(|| self.serves())
-    }
-
     pub fn is_cooked(&self) -> bool {
         self.ad_hoc.is_none()
             && self
@@ -374,7 +376,7 @@ impl MealPlanEntry {
                 .all(|component| matches!(component.item, MealItemRef::Dish { .. }))
     }
 
-    pub fn display_name(&self, first_component_name: impl FnOnce() -> String) -> String {
+    pub fn display_name(&self, component_names: impl FnOnce() -> Vec<String>) -> String {
         if let Some(label) = self
             .label
             .as_deref()
@@ -385,7 +387,7 @@ impl MealPlanEntry {
         if let Some(kind) = self.ad_hoc {
             return kind.label().to_owned();
         }
-        first_component_name()
+        join_food_names(component_names())
     }
 
     pub fn has_resolved_allocations(&self) -> bool {
@@ -420,6 +422,16 @@ impl MealPlanEntry {
     }
 }
 
+pub fn join_food_names(names: Vec<String>) -> String {
+    match names.len() {
+        0 => String::new(),
+        1 => names.into_iter().next().unwrap_or_default(),
+        2 => format!("{} & {}", names[0], names[1]),
+        3 => format!("{}, {} & {}", names[0], names[1], names[2]),
+        n => format!("{}, {} +{}", names[0], names[1], n - 2),
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum MealAttendance {
     Eating {
@@ -435,6 +447,7 @@ pub struct NewMealPlanComponent {
     pub id: Option<MealPlanComponentId>,
     pub item: MealItemRef,
     pub amount: ConsumedAmount,
+    pub cooking_servings: Option<i32>,
 }
 
 #[derive(Debug, Clone)]
@@ -446,7 +459,6 @@ pub struct NewMealGroup {
     pub everyone: bool,
     pub participants: Vec<NewMealParticipant>,
     pub guest_groups: Vec<NewMealGuestGroup>,
-    pub cooking_servings: Option<i32>,
 }
 
 impl NewMealGroup {
@@ -459,7 +471,6 @@ impl NewMealGroup {
             everyone: true,
             participants: Vec::new(),
             guest_groups: Vec::new(),
-            cooking_servings: None,
         }
     }
 }
@@ -489,7 +500,6 @@ pub struct MealGroupPatch {
     pub everyone: Option<bool>,
     pub participants: Option<Vec<NewMealParticipant>>,
     pub guest_groups: Option<Vec<NewMealGuestGroup>>,
-    pub cooking_servings: Option<Option<i32>>,
 }
 
 #[derive(Debug, Clone)]

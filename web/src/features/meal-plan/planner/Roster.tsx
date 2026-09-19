@@ -29,6 +29,7 @@ export function Roster({
   onAddGuest,
   onOpenGuests,
   onRenameGuest,
+  onEditMeal,
 }: {
   occasion: OccasionView;
   week: PlannerWeek;
@@ -37,6 +38,7 @@ export function Roster({
   onAddGuest: (anchor: HTMLElement) => void;
   onOpenGuests: (group: GroupView, guest: PlannerGuest, anchor: HTMLElement) => void;
   onRenameGuest: (guest: PlannerGuest, name: string | null) => void;
+  onEditMeal: (group: GroupView) => void;
 }) {
   const members = week.members;
   return (
@@ -60,6 +62,7 @@ export function Roster({
           status={memberStatus(occasion, member, members)}
           busy={busy}
           onOpen={(anchor) => onOpenMember(member, anchor)}
+          onEditMeal={onEditMeal}
         />
       ))}
       <GuestRows occasion={occasion} onAdd={onAddGuest} onOpen={onOpenGuests} onRename={onRenameGuest} />

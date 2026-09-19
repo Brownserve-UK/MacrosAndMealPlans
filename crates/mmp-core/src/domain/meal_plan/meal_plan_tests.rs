@@ -95,6 +95,7 @@ fn component(id: MealPlanComponentId, amount: ConsumedAmount) -> MealPlanCompone
         amount,
         position: 0,
         snapshot: None,
+        cooking_servings: None,
         revision: Revision::INITIAL,
         display_order: uuid::Uuid::nil(),
     }
@@ -125,6 +126,7 @@ fn a_meal_needs_a_component_a_name_or_an_ad_hoc_kind() {
         id: None,
         item: MealItemRef::product(ProductId::new()),
         amount: servings(1),
+        cooking_servings: None,
     }];
     assert!(validate_group_shape(None, None, &food).is_ok());
     assert!(validate_group_shape(None, Some(AdHocKind::EatingOut), &food).is_err());
@@ -143,6 +145,7 @@ fn a_component_needs_a_positive_amount() {
         id: None,
         item: MealItemRef::product(ProductId::new()),
         amount: ConsumedAmount::Servings(Decimal::ZERO),
+        cooking_servings: None,
     }];
     assert!(validate_components(&components).is_err());
 }
@@ -157,6 +160,7 @@ fn a_recipe_component_must_be_measured_in_servings() {
         id: None,
         item: MealItemRef::recipe(RecipeId::new()),
         amount: grams,
+        cooking_servings: None,
     }];
     assert!(validate_components(&recipe_component).is_err());
 
@@ -164,6 +168,7 @@ fn a_recipe_component_must_be_measured_in_servings() {
         id: None,
         item: MealItemRef::product(ProductId::new()),
         amount: grams,
+        cooking_servings: None,
     }];
     assert!(validate_components(&product_component).is_ok());
 }
@@ -466,7 +471,6 @@ fn group(everyone: bool, members: &[HouseholdMemberId]) -> MealPlanEntry {
             })
             .collect(),
         guest_groups: Vec::new(),
-        cooking_servings: None,
         created_by: UserId::new(),
         updated_by: UserId::new(),
         revision: Revision::INITIAL,
@@ -586,26 +590,35 @@ fn serves_counts_diners_and_guests_and_cooking_can_override_it() {
     roast.guest_groups[0].count = 2;
     assert_eq!(roast.guest_count(), 2);
     assert_eq!(roast.serves(), 4);
-    assert_eq!(roast.effective_cooking_servings(), 4);
+    assert_eq!(
+        roast.components[0].effective_cooking_servings(roast.serves()),
+        4
+    );
 
-    roast.cooking_servings = Some(6);
-    assert_eq!(roast.effective_cooking_servings(), 6);
+    roast.components[0].cooking_servings = Some(6);
+    assert_eq!(
+        roast.components[0].effective_cooking_servings(roast.serves()),
+        6
+    );
 }
 
 #[test]
-fn a_group_is_named_by_its_label_kind_or_first_food() {
+fn a_group_is_named_by_its_label_kind_or_its_food() {
     let mut pizza = group(true, &[]);
-    assert_eq!(pizza.display_name(|| "Margherita".to_owned()), "Margherita");
+    assert_eq!(
+        pizza.display_name(|| vec!["Margherita".to_owned()]),
+        "Margherita"
+    );
     pizza.label = Some("Pizza night".to_owned());
     assert_eq!(
-        pizza.display_name(|| "Margherita".to_owned()),
+        pizza.display_name(|| vec!["Margherita".to_owned()]),
         "Pizza night"
     );
 
     let mut out = group(true, &[]);
     out.components.clear();
     out.ad_hoc = Some(AdHocKind::FendForYourself);
-    assert_eq!(out.display_name(String::new), "Fend for yourself");
+    assert_eq!(out.display_name(Vec::new), "Fend for yourself");
     assert!(!out.is_cooked());
     assert!(!out.is_leftovers());
 
@@ -613,6 +626,46 @@ fn a_group_is_named_by_its_label_kind_or_first_food() {
     leftovers.components[0].item = MealItemRef::dish(RecipeId::new());
     assert!(leftovers.is_leftovers());
     assert!(!leftovers.is_cooked());
+}
+
+#[test]
+fn a_meal_s_derived_name_joins_its_food_by_count() {
+    let one = group(true, &[]);
+    assert_eq!(one.display_name(|| vec!["Salmon".to_owned()]), "Salmon");
+
+    let two = group(true, &[]);
+    assert_eq!(
+        two.display_name(|| vec!["Salmon".to_owned(), "Potatoes".to_owned()]),
+        "Salmon & Potatoes"
+    );
+
+    let three = group(true, &[]);
+    assert_eq!(
+        three.display_name(|| vec![
+            "Salmon".to_owned(),
+            "Potatoes".to_owned(),
+            "Broccoli".to_owned(),
+        ]),
+        "Salmon, Potatoes & Broccoli"
+    );
+
+    let four = group(true, &[]);
+    assert_eq!(
+        four.display_name(|| vec![
+            "Chilli".to_owned(),
+            "Rice".to_owned(),
+            "Garlic bread".to_owned(),
+            "Sour cream".to_owned(),
+        ]),
+        "Chilli, Rice +2"
+    );
+
+    let mut labelled = group(true, &[]);
+    labelled.label = Some("Fish finger sandwich".to_owned());
+    assert_eq!(
+        labelled.display_name(|| vec!["Fish fingers".to_owned(), "White bread".to_owned()]),
+        "Fish finger sandwich"
+    );
 }
 
 fn meal_times() -> MealTimes {

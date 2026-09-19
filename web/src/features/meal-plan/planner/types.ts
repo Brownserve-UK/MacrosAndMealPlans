@@ -1,4 +1,4 @@
-import type { Amount, MealPlanComponent, MealSlot } from '../../../api/client';
+import type { Amount, CookingItem, MealPlanComponent, MealSlot } from '../../../api/client';
 
 export type AdHocKind = 'eating_out' | 'takeaway' | 'fend_for_yourself';
 
@@ -39,8 +39,6 @@ export type GroupView = {
   guest_count: number;
   guests: PlannerGuest[];
   serves: number;
-  cooking_servings: number | null;
-  effective_cooking_servings: number;
   cook_minutes: number | null;
   to_buy: number;
   leftover_servings_available: number | null;
@@ -55,6 +53,7 @@ export type OccasionView = {
   effective_time: string | null;
   note: string | null;
   groups: GroupView[];
+  cooking: CookingItem[];
   absent_member_ids: string[];
   unaccounted_member_ids: string[];
   revision: number;
@@ -78,7 +77,7 @@ export type NewGroupComponent = (
   | { dish_recipe_id: string }
   | { ingredient_id: string }
   | { prepared_meal_id: string }
-) & { amount: Amount };
+) & { id?: string; amount: Amount; cooking_servings?: number | null };
 
 export type NewGroup = {
   label?: string | null;
@@ -87,7 +86,6 @@ export type NewGroup = {
   everyone?: boolean;
   participants?: { member_id: string; note?: string | null }[];
   guest_count?: number;
-  cooking_servings?: number | null;
 };
 
 export type GroupPatch = {
@@ -97,7 +95,6 @@ export type GroupPatch = {
   everyone?: boolean;
   participants?: { member_id: string; note?: string | null }[];
   guest_count?: number;
-  cooking_servings?: number | null;
   revision: number;
 };
 

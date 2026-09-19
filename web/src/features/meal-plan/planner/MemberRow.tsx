@@ -2,27 +2,30 @@ import MoreVertIcon from '@mui/icons-material/MoreVertOutlined';
 import Box from '@mui/material/Box';
 import IconButton from '@mui/material/IconButton';
 import Typography from '@mui/material/Typography';
-import { dishLabel, initialsOf, type MemberStatus, memberVariation } from './plannerWeek';
-import type { PlannerMember } from './types';
+import { groupShortName, initialsOf, type MemberStatus, memberVariation } from './plannerWeek';
+import type { GroupView, PlannerMember } from './types';
 
 export function MemberRow({
   member,
   status,
   busy,
   onOpen,
+  onEditMeal,
 }: {
   member: PlannerMember;
   status: MemberStatus;
   busy: boolean;
   onOpen: (anchor: HTMLElement) => void;
+  onEditMeal: (group: GroupView) => void;
 }) {
   const variation = status.kind === 'eating' ? memberVariation(status.group, member.id) : null;
+  const dish = status.kind === 'eating' ? groupShortName(status.group) : null;
 
   return (
     <Box
       sx={{
         display: 'grid',
-        gridTemplateColumns: '26px 1fr auto 28px',
+        gridTemplateColumns: '26px auto minmax(0, 1fr) 28px',
         gap: 1.5,
         alignItems: 'center',
         py: 1.5,
@@ -56,9 +59,37 @@ export function MemberRow({
           </Typography>
         ) : null}
       </Typography>
-      <Box sx={{ justifySelf: 'end', textAlign: 'right' }}>
-        {status.kind === 'eating' ? (
-          <Typography variant="body2">{dishLabel(status.group)}</Typography>
+      <Box sx={{ textAlign: 'right', minWidth: 0 }}>
+        {status.kind === 'eating' && dish ? (
+          <Typography
+            component="button"
+            type="button"
+            variant="body2"
+            onClick={() => onEditMeal(status.group)}
+            title={dish.tail ? `${dish.head} ${dish.tail}` : dish.head}
+            sx={{
+              background: 'none',
+              border: 0,
+              p: 0,
+              font: 'inherit',
+              cursor: 'pointer',
+              color: 'inherit',
+              display: 'block',
+              width: '100%',
+              textAlign: 'right',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {dish.head}
+            {dish.tail ? (
+              <Typography component="span" variant="body2" color="text.secondary">
+                {' '}
+                {dish.tail}
+              </Typography>
+            ) : null}
+          </Typography>
         ) : status.kind === 'elsewhere' ? (
           <Typography variant="body2" color="text.secondary">
             Eating elsewhere

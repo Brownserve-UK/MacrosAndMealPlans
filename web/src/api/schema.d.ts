@@ -1976,6 +1976,19 @@ export interface components {
             /** Format: uuid */
             recipe_id: string;
         };
+        CookingItemDto: components["schemas"]["MealItemRefDto"] & {
+            amount: components["schemas"]["AmountSummaryDto"];
+            /** Format: int32 */
+            cook_minutes?: number | null;
+            /** Format: int32 */
+            extra_servings?: number | null;
+            group_ids: string[];
+            kind: components["schemas"]["CookingItemKindDto"];
+            member_ids: string[];
+            name: string;
+        };
+        /** @enum {string} */
+        CookingItemKindDto: "recipe" | "food" | "cooked_food";
         CreateConsumptionRequest: components["schemas"]["ItemRefRequest"] & {
             amount: components["schemas"]["AmountDto"];
             /** Format: date-time */
@@ -2250,8 +2263,6 @@ export interface components {
         GroupPatchRequest: {
             ad_hoc?: null | components["schemas"]["AdHocKind"];
             components?: components["schemas"]["NewGroupComponentRequest"][] | null;
-            /** Format: int32 */
-            cooking_servings?: number | null;
             everyone?: boolean | null;
             /** Format: int32 */
             guest_count?: number | null;
@@ -2263,10 +2274,6 @@ export interface components {
             components: components["schemas"]["MealPlanComponentDto"][];
             /** Format: int32 */
             cook_minutes?: number | null;
-            /** Format: int32 */
-            cooking_servings?: number | null;
-            /** Format: int32 */
-            effective_cooking_servings: number;
             everyone: boolean;
             /** Format: int32 */
             guest_count: number;
@@ -2534,6 +2541,10 @@ export interface components {
             amount: components["schemas"]["AmountDto"];
             consumption_record?: null | components["schemas"]["ConsumptionRecordDto"];
             cooked?: null | components["schemas"]["CookedDto"];
+            /** Format: int32 */
+            cooking_servings?: number | null;
+            /** Format: int32 */
+            effective_cooking_servings: number;
             /** Format: uuid */
             id: string;
             item_name: string;
@@ -2550,6 +2561,8 @@ export interface components {
         };
         MealPlanComponentRequest: components["schemas"]["ItemRefRequest"] & {
             amount: components["schemas"]["AmountDto"];
+            /** Format: int32 */
+            cooking_servings?: number | null;
             /** Format: uuid */
             id?: string | null;
         };
@@ -2568,8 +2581,6 @@ export interface components {
             actual?: null | components["schemas"]["NutritionSummaryDto"];
             ad_hoc?: null | components["schemas"]["AdHocKind"];
             components: components["schemas"]["MealPlanComponentDto"][];
-            /** Format: int32 */
-            cooking_servings?: number | null;
             /** Format: date-time */
             created_at: string;
             /** Format: uuid */
@@ -2745,6 +2756,10 @@ export interface components {
         };
         NewGroupComponentRequest: components["schemas"]["ItemRefRequest"] & {
             amount: components["schemas"]["AmountDto"];
+            /** Format: int32 */
+            cooking_servings?: number | null;
+            /** Format: uuid */
+            id?: string | null;
         };
         NewGroupParticipantRequest: {
             /** Format: uuid */
@@ -2754,8 +2769,6 @@ export interface components {
         NewGroupRequest: {
             ad_hoc?: null | components["schemas"]["AdHocKind"];
             components?: components["schemas"]["NewGroupComponentRequest"][];
-            /** Format: int32 */
-            cooking_servings?: number | null;
             everyone?: boolean;
             /** Format: int32 */
             guest_count?: number;
@@ -2874,6 +2887,7 @@ export interface components {
         };
         OccasionViewDto: {
             absent_member_ids: string[];
+            cooking: components["schemas"]["CookingItemDto"][];
             /** @example 18:30 */
             effective_time?: string | null;
             groups: components["schemas"]["GroupViewDto"][];
