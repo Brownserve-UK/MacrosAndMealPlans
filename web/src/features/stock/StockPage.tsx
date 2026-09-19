@@ -1,0 +1,392 @@
+import AddIcon from '@mui/icons-material/AddOutlined';
+import Button from '@mui/material/Button';
+import MenuItem from '@mui/material/MenuItem';
+import Stack from '@mui/material/Stack';
+import Tab from '@mui/material/Tab';
+import Tabs from '@mui/material/Tabs';
+import TextField from '@mui/material/TextField';
+import { useMemo, useState } from 'react';
+import type { IngredientAvailability, PreparedMealAvailability, ProductAvailability, StockItem } from '../../api/client';
+import { useProducts, useStock, useStockAvailability } from '../../api/queries';
+import { PageHeader } from '../../components/PageHeader';
+import { RecordListShell } from '../../components/RecordList';
+import { EmptyState, ErrorState, Loading } from '../../components/States';
+import { useDebounced } from '../../hooks/useDebounced';
+import { NewStockDialog } from './NewStockDialog';
+import {
+  groupSortDate,
+  IngredientCard,
+  PLACE_ORDER,
+  PreparedPortionCard,
+  StockCard,
+  type CookedFoodRow,
+  type StockGroup,
+} from './StockCard';
+import { levelFor } from './stockLevel';
+
+type View = 'ingredients' | 'products' | 'prepared';
+type SortKey = 'level' | 'name' | 'useby';
+
+const SORTS: { value: SortKey; label: string }[] = [
+  { value: 'level', label: 'Stock level' },
+  { value: 'name', label: 'Name' },
+  { value: 'useby', label: 'Use-by' },
+];
+
+function sortGroups(groups: StockGroup[], key: SortKey): StockGroup[] {
+  const byName = (a: StockGroup, b: StockGroup) => a.name.localeCompare(b.name);
+  const sorted = [...groups];
+  if (key === 'name') return sorted.sort(byName);
+  if (key === 'useby') {
+    return sorted.sort((a, b) => {
+      const da = groupSortDate(a);
+      const db = groupSortDate(b);
+      if (da && db) return da.localeCompare(db) || byName(a, b);
+      if (da) return -1;
+      if (db) return 1;
+      return byName(a, b);
+    });
+  }
+  return sorted.sort((a, b) => {
+    const la = levelFor(a.availability);
+    const lb = levelFor(b.availability);
+    return (
+      la.sortRank - lb.sortRank ||
+      la.freeFraction - lb.freeFraction ||
+      byName(a, b)
+    );
+  });
+}
+
+function sortCooked(rows: CookedFoodRow[], key: SortKey): CookedFoodRow[] {
+  const byName = (a: CookedFoodRow, b: CookedFoodRow) => a.name.localeCompare(b.name);
+  const sorted = [...rows];
+  if (key === 'name') return sorted.sort(byName);
+  if (key === 'level') return sorted.sort((a, b) => a.servings - b.servings || byName(a, b));
+  return sorted.sort((a, b) => {
+    if (a.useBy && b.useBy) return a.useBy.localeCompare(b.useBy) || byName(a, b);
+    if (a.useBy) return -1;
+    if (b.useBy) return 1;
+    return byName(a, b);
+  });
+}
+
+export function StockPage() {
+  const [addOpen, setAddOpen] = useState(false);
+  const [search, setSearch] = useState('');
+  const [view, setView] = useState<View>('ingredients');
+  const [sort, setSort] = useState<SortKey>('level');
+  const debounced = useDebounced(search, 200);
+
+  const stock = useStock({ per_page: 200 });
+  const availability = useStockAvailability();
+  const products = useProducts({ per_page: 200 });
+
+  const productName = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const product of products.data?.items ?? []) map.set(product.id, product.name);
+    return map;
+  }, [products.data]);
+
+  const ingredientOfProduct = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const product of products.data?.items ?? []) {
+      if (product.mapped_ingredient_id) map.set(product.id, product.mapped_ingredient_id);
+    }
+    return map;
+  }, [products.data]);
+
+  const availabilityByProduct = useMemo(() => {
+    const map = new Map<string, ProductAvailability>();
+    for (const row of availability.data?.products ?? []) map.set(row.product_id, row);
+    return map;
+  }, [availability.data]);
+
+  const availabilityByIngredient = useMemo(() => {
+    const map = new Map<string, IngredientAvailability>();
+    for (const row of availability.data?.ingredients ?? []) map.set(row.ingredient_id, row);
+    return map;
+  }, [availability.data]);
+
+  const preparedMealOfProduct = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const product of products.data?.items ?? []) {
+      if (product.mapped_prepared_meal_id) map.set(product.id, product.mapped_prepared_meal_id);
+    }
+    return map;
+  }, [products.data]);
+
+  const availabilityByPreparedMeal = useMemo(() => {
+    const map = new Map<string, PreparedMealAvailability>();
+    for (const row of availability.data?.prepared_meals ?? []) map.set(row.prepared_meal_id, row);
+    return map;
+  }, [availability.data]);
+
+  const productGroups = useMemo<StockGroup[]>(() => {
+    const byProduct = new Map<string, StockGroup>();
+    for (const item of stock.data?.items ?? []) {
+      const productId = item.product_id;
+      if (!productId) continue;
+      let group = byProduct.get(productId);
+      if (!group) {
+        group = {
+          id: productId,
+          name: productName.get(productId) ?? 'Unknown product',
+          items: [],
+          availability: availabilityByProduct.get(productId)?.availability ?? null,
+        };
+        byProduct.set(productId, group);
+      }
+      group.items.push(item);
+    }
+    return [...byProduct.values()];
+  }, [stock.data, productName, availabilityByProduct]);
+
+  const preparedRows = useMemo<CookedFoodRow[]>(() => {
+    type Place = { servings: number; useBy: string | null };
+    const byRecipe = new Map<
+      string,
+      { name: string; total: number; soonest: string | null; places: Map<StockItem['storage_location'], Place> }
+    >();
+    for (const item of stock.data?.items ?? []) {
+      const recipeId = item.prepared_recipe_id;
+      if (!recipeId) continue;
+      const servings = 'quantity' in item.level ? item.level.quantity.amount : 0;
+      if (servings <= 0) continue;
+      const useBy = item.usability_deadline?.date ?? null;
+      let row = byRecipe.get(recipeId);
+      if (!row) {
+        row = {
+          name: item.prepared_batch_name ?? 'Cooked food',
+          total: 0,
+          soonest: null,
+          places: new Map(),
+        };
+        byRecipe.set(recipeId, row);
+      }
+      row.total += servings;
+      if (useBy && (!row.soonest || useBy < row.soonest)) row.soonest = useBy;
+      const place = row.places.get(item.storage_location);
+      if (place) {
+        place.servings += servings;
+        if (useBy && (!place.useBy || useBy < place.useBy)) place.useBy = useBy;
+      } else {
+        row.places.set(item.storage_location, { servings, useBy });
+      }
+    }
+    return [...byRecipe.entries()].map(([recipeId, row]) => ({
+      key: recipeId,
+      recipeId,
+      name: row.name,
+      servings: row.total,
+      useBy: row.soonest,
+      places: PLACE_ORDER.filter((location) => row.places.has(location)).map((location) => {
+        const place = row.places.get(location) as Place;
+        return { location, servings: place.servings, useBy: place.useBy };
+      }),
+    }));
+  }, [stock.data]);
+
+  const ingredientGroups = useMemo<{ group: StockGroup; productCount: number; kind: 'ingredient' }[]>(() => {
+    const byIngredient = new Map<string, { group: StockGroup; products: Set<string> }>();
+    for (const item of stock.data?.items ?? []) {
+      if (!item.product_id) continue;
+      const ingredientId = ingredientOfProduct.get(item.product_id);
+      if (!ingredientId) continue;
+      let entry = byIngredient.get(ingredientId);
+      if (!entry) {
+        entry = {
+          group: {
+            id: ingredientId,
+            name: availabilityByIngredient.get(ingredientId)?.name ?? 'Unknown ingredient',
+            items: [],
+            availability: availabilityByIngredient.get(ingredientId)?.availability ?? null,
+          },
+          products: new Set(),
+        };
+        byIngredient.set(ingredientId, entry);
+      }
+      entry.group.items.push(item);
+      entry.products.add(item.product_id);
+    }
+    return [...byIngredient.values()].map((entry) => ({
+      group: entry.group,
+      productCount: entry.products.size,
+      kind: 'ingredient' as const,
+    }));
+  }, [stock.data, ingredientOfProduct, availabilityByIngredient]);
+
+  const preparedMealGroups = useMemo<{ group: StockGroup; productCount: number; kind: 'prepared_meal' }[]>(() => {
+    const byPreparedMeal = new Map<string, { group: StockGroup; products: Set<string> }>();
+    for (const item of stock.data?.items ?? []) {
+      if (!item.product_id) continue;
+      const preparedMealId = preparedMealOfProduct.get(item.product_id);
+      if (!preparedMealId) continue;
+      let entry = byPreparedMeal.get(preparedMealId);
+      if (!entry) {
+        entry = {
+          group: {
+            id: preparedMealId,
+            name: availabilityByPreparedMeal.get(preparedMealId)?.name ?? 'Unknown prepared meal',
+            items: [],
+            availability: availabilityByPreparedMeal.get(preparedMealId)?.availability ?? null,
+          },
+          products: new Set(),
+        };
+        byPreparedMeal.set(preparedMealId, entry);
+      }
+      entry.group.items.push(item);
+      entry.products.add(item.product_id);
+    }
+    return [...byPreparedMeal.values()].map((entry) => ({
+      group: entry.group,
+      productCount: entry.products.size,
+      kind: 'prepared_meal' as const,
+    }));
+  }, [stock.data, preparedMealOfProduct, availabilityByPreparedMeal]);
+
+  const foodGroups = useMemo(() => [...ingredientGroups, ...preparedMealGroups], [ingredientGroups, preparedMealGroups]);
+
+  const visibleProducts = useMemo(() => {
+    const needle = debounced.trim().toLowerCase();
+    const filtered = needle
+      ? productGroups.filter((group) => group.name.toLowerCase().includes(needle))
+      : productGroups;
+    return sortGroups(filtered, sort);
+  }, [productGroups, debounced, sort]);
+
+  const visiblePrepared = useMemo(() => {
+    const needle = debounced.trim().toLowerCase();
+    const filtered = needle
+      ? preparedRows.filter((row) => row.name.toLowerCase().includes(needle))
+      : preparedRows;
+    return sortCooked(filtered, sort);
+  }, [preparedRows, debounced, sort]);
+
+  const visibleFoods = useMemo(() => {
+    const needle = debounced.trim().toLowerCase();
+    const filtered = needle
+      ? foodGroups.filter((entry) => entry.group.name.toLowerCase().includes(needle))
+      : foodGroups;
+    const order = new Map(
+      sortGroups(
+        filtered.map((entry) => entry.group),
+        sort,
+      ).map((group, index) => [group.id, index]),
+    );
+    return [...filtered].sort((a, b) => (order.get(a.group.id) ?? 0) - (order.get(b.group.id) ?? 0));
+  }, [foodGroups, debounced, sort]);
+
+  if (stock.isLoading) return <Loading label="Loading stock" />;
+  if (stock.isError) return <ErrorState error={stock.error} onRetry={() => stock.refetch()} />;
+
+  const empty = productGroups.length === 0 && preparedRows.length === 0;
+  const showing =
+    view === 'ingredients'
+      ? visibleFoods.length
+      : view === 'prepared'
+        ? visiblePrepared.length
+        : visibleProducts.length;
+
+  return (
+    <>
+      <PageHeader
+        title="Stock"
+        subtitle="What's in the house, and how much is still free after planned meals."
+        actions={
+          <Button variant="contained" startIcon={<AddIcon />} onClick={() => setAddOpen(true)}>
+            Add stock
+          </Button>
+        }
+        search={{
+          value: search,
+          onChange: setSearch,
+          placeholder: 'Search stock',
+        }}
+      />
+
+      {!empty && (
+        <>
+          <Tabs
+            value={view}
+            onChange={(_, next: View) => setView(next)}
+            sx={{ mb: 2.5 }}
+          >
+            <Tab value="ingredients" label="Foods" />
+            <Tab value="products" label="Products" />
+            <Tab value="prepared" label="Cooked" />
+          </Tabs>
+
+          <Stack
+            direction="row"
+            spacing={1}
+            sx={{ mb: 2.5, flexWrap: 'wrap', gap: 1, alignItems: 'center' }}
+          >
+            <TextField
+              select
+              size="small"
+              label="Sort"
+              value={sort}
+              onChange={(event) => setSort(event.target.value as SortKey)}
+              sx={{ ml: 'auto', minWidth: 168 }}
+            >
+              {SORTS.map((option) => (
+                <MenuItem key={option.value} value={option.value}>
+                  {option.label}
+                </MenuItem>
+              ))}
+            </TextField>
+          </Stack>
+        </>
+      )}
+
+      {empty ? (
+        <EmptyState
+          title="No stock recorded"
+          description="Add what you have so planned meals can tell you what's missing."
+        />
+      ) : showing === 0 ? (
+        search.trim() ? (
+          <EmptyState title="Nothing matched" description={`Nothing matches "${search}".`} />
+        ) : (
+          view === 'prepared' ? (
+            <EmptyState
+              title="Nothing cooked yet"
+              description="Cook a recipe and any servings you don't eat will wait here."
+            />
+          ) : (
+            <EmptyState
+              title="Nothing mapped to a food"
+              description="Map your products to a food, or switch to Products."
+            />
+          )
+        )
+      ) : view === 'ingredients' ? (
+        <RecordListShell>
+          {visibleFoods.map((entry) => (
+            <IngredientCard
+              key={entry.group.id}
+              group={entry.group}
+              productCount={entry.productCount}
+              kind={entry.kind}
+            />
+          ))}
+        </RecordListShell>
+      ) : view === 'prepared' ? (
+        <RecordListShell>
+          {visiblePrepared.map((row) => (
+            <PreparedPortionCard key={row.key} row={row} />
+          ))}
+        </RecordListShell>
+      ) : (
+        <RecordListShell>
+          {visibleProducts.map((group) => (
+            <StockCard key={group.id} group={group} />
+          ))}
+        </RecordListShell>
+      )}
+
+      <NewStockDialog open={addOpen} onClose={() => setAddOpen(false)} />
+    </>
+  );
+}

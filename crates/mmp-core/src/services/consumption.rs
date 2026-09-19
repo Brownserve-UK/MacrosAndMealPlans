@@ -1,0 +1,629 @@
+use std::sync::Arc;
+
+use time::{Date, Duration};
+
+use super::revision::{commit_outcome, require_revision};
+use crate::domain::{
+    ConsumedAmount, ConsumedNutrition, ConsumptionRecord, ConsumptionRecordId,
+    ConsumptionRecordPatch, HouseholdMemberId, IngredientId, MealItemRef, NewConsumptionRecord,
+    NutritionFacts, NutritionQuality, PreparedBatch, PreparedMealId, Product, ProductId, Quantity,
+    Recipe, RecipeId, RecipeRequirement, Revision, StockEffectSource, Unit, generic_food_nutrition,
+    nutrition_for, recipe_nutrition, recipe_nutrition_for, sum_nutrition,
+};
+use crate::error::{CoreError, Result, ValidationErrors};
+use crate::ports::{
+    Clock, ConsumptionQuery, ConsumptionRecordRepository, HouseholdSettingsRepository,
+    IngredientRepository, PageRequest, PreparedBatchRepository, PreparedMealRepository,
+    ProductRepository, RecipeRepository, StockWrite,
+};
+
+use super::fulfilment::{RecipeFulfilments, expand_recipe};
+use super::stock_effects::{
+    StockAffected, cooked_food_deduction, name_outcomes, record_deduction, record_release,
+    requirement_deduction,
+};
+
+const CONSUMPTION_RECORD: &str = "consumption record";
+const PRODUCT: &str = "product";
+const RECIPE: &str = "recipe";
+const DISH: &str = "cooked food";
+
+#[derive(Debug, Clone)]
+pub struct DayTotals {
+    pub nutrition: NutritionFacts,
+    pub entry_count: i64,
+    pub unknown_count: i64,
+    pub partial_count: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct ConsumptionEntry {
+    pub record: ConsumptionRecord,
+    pub product_name: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct ConsumptionDay {
+    pub member_id: HouseholdMemberId,
+    pub date: Date,
+    pub entries: Vec<ConsumptionEntry>,
+    pub totals: DayTotals,
+}
+
+#[derive(Clone)]
+pub struct ConsumptionService {
+    records: Arc<dyn ConsumptionRecordRepository>,
+    products: Arc<dyn ProductRepository>,
+    ingredients: Arc<dyn IngredientRepository>,
+    prepared_meals: Arc<dyn PreparedMealRepository>,
+    recipes: Arc<dyn RecipeRepository>,
+    batches: Arc<dyn PreparedBatchRepository>,
+    settings: Arc<dyn HouseholdSettingsRepository>,
+    clock: Arc<dyn Clock>,
+}
+
+impl ConsumptionService {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        records: Arc<dyn ConsumptionRecordRepository>,
+        products: Arc<dyn ProductRepository>,
+        ingredients: Arc<dyn IngredientRepository>,
+        prepared_meals: Arc<dyn PreparedMealRepository>,
+        recipes: Arc<dyn RecipeRepository>,
+        batches: Arc<dyn PreparedBatchRepository>,
+        settings: Arc<dyn HouseholdSettingsRepository>,
+        clock: Arc<dyn Clock>,
+    ) -> Self {
+        Self {
+            records,
+            products,
+            ingredients,
+            prepared_meals,
+            recipes,
+            batches,
+            settings,
+            clock,
+        }
+    }
+
+    pub async fn record(
+        &self,
+        input: NewConsumptionRecord,
+    ) -> Result<StockAffected<ConsumptionRecord>> {
+        ensure_not_future(&self.clock, &*self.settings, input.consumed_on).await?;
+        self.record_backdated(input).await
+    }
+
+    pub async fn record_backdated(
+        &self,
+        input: NewConsumptionRecord,
+    ) -> Result<StockAffected<ConsumptionRecord>> {
+        input.validate()?;
+        let scaled = self
+            .resolve_item(input.item, &input.amount, input.recorded_by)
+            .await?;
+        let now = self.clock.now();
+        let record = ConsumptionRecord::create(input, scaled.facts, scaled.quality, now);
+
+        let write = StockWrite {
+            deductions: self.deductions_for(&record).await?,
+            releases: Vec::new(),
+        };
+        let outcomes = self.records.insert(&record, &write).await?;
+        Ok(StockAffected::new(
+            record,
+            name_outcomes(
+                &*self.products,
+                &*self.ingredients,
+                &*self.prepared_meals,
+                &*self.batches,
+                outcomes,
+            )
+            .await?,
+        ))
+    }
+
+    async fn deductions_for(
+        &self,
+        record: &ConsumptionRecord,
+    ) -> Result<Vec<crate::ports::StockDeduction>> {
+        if record.meal_plan_component_id.is_some() {
+            return Ok(Vec::new());
+        }
+        match record.item {
+            MealItemRef::Product { product_id } => {
+                let product = self.get_product(product_id).await?;
+                let label = format!("Logged food \u{2014} {}", product.name);
+                Ok(record_deduction(record, &product, label)
+                    .into_iter()
+                    .collect())
+            }
+            MealItemRef::Recipe { recipe_id } => {
+                let recipe = self.get_recipe(recipe_id, None).await?;
+                let ConsumedAmount::Servings(servings) = record.amount else {
+                    return Ok(Vec::new());
+                };
+                let requirements: Vec<&RecipeRequirement> = recipe
+                    .components
+                    .iter()
+                    .map(|component| &component.requirement)
+                    .collect();
+                let fulfilments = RecipeFulfilments::load(&*self.products, &requirements).await?;
+                let label = format!("Logged food \u{2014} {}", recipe.name);
+                Ok(expand_recipe(&recipe, servings, &fulfilments)
+                    .wants
+                    .into_iter()
+                    .map(|want| {
+                        requirement_deduction(
+                            StockEffectSource::ConsumptionRecord,
+                            record.id.as_uuid(),
+                            want.recipe_component_id.as_uuid(),
+                            want.target,
+                            want.want,
+                            label.clone(),
+                            record.recorded_by,
+                            Some(record.member_id),
+                        )
+                    })
+                    .collect())
+            }
+            MealItemRef::Dish { recipe_id } => {
+                let name = self.cooked_name(recipe_id).await?;
+                let ConsumedAmount::Servings(servings) = record.amount else {
+                    return Ok(Vec::new());
+                };
+                Ok(vec![cooked_food_deduction(
+                    record.id.as_uuid(),
+                    record.member_id.as_uuid(),
+                    recipe_id,
+                    Quantity::new(servings, Unit::Serving),
+                    format!("Logged food \u{2014} {name}"),
+                    record.recorded_by,
+                    Some(record.member_id),
+                )])
+            }
+            MealItemRef::Ingredient { ingredient_id } => {
+                let ConsumedAmount::Measure(quantity) = record.amount else {
+                    return Ok(Vec::new());
+                };
+                let pool = self
+                    .products
+                    .list_by_ingredient(&[ingredient_id])
+                    .await?
+                    .remove(&ingredient_id)
+                    .unwrap_or_default();
+                let name = self.ingredient_name(ingredient_id).await?;
+                let label = format!("Logged food \u{2014} {name}");
+                Ok(vec![requirement_deduction(
+                    StockEffectSource::ConsumptionRecord,
+                    record.id.as_uuid(),
+                    record.id.as_uuid(),
+                    crate::domain::DeductionTarget::pool(
+                        ingredient_id,
+                        pool.iter().map(|p| p.id).collect(),
+                    ),
+                    quantity,
+                    label,
+                    record.recorded_by,
+                    Some(record.member_id),
+                )])
+            }
+            MealItemRef::PreparedMeal { prepared_meal_id } => {
+                let ConsumedAmount::Measure(quantity) = record.amount else {
+                    return Ok(Vec::new());
+                };
+                let pool = self
+                    .products
+                    .list_by_prepared_meal(&[prepared_meal_id])
+                    .await?
+                    .remove(&prepared_meal_id)
+                    .unwrap_or_default();
+                let name = self.prepared_meal_name(prepared_meal_id).await?;
+                let label = format!("Logged food \u{2014} {name}");
+                Ok(vec![requirement_deduction(
+                    StockEffectSource::ConsumptionRecord,
+                    record.id.as_uuid(),
+                    record.id.as_uuid(),
+                    crate::domain::DeductionTarget::prepared_meal_pool(
+                        prepared_meal_id,
+                        pool.iter().map(|p| p.id).collect(),
+                    ),
+                    quantity,
+                    label,
+                    record.recorded_by,
+                    Some(record.member_id),
+                )])
+            }
+        }
+    }
+
+    pub async fn get(&self, id: ConsumptionRecordId) -> Result<ConsumptionRecord> {
+        self.records
+            .get(id)
+            .await?
+            .ok_or_else(|| CoreError::not_found(CONSUMPTION_RECORD, id))
+    }
+
+    pub async fn amend(
+        &self,
+        id: ConsumptionRecordId,
+        expected: Revision,
+        patch: ConsumptionRecordPatch,
+    ) -> Result<StockAffected<ConsumptionRecord>> {
+        patch.validate()?;
+        let mut current = self.get(id).await?;
+        require_revision(CONSUMPTION_RECORD, id, expected, current.revision)?;
+
+        if patch.is_empty() {
+            return Ok(StockAffected::bare(current));
+        }
+        let amount_changing = patch.amount.is_some();
+
+        if patch.slot.is_some() && current.meal_plan_component_id.is_some() {
+            return Err(CoreError::conflict(
+                "This food came from a planned meal. Reopen the meal in your plan to move it.",
+            ));
+        }
+
+        if let Some(consumed_on) = patch.consumed_on {
+            ensure_not_future(&self.clock, &*self.settings, consumed_on).await?;
+            current.consumed_on = consumed_on;
+        }
+        if let Some(consumed_at) = patch.consumed_at {
+            current.consumed_at = consumed_at;
+        }
+        if let Some(slot) = patch.slot {
+            current.slot = slot;
+        }
+        if let Some(amount) = patch.amount {
+            let scaled = self
+                .resolve_item(current.item, &amount, current.recorded_by)
+                .await?;
+            current.amount = amount;
+            current.nutrition = scaled.facts;
+            current.quality = scaled.quality;
+        }
+
+        current.revision = current.revision.next();
+        current.updated_at = self.clock.now();
+
+        let mut write = StockWrite::default();
+        if amount_changing && current.meal_plan_component_id.is_none() {
+            let deductions = self.deductions_for(&current).await?;
+            if !deductions.is_empty() {
+                write
+                    .releases
+                    .push(record_release(&current, self.log_label(&current).await?));
+                write.deductions = deductions;
+            }
+        }
+
+        let outcomes = self.commit(&current, expected, &write).await?;
+        Ok(StockAffected::new(
+            current,
+            name_outcomes(
+                &*self.products,
+                &*self.ingredients,
+                &*self.prepared_meals,
+                &*self.batches,
+                outcomes,
+            )
+            .await?,
+        ))
+    }
+
+    pub async fn remove(
+        &self,
+        id: ConsumptionRecordId,
+        expected: Revision,
+    ) -> Result<StockAffected<()>> {
+        let current = self.get(id).await?;
+        require_revision(CONSUMPTION_RECORD, id, expected, current.revision)?;
+        if current.meal_plan_component_id.is_some() {
+            return Err(CoreError::conflict(
+                "This food came from a planned meal. Reopen the meal in your plan to remove it.",
+            ));
+        }
+
+        let mut write = StockWrite::default();
+        write
+            .releases
+            .push(record_release(&current, self.log_label(&current).await?));
+
+        let (outcome, stock_outcomes) = self
+            .records
+            .archive(id, expected, self.clock.now(), &write)
+            .await?;
+        commit_outcome(CONSUMPTION_RECORD, id, expected, outcome)?;
+        Ok(StockAffected::new(
+            (),
+            name_outcomes(
+                &*self.products,
+                &*self.ingredients,
+                &*self.prepared_meals,
+                &*self.batches,
+                stock_outcomes,
+            )
+            .await?,
+        ))
+    }
+
+    pub async fn day(&self, member_id: HouseholdMemberId, date: Date) -> Result<ConsumptionDay> {
+        let query = ConsumptionQuery {
+            member_id: Some(member_id),
+            from: Some(date),
+            to: Some(date),
+            page: PageRequest::new(1, PageRequest::MAX_PER_PAGE),
+            sort: Default::default(),
+        };
+        let page = self.records.list(&query).await?;
+        let totals = totals_for(&page.items);
+
+        let mut entries = Vec::with_capacity(page.items.len());
+        for record in page.items {
+            let product_name = self.item_name(record.item).await?;
+            entries.push(ConsumptionEntry {
+                record,
+                product_name,
+            });
+        }
+
+        Ok(ConsumptionDay {
+            member_id,
+            date,
+            entries,
+            totals,
+        })
+    }
+
+    async fn log_label(&self, record: &ConsumptionRecord) -> Result<String> {
+        let name = match record.item {
+            MealItemRef::Product { product_id } => self.get_product(product_id).await?.name,
+            MealItemRef::Recipe { recipe_id } => self.get_recipe(recipe_id, None).await?.name,
+            MealItemRef::Dish { recipe_id } => self.cooked_name(recipe_id).await?,
+            MealItemRef::Ingredient { ingredient_id } => {
+                self.ingredient_name(ingredient_id).await?
+            }
+            MealItemRef::PreparedMeal { prepared_meal_id } => {
+                self.prepared_meal_name(prepared_meal_id).await?
+            }
+        };
+        Ok(format!("Logged food \u{2014} {name}"))
+    }
+
+    async fn get_product(&self, id: ProductId) -> Result<Product> {
+        self.products
+            .get(id)
+            .await?
+            .ok_or_else(|| CoreError::not_found(PRODUCT, id))
+    }
+
+    async fn ingredient_name(&self, id: IngredientId) -> Result<String> {
+        Ok(self
+            .ingredients
+            .get(id)
+            .await?
+            .map(|ingredient| ingredient.name)
+            .unwrap_or_else(|| "Missing food".to_owned()))
+    }
+
+    async fn prepared_meal_name(&self, id: PreparedMealId) -> Result<String> {
+        Ok(self
+            .prepared_meals
+            .get(id)
+            .await?
+            .map(|prepared_meal| prepared_meal.name)
+            .unwrap_or_else(|| "Missing food".to_owned()))
+    }
+
+    async fn cooked_first(&self, recipe_id: RecipeId) -> Result<PreparedBatch> {
+        self.batches
+            .held_for_recipe(recipe_id)
+            .await?
+            .into_iter()
+            .next()
+            .ok_or_else(|| CoreError::not_found(DISH, recipe_id))
+    }
+
+    async fn cooked_name(&self, recipe_id: RecipeId) -> Result<String> {
+        match self.batches.held_for_recipe(recipe_id).await?.first() {
+            Some(batch) => Ok(batch.item_name.clone()),
+            None => Ok(self.get_recipe(recipe_id, None).await?.name),
+        }
+    }
+
+    async fn get_recipe(
+        &self,
+        id: RecipeId,
+        actor: Option<crate::domain::UserId>,
+    ) -> Result<Recipe> {
+        self.recipes
+            .get(id)
+            .await?
+            .filter(|recipe| actor.is_none_or(|actor| recipe.owner_id == actor))
+            .ok_or_else(|| CoreError::not_found(RECIPE, id))
+    }
+
+    async fn item_name(&self, item: MealItemRef) -> Result<String> {
+        match item {
+            MealItemRef::Product { product_id } => match self.products.get(product_id).await? {
+                Some(product) => Ok(product.name),
+                None => Ok("Missing product".to_owned()),
+            },
+            MealItemRef::Recipe { recipe_id } => match self.recipes.get(recipe_id).await? {
+                Some(recipe) => Ok(recipe.name),
+                None => Ok("Missing recipe".to_owned()),
+            },
+            MealItemRef::Dish { recipe_id } => {
+                match self.batches.held_for_recipe(recipe_id).await?.first() {
+                    Some(batch) => Ok(batch.item_name.clone()),
+                    None => match self.recipes.get(recipe_id).await? {
+                        Some(recipe) => Ok(recipe.name),
+                        None => Ok("Missing cooked food".to_owned()),
+                    },
+                }
+            }
+            MealItemRef::Ingredient { ingredient_id } => {
+                match self.ingredients.get(ingredient_id).await? {
+                    Some(ingredient) => Ok(ingredient.name),
+                    None => Ok("Missing food".to_owned()),
+                }
+            }
+            MealItemRef::PreparedMeal { prepared_meal_id } => {
+                match self.prepared_meals.get(prepared_meal_id).await? {
+                    Some(prepared_meal) => Ok(prepared_meal.name),
+                    None => Ok("Missing food".to_owned()),
+                }
+            }
+        }
+    }
+
+    async fn resolve_item(
+        &self,
+        item: MealItemRef,
+        amount: &ConsumedAmount,
+        actor: Option<crate::domain::UserId>,
+    ) -> Result<ConsumedNutrition> {
+        match item {
+            MealItemRef::Product { product_id } => {
+                let product = self.get_product(product_id).await?;
+                ensure_loggable(&product)?;
+                ensure_resolvable(&product, amount)?;
+                Ok(nutrition_for(&product, amount))
+            }
+            MealItemRef::Recipe { recipe_id } => {
+                let recipe = self.get_recipe(recipe_id, actor).await?;
+                if recipe.is_archived() {
+                    let mut errors = ValidationErrors::new();
+                    errors.push("item", "That recipe is archived");
+                    return Err(errors.into());
+                }
+                if !matches!(amount, ConsumedAmount::Servings(_)) {
+                    let mut errors = ValidationErrors::new();
+                    errors.push("amount", "Recipes are measured in servings");
+                    return Err(errors.into());
+                }
+                let requirements: Vec<&crate::domain::RecipeRequirement> = recipe
+                    .components
+                    .iter()
+                    .map(|component| &component.requirement)
+                    .collect();
+                let fulfilments = RecipeFulfilments::load(&*self.products, &requirements).await?;
+                let per_serving = recipe_nutrition(
+                    recipe.components.iter().map(|component| {
+                        (&component.amount, fulfilments.get(&component.requirement))
+                    }),
+                    recipe.servings,
+                );
+                Ok(recipe_nutrition_for(&per_serving, amount))
+            }
+            MealItemRef::Dish { recipe_id } => {
+                let batch = self.cooked_first(recipe_id).await?;
+                if !matches!(amount, ConsumedAmount::Servings(_)) {
+                    let mut errors = ValidationErrors::new();
+                    errors.push("amount", "Cooked food is measured in servings");
+                    return Err(errors.into());
+                }
+                Ok(recipe_nutrition_for(&batch.nutrition, amount))
+            }
+            MealItemRef::Ingredient { ingredient_id } => {
+                if !matches!(amount, ConsumedAmount::Measure(_)) {
+                    let mut errors = ValidationErrors::new();
+                    errors.push("amount", "A food without a brand is measured, not counted");
+                    return Err(errors.into());
+                }
+                let candidates = self
+                    .products
+                    .list_by_ingredient(&[ingredient_id])
+                    .await?
+                    .remove(&ingredient_id)
+                    .unwrap_or_default();
+                Ok(generic_food_nutrition(&candidates, amount))
+            }
+            MealItemRef::PreparedMeal { prepared_meal_id } => {
+                if !matches!(amount, ConsumedAmount::Measure(_)) {
+                    let mut errors = ValidationErrors::new();
+                    errors.push("amount", "A food without a brand is measured, not counted");
+                    return Err(errors.into());
+                }
+                let candidates = self
+                    .products
+                    .list_by_prepared_meal(&[prepared_meal_id])
+                    .await?
+                    .remove(&prepared_meal_id)
+                    .unwrap_or_default();
+                Ok(generic_food_nutrition(&candidates, amount))
+            }
+        }
+    }
+
+    async fn commit(
+        &self,
+        record: &ConsumptionRecord,
+        expected: Revision,
+        stock: &StockWrite,
+    ) -> Result<Vec<crate::domain::StockOutcome>> {
+        let (outcome, stock_outcomes) = self.records.update(record, expected, stock).await?;
+        commit_outcome(CONSUMPTION_RECORD, record.id, expected, outcome)?;
+        Ok(stock_outcomes)
+    }
+}
+
+fn ensure_loggable(product: &Product) -> Result<()> {
+    if product.is_archived() {
+        let mut errors = ValidationErrors::new();
+        errors.push("product_id", "That product is archived");
+        return errors.into_result();
+    }
+    Ok(())
+}
+
+fn ensure_resolvable(product: &Product, amount: &ConsumedAmount) -> Result<()> {
+    if let Err(err) = amount.resolve(product) {
+        let mut errors = ValidationErrors::new();
+        errors.push("amount", err.to_string());
+        return errors.into_result();
+    }
+    Ok(())
+}
+
+const LOGGING_GRACE_DAYS: i64 = 1;
+
+async fn ensure_not_future(
+    clock: &Arc<dyn Clock>,
+    settings: &dyn HouseholdSettingsRepository,
+    consumed_on: Date,
+) -> Result<()> {
+    let today = super::calendar::household_calendar(settings, clock)
+        .await?
+        .today();
+    let latest = today + Duration::days(LOGGING_GRACE_DAYS);
+    if consumed_on > latest {
+        let mut errors = ValidationErrors::new();
+        errors.push("consumed_on", "Food cannot be logged in the future");
+        return errors.into_result();
+    }
+    Ok(())
+}
+
+fn totals_for(entries: &[ConsumptionRecord]) -> DayTotals {
+    let nutrition = sum_nutrition(entries.iter().map(|e| &e.nutrition));
+    let unknown_count = entries
+        .iter()
+        .filter(|e| e.quality == NutritionQuality::Unknown)
+        .count() as i64;
+    let partial_count = entries
+        .iter()
+        .filter(|e| e.quality == NutritionQuality::Partial)
+        .count() as i64;
+    DayTotals {
+        nutrition,
+        entry_count: entries.len() as i64,
+        unknown_count,
+        partial_count,
+    }
+}
+
+#[cfg(test)]
+#[path = "consumption_tests.rs"]
+mod tests;
