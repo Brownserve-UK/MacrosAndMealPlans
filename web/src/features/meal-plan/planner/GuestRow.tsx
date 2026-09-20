@@ -1,6 +1,7 @@
 import AddIcon from '@mui/icons-material/AddOutlined';
 import EditIcon from '@mui/icons-material/EditOutlined';
 import MoreVertIcon from '@mui/icons-material/MoreVertOutlined';
+import PersonIcon from '@mui/icons-material/PersonOutlined';
 import Box from '@mui/material/Box';
 import IconButton from '@mui/material/IconButton';
 import InputBase from '@mui/material/InputBase';
@@ -9,8 +10,16 @@ import { useRef, useState } from 'react';
 import { DinerMeal, dinerRowSx } from './DinerRow';
 import type { GroupView, OccasionView, PlannerGuest } from './types';
 
-function GuestAvatar() {
-  return <Box aria-hidden sx={{ width: 26, height: 26, borderRadius: '50%', border: '1px dashed', borderColor: 'divider' }} />;
+function GuestAvatar({ placeholder = false }: { placeholder?: boolean }) {
+  return <Box aria-hidden sx={{
+    width: 26, height: 26, borderRadius: '50%', display: 'grid', placeItems: 'center',
+    backgroundColor: placeholder ? 'transparent' : 'divider',
+    border: placeholder ? '1px dashed' : 'none',
+    borderColor: placeholder ? 'text.disabled' : undefined,
+    color: placeholder ? 'text.disabled' : 'text.secondary',
+  }}>
+    <PersonIcon sx={{ fontSize: 16 }} />
+  </Box>;
 }
 
 function GuestName({ guest, label, onRename }: { guest: PlannerGuest; label: string; onRename: (guest: PlannerGuest, name: string | null) => Promise<boolean> }) {
@@ -81,7 +90,7 @@ export function GuestRows({ occasion, onAdd, onOpen, onRename }: {
         </Box>;
       })}
       <Box sx={dinerRowSx}>
-        <GuestAvatar />
+        <GuestAvatar placeholder />
         <Typography sx={{ color: 'text.secondary' }}>Add a guest</Typography>
         <Box />
         <IconButton size="small" aria-label="Add a guest" onClick={(event) => onAdd(event.currentTarget)} sx={{ color: 'text.disabled' }}>
