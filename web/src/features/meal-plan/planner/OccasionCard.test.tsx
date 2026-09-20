@@ -222,6 +222,31 @@ describe('OccasionCard', () => {
     expect(mocks.changeGuest).toHaveBeenCalledWith({ occasionId: 'occasion-1', guestId: 'alex', revision: withGuest.revision, note: 'no chilli' });
   });
 
+  it('keeps generated names unset, cancels edits and retains failed rename drafts', async () => {
+    const withGuest = occasion({ groups: [group({ guests: [{ id: 'guest', name: null, note: 'no chilli', count: 1 }], guest_count: 1 })] });
+    render(<OccasionCard occasion={withGuest} week={week([withGuest])} sheet={false} onClose={vi.fn()} onMove={vi.fn()} onCopy={vi.fn()} onDelete={vi.fn()} />);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Edit name for Guest 1' }));
+    const input = screen.getByRole('textbox', { name: 'Name for Guest 1' }) as HTMLInputElement;
+    expect(input.value).toBe('Guest 1');
+    expect(input.selectionStart).toBe(0);
+    expect(input.selectionEnd).toBe(7);
+    expect(screen.getByText('· no chilli')).toBeVisible();
+    await user.keyboard('{Enter}');
+    expect(mocks.changeGuest).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: 'Edit name for Guest 1' }));
+    await user.keyboard('Alex{Escape}');
+    expect(mocks.changeGuest).not.toHaveBeenCalled();
+    mocks.changeGuest.mockRejectedValueOnce(new Error('Unavailable'));
+    await user.click(screen.getByRole('button', { name: 'Edit name for Guest 1' }));
+    await user.keyboard('Morgan{Enter}');
+    expect(await screen.findByText('Could not change the guest name.')).toBeVisible();
+    expect(screen.getByRole('textbox', { name: 'Name for Guest 1' })).toHaveValue('Morgan');
+    await user.keyboard('{Enter}');
+    expect(mocks.changeGuest).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole('textbox', { name: 'Name for Guest 1' })).not.toBeInTheDocument();
+  });
+
   it('shows a shared food once, added up, with a for column when two meals share it', () => {
     const pizzaComponent = {
       id: 'chips-a',

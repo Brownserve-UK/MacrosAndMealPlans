@@ -37,7 +37,7 @@ export function Roster({
   onOpenMember: (member: PlannerMember, anchor: HTMLElement) => void;
   onAddGuest: (anchor: HTMLElement) => void;
   onOpenGuests: (group: GroupView, guest: PlannerGuest, anchor: HTMLElement) => void;
-  onRenameGuest: (guest: PlannerGuest, name: string | null) => void;
+  onRenameGuest: (guest: PlannerGuest, name: string | null) => Promise<boolean>;
   onEditMeal: (group: GroupView) => void;
 }) {
   const members = week.members;

@@ -69,8 +69,10 @@ export function OccasionCard({
     try {
       setError(null);
       await action();
+      return true;
     } catch (caught) {
       setError(caught instanceof ApiError ? caught.message : fallback);
+      return false;
     }
   }
 
@@ -205,7 +207,7 @@ export function OccasionCard({
         onOpenMember={(member, anchor) => setPicker({ anchor, kind: 'member', member })}
         onAddGuest={(anchor) => setPicker({ anchor, kind: 'guests', group: null, guest: null })}
         onOpenGuests={(group, guest, anchor) => setPicker({ anchor, kind: 'guests', group, guest })}
-        onRenameGuest={(guest, name) => { void run(() => changeGuest.mutateAsync({ occasionId: occasion.id, guestId: guest.id, revision: occasion.revision, name }), 'Could not change the guest name.'); }}
+        onRenameGuest={(guest, name) => run(() => changeGuest.mutateAsync({ occasionId: occasion.id, guestId: guest.id, revision: occasion.revision, name }), 'Could not change the guest name.')}
         onEditMeal={(group) => setEditingGroupId(group.id)}
       />
       <CookingList occasion={occasion} members={members} />
