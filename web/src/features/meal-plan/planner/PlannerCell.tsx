@@ -1,11 +1,18 @@
+import CallSplitOutlinedIcon from '@mui/icons-material/CallSplitOutlined';
+import MeetingRoomOutlinedIcon from '@mui/icons-material/MeetingRoomOutlined';
+import PersonAddAltOutlinedIcon from '@mui/icons-material/PersonAddAltOutlined';
+import ShoppingCartOutlinedIcon from '@mui/icons-material/ShoppingCartOutlined';
+import SoupKitchenOutlinedIcon from '@mui/icons-material/SoupKitchenOutlined';
 import Box from '@mui/material/Box';
 import Stack from '@mui/material/Stack';
 import Typography from '@mui/material/Typography';
-import type { DragEvent, KeyboardEvent, MouseEvent } from 'react';
+import type { SvgIconProps } from '@mui/material/SvgIcon';
+import { alpha } from '@mui/material/styles';
+import type { ComponentType, DragEvent, KeyboardEvent, MouseEvent } from 'react';
 import { forwardRef } from 'react';
 import type { MealSlot } from '../../../api/client';
 import { labelForSlot } from '../slots';
-import type { CellSummary } from './plannerWeek';
+import type { AvatarState, CellAvatar, CellDetail, CellMarker, MarkerKind } from './plannerWeek';
 import { shortDate } from './plannerWeek';
 import type { OccasionView } from './types';
 
@@ -13,7 +20,7 @@ export type CellProps = {
   date: string;
   slot: MealSlot;
   occasion: OccasionView | null;
-  summary: CellSummary | null;
+  detail: CellDetail | null;
   past: boolean;
   tabIndex: number;
   onOpen: (occasion: OccasionView, anchor: HTMLElement) => void;
@@ -24,16 +31,90 @@ export type CellProps = {
   onFocus: () => void;
 };
 
+const AVATAR_STATE_TEXT: Record<AvatarState, string> = {
+  eating: 'eating this',
+  separate: 'eating something else',
+  unaccounted: 'needs a meal',
+  elsewhere: 'eating elsewhere',
+};
+
+const MARKER_ICON: Record<MarkerKind, ComponentType<SvgIconProps>> = {
+  separate: CallSplitOutlinedIcon,
+  cook: SoupKitchenOutlinedIcon,
+  guests: PersonAddAltOutlinedIcon,
+  buy: ShoppingCartOutlinedIcon,
+  elsewhere: MeetingRoomOutlinedIcon,
+};
+
+const MARKER_COLOR: Record<CellMarker['tone'], string> = {
+  secondary: 'text.secondary',
+  brown: 'secondary.main',
+  amber: 'warning.main',
+};
+
 function isPrintable(event: KeyboardEvent) {
   return event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey;
 }
 
+function MemberAvatar({ avatar, past }: { avatar: CellAvatar; past: boolean }) {
+  return (
+    <Box
+      aria-hidden
+      title={`${avatar.name} · ${AVATAR_STATE_TEXT[avatar.state]}`}
+      sx={{
+        width: 24,
+        height: 24,
+        flexShrink: 0,
+        borderRadius: '50%',
+        display: 'grid',
+        placeItems: 'center',
+        fontSize: '0.6875rem',
+        fontWeight: 600,
+        lineHeight: 1,
+        boxSizing: 'border-box',
+        ...(past
+          ? { backgroundColor: 'divider', border: '1px solid transparent', color: 'text.disabled' }
+          : avatar.state === 'eating'
+            ? { backgroundColor: (theme) => alpha(theme.palette.primary.main, 0.18), border: '1px solid transparent', color: 'primary.main' }
+            : avatar.state === 'separate'
+              ? { backgroundColor: (theme) => alpha(theme.palette.text.secondary, 0.18), border: '1px solid transparent', color: 'text.secondary' }
+              : avatar.state === 'unaccounted'
+                ? { backgroundColor: 'transparent', border: '1px dashed', borderColor: 'warning.main', color: 'warning.main' }
+                : { backgroundColor: 'transparent', border: '1px solid', borderColor: 'divider', color: 'text.disabled' }),
+      }}
+    >
+      {avatar.initials || '?'}
+    </Box>
+  );
+}
+
+function MealMarker({ marker, past }: { marker: CellMarker; past: boolean }) {
+  const Icon = MARKER_ICON[marker.kind];
+  return (
+    <Stack
+      direction="row"
+      spacing={0.375}
+      sx={{ alignItems: 'center', color: past ? 'text.disabled' : MARKER_COLOR[marker.tone] }}
+    >
+      <Icon sx={{ fontSize: 14 }} />
+      <Typography component="span" variant="caption" className="numeral">
+        {marker.value}
+      </Typography>
+    </Stack>
+  );
+}
+
 export const PlannerCell = forwardRef<HTMLButtonElement, CellProps>(function PlannerCell(
-  { date, slot, occasion, summary, past, tabIndex, onOpen, onAdd, onContextMenu, onNavigate, onDrop, onFocus },
+  { date, slot, occasion, detail, past, tabIndex, onOpen, onAdd, onContextMenu, onNavigate, onDrop, onFocus },
   ref,
 ) {
+  const needingMeal = detail?.avatars.filter((avatar) => avatar.state === 'unaccounted') ?? [];
+  const needingMealSuffix =
+    needingMeal.length > 0
+      ? `. ${needingMeal.map((avatar) => avatar.name).join(', ')} ${needingMeal.length === 1 ? 'needs' : 'need'} a meal`
+      : '';
   const label = occasion
-    ? `${labelForSlot(slot)} on ${shortDate(date)}: ${summary?.name ?? ''}`
+    ? `${labelForSlot(slot)} on ${shortDate(date)}: ${detail?.name ?? ''}${needingMealSuffix}`
     : `Plan ${labelForSlot(slot).toLowerCase()} on ${shortDate(date)}`;
 
   function keyDown(event: KeyboardEvent<HTMLButtonElement>) {
@@ -102,7 +183,7 @@ export const PlannerCell = forwardRef<HTMLButtonElement, CellProps>(function Pla
       onFocus={onFocus}
       sx={{
         position: 'relative',
-        minHeight: 82,
+        minHeight: 112,
         px: 1.75,
         py: 1.5,
         borderRadius: '10px',
@@ -131,12 +212,12 @@ export const PlannerCell = forwardRef<HTMLButtonElement, CellProps>(function Pla
             }),
       }}
     >
-      {occasion && summary ? (
+      {occasion && detail ? (
         <>
           <Typography
             component="span"
             variant="body1"
-            title={summary.tail ? `${summary.name} ${summary.tail}` : summary.name}
+            title={detail.tail ? `${detail.name} ${detail.tail}` : detail.name}
             sx={{
               fontWeight: 500,
               lineHeight: 1.3,
@@ -147,29 +228,30 @@ export const PlannerCell = forwardRef<HTMLButtonElement, CellProps>(function Pla
               overflow: 'hidden',
             }}
           >
-            {summary.name}
-            {summary.tail ? (
+            {detail.name}
+            {detail.tail ? (
               <Typography component="span" variant="body1" sx={{ color: past ? 'inherit' : 'text.secondary' }}>
                 {' '}
-                {summary.tail}
+                {detail.tail}
               </Typography>
             ) : null}
           </Typography>
-          {summary.meta.length > 0 ? (
-            <Stack direction="row" spacing={1.25} sx={{ flexWrap: 'wrap', rowGap: 0.25 }}>
-              {summary.meta.map((item) => (
-                <Typography
-                  key={item.text}
-                  component="span"
-                  variant="caption"
-                  className="numeral"
-                  sx={{ color: past ? 'inherit' : item.tone === 'buy' ? 'warning.main' : 'text.secondary' }}
-                >
-                  {item.text}
-                </Typography>
-              ))}
-            </Stack>
-          ) : null}
+          <Stack spacing={0.75}>
+            {detail.avatars.length > 0 ? (
+              <Stack direction="row" spacing={0.5} sx={{ flexWrap: 'wrap', rowGap: 0.5 }}>
+                {detail.avatars.map((avatar) => (
+                  <MemberAvatar key={avatar.memberId} avatar={avatar} past={past} />
+                ))}
+              </Stack>
+            ) : null}
+            {detail.markers.length > 0 ? (
+              <Stack direction="row" spacing={1.25} sx={{ flexWrap: 'wrap', rowGap: 0.25 }}>
+                {detail.markers.map((marker) => (
+                  <MealMarker key={marker.kind} marker={marker} past={past} />
+                ))}
+              </Stack>
+            ) : null}
+          </Stack>
         </>
       ) : (
         <Box

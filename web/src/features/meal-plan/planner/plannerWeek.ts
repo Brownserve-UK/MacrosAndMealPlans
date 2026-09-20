@@ -95,6 +95,51 @@ export function groupFoodCaption(group: GroupView): string | null {
   return joinFoodNamesPlain(group.components.map((component) => component.item_name));
 }
 
+export type AvatarState = 'eating' | 'separate' | 'elsewhere' | 'unaccounted';
+
+export type CellAvatar = { memberId: string; name: string; initials: string; state: AvatarState };
+
+export type MarkerKind = 'separate' | 'cook' | 'guests' | 'buy' | 'elsewhere';
+
+export type CellMarker = { kind: MarkerKind; value: string; tone: 'secondary' | 'brown' | 'amber' };
+
+export type CellDetail = { name: string; tail: string | null; avatars: CellAvatar[]; markers: CellMarker[] };
+
+export function cellDetail(occasion: OccasionView, members: PlannerMember[]): CellDetail {
+  const [first, ...rest] = occasion.groups;
+
+  const avatars: CellAvatar[] = members.map((member) => {
+    const status = memberStatus(occasion, member, members);
+    let state: AvatarState;
+    if (status.kind === 'eating') {
+      state = first && status.group.id === first.id ? 'eating' : 'separate';
+    } else if (status.kind === 'elsewhere') {
+      state = 'elsewhere';
+    } else {
+      state = 'unaccounted';
+    }
+    return { memberId: member.id, name: member.name, initials: initialsOf(member), state };
+  });
+
+  const markers: CellMarker[] = [];
+  if (rest.length > 0) {
+    markers.push({ kind: 'separate', value: `${occasion.groups.length} meals`, tone: 'secondary' });
+  }
+  if (first?.cook_minutes) {
+    markers.push({ kind: 'cook', value: formatMinutes(first.cook_minutes), tone: 'brown' });
+  }
+  const guests = occasion.groups.reduce((total, group) => total + group.guest_count, 0);
+  if (guests > 0) markers.push({ kind: 'guests', value: String(guests), tone: 'secondary' });
+  const toBuy = occasion.groups.reduce((total, group) => total + group.to_buy, 0);
+  if (toBuy > 0) markers.push({ kind: 'buy', value: `${toBuy} to buy`, tone: 'amber' });
+  if (occasion.absent_member_ids.length > 0) {
+    markers.push({ kind: 'elsewhere', value: String(occasion.absent_member_ids.length), tone: 'secondary' });
+  }
+
+  const name = first ? groupShortName(first) : { head: 'Nothing planned', tail: null };
+  return { name: name.head, tail: name.tail, avatars, markers };
+}
+
 export function cellSummary(occasion: OccasionView, members: PlannerMember[]): CellSummary {
   const [first, ...rest] = occasion.groups;
   const meta: CellMeta[] = [];

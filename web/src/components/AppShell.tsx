@@ -35,6 +35,7 @@ import { useColorScheme } from '@mui/material/styles';
 import { Link, useNavigate, Outlet, useRouterState } from '@tanstack/react-router';
 import { useState } from 'react';
 import { useAuth } from '../auth/AuthProvider';
+import { SetContainerWidthContext, type ContainerWidth } from './PageWidth';
 
 export const DRAWER_WIDTH = 236;
 
@@ -127,6 +128,7 @@ function ThemeToggle() {
 export function AppShell() {
   const { principal } = useAuth();
   const pathname = useRouterState({ select: (s) => s.location.pathname });
+  const [containerWidth, setContainerWidth] = useState<ContainerWidth>('md');
 
   const activeNavTo = [...NAV, ...BOTTOM_NAV]
     .filter((item) => pathname === item.to || pathname.startsWith(`${item.to}/`))
@@ -203,8 +205,10 @@ export function AppShell() {
           </Toolbar>
         </AppBar>
 
-        <Container maxWidth="md" sx={{ py: 5, flexGrow: 1 }}>
-          <Outlet />
+        <Container maxWidth={containerWidth} sx={{ py: 5, flexGrow: 1 }}>
+          <SetContainerWidthContext.Provider value={setContainerWidth}>
+            <Outlet />
+          </SetContainerWidthContext.Provider>
         </Container>
       </Box>
     </Box>

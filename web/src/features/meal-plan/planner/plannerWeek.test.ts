@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { groupDisplayName, groupFoodCaption, groupShortName, joinFoodNames } from './plannerWeek';
+import { group, occasion, MEMBERS } from './fixtures';
+import { cellDetail, groupDisplayName, groupFoodCaption, groupShortName, joinFoodNames } from './plannerWeek';
 import type { GroupView } from './types';
 
 describe('joinFoodNames', () => {
@@ -112,5 +113,91 @@ describe('groupFoodCaption', () => {
 
   it('surfaces the joined food as the caption once a label is typed', () => {
     expect(groupFoodCaption(baseGroup({ label: 'Fish finger sandwich' }))).toBe('Salmon, Potatoes & Broccoli');
+  });
+});
+
+describe('cellDetail', () => {
+  it('marks everyone as eating when there is one everyone group', () => {
+    const detail = cellDetail(occasion(), MEMBERS);
+    expect(detail.avatars).toEqual(
+      MEMBERS.map((member) => ({
+        memberId: member.id,
+        name: member.name,
+        initials: member.initials,
+        state: 'eating',
+      })),
+    );
+    expect(detail.markers).toEqual([
+      { kind: 'cook', value: '35 mins', tone: 'brown' },
+      { kind: 'buy', value: '2 to buy', tone: 'amber' },
+    ]);
+  });
+
+  it('marks a member with no group and no absence as unaccounted', () => {
+    const curry = occasion({
+      groups: [
+        group({
+          everyone: false,
+          participants: [
+            { member_id: 'steve', name: 'Steve', note: null },
+            { member_id: 'sarah', name: 'Sarah', note: null },
+            { member_id: 'emily', name: 'Emily', note: null },
+          ],
+        }),
+      ],
+    });
+    const detail = cellDetail(curry, MEMBERS);
+    expect(detail.avatars.find((avatar) => avatar.memberId === 'jack')).toEqual({
+      memberId: 'jack',
+      name: 'Jack',
+      initials: 'JB',
+      state: 'unaccounted',
+    });
+  });
+
+  it('marks an absent member as elsewhere', () => {
+    const detail = cellDetail(occasion({ absent_member_ids: ['jack'] }), MEMBERS);
+    expect(detail.avatars.find((avatar) => avatar.memberId === 'jack')).toEqual({
+      memberId: 'jack',
+      name: 'Jack',
+      initials: 'JB',
+      state: 'elsewhere',
+    });
+  });
+
+  it('marks a member on a second group as separate', () => {
+    const split = occasion({
+      groups: [
+        group({ id: 'bol', name: 'Spaghetti bolognese' }),
+        group({
+          id: 'lasagne',
+          name: 'Lasagne',
+          everyone: false,
+          participants: [{ member_id: 'jack', name: 'Jack', note: null }],
+        }),
+      ],
+    });
+    const detail = cellDetail(split, MEMBERS);
+    expect(detail.avatars.find((avatar) => avatar.memberId === 'jack')?.state).toBe('separate');
+    expect(detail.avatars.find((avatar) => avatar.memberId === 'steve')?.state).toBe('eating');
+    expect(detail.markers).toContainEqual({ kind: 'separate', value: '2 meals', tone: 'secondary' });
+  });
+
+  it('builds the full marker set from guests, cooking, shopping and absence', () => {
+    const busy = occasion({
+      groups: [
+        group({ id: 'bol', name: 'Spaghetti bolognese', cook_minutes: 40, to_buy: 3, guest_count: 2 }),
+        group({ id: 'lasagne', name: 'Lasagne', everyone: false, participants: [], guest_count: 0, to_buy: 0 }),
+      ],
+      absent_member_ids: ['jack'],
+    });
+    const detail = cellDetail(busy, MEMBERS);
+    expect(detail.markers).toEqual([
+      { kind: 'separate', value: '2 meals', tone: 'secondary' },
+      { kind: 'cook', value: '40 mins', tone: 'brown' },
+      { kind: 'guests', value: '2', tone: 'secondary' },
+      { kind: 'buy', value: '3 to buy', tone: 'amber' },
+      { kind: 'elsewhere', value: '1', tone: 'secondary' },
+    ]);
   });
 });

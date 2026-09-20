@@ -5,7 +5,7 @@ import type { MealSlot } from '../../../api/client';
 import { parseIsoDate } from '../date';
 import { labelForSlot } from '../slots';
 import { PlannerCell } from './PlannerCell';
-import { cellSummary, occasionAt, SLOT_ORDER, weekDates } from './plannerWeek';
+import { cellDetail, occasionAt, SLOT_ORDER, weekDates } from './plannerWeek';
 import type { OccasionView, PlannerWeek } from './types';
 
 export function WeekGrid({
@@ -99,7 +99,7 @@ export function WeekGrid({
                 date={date}
                 slot={slot}
                 occasion={occasion}
-                summary={occasion ? cellSummary(occasion, week.members) : null}
+                detail={occasion ? cellDetail(occasion, week.members) : null}
                 past={date < today}
                 tabIndex={focused.row === row && focused.col === col ? 0 : -1}
                 onOpen={onOpen}

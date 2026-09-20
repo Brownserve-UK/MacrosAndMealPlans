@@ -22,6 +22,7 @@ import {
   useSetAttendance,
   useUpdateOccasion,
 } from '../../../api/queries';
+import { usePageContainerWidth } from '../../../components/PageWidth';
 import { ErrorState, Loading } from '../../../components/States';
 import { useHouseholdTimeZone } from '../../../hooks/useHouseholdTimeZone';
 import { addDays, parseIsoDate, startOfWeekIso, todayIso } from '../date';
@@ -44,6 +45,8 @@ export function PlannerPage({ weekStart }: { weekStart: string }) {
   const navigate = useNavigate();
   const theme = useTheme();
   const desktop = useMediaQuery(theme.breakpoints.up('md'));
+  const wideGrid = useMediaQuery(theme.breakpoints.up('lg'));
+  usePageContainerWidth('xl');
   const timeZone = useHouseholdTimeZone();
   const today = todayIso(timeZone);
   const currentMonday = startOfWeekIso(today);
@@ -217,7 +220,7 @@ export function PlannerPage({ weekStart }: { weekStart: string }) {
       ) : null}
       {week.isLoading || !week.data ? <Loading label="Loading planner" /> : null}
       {week.data ? (
-        desktop ? (
+        wideGrid ? (
           <WeekGrid
             week={week.data}
             weekStart={weekStart}
