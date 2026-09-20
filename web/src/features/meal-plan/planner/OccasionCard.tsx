@@ -272,6 +272,7 @@ export function OccasionCard({
   const pickerElement = (
     <>
       <PersonPicker
+        plannedOn={occasion.planned_on}
         open={picker?.kind === 'member'}
         anchorEl={picker?.anchor ?? null}
         sheet={sheet}
@@ -307,6 +308,7 @@ export function OccasionCard({
         onClose={() => setEditingGroupId(null)}
       />
       <GuestMenu
+        plannedOn={occasion.planned_on}
         open={picker?.kind === 'guests'}
         anchorEl={picker?.anchor ?? null}
         sheet={sheet}

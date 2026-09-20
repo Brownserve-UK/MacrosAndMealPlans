@@ -657,12 +657,18 @@ impl MealPlanService {
             let mut available = Decimal::ZERO;
             for batch in self.batches.held_for_recipe(recipe_id).await? {
                 for portion in self.batches.portions(batch.id).await? {
-                    if portion.is_archived() {
+                    if portion.is_archived()
+                        || !portion
+                            .usability_deadline
+                            .as_ref()
+                            .is_some_and(|deadline| deadline.date >= group.planned_on)
+                    {
                         continue;
                     }
                     match portion.level {
                         StockLevel::Exact { quantity } | StockLevel::Estimated { quantity }
-                            if quantity.unit == Unit::Serving =>
+                            if quantity.unit == Unit::Serving
+                                && quantity.amount > Decimal::ZERO =>
                         {
                             available += quantity.amount;
                         }

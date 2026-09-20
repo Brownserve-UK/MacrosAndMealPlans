@@ -80,7 +80,7 @@ export function MealSheet({
   const [saving, setSaving] = useState(false);
   const [templateName, setTemplateName] = useState('');
 
-  const { rows } = usePickerRows(query);
+  const { rows } = usePickerRows(query, occasionProp?.planned_on ?? '');
   const busy = updateGroup.isPending || deleteGroup.isPending || saveTemplate.isPending;
 
   if (!open || !groupProp || !occasionProp) return null;

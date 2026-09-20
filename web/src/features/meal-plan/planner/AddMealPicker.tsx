@@ -8,11 +8,13 @@ import type { NewGroup, PickerRow } from './types';
 import { usePickerRows } from './usePickerRows';
 
 function PickerBody({
+  plannedOn,
   initialQuery,
   placeholder,
   onPick,
   onClose,
 }: {
+  plannedOn: string;
   initialQuery: string;
   placeholder: string;
   onPick: (group: NewGroup) => void;
@@ -20,7 +22,7 @@ function PickerBody({
 }) {
   const [query, setQuery] = useState(initialQuery);
   const [selected, setSelected] = useState(0);
-  const { rows } = usePickerRows(query);
+  const { rows } = usePickerRows(query, plannedOn);
 
   const typed = query.trim();
 
@@ -94,6 +96,7 @@ function PickerBody({
 }
 
 export function AddMealPicker({
+  plannedOn,
   open,
   anchorEl,
   sheet,
@@ -102,6 +105,7 @@ export function AddMealPicker({
   onPick,
   onClose,
 }: {
+  plannedOn: string;
   open: boolean;
   anchorEl: HTMLElement | null;
   sheet: boolean;
@@ -110,7 +114,7 @@ export function AddMealPicker({
   onPick: (group: NewGroup) => void;
   onClose: () => void;
 }) {
-  const body = open ? <PickerBody initialQuery={initialQuery} placeholder={placeholder} onPick={onPick} onClose={onClose} /> : null;
+  const body = open ? <PickerBody plannedOn={plannedOn} initialQuery={initialQuery} placeholder={placeholder} onPick={onPick} onClose={onClose} /> : null;
 
   if (sheet) {
     return (

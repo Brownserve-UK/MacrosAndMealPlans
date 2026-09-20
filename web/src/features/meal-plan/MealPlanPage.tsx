@@ -48,7 +48,7 @@ import { formatAmount } from './format';
 import { DayWeekNutrition } from './NutritionSummary';
 import { groupDiners, occasionAt, occasionTitle } from './planner/plannerWeek';
 import type { GroupView, OccasionView, PlannerWeek } from './planner/types';
-import { leftoversRow, servingsInFridge, useFridgeDishes } from './planner/usePickerRows';
+import { leftoversRow, leftoverCaption, useLeftoverDishes } from './planner/usePickerRows';
 import { SLOTS } from './slots';
 import { WeekNavigator } from './WeekNavigator';
 
@@ -496,7 +496,6 @@ export function MealPlanPage({ weekStart, day }: { weekStart: string; day: strin
   const week = useMealPlanWeek(weekStart);
   const plannerWeek = usePlannerWeek(weekStart);
   const meta = useMeta();
-  const dishes = useFridgeDishes();
   const directions = meta.data?.nutrient_directions ?? {};
   const [adding, setAdding] = useState<AddSelection | null>(null);
   const [editing, setEditing] = useState<EditSelection | null>(null);
@@ -513,6 +512,7 @@ export function MealPlanPage({ weekStart, day }: { weekStart: string; day: strin
   const timeZone = useHouseholdTimeZone();
   const currentMonday = startOfWeekIso(todayIso(timeZone));
   const activeDate = day >= weekStart && day <= addDays(weekStart, 6) ? day : weekStart;
+  const dishes = useLeftoverDishes(notEating?.occasion.planned_on ?? activeDate);
 
   function goToWeek(start: string) {
     void navigate({
@@ -730,7 +730,7 @@ export function MealPlanPage({ weekStart, day }: { weekStart: string; day: strin
           <MenuRow
             icon={<IconTile concept="dish" tone="secondary" />}
             primary="Leftovers"
-            secondary={fridge ? `${fridge.name}, ${servingsInFridge(fridge)}` : 'Nothing in the fridge'}
+            secondary={fridge ? `${fridge.name}, ${leftoverCaption(fridge)}` : 'No leftovers available'}
           />
         </MenuItem>
         <MenuItem

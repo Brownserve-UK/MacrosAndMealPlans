@@ -5,7 +5,7 @@ import { useDebounced } from '../../../hooks/useDebounced';
 import { formatMinutes } from './plannerWeek';
 import type { NewGroupComponent, PickerRow } from './types';
 
-export type FridgeDish = { recipeId: string; name: string; servings: number; useBy: string | null };
+export type LeftoverDish = { recipeId: string; name: string; servings: number; useBy: string; locations: Record<'chilled' | 'frozen' | 'ambient', number> };
 
 export function templateComponents(template: MealTemplate): NewGroupComponent[] {
   return template.components
@@ -31,15 +31,16 @@ function refToComponent(component: MealTemplateComponent): NewGroupComponent | n
   }
 }
 
-export function servingsInFridge(dish: FridgeDish): string {
-  return dish.servings === 1 ? '1 serving in the fridge' : `${dish.servings} servings in the fridge`;
+export function leftoverCaption(dish: LeftoverDish): string {
+  const locations = Object.entries(dish.locations).filter(([, servings]) => servings > 0);
+  return `${dish.servings} ${dish.servings === 1 ? 'serving' : 'servings'} (${locations.map(([location, servings]) => `${servings} ${location}`).join(' · ')})`;
 }
 
-export function leftoversRow(dish: FridgeDish, servings = dish.servings): PickerRow {
+export function leftoversRow(dish: LeftoverDish, servings = dish.servings): PickerRow {
   return {
     id: `leftovers:${dish.recipeId}`,
     title: 'Leftovers',
-    caption: `${dish.name}, ${servingsInFridge(dish)}`,
+    caption: `${dish.name}, ${leftoverCaption(dish)}`,
     concept: 'dish',
     section: 'quick',
     group: {
@@ -48,38 +49,41 @@ export function leftoversRow(dish: FridgeDish, servings = dish.servings): Picker
   };
 }
 
-export function useFridgeDishes(): FridgeDish[] {
+export function useLeftoverDishes(plannedOn: string): LeftoverDish[] {
   const stock = useStock({ per_page: 200 });
   return useMemo(() => {
-    const byRecipe = new Map<string, FridgeDish>();
+    const byRecipe = new Map<string, LeftoverDish>();
     for (const item of stock.data?.items ?? []) {
-      if (item.subject_kind !== 'prepared_portion' || !item.prepared_recipe_id) continue;
-      const servings = 'quantity' in item.level ? item.level.quantity.amount : 0;
+      if (item.subject_kind !== 'prepared_portion' || !item.prepared_recipe_id || item.archived_at) continue;
+      const servings = 'quantity' in item.level && item.level.quantity.unit === 'serving' ? item.level.quantity.amount : 0;
       if (servings <= 0) continue;
-      const useBy = item.usability_deadline?.date ?? null;
+      const useBy = item.usability_deadline?.date;
+      if (!useBy || !plannedOn || useBy < plannedOn) continue;
       const found = byRecipe.get(item.prepared_recipe_id);
       if (found) {
         found.servings += servings;
-        if (useBy && (!found.useBy || useBy < found.useBy)) found.useBy = useBy;
+        found.locations[item.storage_location] += servings;
+        if (useBy < found.useBy) found.useBy = useBy;
       } else {
         byRecipe.set(item.prepared_recipe_id, {
           recipeId: item.prepared_recipe_id,
           name: item.prepared_batch_name ?? 'Cooked food',
           servings,
           useBy,
+          locations: { chilled: 0, frozen: 0, ambient: 0, [item.storage_location]: servings },
         });
       }
     }
-    return [...byRecipe.values()].sort((a, b) => (a.useBy ?? '9999').localeCompare(b.useBy ?? '9999'));
-  }, [stock.data]);
+    return [...byRecipe.values()].sort((a, b) => a.useBy.localeCompare(b.useBy));
+  }, [stock.data, plannedOn]);
 }
 
-export function usePickerRows(query: string): { rows: PickerRow[]; loading: boolean } {
+export function usePickerRows(query: string, plannedOn: string): { rows: PickerRow[]; loading: boolean } {
   const debounced = useDebounced(query.trim(), 250);
   const recipes = useRecipes({ q: debounced || undefined, per_page: 6 });
   const savedMeals = useMealTemplates({ q: debounced || undefined, per_page: 6 });
   const products = useProducts({ q: debounced || undefined, per_page: 6 });
-  const dishes = useFridgeDishes();
+  const dishes = useLeftoverDishes(plannedOn);
 
   const rows = useMemo<PickerRow[]>(() => {
     const matches: PickerRow[] = [];

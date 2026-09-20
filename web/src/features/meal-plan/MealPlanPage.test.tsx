@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { ApiError, type MealItem, type MealPlanEntry, type MealPlanWeek } from '../../api/client';
+import { ApiError, type MealItem, type MealPlanEntry, type MealPlanWeek, type StockItem } from '../../api/client';
 import { MealPlanPage } from './MealPlanPage';
 import type { GroupView, OccasionView, PlannerWeek } from './planner/types';
 
@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   addGroup: vi.fn(),
   navigate: vi.fn(),
   absent: false,
+  stock: [] as StockItem[],
 }));
 
 const WEEK_START = '2026-08-24';
@@ -213,7 +214,7 @@ vi.mock('../../api/queries', () => ({
   usePlannerWeek: () => ({ data: plannerWeek(), isLoading: false, isError: false, refetch: vi.fn() }),
   useHouseholdSettings: () => ({ data: undefined }),
   useMeta: () => ({ data: { nutrient_directions: {} } }),
-  useStock: () => ({ data: { items: [] } }),
+  useStock: () => ({ data: { items: mocks.stock } }),
   useMarkMealPlanComponentEaten: () => ({ mutateAsync: mocks.markComponentEaten }),
   useReopenMealPlanComponent: () => ({ mutateAsync: mocks.reopen }),
   useSetAttendance: () => ({ mutateAsync: mocks.setAttendance, isPending: false }),
@@ -235,6 +236,7 @@ describe('MealPlanPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.absent = false;
+    mocks.stock = [];
     breakfastItems = [plannedItem, siblingItem, eatenItem];
   });
 
@@ -262,6 +264,40 @@ describe('MealPlanPage', () => {
       occasionId: 'occasion-1',
       memberId: 'member-1',
       attendance: { kind: 'elsewhere' },
+    });
+  });
+
+  it('only offers leftovers whose deadline covers the occasion', async () => {
+    const portion: StockItem = {
+      id: 'chilled',
+      subject_kind: 'prepared_portion',
+      prepared_recipe_id: 'curry',
+      prepared_batch_name: 'Curry',
+      storage_location: 'chilled',
+      level: { mode: 'exact', quantity: { amount: 2, unit: 'serving' } },
+      tracking_mode: 'exact',
+      usability_deadline: { date: '2026-08-24' },
+      revision: 1,
+      created_at: '2026-08-22T09:00:00Z',
+      updated_at: '2026-08-22T09:00:00Z',
+    };
+    mocks.stock = [
+      portion,
+      { ...portion, id: 'frozen', storage_location: 'frozen', usability_deadline: { date: DAY } },
+    ];
+    mocks.addGroup.mockResolvedValue({});
+    renderPage();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Not eating this' }));
+    expect(screen.getByText('Curry, 2 servings (2 frozen)')).toBeInTheDocument();
+    await user.click(screen.getByText('Leftovers'));
+    expect(mocks.addGroup).toHaveBeenCalledWith({
+      occasionId: 'occasion-1',
+      body: {
+        components: [{ dish_recipe_id: 'curry', amount: { kind: 'servings', value: 1 } }],
+        everyone: false,
+        participants: [{ member_id: 'member-1' }],
+      },
     });
   });
 
@@ -406,6 +442,7 @@ describe('MealPlanPage', () => {
 describe('MealPlanPage assumed meals', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.stock = [];
     breakfastItems = [assumedItem];
   });
 

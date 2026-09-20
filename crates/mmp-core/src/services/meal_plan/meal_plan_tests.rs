@@ -2082,6 +2082,64 @@ async fn cook_standalone(
         .into_value()
 }
 
+#[tokio::test]
+async fn leftover_counts_use_each_portions_deadline_for_the_planned_date() {
+    let h = harness();
+    let curry = recipe("Curry", h.actor_id, 4, vec![]);
+    h.recipes.seed(curry.clone());
+    h.preparation
+        .record(crate::services::RecordPreparation {
+            recipe_id: curry.id,
+            source: crate::domain::PreparationSource::Standalone,
+            servings_produced: Decimal::new(17, 0),
+            placements: [
+                (StorageLocation::Chilled, 2),
+                (StorageLocation::Frozen, 5),
+                (StorageLocation::Ambient, 10),
+            ]
+            .into_iter()
+            .map(|(location, servings)| crate::domain::PortionPlacement {
+                usability_deadline: crate::domain::cooked_deadline(location, date!(2026 - 08 - 24)),
+                ..crate::domain::PortionPlacement::new(location, Decimal::new(servings, 0))
+            })
+            .collect(),
+            prepared_at: None,
+            actor: h.actor_id,
+        })
+        .await
+        .unwrap();
+
+    for (on, expected) in [
+        (date!(2026 - 08 - 26), 7),
+        (date!(2026 - 08 - 27), 5),
+        (date!(2026 - 10 - 24), 5),
+        (date!(2026 - 11 - 23), 0),
+    ] {
+        let entry = plan(
+            &h,
+            on,
+            Some(time!(18:30)),
+            MealSlot::Dinner,
+            everyone(vec![NewMealPlanComponent {
+                item: MealItemRef::Dish {
+                    recipe_id: curry.id,
+                },
+                ..servings_of(curry.id, 1)
+            }]),
+        )
+        .await;
+        let occasion = h
+            .service
+            .get_occasion(entry.entry.occasion_id)
+            .await
+            .unwrap();
+        assert_eq!(
+            occasion.groups[0].leftover_servings_available,
+            Some(Decimal::new(expected, 0)),
+        );
+    }
+}
+
 async fn cook(
     h: &Harness,
     entry_id: crate::domain::MealPlanEntryId,

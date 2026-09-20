@@ -270,7 +270,7 @@ export function groupCaption(group: GroupView): string | null {
   const kind = groupKind(group);
   if (kind === 'dish' && group.leftover_servings_available != null) {
     const servings = group.leftover_servings_available;
-    return servings === 1 ? '1 serving in the fridge' : `${servings} servings in the fridge`;
+    return servings === 1 ? '1 serving available' : `${servings} servings available`;
   }
   if (group.cook_minutes) return formatMinutes(group.cook_minutes);
   return null;

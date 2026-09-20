@@ -10,7 +10,7 @@ import { useMemo, useState } from 'react';
 import { PickerPromptStep, PickerRowButton, PickerSearchField, SectionHeading, type PickerRowContent } from './pickerParts';
 import { conceptFor, groupDisplayName, groupFoodCaption, groupShortName, type MemberStatus, memberVariation } from './plannerWeek';
 import type { GroupView, NewGroup, PlannerMember } from './types';
-import { leftoversRow, useFridgeDishes, usePickerRows } from './usePickerRows';
+import { leftoversRow, useLeftoverDishes, usePickerRows } from './usePickerRows';
 
 type Row = PickerRowContent & {
   key: string;
@@ -21,6 +21,7 @@ type Row = PickerRowContent & {
 };
 
 function PersonPickerBody({
+  plannedOn,
   member,
   groups,
   status,
@@ -31,6 +32,7 @@ function PersonPickerBody({
   onEditMeal,
   onClose,
 }: {
+  plannedOn: string;
   member: PlannerMember;
   groups: GroupView[];
   status: MemberStatus;
@@ -44,8 +46,8 @@ function PersonPickerBody({
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState(0);
   const [prompting, setPrompting] = useState(false);
-  const { rows } = usePickerRows(query);
-  const dishes = useFridgeDishes();
+  const { rows } = usePickerRows(query, plannedOn);
+  const dishes = useLeftoverDishes(plannedOn);
   const typed = query.trim();
 
   const currentGroupId = status.kind === 'eating' ? status.group.id : null;
@@ -266,6 +268,7 @@ function PersonPickerBody({
 }
 
 export function PersonPicker({
+  plannedOn,
   open,
   anchorEl,
   sheet,
@@ -279,6 +282,7 @@ export function PersonPicker({
   onEditMeal,
   onClose,
 }: {
+  plannedOn: string;
   open: boolean;
   anchorEl: HTMLElement | null;
   sheet: boolean;
@@ -295,6 +299,7 @@ export function PersonPicker({
   const body =
     open && member && status ? (
       <PersonPickerBody
+        plannedOn={plannedOn}
         member={member}
         groups={groups}
         status={status}

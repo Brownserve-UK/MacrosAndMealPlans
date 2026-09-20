@@ -9,7 +9,7 @@ import { useState } from 'react';
 import { PickerPromptStep, PickerRowButton, PickerSearchField, SectionHeading, type PickerRowContent } from './pickerParts';
 import { conceptFor, dishLabel } from './plannerWeek';
 import type { GroupView, NewGroup, PlannerGuest } from './types';
-import { leftoversRow, useFridgeDishes, usePickerRows } from './usePickerRows';
+import { leftoversRow, useLeftoverDishes, usePickerRows } from './usePickerRows';
 
 export type GuestTarget = { group_id: string } | { new_group: NewGroup };
 
@@ -21,7 +21,8 @@ type Row = PickerRowContent & {
   onSelect: () => void;
 };
 
-function GuestMenuBody({ group, guest, groups, onSelect, onVariation, onRemove, onSplit, onClose }: {
+function GuestMenuBody({ plannedOn, group, guest, groups, onSelect, onVariation, onRemove, onSplit, onClose }: {
+  plannedOn: string;
   group: GroupView | null;
   guest: PlannerGuest | null;
   groups: GroupView[];
@@ -34,8 +35,8 @@ function GuestMenuBody({ group, guest, groups, onSelect, onVariation, onRemove, 
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState(0);
   const [prompting, setPrompting] = useState(false);
-  const { rows } = usePickerRows(query);
-  const dishes = useFridgeDishes();
+  const { rows } = usePickerRows(query, plannedOn);
+  const dishes = useLeftoverDishes(plannedOn);
   const typed = query.trim();
 
   const thisMeal: Row[] = groups.map((candidate) => ({
@@ -142,7 +143,8 @@ function GuestMenuBody({ group, guest, groups, onSelect, onVariation, onRemove, 
   </Stack>;
 }
 
-export function GuestMenu({ open, anchorEl, sheet, group, guest, groups, onSelect, onVariation, onRemove, onSplit, onClose }: {
+export function GuestMenu({ plannedOn, open, anchorEl, sheet, group, guest, groups, onSelect, onVariation, onRemove, onSplit, onClose }: {
+  plannedOn: string;
   open: boolean;
   anchorEl: HTMLElement | null;
   sheet: boolean;
@@ -155,7 +157,7 @@ export function GuestMenu({ open, anchorEl, sheet, group, guest, groups, onSelec
   onSplit: () => void;
   onClose: () => void;
 }) {
-  const body = open ? <GuestMenuBody key={guest?.id ?? 'new'} group={group} guest={guest} groups={groups} onSelect={onSelect}
+  const body = open ? <GuestMenuBody plannedOn={plannedOn} key={guest?.id ?? 'new'} group={group} guest={guest} groups={groups} onSelect={onSelect}
     onVariation={onVariation} onRemove={onRemove} onSplit={onSplit} onClose={onClose} /> : null;
   if (sheet) return <Drawer anchor="bottom" open={open} onClose={onClose} slotProps={{ paper: { sx: { borderRadius: '14px 14px 0 0', maxHeight: '85vh' } } }}>{body}</Drawer>;
   return <Popover open={open && Boolean(anchorEl)} anchorEl={anchorEl} onClose={onClose} anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}

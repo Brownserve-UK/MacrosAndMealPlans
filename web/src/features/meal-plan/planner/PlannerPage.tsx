@@ -247,6 +247,7 @@ export function PlannerPage({ weekStart }: { weekStart: string }) {
       ) : null}
 
       <AddMealPicker
+        plannedOn={adding?.date ?? ''}
         open={adding !== null}
         anchorEl={adding?.anchor ?? null}
         sheet={!desktop || adding?.anchor === null}
