@@ -35,6 +35,7 @@ import { occasionTitle, toNewGroup } from './plannerWeek';
 import type { NewGroup, OccasionView } from './types';
 import { WeekGrid } from './WeekGrid';
 import { WeekHeader } from './WeekHeader';
+import { WeekLegend } from './WeekLegend';
 
 type Adding = { date: string; slot: MealSlot; initial: string; anchor: HTMLElement | null };
 type CellMenu = { occasion: OccasionView; position: { left: number; top: number } };
@@ -221,15 +222,18 @@ export function PlannerPage({ weekStart }: { weekStart: string }) {
       {week.isLoading || !week.data ? <Loading label="Loading planner" /> : null}
       {week.data ? (
         wideGrid ? (
-          <WeekGrid
-            week={week.data}
-            weekStart={weekStart}
-            today={today}
-            onOpen={(occasion) => setViewingId(occasion.id)}
-            onAdd={(date, slot, initial, anchor) => setAdding({ date, slot, initial, anchor })}
-            onContextMenu={(occasion, position) => setCellMenu({ occasion, position })}
-            onDrop={onDrop}
-          />
+          <>
+            <WeekGrid
+              week={week.data}
+              weekStart={weekStart}
+              today={today}
+              onOpen={(occasion) => setViewingId(occasion.id)}
+              onAdd={(date, slot, initial, anchor) => setAdding({ date, slot, initial, anchor })}
+              onContextMenu={(occasion, position) => setCellMenu({ occasion, position })}
+              onDrop={onDrop}
+            />
+            <WeekLegend members={week.data.members} />
+          </>
         ) : (
           <DayCards
             week={week.data}
