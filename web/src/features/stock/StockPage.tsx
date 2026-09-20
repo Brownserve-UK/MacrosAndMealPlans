@@ -1,24 +1,35 @@
 import AddIcon from '@mui/icons-material/AddOutlined';
+import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
 import MenuItem from '@mui/material/MenuItem';
+import Paper from '@mui/material/Paper';
 import Stack from '@mui/material/Stack';
 import Tab from '@mui/material/Tab';
 import Tabs from '@mui/material/Tabs';
 import TextField from '@mui/material/TextField';
-import { useMemo, useState } from 'react';
+import ToggleButton from '@mui/material/ToggleButton';
+import ToggleButtonGroup from '@mui/material/ToggleButtonGroup';
+import Typography from '@mui/material/Typography';
+import { Link } from '@tanstack/react-router';
+import { Fragment, useMemo, useState } from 'react';
 import type { IngredientAvailability, PreparedMealAvailability, ProductAvailability, StockItem } from '../../api/client';
 import { useProducts, useStock, useStockAvailability } from '../../api/queries';
 import { PageHeader } from '../../components/PageHeader';
 import { RecordListShell } from '../../components/RecordList';
 import { EmptyState, ErrorState, Loading } from '../../components/States';
 import { useDebounced } from '../../hooks/useDebounced';
+import { addDays, startOfWeekIso, todayIso } from '../meal-plan/date';
 import { NewStockDialog } from './NewStockDialog';
 import {
   groupSortDate,
   IngredientCard,
+  LOCATION_ORDER,
   PLACE_ORDER,
   PreparedPortionCard,
+  primaryLocation,
   StockCard,
+  StorageGroupHeading,
+  withLocationGroups,
   type CookedFoodRow,
   type StockGroup,
 } from './StockCard';
@@ -26,12 +37,32 @@ import { levelFor } from './stockLevel';
 
 type View = 'ingredients' | 'products' | 'prepared';
 type SortKey = 'level' | 'name' | 'useby';
+type WindowKey = 'week' | 'fortnight' | 'all';
 
 const SORTS: { value: SortKey; label: string }[] = [
   { value: 'level', label: 'Stock level' },
   { value: 'name', label: 'Name' },
   { value: 'useby', label: 'Use-by' },
 ];
+
+const WINDOWS: { value: WindowKey; label: string }[] = [
+  { value: 'week', label: 'This week' },
+  { value: 'fortnight', label: '14 days' },
+  { value: 'all', label: 'All planned' },
+];
+
+const STRIP_HEADING: Record<WindowKey, string> = {
+  week: 'Short this week',
+  fortnight: 'Short in 14 days',
+  all: 'Short',
+};
+
+function windowRange(windowKey: WindowKey): { from: string; to: string } {
+  const from = todayIso();
+  if (windowKey === 'fortnight') return { from, to: addDays(from, 13) };
+  if (windowKey === 'all') return { from, to: addDays(from, 365) };
+  return { from, to: addDays(startOfWeekIso(from), 6) };
+}
 
 function sortGroups(groups: StockGroup[], key: SortKey): StockGroup[] {
   const byName = (a: StockGroup, b: StockGroup) => a.name.localeCompare(b.name);
@@ -58,6 +89,16 @@ function sortGroups(groups: StockGroup[], key: SortKey): StockGroup[] {
   });
 }
 
+export function groupLocation(group: StockGroup): StockItem['storage_location'] {
+  return primaryLocation(group.items.map((item) => item.storage_location));
+}
+
+function byLocation(groups: StockGroup[]): StockGroup[] {
+  return [...groups].sort(
+    (a, b) => LOCATION_ORDER.indexOf(groupLocation(a)) - LOCATION_ORDER.indexOf(groupLocation(b)),
+  );
+}
+
 function sortCooked(rows: CookedFoodRow[], key: SortKey): CookedFoodRow[] {
   const byName = (a: CookedFoodRow, b: CookedFoodRow) => a.name.localeCompare(b.name);
   const sorted = [...rows];
@@ -71,15 +112,61 @@ function sortCooked(rows: CookedFoodRow[], key: SortKey): CookedFoodRow[] {
   });
 }
 
+function ShortStrip({
+  heading,
+  items,
+}: {
+  heading: string;
+  items: { id: string; name: string; amount: string }[];
+}) {
+  if (items.length === 0) return null;
+
+  return (
+    <Paper
+      variant="outlined"
+      sx={{ mb: 3, p: 2, borderLeft: '3px solid', borderLeftColor: 'warning.main' }}
+    >
+      <Stack direction="row" spacing={1} sx={{ alignItems: 'center', mb: 1 }}>
+        <Typography variant="h3">{heading}</Typography>
+        <Button component={Link} to="/shopping" size="small" sx={{ ml: 'auto' }}>
+          Add to shopping
+        </Button>
+      </Stack>
+      <Stack spacing={0.75}>
+        {items.map((item) => (
+          <Stack key={item.id} direction="row" spacing={1.5} sx={{ alignItems: 'center' }}>
+            <Box
+              aria-hidden
+              sx={{ width: 6, height: 6, borderRadius: '50%', backgroundColor: 'warning.main', flexShrink: 0 }}
+            />
+            <Typography variant="body2" sx={{ flexGrow: 1, minWidth: 0 }} noWrap>
+              {item.name}
+            </Typography>
+            <Typography
+              variant="body2"
+              className="numeral"
+              sx={{ color: 'warning.main', fontWeight: 600, flexShrink: 0 }}
+            >
+              {item.amount}
+            </Typography>
+          </Stack>
+        ))}
+      </Stack>
+    </Paper>
+  );
+}
+
 export function StockPage() {
   const [addOpen, setAddOpen] = useState(false);
   const [search, setSearch] = useState('');
   const [view, setView] = useState<View>('ingredients');
   const [sort, setSort] = useState<SortKey>('level');
+  const [windowKey, setWindowKey] = useState<WindowKey>('week');
   const debounced = useDebounced(search, 200);
+  const range = useMemo(() => windowRange(windowKey), [windowKey]);
 
   const stock = useStock({ per_page: 200 });
-  const availability = useStockAvailability();
+  const availability = useStockAvailability(undefined, range);
   const products = useProducts({ per_page: 200 });
 
   const productName = useMemo(() => {
@@ -247,12 +334,20 @@ export function StockPage() {
 
   const foodGroups = useMemo(() => [...ingredientGroups, ...preparedMealGroups], [ingredientGroups, preparedMealGroups]);
 
+  const shortFoods = useMemo(() => {
+    return foodGroups
+      .map((entry) => ({ id: entry.group.id, name: entry.group.name, level: levelFor(entry.group.availability) }))
+      .filter((entry) => entry.level.figure?.short)
+      .sort((a, b) => a.level.freeFraction - b.level.freeFraction || a.name.localeCompare(b.name))
+      .map((entry) => ({ id: entry.id, name: entry.name, amount: entry.level.figure?.shortAmount ?? '' }));
+  }, [foodGroups]);
+
   const visibleProducts = useMemo(() => {
     const needle = debounced.trim().toLowerCase();
     const filtered = needle
       ? productGroups.filter((group) => group.name.toLowerCase().includes(needle))
       : productGroups;
-    return sortGroups(filtered, sort);
+    return byLocation(sortGroups(filtered, sort));
   }, [productGroups, debounced, sort]);
 
   const visiblePrepared = useMemo(() => {
@@ -269,9 +364,11 @@ export function StockPage() {
       ? foodGroups.filter((entry) => entry.group.name.toLowerCase().includes(needle))
       : foodGroups;
     const order = new Map(
-      sortGroups(
-        filtered.map((entry) => entry.group),
-        sort,
+      byLocation(
+        sortGroups(
+          filtered.map((entry) => entry.group),
+          sort,
+        ),
       ).map((group, index) => [group.id, index]),
     );
     return [...filtered].sort((a, b) => (order.get(a.group.id) ?? 0) - (order.get(b.group.id) ?? 0));
@@ -292,7 +389,6 @@ export function StockPage() {
     <>
       <PageHeader
         title="Stock"
-        subtitle="What's in the house, and how much is still free after planned meals."
         actions={
           <Button variant="contained" startIcon={<AddIcon />} onClick={() => setAddOpen(true)}>
             Add stock
@@ -304,6 +400,8 @@ export function StockPage() {
           placeholder: 'Search stock',
         }}
       />
+
+      <ShortStrip heading={STRIP_HEADING[windowKey]} items={shortFoods} />
 
       {!empty && (
         <>
@@ -322,12 +420,28 @@ export function StockPage() {
             spacing={1}
             sx={{ mb: 2.5, flexWrap: 'wrap', gap: 1, alignItems: 'center' }}
           >
+            <ToggleButtonGroup
+              size="small"
+              exclusive
+              value={windowKey}
+              onChange={(_event, next: WindowKey | null) => {
+                if (next) setWindowKey(next);
+              }}
+              aria-label="Demand window"
+            >
+              {WINDOWS.map((option) => (
+                <ToggleButton key={option.value} value={option.value}>
+                  {option.label}
+                </ToggleButton>
+              ))}
+            </ToggleButtonGroup>
+
             <TextField
               select
               size="small"
-              label="Sort"
               value={sort}
               onChange={(event) => setSort(event.target.value as SortKey)}
+              slotProps={{ select: { 'aria-label': 'Sort' } }}
               sx={{ ml: 'auto', minWidth: 168 }}
             >
               {SORTS.map((option) => (
@@ -363,13 +477,11 @@ export function StockPage() {
         )
       ) : view === 'ingredients' ? (
         <RecordListShell>
-          {visibleFoods.map((entry) => (
-            <IngredientCard
-              key={entry.group.id}
-              group={entry.group}
-              productCount={entry.productCount}
-              kind={entry.kind}
-            />
+          {withLocationGroups(visibleFoods, (entry) => groupLocation(entry.group)).map(({ item: entry, heading }) => (
+            <Fragment key={entry.group.id}>
+              {heading ? <StorageGroupHeading label={heading.label} count={heading.count} /> : null}
+              <IngredientCard group={entry.group} productCount={entry.productCount} kind={entry.kind} />
+            </Fragment>
           ))}
         </RecordListShell>
       ) : view === 'prepared' ? (
@@ -380,8 +492,11 @@ export function StockPage() {
         </RecordListShell>
       ) : (
         <RecordListShell>
-          {visibleProducts.map((group) => (
-            <StockCard key={group.id} group={group} />
+          {withLocationGroups(visibleProducts, groupLocation).map(({ item: group, heading }) => (
+            <Fragment key={group.id}>
+              {heading ? <StorageGroupHeading label={heading.label} count={heading.count} /> : null}
+              <StockCard group={group} />
+            </Fragment>
           ))}
         </RecordListShell>
       )}

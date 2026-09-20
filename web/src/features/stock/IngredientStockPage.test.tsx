@@ -72,15 +72,16 @@ describe('IngredientStockPage', () => {
   it('shows the pooled availability for the ingredient', () => {
     renderPage();
     expect(screen.getByText('Whole Milk')).toBeInTheDocument();
-    expect(screen.getByText('500 ml / 750 ml')).toBeInTheDocument();
-    expect(screen.getByText('750 ml on hand · 500 ml planned')).toBeInTheDocument();
+    expect(screen.getByText('750 ml')).toBeInTheDocument();
+    expect(screen.getByText('250 ml free')).toBeInTheDocument();
   });
 
   it('lists the products we actually hold, with their own figures', () => {
     renderPage();
     const value = screen.getByTestId('stock-card-mv');
     expect(within(value).getByText('Sample Value Milk')).toBeInTheDocument();
-    expect(within(value).getByText('100 ml / 450 ml')).toBeInTheDocument();
+    expect(within(value).getByText('450 ml')).toBeInTheDocument();
+    expect(within(value).getByText('350 ml free')).toBeInTheDocument();
     expect(within(value).getByText('chilled · nearest date 08/09/2026')).toBeInTheDocument();
   });
 

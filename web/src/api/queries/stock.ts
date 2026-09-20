@@ -2,7 +2,7 @@ import { keepPreviousData, useMutation, useQueries, useQuery, useQueryClient } f
 import { client, ifMatch, unwrap } from '../client';
 import type { components } from '../schema';
 import { stockKeys } from '../keys';
-import type { StockListParams } from '../keys';
+import type { StockAvailabilityRange, StockListParams } from '../keys';
 
 export function useStock(params: StockListParams) {
   return useQuery({
@@ -30,13 +30,13 @@ export function useStockEvents(id: string, options?: { enabled?: boolean }) {
   });
 }
 
-export function useStockAvailability(productId?: string) {
+export function useStockAvailability(productId?: string, range?: StockAvailabilityRange) {
   return useQuery({
-    queryKey: stockKeys.availability(productId),
+    queryKey: stockKeys.availability(productId, range),
     queryFn: async () =>
       unwrap(
         await client.GET('/api/v1/stock/availability', {
-          params: { query: { product_id: productId } },
+          params: { query: { product_id: productId, from: range?.from, to: range?.to } },
         }),
       ),
   });

@@ -1,50 +1,57 @@
 import type { Availability } from '../../api/client';
-import { displayUnit } from '../../components/UnitSelect';
+import { formatQuantity } from './SpokenFor';
 
-export const AMBER = '#D9A441';
-export const ORANGE = '#E06C24';
-
-export type Tier = 'green' | 'amber' | 'orange' | 'red' | 'muted';
+export type Tier = 'green' | 'amber' | 'muted';
 
 const TIER_COLOUR: Record<Tier, string> = {
   green: 'success.main',
-  amber: AMBER,
-  orange: ORANGE,
-  red: 'error.main',
+  amber: 'warning.main',
   muted: 'text.secondary',
+};
+
+const COUNTABLE_UNITS = new Set([
+  'item',
+  'piece',
+  'slice',
+  'clove',
+  'can',
+  'pack',
+  'bunch',
+  'serving',
+]);
+
+export type StockFigure = {
+  onHand: string;
+  free: string;
+  short: boolean;
+  shortAmount: string | null;
+  fillPct: number;
 };
 
 export type StockLevel = {
   tier: Tier;
   colour: string;
-  fillPct: number;
-  solidRed: boolean;
-  figure: { needed: string; available: string } | null;
-  detailLine: string | null;
+  figure: StockFigure | null;
   statusWord: string | null;
   sortRank: number;
   freeFraction: number;
 };
 
-function quantity(amount: number, unit: string): string {
-  const formatted = Number.isInteger(amount)
-    ? amount.toLocaleString('en-GB')
-    : amount.toLocaleString('en-GB', { maximumFractionDigits: 2 });
-  return `${formatted} ${displayUnit(unit)}`;
-}
-
 function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
+}
+
+function amountLabel(amount: number): string {
+  return Number.isInteger(amount)
+    ? amount.toLocaleString('en-GB')
+    : amount.toLocaleString('en-GB', { maximumFractionDigits: 2 });
 }
 
 export function levelFor(availability: Availability | null | undefined): StockLevel {
   const muted = (statusWord: string, sortRank: number): StockLevel => ({
     tier: 'muted',
     colour: TIER_COLOUR.muted,
-    fillPct: 0,
-    solidRed: false,
     figure: null,
-    detailLine: null,
     statusWord,
     sortRank,
     freeFraction: Number.POSITIVE_INFINITY,
@@ -53,53 +60,53 @@ export function levelFor(availability: Availability | null | undefined): StockLe
   if (!availability) return muted('Not known', 5);
   switch (availability.state) {
     case 'assumed_available':
-      return muted('Assumed available', 4);
+      return muted('Not counted', 4);
     case 'unknown':
       return muted('Not known', 5);
     case 'absent':
       return muted('None in stock', 4.5);
     case 'quantified': {
-      const available = availability.on_hand.amount;
-      const needed = availability.planned_demand.amount;
+      const onHand = availability.on_hand.amount;
       const free = availability.unallocated.amount;
       const unit = availability.on_hand.unit;
       const estimated = availability.confidence === 'estimated';
-      const f = available > 0 ? free / available : free >= 0 ? 1 : -1;
-
-      const figure = {
-        needed: quantity(needed, unit),
-        available: `${estimated ? '~' : ''}${quantity(available, unit)}`,
-      };
-      const detailLine =
-        needed > 0
-          ? `${quantity(available, unit)} on hand · ${quantity(needed, unit)} planned`
-          : `${quantity(available, unit)} on hand`;
+      const countable = COUNTABLE_UNITS.has(unit);
+      const f = onHand > 0 ? free / onHand : free >= 0 ? 1 : -1;
+      const onHandFigure = `${estimated ? '~' : ''}${formatQuantity({ amount: onHand, unit })}`;
 
       if (free < 0) {
+        const shortAmount = formatQuantity({ amount: -free, unit });
+        const shortLabel = countable ? amountLabel(-free) : shortAmount;
         return {
-          tier: 'red',
-          colour: TIER_COLOUR.red,
-          fillPct: 100,
-          solidRed: true,
-          figure,
-          detailLine,
+          tier: 'amber',
+          colour: TIER_COLOUR.amber,
+          figure: {
+            onHand: onHandFigure,
+            free: `${shortLabel} short`,
+            short: true,
+            shortAmount,
+            fillPct: 0,
+          },
           statusWord: null,
           sortRank: 0,
           freeFraction: f,
         };
       }
 
-      const tier: Tier = f > 0.5 ? 'green' : f > 0.25 ? 'amber' : 'orange';
-      const sortRank = tier === 'green' ? 3 : tier === 'amber' ? 2 : 1;
+      const freeLabel = countable ? `${amountLabel(free)} free` : `${formatQuantity({ amount: free, unit })} free`;
+
       return {
-        tier,
-        colour: TIER_COLOUR[tier],
-        fillPct: clamp(f * 100, 0, 100),
-        solidRed: false,
-        figure,
-        detailLine,
+        tier: 'green',
+        colour: TIER_COLOUR.green,
+        figure: {
+          onHand: onHandFigure,
+          free: freeLabel,
+          short: false,
+          shortAmount: null,
+          fillPct: clamp(f * 100, 0, 100),
+        },
         statusWord: null,
-        sortRank,
+        sortRank: 1,
         freeFraction: f,
       };
     }

@@ -175,12 +175,15 @@ export const preparationKeys = {
   range: (from: string, to: string) => ['preparations', from, to] as const,
 };
 
+export type StockAvailabilityRange = { from?: string; to?: string };
+
 export const stockKeys = {
   all: () => stock,
   list: (params: StockListParams) => [...stock, params] as const,
   item: (id: string) => [...stock, id] as const,
   events: (id: string) => [...stock, id, 'events'] as const,
-  availability: (productId?: string) => [...stock, 'availability', productId] as const,
+  availability: (productId?: string, range?: StockAvailabilityRange) =>
+    [...stock, 'availability', productId, range ?? null] as const,
 };
 
 export const shoppingKeys = {

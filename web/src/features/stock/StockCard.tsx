@@ -1,4 +1,5 @@
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
+import { alpha } from '@mui/material/styles';
 import Box from '@mui/material/Box';
 import Stack from '@mui/material/Stack';
 import Typography from '@mui/material/Typography';
@@ -6,7 +7,7 @@ import { Link } from '@tanstack/react-router';
 import { Fragment, type ReactNode } from 'react';
 import type { Availability, StockItem } from '../../api/client';
 import { InitialsAvatar } from '../../components/InitialsAvatar';
-import { levelFor } from './stockLevel';
+import { levelFor, type StockFigure } from './stockLevel';
 
 export type StockGroup = {
   id: string;
@@ -32,6 +33,111 @@ export function locationSubtitle(items: StockItem[]): string {
   const date = firstDate(items);
   const location = locations.join(', ');
   return date ? `${location} · nearest date ${new Date(`${date}T00:00:00`).toLocaleDateString('en-GB')}` : location;
+}
+
+export const LOCATION_ORDER: StockItem['storage_location'][] = ['frozen', 'chilled', 'ambient'];
+
+export const LOCATION_LABEL: Record<StockItem['storage_location'], string> = {
+  frozen: 'Freezer',
+  chilled: 'Fridge',
+  ambient: 'Cupboard',
+};
+
+export function primaryLocation(
+  locations: StockItem['storage_location'][],
+): StockItem['storage_location'] {
+  const counts = new Map<StockItem['storage_location'], number>();
+  for (const location of locations) counts.set(location, (counts.get(location) ?? 0) + 1);
+  let best = LOCATION_ORDER[0] as StockItem['storage_location'];
+  let bestCount = -1;
+  for (const location of LOCATION_ORDER) {
+    const count = counts.get(location) ?? 0;
+    if (count > bestCount) {
+      bestCount = count;
+      best = location;
+    }
+  }
+  return best;
+}
+
+export function withLocationGroups<T>(
+  items: T[],
+  locationOf: (item: T) => StockItem['storage_location'],
+): { item: T; heading: { label: string; count: number } | null }[] {
+  const counts = new Map<StockItem['storage_location'], number>();
+  for (const item of items) {
+    const location = locationOf(item);
+    counts.set(location, (counts.get(location) ?? 0) + 1);
+  }
+  let previous: StockItem['storage_location'] | null = null;
+  return items.map((item) => {
+    const location = locationOf(item);
+    const heading =
+      location === previous ? null : { label: LOCATION_LABEL[location], count: counts.get(location) ?? 0 };
+    previous = location;
+    return { item, heading };
+  });
+}
+
+export function StorageGroupHeading({ label, count }: { label: string; count: number }) {
+  return (
+    <Box
+      sx={{
+        display: 'flex',
+        alignItems: 'baseline',
+        gap: 1.25,
+        px: { xs: 2, sm: 2.5 },
+        py: 1.25,
+        fontSize: '0.7rem',
+        fontWeight: 600,
+        letterSpacing: '0.09em',
+        textTransform: 'uppercase',
+        color: 'text.disabled',
+        backgroundColor: 'background.default',
+        borderBottom: '1px solid',
+        borderColor: 'divider',
+      }}
+    >
+      {label}
+      <Box component="span" sx={{ letterSpacing: 0, textTransform: 'none', fontWeight: 500 }}>
+        {count}
+      </Box>
+    </Box>
+  );
+}
+
+export function Gauge({ figure }: { figure: StockFigure }) {
+  if (figure.short) {
+    return (
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6 }}>
+        <Box
+          aria-hidden
+          sx={{
+            flex: '1 1 auto',
+            height: 12,
+            borderRadius: 999,
+            backgroundColor: (theme) => alpha(theme.palette.warning.main, 0.12),
+          }}
+        />
+        <Box
+          aria-hidden
+          sx={{
+            flex: 'none',
+            width: 38,
+            height: 12,
+            borderRadius: 999,
+            backgroundImage: (theme) =>
+              `repeating-linear-gradient(115deg, ${theme.palette.warning.main} 0 4px, ${alpha(theme.palette.warning.main, 0.25)} 4px 8px)`,
+          }}
+        />
+      </Box>
+    );
+  }
+  return (
+    <Box aria-hidden sx={{ height: 12, borderRadius: 999, overflow: 'hidden', backgroundColor: 'divider' }}>
+      <Box sx={{ width: `${figure.fillPct}%`, height: '100%', backgroundColor: 'success.main' }} />
+    </Box>
+  );
 }
 
 export function StockRow({
@@ -83,31 +189,33 @@ export function StockRow({
           {figure}
         </Typography>
       ) : level.figure ? (
-        <Stack spacing={0.5} sx={{ width: { xs: 128, sm: 176 }, flexShrink: 0 }}>
-          <Box
-            aria-hidden
+        <Stack spacing={0.75} sx={{ width: { xs: 'auto', sm: 176 }, flexShrink: 0 }}>
+          <Box sx={{ display: { xs: 'none', sm: 'block' } }}>
+            <Gauge figure={level.figure} />
+          </Box>
+          <Stack
+            direction={{ xs: 'column', sm: 'row' }}
+            className="numeral"
             sx={{
-              height: 8,
-              borderRadius: 999,
-              overflow: 'hidden',
-              backgroundColor: 'text.primary',
+              justifyContent: 'space-between',
+              alignItems: { xs: 'flex-end', sm: 'baseline' },
+              gap: { xs: 0, sm: 1 },
             }}
           >
-            <Box
+            <Typography variant="body2" sx={{ fontWeight: 600 }} noWrap>
+              {level.figure.onHand}
+            </Typography>
+            <Typography
+              variant="caption"
               sx={{
-                width: level.solidRed ? '100%' : `${level.fillPct}%`,
-                height: '100%',
-                backgroundColor: level.colour,
+                color: level.figure.short ? 'warning.main' : 'text.secondary',
+                fontWeight: level.figure.short ? 600 : 400,
+                whiteSpace: 'nowrap',
               }}
-            />
-          </Box>
-          <Typography
-            variant="caption"
-            className="numeral"
-            sx={{ fontWeight: 600, color: level.colour, textAlign: 'right' }}
-          >
-            {level.figure.needed} / {level.figure.available}
-          </Typography>
+            >
+              {level.figure.free}
+            </Typography>
+          </Stack>
         </Stack>
       ) : (
         <Typography

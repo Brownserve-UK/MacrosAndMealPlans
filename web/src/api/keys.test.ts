@@ -35,14 +35,20 @@ describe('query key shapes', () => {
     expect(mealPlanKeys.householdWeek('2026-09-07')).toEqual(['plannerWeek', '2026-09-07']);
     expect(mealPlanKeys.plannerWeek('2026-09-07')).toEqual(['planner', '2026-09-07']);
     expect(recipeKeys.photo('r1', 'hero', 3)).toEqual(['recipe', 'r1', 'photo', 'hero', 3]);
-    expect(stockKeys.availability('p1')).toEqual(['stock', 'availability', 'p1']);
+    expect(stockKeys.availability('p1')).toEqual(['stock', 'availability', 'p1', null]);
     expect(shoppingKeys.list('2026-09-07')).toEqual(['shopping', 'requirements', '2026-09-07']);
     expect(weightKeys.summary('m1')).toEqual(['weight', 'summary', 'm1']);
   });
 
   it('gives an absent argument a stable slot so two calls agree', () => {
-    expect(stockKeys.availability()).toEqual(['stock', 'availability', undefined]);
+    expect(stockKeys.availability()).toEqual(['stock', 'availability', undefined, null]);
     expect(shoppingKeys.purchases()).toEqual(['shopping', 'purchases', undefined]);
+  });
+
+  it('keeps a demand window distinct from the unbounded query', () => {
+    const bounded = stockKeys.availability(undefined, { from: '2026-09-20', to: '2026-09-26' });
+    expect(bounded).toEqual(['stock', 'availability', undefined, { from: '2026-09-20', to: '2026-09-26' }]);
+    expect(bounded).not.toEqual(stockKeys.availability());
   });
 
   it('starts every key with the prefix its family is invalidated by', () => {

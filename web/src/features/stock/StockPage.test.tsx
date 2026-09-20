@@ -30,12 +30,13 @@ vi.mock('../../api/queries', () => ({
         { id: 'ck1', product_id: 'ck', level: exact(400, 'g'), storage_location: 'chilled', usability_deadline: { date: '2026-08-27' }, revision: 1 },
         { id: 'ck2', product_id: 'ck', level: exact(650, 'g'), storage_location: 'frozen', revision: 1 },
         { id: 'ri1', product_id: 'ri', level: { mode: 'not_tracked' }, storage_location: 'ambient', revision: 1 },
+        { id: 'gy1', product_id: 'gy', level: exact(200, 'g'), storage_location: 'chilled', revision: 1 },
         { id: 'cu1', prepared_batch_id: 'b1', prepared_recipe_id: 'curry', prepared_batch_name: 'Chicken Curry', level: exact(2, 'serving'), storage_location: 'chilled', usability_deadline: { date: '2026-09-10' }, revision: 1 },
         { id: 'cu2', prepared_batch_id: 'b2', prepared_recipe_id: 'curry', prepared_batch_name: 'Chicken Curry', level: exact(1, 'serving'), storage_location: 'chilled', usability_deadline: { date: '2026-09-12' }, revision: 1 },
         { id: 'cu3', prepared_batch_id: 'b2', prepared_recipe_id: 'curry', prepared_batch_name: 'Chicken Curry', level: exact(3, 'serving'), storage_location: 'frozen', revision: 1 },
         { id: 'ch1', prepared_batch_id: 'b3', prepared_recipe_id: 'chilli', prepared_batch_name: 'Chilli', level: exact(4, 'serving'), storage_location: 'frozen', revision: 1 },
       ],
-      total: 11,
+      total: 12,
     },
   }),
   useStockAvailability: () => ({
@@ -47,12 +48,14 @@ vi.mock('../../api/queries', () => ({
         { product_id: 'oa', demand_gaps: [], availability: quantified(500, 160, 'g') },
         { product_id: 'ck', demand_gaps: [], availability: quantified(1050, 300, 'g') },
         { product_id: 'ri', demand_gaps: [], availability: { state: 'assumed_available' } },
+        { product_id: 'gy', demand_gaps: [], availability: quantified(200, 600, 'g') },
       ],
       ingredients: [
         { ingredient_id: 'milk', name: 'Whole Milk', demand_gaps: [], availability: quantified(750, 500, 'ml') },
         { ingredient_id: 'oats', name: 'Jumbo Oats', demand_gaps: [], availability: quantified(500, 160, 'g') },
         { ingredient_id: 'chicken', name: 'Chicken Breast', demand_gaps: [], availability: quantified(1050, 300, 'g') },
         { ingredient_id: 'rice', name: 'Basmati Rice', demand_gaps: [], availability: { state: 'assumed_available' } },
+        { ingredient_id: 'yoghurt', name: 'Greek Yoghurt', demand_gaps: [], availability: quantified(200, 600, 'g') },
       ],
       demand_gaps: [],
     },
@@ -66,6 +69,7 @@ vi.mock('../../api/queries', () => ({
         { id: 'oa', name: 'Sample Jumbo Oats', mapped_ingredient_id: 'oats' },
         { id: 'ck', name: 'Sample Chicken Breast', mapped_ingredient_id: 'chicken' },
         { id: 'ri', name: 'Sample Basmati Rice', mapped_ingredient_id: 'rice' },
+        { id: 'gy', name: 'Sample Greek Yoghurt', mapped_ingredient_id: 'yoghurt' },
       ],
     },
   }),
@@ -89,6 +93,27 @@ async function showProducts() {
   await userEvent.setup().click(screen.getByRole('tab', { name: 'Products' }));
 }
 
+describe('StockPage short strip', () => {
+  it('shows the foods that are short this week, worst first', () => {
+    renderPage();
+    const heading = screen.getByText('Short this week');
+    expect(heading).toBeInTheDocument();
+    const strip = heading.closest('.MuiPaper-root') as HTMLElement;
+    expect(within(strip).getByText('Greek Yoghurt')).toBeInTheDocument();
+    expect(within(strip).getByText('400 g')).toBeInTheDocument();
+    expect(within(strip).getByText('Add to shopping')).toBeInTheDocument();
+  });
+
+  it('switches its heading with the selected demand window', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(screen.getByRole('button', { name: '14 days' }));
+    expect(screen.getByText('Short in 14 days')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'All planned' }));
+    expect(screen.getByText('Short')).toBeInTheDocument();
+  });
+});
+
 describe('StockPage ingredients view', () => {
   it('opens on ingredients rather than products', () => {
     renderPage();
@@ -105,7 +130,8 @@ describe('StockPage ingredients view', () => {
     const milk = screen.getByTestId('stock-ingredient-milk');
     expect(within(milk).getByText('Whole Milk')).toBeInTheDocument();
     expect(within(milk).getByText('2 products')).toBeInTheDocument();
-    expect(within(milk).getByText('500 ml / 750 ml')).toBeInTheDocument();
+    expect(within(milk).getByText('750 ml')).toBeInTheDocument();
+    expect(within(milk).getByText('250 ml free')).toBeInTheDocument();
     expect(screen.queryByText('Sample Whole Milk')).toBeNull();
   });
 
@@ -121,9 +147,15 @@ describe('StockPage ingredients view', () => {
     expect(ingredientOrder()).not.toContain('stock-ingredient-br');
   });
 
-  it('puts shortfalls first here too', () => {
+  it('puts the shortest food first within its storage group, ahead of anything merely low', () => {
     renderPage();
-    expect(ingredientOrder()[0]).toBe('stock-ingredient-milk');
+    expect(ingredientOrder()).toEqual([
+      'stock-ingredient-chicken',
+      'stock-ingredient-yoghurt',
+      'stock-ingredient-milk',
+      'stock-ingredient-oats',
+      'stock-ingredient-rice',
+    ]);
   });
 
   it('filters by ingredient name', async () => {
@@ -135,26 +167,31 @@ describe('StockPage ingredients view', () => {
 });
 
 describe('StockPage products view', () => {
-  it('puts shortfalls first and shows needed / available in the tier colour', async () => {
+  it('puts the shortest product first in its storage group and shows the on-hand figure with its shortfall', async () => {
     renderPage();
     await showProducts();
-    expect(productOrder()[0]).toBe('stock-card-br');
+    const order = productOrder();
+    expect(order.indexOf('stock-card-gy')).toBeLessThan(order.indexOf('stock-card-br'));
+    expect(order.indexOf('stock-card-br')).toBeLessThan(order.indexOf('stock-card-mk'));
     const broccoli = screen.getByTestId('stock-card-br');
-    expect(within(broccoli).getByText('300 g / 120 g')).toBeInTheDocument();
+    expect(within(broccoli).getByText('120 g')).toBeInTheDocument();
+    expect(within(broccoli).getByText('180 g short')).toBeInTheDocument();
   });
 
-  it('marks an estimated available figure with a tilde', async () => {
+  it('marks an estimated on-hand figure with a tilde', async () => {
     renderPage();
     await showProducts();
     const milk = screen.getByTestId('stock-card-mk');
-    expect(within(milk).getByText('500 ml / ~300 ml')).toBeInTheDocument();
+    expect(within(milk).getByText('~300 ml')).toBeInTheDocument();
+    expect(within(milk).getByText('200 ml short')).toBeInTheDocument();
   });
 
   it('shows a healthy item with its figure and no alarm', async () => {
     renderPage();
     await showProducts();
     const oats = screen.getByTestId('stock-card-oa');
-    expect(within(oats).getByText('160 g / 500 g')).toBeInTheDocument();
+    expect(within(oats).getByText('500 g')).toBeInTheDocument();
+    expect(within(oats).getByText('340 g free')).toBeInTheDocument();
   });
 
   it('collapses multiple lots of one product into one card', async () => {
@@ -163,15 +200,16 @@ describe('StockPage products view', () => {
     expect(screen.getAllByText('Sample Chicken Breast')).toHaveLength(1);
     const chicken = screen.getByTestId('stock-card-ck');
     expect(within(chicken).getByText('chilled, frozen · nearest date 27/08/2026')).toBeInTheDocument();
-    expect(within(chicken).getByText('300 g / 1,050 g')).toBeInTheDocument();
+    expect(within(chicken).getByText('1,050 g')).toBeInTheDocument();
+    expect(within(chicken).getByText('750 g free')).toBeInTheDocument();
   });
 
-  it('shows a not-tracked staple as assumed available, with no figure, and sorts it last', async () => {
+  it('shows a not-tracked staple as not counted, with no figure, and sorts it near the end', async () => {
     renderPage();
     await showProducts();
     const rice = screen.getByTestId('stock-card-ri');
-    expect(within(rice).getByText('Assumed available')).toBeInTheDocument();
-    expect(within(rice).queryByText(/\//)).toBeNull();
+    expect(within(rice).getByText('Not counted')).toBeInTheDocument();
+    expect(within(rice).queryByText(/free|short/)).toBeNull();
     expect(productOrder().at(-1)).toBe('stock-card-ri');
   });
 
@@ -190,13 +228,28 @@ describe('StockPage products view', () => {
     await user.click(screen.getByRole('combobox', { name: 'Sort' }));
     await user.click(within(screen.getByRole('listbox')).getByText('Name'));
     expect(productOrder()).toEqual([
-      'stock-card-ri',
-      'stock-card-br',
       'stock-card-ck',
-      'stock-card-oa',
+      'stock-card-br',
+      'stock-card-gy',
       'stock-card-mv',
       'stock-card-mk',
+      'stock-card-ri',
+      'stock-card-oa',
     ]);
+  });
+
+  it('always groups by where it lives, whatever the sort', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await showProducts();
+    expect(screen.getByText('Freezer')).toBeInTheDocument();
+    expect(screen.getByText('Fridge')).toBeInTheDocument();
+    expect(screen.getByText('Cupboard')).toBeInTheDocument();
+    await user.click(screen.getByRole('combobox', { name: 'Sort' }));
+    await user.click(within(screen.getByRole('listbox')).getByText('Name'));
+    expect(screen.getByText('Freezer')).toBeInTheDocument();
+    expect(screen.getByText('Fridge')).toBeInTheDocument();
+    expect(screen.getByText('Cupboard')).toBeInTheDocument();
   });
 
   it('no longer claims recipe meals are uncounted', () => {

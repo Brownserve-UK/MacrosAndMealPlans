@@ -15,6 +15,7 @@ import { EmptyState, ErrorState, Loading } from '../../components/States';
 import { displayUnit } from '../../components/UnitSelect';
 import { NewStockDialog } from './NewStockDialog';
 import { SpokenFor } from './SpokenFor';
+import { Gauge } from './StockCard';
 import { levelFor } from './stockLevel';
 
 function amountLabel(level: StockLevel): string {
@@ -108,27 +109,30 @@ export function ProductStockPage({ productId }: { productId: string }) {
           <Typography variant="overline" color="text.secondary">
             Availability
           </Typography>
-          <Typography className="numeral" sx={{ fontWeight: 600, color: level.colour }}>
-            {level.figure ? `${level.figure.needed} / ${level.figure.available}` : level.statusWord}
+          <Typography
+            className="numeral"
+            sx={{ fontWeight: 600, color: level.figure ? 'text.primary' : level.colour }}
+          >
+            {level.figure ? level.figure.onHand : level.statusWord}
           </Typography>
         </Stack>
         {level.figure ? (
-          <Box
-            aria-hidden
-            sx={{ mt: 1.25, height: 8, borderRadius: 999, overflow: 'hidden', backgroundColor: 'text.primary' }}
-          >
-            <Box
-              sx={{
-                width: level.solidRed ? '100%' : `${level.fillPct}%`,
-                height: '100%',
-                backgroundColor: level.colour,
-              }}
-            />
+          <Box sx={{ mt: 1.25 }}>
+            <Gauge figure={level.figure} />
           </Box>
         ) : null}
-        {level.detailLine ? (
-          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
-            {level.detailLine}
+        {level.figure ? (
+          <Typography
+            variant="caption"
+            className="numeral"
+            sx={{
+              display: 'block',
+              mt: 1,
+              color: level.figure.short ? 'warning.main' : 'text.secondary',
+              fontWeight: level.figure.short ? 600 : 400,
+            }}
+          >
+            {level.figure.free}
           </Typography>
         ) : null}
       </Paper>
