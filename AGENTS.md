@@ -4,7 +4,7 @@ Macros & Meal Plans is a FOSS calorie tracking and meal planning app.
 
 ## Technical specification and ADRs
 
-Before planning or implementing a change, read the current Macros & Meal Plans technical specification and the relevant ADRs in the [Brownserve ADR repository](https://github.com/brownserve-UK/ADRs).
+Unless the user explicitly tells you not to before planning or implementing a change, read the current Macros & Meal Plans technical specification and the relevant ADRs in the [Brownserve ADR repository](https://github.com/brownserve-UK/ADRs).
 
 In Brownserve devcontainers, the repository is available at `~/Repositories/Brownserve/ADRs/`. The specification is `02_technical_specifications/2026-08-17-MacrosAndMealPlans.md`; relevant product ADRs are in `01_adrs/` tagged by product in their name/tags.
 
