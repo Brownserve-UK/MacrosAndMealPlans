@@ -1,0 +1,447 @@
+import { createRootRoute, createRoute, createRouter, redirect } from '@tanstack/react-router';
+import { AppShell } from '../components/AppShell';
+import { RequirePermission } from '../components/RequirePermission';
+import { RouteError, RouteNotFound } from '../components/RouteStates';
+import { AccountsPage } from '../features/administration/AccountsPage';
+import { AdministrationPage } from '../features/administration/AdministrationPage';
+import { MealTimesPage } from '../features/administration/MealTimesPage';
+import { HouseholdPage } from '../features/household/HouseholdPage';
+import { MemberPage } from '../features/household/MemberPage';
+import { MealPlanIndexRedirect } from '../features/meal-plan/MealPlanIndexRedirect';
+import { MealPlanPage } from '../features/meal-plan/MealPlanPage';
+import { PlannerIndexRedirect } from '../features/meal-plan/planner/PlannerIndexRedirect';
+import { PlannerPage } from '../features/meal-plan/planner/PlannerPage';
+import { NeedsReviewPage } from '../features/meal-plan/NeedsReviewPage';
+import { defaultDayFor } from '../features/meal-plan/date';
+import { IngredientPage } from '../features/ingredients/IngredientPage';
+import { FoodsPage } from '../features/foods/FoodsPage';
+import { PreparedMealPage } from '../features/prepared-meals/PreparedMealPage';
+import { SavedMealsPage } from '../features/saved-meals/SavedMealsPage';
+import { SavedMealPage } from '../features/saved-meals/SavedMealPage';
+import { ProductPage } from '../features/products/ProductPage';
+import { ProductsPage } from '../features/products/ProductsPage';
+import { RecipePage } from '../features/recipes/RecipePage';
+import { EditRecipePage, NewRecipePage } from '../features/recipes/RecipeFormPage';
+import { RecipesPage } from '../features/recipes/RecipesPage';
+import { ProfilePage } from '../features/profile/ProfilePage';
+import { PutAwayPage } from '../features/shopping/PutAwayPage';
+import { ShoppingPage } from '../features/shopping/ShoppingPage';
+import { TripPage } from '../features/shopping/TripPage';
+import { ShoppingSettingsPage } from '../features/shopping/ShoppingSettingsPage';
+import { StockPage } from '../features/stock/StockPage';
+import { DishPage } from '../features/stock/DishPage';
+import { StockItemPage } from '../features/stock/StockItemPage';
+import { ProductStockPage } from '../features/stock/ProductStockPage';
+import { IngredientStockPage } from '../features/stock/IngredientStockPage';
+import { PreparedMealStockPage } from '../features/stock/PreparedMealStockPage';
+import { GoalsPage } from '../features/goals/GoalsPage';
+import { KitchenPage } from '../features/kitchen/KitchenPage';
+
+const rootRoute = createRootRoute({ component: AppShell });
+
+const indexRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/',
+  beforeLoad: () => {
+    throw redirect({ to: '/my-food' });
+  },
+});
+
+const myFoodIndexRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/my-food',
+  component: MealPlanIndexRedirect,
+});
+
+const myFoodWeekRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/my-food/$weekStart',
+  beforeLoad: ({ params }) => {
+    throw redirect({
+      to: '/my-food/$weekStart/$day',
+      params: { weekStart: params.weekStart, day: defaultDayFor(params.weekStart) },
+      replace: true,
+    });
+  },
+});
+
+const myFoodDayRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/my-food/$weekStart/$day',
+  component: function ViewMyFood() {
+    const { weekStart, day } = myFoodDayRoute.useParams();
+    return <MealPlanPage weekStart={weekStart} day={day} />;
+  },
+});
+
+const foodLogIndexRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/food-log',
+  beforeLoad: () => {
+    throw redirect({ to: '/my-food', replace: true });
+  },
+});
+
+const foodLogWeekRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/food-log/$weekStart',
+  beforeLoad: ({ params }) => {
+    throw redirect({
+      to: '/my-food/$weekStart',
+      params: { weekStart: params.weekStart },
+      replace: true,
+    });
+  },
+});
+
+const foodLogDayRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/food-log/$weekStart/$day',
+  beforeLoad: ({ params }) => {
+    throw redirect({
+      to: '/my-food/$weekStart/$day',
+      params: { weekStart: params.weekStart, day: params.day },
+      replace: true,
+    });
+  },
+});
+
+const plannerIndexRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/planner',
+  component: PlannerIndexRedirect,
+});
+
+const plannerWeekRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/planner/$weekStart',
+  component: function ViewPlanner() {
+    const { weekStart } = plannerWeekRoute.useParams();
+    return <PlannerPage weekStart={weekStart} />;
+  },
+});
+
+const plannerDayRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/planner/$weekStart/$day',
+  beforeLoad: ({ params }) => {
+    throw redirect({
+      to: '/planner/$weekStart',
+      params: { weekStart: params.weekStart },
+      replace: true,
+    });
+  },
+});
+
+const needsReviewRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/needs-review',
+  component: NeedsReviewPage,
+});
+
+const kitchenRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/kitchen',
+  component: KitchenPage,
+});
+
+const foodsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/foods',
+  component: FoodsPage,
+});
+
+const ingredientsRedirectRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/ingredients',
+  beforeLoad: () => {
+    throw redirect({ to: '/foods' });
+  },
+});
+
+const ingredientRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/ingredients/$id',
+  component: function EditIngredient() {
+    const { id } = ingredientRoute.useParams();
+    return <IngredientPage id={id} />;
+  },
+});
+
+const preparedMealRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/prepared-meals/$id',
+  component: function EditPreparedMeal() {
+    const { id } = preparedMealRoute.useParams();
+    return <PreparedMealPage id={id} />;
+  },
+});
+
+const savedMealsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/saved-meals',
+  component: SavedMealsPage,
+});
+
+const savedMealRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/saved-meals/$id',
+  component: function EditSavedMeal() {
+    const { id } = savedMealRoute.useParams();
+    return <SavedMealPage id={id} />;
+  },
+});
+
+const productsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/products',
+  component: ProductsPage,
+});
+
+const productRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/products/$id',
+  component: function EditProduct() {
+    const { id } = productRoute.useParams();
+    return <ProductPage id={id} />;
+  },
+});
+
+const recipesRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/recipes',
+  component: RecipesPage,
+});
+
+const newRecipeRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/recipes/new',
+  component: NewRecipePage,
+});
+
+const editRecipeRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/recipes/$id/edit',
+  component: function EditRecipe() {
+    const { id } = editRecipeRoute.useParams();
+    return <EditRecipePage id={id} />;
+  },
+});
+
+const recipeRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/recipes/$id',
+  component: function EditRecipe() {
+    const { id } = recipeRoute.useParams();
+    return <RecipePage id={id} />;
+  },
+});
+
+const stockRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/stock',
+  component: StockPage,
+});
+
+const stockItemRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/stock/$id',
+  component: function ViewStockItem() {
+    const { id } = stockItemRoute.useParams();
+    return <StockItemPage id={id} />;
+  },
+});
+
+const dishRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/stock/dishes/$recipeId',
+  component: function ViewDish() {
+    const { recipeId } = dishRoute.useParams();
+    return <DishPage recipeId={recipeId} />;
+  },
+});
+
+const productStockRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/stock/products/$productId',
+  component: function ViewProductStock() {
+    const { productId } = productStockRoute.useParams();
+    return <ProductStockPage productId={productId} />;
+  },
+});
+
+const ingredientStockRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/stock/ingredients/$ingredientId',
+  component: function ViewIngredientStock() {
+    const { ingredientId } = ingredientStockRoute.useParams();
+    return <IngredientStockPage ingredientId={ingredientId} />;
+  },
+});
+
+const preparedMealStockRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/stock/prepared-meals/$preparedMealId',
+  component: function ViewPreparedMealStock() {
+    const { preparedMealId } = preparedMealStockRoute.useParams();
+    return <PreparedMealStockPage preparedMealId={preparedMealId} />;
+  },
+});
+
+const householdRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/household',
+  component: HouseholdPage,
+});
+
+const memberRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/household/$id',
+  component: function EditMember() {
+    const { id } = memberRoute.useParams();
+    return <MemberPage id={id} />;
+  },
+});
+
+const administrationRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/administration',
+  component: AdministrationPage,
+});
+
+const accountsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/administration/accounts',
+  component: AccountsPage,
+});
+
+const mealTimesRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/administration/meal-times',
+  component: MealTimesPage,
+});
+
+const shoppingRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/shopping',
+  component: function Shopping() {
+    return (
+      <RequirePermission permission="shopping:read">
+        <ShoppingPage />
+      </RequirePermission>
+    );
+  },
+});
+
+const putAwayRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/shopping/put-away',
+  component: function PutAway() {
+    return (
+      <RequirePermission permission="shopping:read">
+        <PutAwayPage />
+      </RequirePermission>
+    );
+  },
+});
+
+const tripRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/shopping/$date',
+  component: function Trip() {
+    return (
+      <RequirePermission permission="shopping:read">
+        <TripPage />
+      </RequirePermission>
+    );
+  },
+});
+
+const shoppingSettingsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/administration/shopping',
+  component: function ShoppingSettings() {
+    return (
+      <RequirePermission permission="household:write">
+        <ShoppingSettingsPage />
+      </RequirePermission>
+    );
+  },
+});
+
+const goalsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/goals',
+  component: GoalsPage,
+});
+
+const weightRedirectRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/weight',
+  beforeLoad: () => {
+    throw redirect({ to: '/goals' });
+  },
+});
+
+const profileRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/profile',
+  component: ProfilePage,
+});
+
+export const routeTree = rootRoute.addChildren([
+  indexRoute,
+  myFoodIndexRoute,
+  myFoodWeekRoute,
+  myFoodDayRoute,
+  foodLogIndexRoute,
+  foodLogWeekRoute,
+  foodLogDayRoute,
+  plannerIndexRoute,
+  plannerWeekRoute,
+  plannerDayRoute,
+  kitchenRoute,
+  needsReviewRoute,
+  foodsRoute,
+  ingredientsRedirectRoute,
+  ingredientRoute,
+  preparedMealRoute,
+  savedMealsRoute,
+  savedMealRoute,
+  productsRoute,
+  productRoute,
+  recipesRoute,
+  newRecipeRoute,
+  recipeRoute,
+  editRecipeRoute,
+  stockRoute,
+  productStockRoute,
+  ingredientStockRoute,
+  preparedMealStockRoute,
+  stockItemRoute,
+  dishRoute,
+  householdRoute,
+  memberRoute,
+  administrationRoute,
+  accountsRoute,
+  mealTimesRoute,
+  shoppingRoute,
+  putAwayRoute,
+  tripRoute,
+  shoppingSettingsRoute,
+  goalsRoute,
+  weightRedirectRoute,
+  profileRoute,
+]);
+
+export const router = createRouter({
+  routeTree,
+  defaultNotFoundComponent: RouteNotFound,
+  defaultErrorComponent: RouteError,
+});
+
+declare module '@tanstack/react-router' {
+  interface Register {
+    router: typeof router;
+  }
+}

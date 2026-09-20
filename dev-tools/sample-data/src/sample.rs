@@ -1,0 +1,3416 @@
+use std::collections::HashSet;
+use std::fmt;
+use std::str::FromStr;
+
+use anyhow::{Context, bail};
+use mmp_core::CoreError;
+use mmp_core::domain::{
+    AccessScope, ActualMealPlanComponent, AdHocKind, Assumption, ConfirmMealPlanComponent,
+    ConfirmMealPlanEntry, ConsumedAmount, ConsumptionRecordId, HabitualActivity, HouseholdMember,
+    HouseholdMemberId, HouseholdSettingsPatch, IngredientId, MacroTargets, MealAttendance,
+    MealCategory, MealItemRef, MealOccasionId, MealPlanEntryId, MealPlanStatus, MealSlot,
+    MealTemplateId, NewConsumptionRecord, NewHouseholdMember, NewMealGroup, NewMealGuestAllocation,
+    NewMealGuestGroup, NewMealOccasion, NewMealParticipant, NewMealParticipantAllocation,
+    NewMealPlanComponent, NewMealTemplate, NewMealTemplateComponent, NewNutritionTarget,
+    NewProduct, NewPurchase, NewRecipe, NewRecipeComponent, NewRecipeInstruction,
+    NewShoppingCadence, NewShoppingListItem, NewStockItem, NewUser, NewWeightGoal, NewWeightRecord,
+    NutritionEmphasis, NutritionFacts, NutritionGoals, OutcomeActor, Pace, Patch, PreparedMealId,
+    ProductId, Provenance, Quantity, RecipeId, RecipePatch, RecipeRequirement, Revision, Role,
+    SectionOrder, Sex, ShoppingSection, SourceDate, SourceDateKind, StockLevel, StockSubject,
+    StorageLocation, Unit, UsabilityDeadline, User, UserId, WeightObjective, WeightSource,
+};
+use mmp_core::services::NutritionPlanAnswers;
+use mmp_server::state::AppState;
+use rust_decimal::Decimal;
+use time::macros::{date, time};
+use time::{Date, Duration, PrimitiveDateTime, Time, Weekday};
+use uuid::Uuid;
+
+const SAMPLE_NAMESPACE: Uuid = Uuid::from_u128(0x6d6d_7073_616d_706c_6580_4c2f_923b_8d10);
+const SAMPLE_RECIPE_IMAGE: &[u8] = include_bytes!("../assets/sample_recipe.png");
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Scenario {
+    Minimal,
+    Full,
+}
+
+impl fmt::Display for Scenario {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Scenario::Minimal => "minimal",
+            Scenario::Full => "full",
+        })
+    }
+}
+
+impl FromStr for Scenario {
+    type Err = anyhow::Error;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "minimal" => Ok(Self::Minimal),
+            "full" => Ok(Self::Full),
+            _ => bail!("unknown scenario `{value}`; expected `minimal` or `full`"),
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct Report {
+    pub users_created: usize,
+    pub members_created: usize,
+    pub products_created: usize,
+    pub recipes_created: usize,
+    pub targets_created: usize,
+    pub body_profiles_created: usize,
+    pub calculations_created: usize,
+    pub weigh_ins_created: usize,
+    pub weight_goals_created: usize,
+    pub stock_items_created: usize,
+    pub meals_created: usize,
+    pub meals_resolved: usize,
+    pub stock_effects_applied: usize,
+    pub household_participants_created: usize,
+    pub consumption_entries_created: usize,
+    pub shopping_seeded: usize,
+}
+
+const BATCH_COOK_NOTE: &str = "batch cooked on a Sunday, frozen in portions";
+
+struct Loader<'a> {
+    state: &'a AppState,
+    actor: User,
+    member: HouseholdMember,
+    week_start: Date,
+    today: Date,
+    report: Report,
+}
+
+#[derive(Clone, Copy)]
+enum Outcome {
+    Planned,
+    PartiallyEaten { component_index: usize },
+    Eaten { varied: bool },
+    NotEaten,
+}
+
+struct StockSpec {
+    product_key: &'static str,
+    level: StockLevel,
+    storage_location: StorageLocation,
+    source_date: Option<SourceDate>,
+    note: Option<&'static str>,
+}
+
+struct ProductSpec {
+    key: &'static str,
+    name: &'static str,
+    brand: Option<&'static str>,
+    ingredient_key: Option<&'static str>,
+    section: ShoppingSection,
+    package_quantity: Option<Quantity>,
+    servings_per_pack: Option<i32>,
+    nutrition: NutritionFacts,
+}
+
+pub async fn load(
+    state: &AppState,
+    actor_username: &str,
+    scenario: Scenario,
+    week_start: Date,
+    today: Date,
+) -> anyhow::Result<Report> {
+    let actor = state
+        .household
+        .find_user_by_username(actor_username)
+        .await?
+        .with_context(|| format!("development account `{actor_username}` does not exist"))?;
+    let member = state
+        .household
+        .find_member_by_linked_user(actor.id)
+        .await?
+        .context("the development account is not linked to a household member")?;
+    let mut loader = Loader {
+        state,
+        actor,
+        member,
+        week_start,
+        today,
+        report: Report::default(),
+    };
+
+    let (manager, basic) = loader.load_accounts().await?;
+    loader.load_products().await?;
+    loader.load_prepared_meal_products().await?;
+    loader.load_recipes().await?;
+    loader.load_targets().await?;
+    loader.load_weight().await?;
+    loader.load_guided_nutrition_plan().await?;
+    loader.load_basic_guided_nutrition_plan(basic.id).await?;
+    loader.load_manager_nutrition_target(manager.id).await?;
+    loader.load_stock().await?;
+
+    match scenario {
+        Scenario::Minimal => loader.load_minimal().await?,
+        Scenario::Full => loader.load_full().await?,
+    }
+
+    Ok(loader.report)
+}
+
+impl Loader<'_> {
+    async fn load_accounts(&mut self) -> anyhow::Result<(HouseholdMember, HouseholdMember)> {
+        let manager = self
+            .ensure_user(
+                "manager",
+                "sample.manager",
+                "Morgan Sample",
+                vec![Role::HouseholdManager],
+            )
+            .await?;
+        let manager_member = self
+            .ensure_member("manager", "Morgan Sample", manager.id)
+            .await?;
+
+        let basic = self
+            .ensure_user(
+                "basic-user",
+                "sample.user",
+                "Taylor Sample",
+                vec![Role::BasicUser],
+            )
+            .await?;
+        let basic_member = self
+            .ensure_member("basic-user", "Taylor Sample", basic.id)
+            .await?;
+
+        let nutritionist = self
+            .ensure_user(
+                "nutritionist",
+                "sample.nutritionist",
+                "Casey Sample",
+                vec![Role::Nutritionist],
+            )
+            .await?;
+        self.state
+            .household
+            .grant_access(
+                self.member.id,
+                nutritionist.id,
+                AccessScope::HealthData,
+                Some(self.actor.id),
+            )
+            .await?;
+        Ok((manager_member, basic_member))
+    }
+
+    async fn ensure_user(
+        &mut self,
+        key: &str,
+        username: &str,
+        display_name: &str,
+        roles: Vec<Role>,
+    ) -> anyhow::Result<User> {
+        let id = UserId::from_uuid(sample_uuid("user", key));
+        let mut user = match self.state.household.get_user(id).await {
+            Ok(user) => user,
+            Err(CoreError::NotFound { .. }) => {
+                if let Some(user) = self.state.household.find_user_by_username(username).await? {
+                    user
+                } else {
+                    self.report.users_created += 1;
+                    self.state
+                        .household
+                        .create_user(NewUser {
+                            id: Some(id),
+                            username: username.to_owned(),
+                            display_name: Some(display_name.to_owned()),
+                            roles: roles.clone(),
+                        })
+                        .await?
+                }
+            }
+            Err(error) => return Err(error.into()),
+        };
+        if user.roles != roles {
+            user = self
+                .state
+                .household
+                .set_user_roles(user.id, user.revision, roles)
+                .await?;
+        }
+        Ok(user)
+    }
+
+    async fn ensure_member(
+        &mut self,
+        key: &str,
+        display_name: &str,
+        user_id: UserId,
+    ) -> anyhow::Result<HouseholdMember> {
+        if let Some(member) = self
+            .state
+            .household
+            .find_member_by_linked_user(user_id)
+            .await?
+        {
+            return Ok(member);
+        }
+
+        let id = HouseholdMemberId::from_uuid(sample_uuid("household-member", key));
+        let member = match self.state.household.get_member(id).await {
+            Ok(member) => {
+                self.state
+                    .household
+                    .link_account(member.id, member.revision, user_id)
+                    .await?
+            }
+            Err(CoreError::NotFound { .. }) => {
+                self.report.members_created += 1;
+                self.state
+                    .household
+                    .create_member(NewHouseholdMember {
+                        id: Some(id),
+                        display_name: display_name.to_owned(),
+                        linked_user_id: Some(user_id),
+                    })
+                    .await?
+            }
+            Err(error) => return Err(error.into()),
+        };
+        Ok(member)
+    }
+
+    async fn load_products(&mut self) -> anyhow::Result<()> {
+        for spec in product_specs() {
+            let id = product_id(spec.key);
+            match self.state.catalogue.get_product(id).await {
+                Ok(_) => continue,
+                Err(CoreError::NotFound { .. }) => {}
+                Err(error) => return Err(error.into()),
+            }
+            self.state
+                .catalogue
+                .create_product(NewProduct {
+                    id: Some(id),
+                    name: spec.name.to_owned(),
+                    brand: spec.brand.map(str::to_owned),
+                    barcode: None,
+                    retailer: Some("Sample Supermarket".to_owned()),
+                    shopping_section: Some(spec.section),
+                    track_stock: None,
+                    package_quantity: spec.package_quantity,
+                    servings_per_pack: spec.servings_per_pack,
+                    mapped_ingredient_id: spec.ingredient_key.map(IngredientId::seeded),
+                    mapped_prepared_meal_id: None,
+                    nutrition: spec.nutrition,
+                    provenance: Provenance::local(),
+                })
+                .await?;
+            self.report.products_created += 1;
+        }
+        Ok(())
+    }
+
+    async fn load_prepared_meal_products(&mut self) -> anyhow::Result<()> {
+        for spec in prepared_meal_product_specs() {
+            let id = product_id(spec.key);
+            match self.state.catalogue.get_product(id).await {
+                Ok(_) => continue,
+                Err(CoreError::NotFound { .. }) => {}
+                Err(error) => return Err(error.into()),
+            }
+            self.state
+                .catalogue
+                .create_product(NewProduct {
+                    id: Some(id),
+                    name: spec.name.to_owned(),
+                    brand: Some(spec.brand.to_owned()),
+                    barcode: None,
+                    retailer: Some("Sample Supermarket".to_owned()),
+                    shopping_section: Some(spec.section),
+                    track_stock: None,
+                    package_quantity: Some(spec.package_quantity),
+                    servings_per_pack: spec.servings_per_pack,
+                    mapped_ingredient_id: None,
+                    mapped_prepared_meal_id: Some(PreparedMealId::seeded(spec.prepared_meal_key)),
+                    nutrition: spec.nutrition,
+                    provenance: Provenance::local(),
+                })
+                .await?;
+            self.report.products_created += 1;
+        }
+        Ok(())
+    }
+
+    async fn load_recipes(&mut self) -> anyhow::Result<()> {
+        for spec in recipe_specs() {
+            let id = recipe_id(spec.key);
+            let countries: Vec<String> = spec
+                .country_categories
+                .iter()
+                .map(|country| (*country).to_owned())
+                .collect();
+            let tags: Vec<String> = spec.tags.iter().map(|tag| (*tag).to_owned()).collect();
+            let instructions: Vec<NewRecipeInstruction> = spec
+                .instructions
+                .iter()
+                .map(|text| NewRecipeInstruction {
+                    id: None,
+                    text: (*text).to_owned(),
+                })
+                .collect();
+            let existing = match self.state.recipes.get_recipe(id, self.actor.id).await {
+                Ok(recipe) => Some(recipe),
+                Err(CoreError::NotFound { .. }) => None,
+                Err(error) => return Err(error.into()),
+            };
+            let recipe = if let Some(mut recipe) = existing {
+                let patch = RecipePatch {
+                    description: Patch::Set(spec.description.to_owned()),
+                    preparation_minutes: Patch::Set(spec.preparation_minutes),
+                    cooking_minutes: Patch::Set(spec.cooking_minutes),
+                    notes: Patch::Set(spec.notes.to_owned()),
+                    instructions: Some(instructions.clone()),
+                    meal_categories: Some(spec.meal_categories.clone()),
+                    country_categories: Some(countries.clone()),
+                    tags: Some(tags.clone()),
+                    ..RecipePatch::default()
+                };
+                if recipe.description.as_deref() != Some(spec.description)
+                    || recipe.preparation_minutes != Some(spec.preparation_minutes)
+                    || recipe.cooking_minutes != Some(spec.cooking_minutes)
+                    || recipe.notes.as_deref() != Some(spec.notes)
+                    || recipe
+                        .instructions
+                        .iter()
+                        .map(|step| step.text.as_str())
+                        .collect::<Vec<_>>()
+                        != spec.instructions
+                    || recipe.meal_categories != spec.meal_categories
+                    || recipe.country_categories != countries
+                    || recipe.tags != tags
+                {
+                    recipe = self
+                        .state
+                        .recipes
+                        .update_recipe(id, recipe.revision, patch, self.actor.id)
+                        .await?;
+                }
+                recipe
+            } else {
+                let recipe = self
+                    .state
+                    .recipes
+                    .create_recipe(NewRecipe {
+                        id: Some(id),
+                        name: spec.name.to_owned(),
+                        description: Some(spec.description.to_owned()),
+                        servings: spec.servings,
+                        preparation_minutes: Some(spec.preparation_minutes),
+                        cooking_minutes: Some(spec.cooking_minutes),
+                        notes: Some(spec.notes.to_owned()),
+                        components: spec
+                            .components
+                            .iter()
+                            .map(|(line, amount)| NewRecipeComponent {
+                                id: None,
+                                requirement: line.requirement(),
+                                amount: *amount,
+                            })
+                            .collect(),
+                        instructions,
+                        meal_categories: spec.meal_categories.clone(),
+                        country_categories: countries,
+                        tags,
+                        actor_id: self.actor.id,
+                    })
+                    .await?;
+                self.report.recipes_created += 1;
+                recipe
+            };
+            if spec.photo && recipe.photo_version.is_none() {
+                let derivatives = mmp_server::photo::process(SAMPLE_RECIPE_IMAGE)
+                    .map_err(|error| anyhow::anyhow!(error))?;
+                self.state
+                    .recipes
+                    .replace_photo(recipe.id, recipe.revision, derivatives, self.actor.id)
+                    .await?;
+            }
+        }
+        Ok(())
+    }
+
+    async fn load_targets(&mut self) -> anyhow::Result<()> {
+        self.ensure_target(
+            self.week_start - Duration::weeks(6),
+            nutrition_goals([2000, 100, 240, 70, 65, 20, 30, 6, 300]),
+        )
+        .await?;
+        self.ensure_target(
+            self.week_start - Duration::weeks(2),
+            nutrition_goals([2200, 120, 260, 75, 70, 22, 35, 6, 300]),
+        )
+        .await
+    }
+
+    async fn ensure_target(
+        &mut self,
+        effective_from: Date,
+        goals: NutritionGoals,
+    ) -> anyhow::Result<()> {
+        let existing = self.state.nutrition_targets.list(self.member.id).await?;
+        if existing
+            .iter()
+            .any(|target| target.effective_from == effective_from)
+        {
+            return Ok(());
+        }
+        self.state
+            .nutrition_targets
+            .create(NewNutritionTarget {
+                member_id: self.member.id,
+                effective_from,
+                goals,
+            })
+            .await?;
+        self.report.targets_created += 1;
+        Ok(())
+    }
+
+    async fn load_weight(&mut self) -> anyhow::Result<()> {
+        let readings: [(i64, &str, Option<Time>); 10] = [
+            (8, "82.4", None),
+            (7, "82.0", None),
+            (6, "82.3", None),
+            (5, "81.5", None),
+            (4, "81.1", None),
+            (3, "81.4", None),
+            (2, "80.6", None),
+            (1, "80.2", Some(time!(07:15))),
+            (1, "80.9", Some(time!(21:40))),
+            (0, "79.8", None),
+        ];
+
+        for (weeks_ago, weight, at) in readings {
+            let on = self.week_start - Duration::weeks(weeks_ago);
+            let recorded_at = at.map(|at| PrimitiveDateTime::new(on, at).assume_utc());
+            self.ensure_weigh_in(on, recorded_at, weight).await?;
+        }
+
+        self.ensure_weight_goal().await
+    }
+
+    async fn load_guided_nutrition_plan(&mut self) -> anyhow::Result<()> {
+        let existing_targets = self.state.nutrition_targets.list(self.member.id).await?;
+        let profile_exists = self
+            .state
+            .nutrition_plan
+            .body_profile(self.member.id)
+            .await?
+            .is_some();
+        let calculation_exists = self
+            .state
+            .nutrition_plan
+            .current(self.member.id)
+            .await?
+            .calculation
+            .is_some();
+        if profile_exists && calculation_exists {
+            return Ok(());
+        }
+
+        let guided = self
+            .state
+            .nutrition_plan
+            .set_guided(NutritionPlanAnswers {
+                member_id: self.member.id,
+                date_of_birth: date!(1985 - 01 - 01),
+                sex: Sex::Male,
+                height_cm: Decimal::from(178),
+                current_weight: Quantity::new(Decimal::from_str("79.8")?, Unit::Kilogram),
+                habitual_activity: HabitualActivity::LightlyActive,
+                objective: WeightObjective::Lose,
+                emphasis: NutritionEmphasis::Muscle,
+                target_weight: Some(quantity(76, Unit::Kilogram)),
+                pace: Some(Pace::Standard),
+                recorded_by: Some(self.actor.id),
+            })
+            .await?;
+        if !existing_targets
+            .iter()
+            .any(|target| target.id == guided.target.id)
+        {
+            self.report.targets_created += 1;
+        }
+        if !profile_exists {
+            self.report.body_profiles_created += 1;
+        }
+        if !calculation_exists {
+            self.report.calculations_created += 1;
+        }
+        Ok(())
+    }
+
+    async fn load_basic_guided_nutrition_plan(
+        &mut self,
+        member_id: HouseholdMemberId,
+    ) -> anyhow::Result<()> {
+        if self
+            .state
+            .nutrition_plan
+            .current(member_id)
+            .await?
+            .target
+            .is_some()
+        {
+            return Ok(());
+        }
+        self.state
+            .nutrition_plan
+            .set_guided(NutritionPlanAnswers {
+                member_id,
+                date_of_birth: date!(1992 - 06 - 15),
+                sex: Sex::Female,
+                height_cm: Decimal::from(168),
+                current_weight: quantity(62, Unit::Kilogram),
+                habitual_activity: HabitualActivity::Active,
+                objective: WeightObjective::Gain,
+                emphasis: NutritionEmphasis::Endurance,
+                target_weight: Some(quantity(66, Unit::Kilogram)),
+                pace: Some(Pace::Steady),
+                recorded_by: Some(self.actor.id),
+            })
+            .await?;
+        self.report.targets_created += 1;
+        self.report.body_profiles_created += 1;
+        self.report.calculations_created += 1;
+        self.report.weigh_ins_created += 1;
+        self.report.weight_goals_created += 1;
+        Ok(())
+    }
+
+    async fn load_manager_nutrition_target(
+        &mut self,
+        manager_id: HouseholdMemberId,
+    ) -> anyhow::Result<()> {
+        if self
+            .state
+            .nutrition_plan
+            .current(manager_id)
+            .await?
+            .target
+            .is_some()
+        {
+            return Ok(());
+        }
+
+        self.state
+            .nutrition_plan
+            .set_manual(
+                manager_id,
+                Decimal::from(2_200),
+                MacroTargets {
+                    protein_g: Decimal::from(135),
+                    carbohydrate_g: Decimal::from(275),
+                    fat_g: Decimal::from(65),
+                },
+            )
+            .await?;
+        self.report.targets_created += 1;
+        Ok(())
+    }
+
+    async fn ensure_weigh_in(
+        &mut self,
+        recorded_on: Date,
+        recorded_at: Option<time::OffsetDateTime>,
+        weight: &str,
+    ) -> anyhow::Result<()> {
+        let existing = self.state.weight.list_records(self.member.id).await?;
+        if existing
+            .iter()
+            .any(|record| record.recorded_on == recorded_on && record.recorded_at == recorded_at)
+        {
+            return Ok(());
+        }
+
+        self.state
+            .weight
+            .record(NewWeightRecord {
+                member_id: self.member.id,
+                weight: Quantity::new(Decimal::from_str(weight)?, Unit::Kilogram),
+                recorded_on,
+                recorded_at,
+                source: WeightSource::Manual,
+                recorded_by: Some(self.actor.id),
+            })
+            .await?;
+        self.report.weigh_ins_created += 1;
+        Ok(())
+    }
+
+    async fn ensure_weight_goal(&mut self) -> anyhow::Result<()> {
+        if self.state.weight.goal(self.member.id).await?.is_some() {
+            return Ok(());
+        }
+
+        self.state
+            .weight
+            .set_goal(NewWeightGoal {
+                member_id: self.member.id,
+                objective: WeightObjective::Lose,
+                starting_weight: Quantity::new(Decimal::from_str("82.4")?, Unit::Kilogram),
+                target_weight: Some(Quantity::new(Decimal::from_str("76.0")?, Unit::Kilogram)),
+                planned_rate: Some(Quantity::new(Decimal::from_str("0.5")?, Unit::Kilogram)),
+                started_on: self.week_start - Duration::weeks(8),
+            })
+            .await?;
+        self.report.weight_goals_created += 1;
+        Ok(())
+    }
+
+    async fn load_stock(&mut self) -> anyhow::Result<()> {
+        let use_by = SourceDate {
+            date: self.week_start + Duration::days(2),
+            kind: SourceDateKind::UseBy,
+        };
+        let specs: Vec<StockSpec> = vec![
+            StockSpec {
+                product_key: "chicken-breast",
+                level: StockLevel::Exact {
+                    quantity: quantity(400, Unit::Gram),
+                },
+                storage_location: StorageLocation::Chilled,
+                source_date: Some(use_by),
+                note: Some("back left of the fridge"),
+            },
+            StockSpec {
+                product_key: "chicken-breast",
+                level: StockLevel::Exact {
+                    quantity: quantity(650, Unit::Gram),
+                },
+                storage_location: StorageLocation::Frozen,
+                source_date: None,
+                note: Some("frozen flat, bought in bulk"),
+            },
+            StockSpec {
+                product_key: "onion-salt",
+                level: StockLevel::NotTracked,
+                storage_location: StorageLocation::Ambient,
+                source_date: None,
+                note: Some("we never count this, it is just always there"),
+            },
+            StockSpec {
+                product_key: "tomato-ketchup",
+                level: StockLevel::Estimated {
+                    quantity: quantity(150, Unit::Millilitre),
+                },
+                storage_location: StorageLocation::Chilled,
+                source_date: None,
+                note: Some("about a third left, going by the squeeze"),
+            },
+            StockSpec {
+                product_key: "rolled-oats",
+                level: StockLevel::Exact {
+                    quantity: quantity(500, Unit::Gram),
+                },
+                storage_location: StorageLocation::Ambient,
+                source_date: None,
+                note: None,
+            },
+            StockSpec {
+                product_key: "broccoli",
+                level: StockLevel::Exact {
+                    quantity: quantity(120, Unit::Gram),
+                },
+                storage_location: StorageLocation::Chilled,
+                source_date: None,
+                note: None,
+            },
+            StockSpec {
+                product_key: "basmati-rice",
+                level: StockLevel::NotTracked,
+                storage_location: StorageLocation::Ambient,
+                source_date: None,
+                note: None,
+            },
+        ];
+
+        let mut expected_per_product: std::collections::HashMap<&str, i64> =
+            std::collections::HashMap::new();
+        for spec in &specs {
+            *expected_per_product.entry(spec.product_key).or_default() += 1;
+        }
+
+        for StockSpec {
+            product_key,
+            level,
+            storage_location,
+            source_date,
+            note,
+        } in specs
+        {
+            let product = product_id(product_key);
+            let existing = self
+                .state
+                .stock
+                .list(&mmp_core::ports::StockQuery {
+                    product_id: Some(product),
+                    ..Default::default()
+                })
+                .await?;
+            if existing.total >= expected_per_product[product_key] {
+                continue;
+            }
+            self.state
+                .stock
+                .create(
+                    NewStockItem {
+                        subject: StockSubject::product(product),
+                        level,
+                        storage_location,
+                        source_date,
+                        usability_deadline: None,
+                        note: note.map(str::to_owned),
+                    },
+                    self.actor.id,
+                    Some(self.member.id),
+                )
+                .await?;
+            self.report.stock_items_created += 1;
+        }
+        Ok(())
+    }
+
+    async fn load_minimal(&mut self) -> anyhow::Result<()> {
+        for slot in MealSlot::ALL {
+            self.ensure_meal(self.week_start, slot, Outcome::Planned)
+                .await?;
+        }
+        Ok(())
+    }
+
+    async fn load_full(&mut self) -> anyhow::Result<()> {
+        for week_offset in [-3_i64, -2] {
+            let week = self.week_start + Duration::weeks(week_offset);
+            self.load_weekly_shop(week, 7).await?;
+            for day_offset in 0..7 {
+                let date = week + Duration::days(day_offset);
+                for slot in MealSlot::ALL {
+                    self.ensure_filler_meal(date, slot, Outcome::Eaten { varied: false })
+                        .await?;
+                }
+            }
+        }
+
+        self.load_weekly_shop(self.week_start - Duration::weeks(1), 2)
+            .await?;
+        self.load_previous_partial_week().await?;
+        let eaten_this_week = (self.today - self.week_start).whole_days() + 1;
+        self.load_weekly_shop(self.week_start, eaten_this_week)
+            .await?;
+        self.load_current_partial_week().await?;
+        self.load_household_meals().await?;
+        self.load_assumed_meals().await?;
+        self.load_pooled_ingredient_demand().await?;
+        self.load_batch_cook().await?;
+        self.load_planner_showcase().await?;
+        self.load_shopping().await?;
+        self.load_generic_food_showcase().await?;
+        self.load_planning_horizon().await
+    }
+
+    async fn load_planner_showcase(&mut self) -> anyhow::Result<()> {
+        let week = self.week_start + Duration::weeks(1);
+        let manager = HouseholdMemberId::from_uuid(sample_uuid("household-member", "manager"));
+        let basic = HouseholdMemberId::from_uuid(sample_uuid("household-member", "basic-user"));
+
+        let monday = week;
+        let curry_id = showcase_group_id(monday, MealSlot::Dinner, "family-curry");
+        self.ensure_showcase_group(
+            monday,
+            MealSlot::Dinner,
+            Some("Defrost the chicken in the morning"),
+            NewMealGroup {
+                id: Some(curry_id),
+                label: Some("Family curry".to_owned()),
+                ad_hoc: None,
+                components: vec![NewMealPlanComponent {
+                    id: None,
+                    item: MealItemRef::recipe(recipe_id("chicken-and-rice")),
+                    amount: servings(4),
+                    cooking_servings: Some(4),
+                }],
+                everyone: true,
+                participants: Vec::new(),
+                guest_groups: Vec::new(),
+            },
+        )
+        .await?;
+        self.state
+            .meal_plan
+            .set_attendance(
+                occasion_id(monday, MealSlot::Dinner),
+                basic,
+                MealAttendance::Eating {
+                    group_id: curry_id,
+                    note: Some("mild".to_owned()),
+                },
+                self.actor.id,
+            )
+            .await?;
+        let leftovers_id = showcase_group_id(monday, MealSlot::Dinner, "leftovers");
+        if matches!(
+            self.state.meal_plan.get(leftovers_id).await,
+            Err(CoreError::NotFound { .. })
+        ) {
+            self.state
+                .meal_plan
+                .add_group(
+                    occasion_id(monday, MealSlot::Dinner),
+                    NewMealGroup {
+                        id: Some(leftovers_id),
+                        label: Some("Leftover chicken and rice".to_owned()),
+                        ad_hoc: None,
+                        components: vec![NewMealPlanComponent {
+                            id: None,
+                            item: MealItemRef::dish(recipe_id("chicken-and-rice")),
+                            amount: servings(1),
+                            cooking_servings: None,
+                        }],
+                        everyone: false,
+                        participants: vec![NewMealParticipant::member(manager)],
+                        guest_groups: Vec::new(),
+                    },
+                    self.actor.id,
+                )
+                .await?;
+            self.report.meals_created += 1;
+        }
+
+        let tuesday = week + Duration::days(1);
+        self.ensure_showcase_group(
+            tuesday,
+            MealSlot::Dinner,
+            None,
+            everyone_recipe_group(
+                tuesday,
+                MealSlot::Dinner,
+                "tuesday-dinner",
+                "chicken-and-rice",
+            ),
+        )
+        .await?;
+        self.state
+            .meal_plan
+            .set_attendance(
+                occasion_id(tuesday, MealSlot::Dinner),
+                manager,
+                MealAttendance::Elsewhere,
+                self.actor.id,
+            )
+            .await?;
+
+        let wednesday = week + Duration::days(2);
+        let mut guests = everyone_recipe_group(
+            wednesday,
+            MealSlot::Lunch,
+            "lunch-with-guests",
+            "chicken-and-rice",
+        );
+        guests.guest_groups = vec![NewMealGuestGroup {
+            name: Some("Alex".to_owned()),
+            ..NewMealGuestGroup::of(1)
+        }];
+        self.ensure_showcase_group(wednesday, MealSlot::Lunch, None, guests)
+            .await?;
+        for (key, label, names) in [
+            ("vegetarian-guest", "Vegetarian lunch", [Some("Morgan"), None]),
+            ("children-guests", "Pizza and garlic bread", [Some("Charlie"), Some("Robin")]),
+        ] {
+            self.ensure_showcase_group(wednesday, MealSlot::Lunch, None, NewMealGroup {
+                id: Some(showcase_group_id(wednesday, MealSlot::Lunch, key)),
+                label: Some(label.to_owned()),
+                ad_hoc: None,
+                components: Vec::new(),
+                everyone: false,
+                participants: Vec::new(),
+                guest_groups: names.into_iter().flatten().map(|name| NewMealGuestGroup {
+                    name: Some(name.to_owned()),
+                    note: (name == "Charlie").then(|| "No cheese".to_owned()),
+                    ..NewMealGuestGroup::of(1)
+                }).collect(),
+            }).await?;
+        }
+
+        let thursday = week + Duration::days(3);
+        self.ensure_showcase_group(
+            thursday,
+            MealSlot::Dinner,
+            None,
+            NewMealGroup {
+                id: Some(showcase_group_id(thursday, MealSlot::Dinner, "eating-out")),
+                label: None,
+                ad_hoc: Some(AdHocKind::EatingOut),
+                components: Vec::new(),
+                everyone: true,
+                participants: Vec::new(),
+                guest_groups: Vec::new(),
+            },
+        )
+        .await?;
+
+        let friday = week + Duration::days(4);
+        self.ensure_showcase_group(
+            friday,
+            MealSlot::Dinner,
+            None,
+            NewMealGroup {
+                id: Some(showcase_group_id(friday, MealSlot::Dinner, "pizza")),
+                label: Some("Pizza night".to_owned()),
+                ad_hoc: None,
+                components: Vec::new(),
+                everyone: true,
+                participants: Vec::new(),
+                guest_groups: Vec::new(),
+            },
+        )
+        .await?;
+
+        let saturday = week + Duration::days(5);
+        let mut cake =
+            everyone_recipe_group(saturday, MealSlot::Snacks, "saturday-cake", "saturday-cake");
+        cake.components[0].cooking_servings = Some(8);
+        cake.components[0].amount = servings(8);
+        self.ensure_showcase_group(saturday, MealSlot::Snacks, None, cake)
+            .await?;
+
+        let sunday = week + Duration::days(6);
+        self.ensure_showcase_group(
+            sunday,
+            MealSlot::Breakfast,
+            None,
+            everyone_recipe_group(sunday, MealSlot::Breakfast, "everyone-pancakes", "porridge"),
+        )
+        .await?;
+
+        let shared_food_day = saturday;
+        let manager_meal_id =
+            showcase_group_id(shared_food_day, MealSlot::Lunch, "fish-fingers-and-chips");
+        self.ensure_showcase_group(
+            shared_food_day,
+            MealSlot::Lunch,
+            None,
+            NewMealGroup {
+                id: Some(manager_meal_id),
+                label: None,
+                ad_hoc: None,
+                components: vec![
+                    NewMealPlanComponent {
+                        id: None,
+                        item: MealItemRef::product(product_id("fish-fingers")),
+                        amount: ConsumedAmount::Packs(decimal(1)),
+                        cooking_servings: None,
+                    },
+                    NewMealPlanComponent {
+                        id: None,
+                        item: MealItemRef::product(product_id("chips")),
+                        amount: measured(150, Unit::Gram),
+                        cooking_servings: None,
+                    },
+                ],
+                everyone: false,
+                participants: vec![NewMealParticipant::member(manager)],
+                guest_groups: Vec::new(),
+            },
+        )
+        .await?;
+        let basic_meal_id =
+            showcase_group_id(shared_food_day, MealSlot::Lunch, "salmon-and-chips");
+        if matches!(
+            self.state.meal_plan.get(basic_meal_id).await,
+            Err(CoreError::NotFound { .. })
+        ) {
+            self.state
+                .meal_plan
+                .add_group(
+                    occasion_id(shared_food_day, MealSlot::Lunch),
+                    NewMealGroup {
+                        id: Some(basic_meal_id),
+                        label: None,
+                        ad_hoc: None,
+                        components: vec![
+                            NewMealPlanComponent {
+                                id: None,
+                                item: MealItemRef::product(product_id("salmon-fillet")),
+                                amount: measured(150, Unit::Gram),
+                                cooking_servings: None,
+                            },
+                            NewMealPlanComponent {
+                                id: None,
+                                item: MealItemRef::product(product_id("chips")),
+                                amount: measured(150, Unit::Gram),
+                                cooking_servings: None,
+                            },
+                        ],
+                        everyone: false,
+                        participants: vec![NewMealParticipant::member(basic)],
+                        guest_groups: Vec::new(),
+                    },
+                    self.actor.id,
+                )
+                .await?;
+            self.report.meals_created += 1;
+        }
+
+        Ok(())
+    }
+
+    async fn ensure_showcase_group(
+        &mut self,
+        date: Date,
+        slot: MealSlot,
+        note: Option<&str>,
+        group: NewMealGroup,
+    ) -> anyhow::Result<()> {
+        let group_id = group.id.context("showcase group needs a stable id")?;
+        if self.state.meal_plan.get(group_id).await.is_ok() {
+            return Ok(());
+        }
+        self.state
+            .meal_plan
+            .create_occasion_backdated(NewMealOccasion {
+                id: Some(occasion_id(date, slot)),
+                planned_on: date,
+                slot,
+                planned_time: slot_time(slot),
+                note: note.map(str::to_owned),
+                group,
+                actor_id: self.actor.id,
+            })
+            .await?;
+        self.report.meals_created += 1;
+        Ok(())
+    }
+
+    async fn load_generic_food_showcase(&mut self) -> anyhow::Result<()> {
+        let garlic = self
+            .state
+            .catalogue
+            .get_ingredient(IngredientId::seeded("garlic"))
+            .await?;
+        if garlic.track_stock != Some(false) {
+            self.state
+                .catalogue
+                .update_ingredient(
+                    garlic.id,
+                    garlic.revision,
+                    mmp_core::domain::IngredientPatch {
+                        track_stock: Patch::Set(false),
+                        ..Default::default()
+                    },
+                )
+                .await?;
+        }
+
+        let fish_finger_dinner = self.week_start + Duration::days(20);
+        self.ensure_components_meal(
+            fish_finger_dinner,
+            "fish-finger-dinner",
+            MealSlot::Dinner,
+            Time::from_hms(18, 30, 0).unwrap(),
+            vec![
+                (
+                    MealItemRef::ingredient(IngredientId::seeded("fish-fingers")),
+                    ConsumedAmount::Measure(quantity(4, Unit::Item)),
+                ),
+                (
+                    MealItemRef::ingredient(IngredientId::seeded("chips")),
+                    ConsumedAmount::Measure(quantity(100, Unit::Gram)),
+                ),
+                (
+                    MealItemRef::ingredient(IngredientId::seeded("peas")),
+                    ConsumedAmount::Measure(quantity(70, Unit::Gram)),
+                ),
+            ],
+        )
+        .await?;
+
+        let saved_meal_dinner = self.week_start + Duration::days(21);
+        self.ensure_components_meal(
+            saved_meal_dinner,
+            "saved-meal-dinner",
+            MealSlot::Dinner,
+            Time::from_hms(18, 30, 0).unwrap(),
+            vec![
+                (
+                    MealItemRef::ingredient(IngredientId::seeded("fish-fingers")),
+                    ConsumedAmount::Measure(quantity(4, Unit::Item)),
+                ),
+                (
+                    MealItemRef::ingredient(IngredientId::seeded("chips")),
+                    ConsumedAmount::Measure(quantity(100, Unit::Gram)),
+                ),
+            ],
+        )
+        .await?;
+
+        let lasagne_dinner = self.week_start + Duration::days(22);
+        self.ensure_components_meal(
+            lasagne_dinner,
+            "lasagne-dinner",
+            MealSlot::Dinner,
+            Time::from_hms(18, 30, 0).unwrap(),
+            vec![
+                (
+                    MealItemRef::prepared_meal(PreparedMealId::seeded("frozen-lasagne")),
+                    ConsumedAmount::Measure(quantity(1, Unit::Item)),
+                ),
+                (
+                    MealItemRef::ingredient(IngredientId::seeded("kale")),
+                    ConsumedAmount::Measure(quantity(80, Unit::Gram)),
+                ),
+            ],
+        )
+        .await?;
+
+        let lasagne_product = product_id("frozen-lasagne-tesco");
+        let already_stocked = self
+            .state
+            .stock
+            .list(&mmp_core::ports::StockQuery {
+                product_id: Some(lasagne_product),
+                ..Default::default()
+            })
+            .await?
+            .total
+            > 0;
+        if !already_stocked {
+            self.state
+                .stock
+                .create(
+                    NewStockItem {
+                        subject: StockSubject::product(lasagne_product),
+                        level: StockLevel::Exact {
+                            quantity: quantity(2, Unit::Item),
+                        },
+                        storage_location: StorageLocation::Frozen,
+                        source_date: None,
+                        usability_deadline: None,
+                        note: Some("already in the freezer".to_owned()),
+                    },
+                    self.actor.id,
+                    Some(self.member.id),
+                )
+                .await?;
+            self.report.stock_items_created += 1;
+        }
+
+        self.ensure_saved_meal(
+            "fish-fingers-chips-and-peas",
+            UserId::from_uuid(sample_uuid("user", "basic-user")),
+            "Fish fingers, chips and peas",
+            vec![
+                (
+                    MealItemRef::ingredient(IngredientId::seeded("fish-fingers")),
+                    ConsumedAmount::Measure(quantity(4, Unit::Item)),
+                ),
+                (
+                    MealItemRef::ingredient(IngredientId::seeded("chips")),
+                    ConsumedAmount::Measure(quantity(100, Unit::Gram)),
+                ),
+                (
+                    MealItemRef::ingredient(IngredientId::seeded("peas")),
+                    ConsumedAmount::Measure(quantity(70, Unit::Gram)),
+                ),
+            ],
+        )
+        .await?;
+
+        self.ensure_saved_meal(
+            "manager-lasagne-and-kale",
+            UserId::from_uuid(sample_uuid("user", "manager")),
+            "Lasagne and kale",
+            vec![
+                (
+                    MealItemRef::prepared_meal(PreparedMealId::seeded("frozen-lasagne")),
+                    ConsumedAmount::Measure(quantity(1, Unit::Item)),
+                ),
+                (
+                    MealItemRef::ingredient(IngredientId::seeded("kale")),
+                    ConsumedAmount::Measure(quantity(80, Unit::Gram)),
+                ),
+            ],
+        )
+        .await?;
+
+        Ok(())
+    }
+
+    async fn ensure_components_meal(
+        &mut self,
+        date: Date,
+        key: &str,
+        slot: MealSlot,
+        planned_time: Time,
+        components: Vec<(MealItemRef, ConsumedAmount)>,
+    ) -> anyhow::Result<()> {
+        let id = snack_id(date, key);
+        if !matches!(
+            self.state.meal_plan.get(id).await,
+            Err(CoreError::NotFound { .. })
+        ) {
+            return Ok(());
+        }
+        self.report.meals_created += 1;
+        self.state
+            .meal_plan
+            .create_occasion_backdated(NewMealOccasion {
+                id: Some(occasion_id(date, slot)),
+                planned_on: date,
+                planned_time: Some(planned_time),
+                slot,
+                note: None,
+                group: NewMealGroup {
+                    id: Some(id),
+                    label: None,
+                    ad_hoc: None,
+                    components: components
+                        .into_iter()
+                        .map(|(item, amount)| NewMealPlanComponent {
+                            id: None,
+                            item,
+                            amount,
+                            cooking_servings: None,
+                        })
+                        .collect(),
+                    everyone: false,
+                    participants: vec![NewMealParticipant::member(self.member.id)],
+                    guest_groups: Vec::new(),
+                },
+                actor_id: self.actor.id,
+            })
+            .await?;
+        Ok(())
+    }
+
+    async fn ensure_saved_meal(
+        &mut self,
+        key: &str,
+        owner_id: UserId,
+        name: &str,
+        components: Vec<(MealItemRef, ConsumedAmount)>,
+    ) -> anyhow::Result<()> {
+        let id = meal_template_id(key);
+        match self.state.meal_templates.get(id, owner_id).await {
+            Ok(_) => return Ok(()),
+            Err(CoreError::NotFound { .. }) => {}
+            Err(error) => return Err(error.into()),
+        }
+        self.state
+            .meal_templates
+            .create(NewMealTemplate {
+                id: Some(id),
+                owner_id,
+                name: name.to_owned(),
+                components: components
+                    .into_iter()
+                    .map(|(item, amount)| NewMealTemplateComponent { item, amount })
+                    .collect(),
+            })
+            .await?;
+        Ok(())
+    }
+
+    async fn load_planning_horizon(&mut self) -> anyhow::Result<()> {
+        let start = self.week_start + Duration::days(7);
+        let horizon = self.today + Duration::days(30);
+
+        let mut taken: HashSet<(Date, MealSlot)> = HashSet::new();
+        let mut week = start;
+        while week <= horizon {
+            let view = self.state.meal_plan.week(self.member.id, week).await?;
+            for day in view.days {
+                for entry in day.entries {
+                    taken.insert((entry.entry.planned_on, entry.entry.slot));
+                }
+            }
+            week += Duration::weeks(1);
+        }
+
+        let mut date = start;
+        while date <= horizon {
+            for slot in MealSlot::ALL {
+                if taken.contains(&(date, slot)) {
+                    continue;
+                }
+                self.ensure_meal(date, slot, Outcome::Planned).await?;
+            }
+            date += Duration::days(1);
+        }
+        Ok(())
+    }
+
+    async fn cook_planned_recipes(
+        &mut self,
+        view: &mmp_core::services::MealPlanEntryView,
+    ) -> anyhow::Result<()> {
+        for component in &view.components {
+            if component.cooked.is_some() {
+                continue;
+            }
+            let Some(recipe_id) = component.component.item.recipe_id() else {
+                continue;
+            };
+            let mmp_core::domain::ConsumedAmount::Servings(servings) = component.component.amount
+            else {
+                continue;
+            };
+            self.state
+                .preparation
+                .record(mmp_core::services::RecordPreparation {
+                    recipe_id,
+                    source: mmp_core::domain::PreparationSource::MealPlanComponent {
+                        entry_id: view.entry.id,
+                        component_id: component.component.id,
+                    },
+                    servings_produced: servings,
+                    placements: vec![mmp_core::domain::PortionPlacement::new(
+                        StorageLocation::Chilled,
+                        servings,
+                    )],
+                    prepared_at: None,
+                    actor: self.actor.id,
+                })
+                .await?;
+            self.report.stock_items_created += 1;
+        }
+        Ok(())
+    }
+
+    async fn load_batch_cook(&mut self) -> anyhow::Result<()> {
+        let already = self
+            .state
+            .stock
+            .list(&mmp_core::ports::StockQuery {
+                include_archived: false,
+                page: mmp_core::ports::PageRequest::new(
+                    1,
+                    mmp_core::ports::PageRequest::MAX_PER_PAGE,
+                ),
+                ..Default::default()
+            })
+            .await?
+            .items
+            .iter()
+            .any(|item| item.note.as_deref() == Some(BATCH_COOK_NOTE));
+        if already {
+            return Ok(());
+        }
+
+        let prepared = self
+            .state
+            .preparation
+            .record(mmp_core::services::RecordPreparation {
+                recipe_id: recipe_id("chicken-and-rice"),
+                source: mmp_core::domain::PreparationSource::Standalone,
+                servings_produced: rust_decimal::Decimal::new(6, 0),
+                placements: vec![
+                    mmp_core::domain::PortionPlacement {
+                        storage_location: StorageLocation::Chilled,
+                        servings: rust_decimal::Decimal::new(2, 0),
+                        usability_deadline: Some(UsabilityDeadline {
+                            date: self.today + Duration::days(3),
+                            basis: Some("eat within three days of cooking".to_owned()),
+                        }),
+                        note: Some(BATCH_COOK_NOTE.to_owned()),
+                    },
+                    mmp_core::domain::PortionPlacement {
+                        storage_location: StorageLocation::Frozen,
+                        servings: rust_decimal::Decimal::new(4, 0),
+                        usability_deadline: Some(UsabilityDeadline {
+                            date: self.today + Duration::days(60),
+                            basis: Some("frozen on the day it was cooked".to_owned()),
+                        }),
+                        note: Some(BATCH_COOK_NOTE.to_owned()),
+                    },
+                ],
+                prepared_at: None,
+                actor: self.actor.id,
+            })
+            .await?;
+        self.report.stock_items_created += 2;
+        self.report.stock_effects_applied += prepared.stock.len();
+        Ok(())
+    }
+
+    async fn load_weekly_shop(&mut self, week: Date, days: i64) -> anyhow::Result<()> {
+        let per_day = [
+            ("rolled-oats", 65, Unit::Gram, StorageLocation::Ambient),
+            ("chicken-breast", 120, Unit::Gram, StorageLocation::Chilled),
+            ("broccoli", 240, Unit::Gram, StorageLocation::Chilled),
+            (
+                "whole-milk",
+                250,
+                Unit::Millilitre,
+                StorageLocation::Chilled,
+            ),
+        ];
+
+        let specs = per_day.map(|(product_key, amount, unit, storage_location)| {
+            (product_key, quantity(amount * days, unit), storage_location)
+        });
+
+        for (product_key, amount, storage_location) in specs {
+            let note = format!("shopped for the week of {week}");
+            let product = product_id(product_key);
+            let held = self
+                .state
+                .stock
+                .list(&mmp_core::ports::StockQuery {
+                    product_id: Some(product),
+                    ..Default::default()
+                })
+                .await?
+                .items
+                .iter()
+                .any(|item| item.note.as_deref() == Some(note.as_str()));
+            if held {
+                continue;
+            }
+            self.state
+                .stock
+                .create(
+                    NewStockItem {
+                        subject: StockSubject::product(product),
+                        level: StockLevel::Exact { quantity: amount },
+                        storage_location,
+                        source_date: None,
+                        usability_deadline: None,
+                        note: Some(note),
+                    },
+                    self.actor.id,
+                    Some(self.member.id),
+                )
+                .await?;
+            self.report.stock_items_created += 1;
+        }
+        Ok(())
+    }
+
+    async fn load_pooled_ingredient_demand(&mut self) -> anyhow::Result<()> {
+        let milk = [
+            (
+                "whole-milk",
+                StockLevel::Exact {
+                    quantity: quantity(150, Unit::Millilitre),
+                },
+                Some(2_i64),
+                "nearly empty, use this one first",
+            ),
+            (
+                "whole-milk-value",
+                StockLevel::Exact {
+                    quantity: quantity(600, Unit::Millilitre),
+                },
+                Some(9),
+                "the big bottle, still sealed",
+            ),
+            (
+                "whole-milk",
+                StockLevel::Estimated {
+                    quantity: quantity(300, Unit::Millilitre),
+                },
+                None,
+                "guessing from the weight of the bottle",
+            ),
+        ];
+        for (key, level, days, note) in milk {
+            let product = product_id(key);
+            if self
+                .state
+                .stock
+                .list(&mmp_core::ports::StockQuery {
+                    product_id: Some(product),
+                    ..Default::default()
+                })
+                .await?
+                .items
+                .iter()
+                .any(|item| item.note.as_deref() == Some(note))
+            {
+                continue;
+            }
+            self.state
+                .stock
+                .create(
+                    NewStockItem {
+                        subject: StockSubject::product(product),
+                        level,
+                        storage_location: StorageLocation::Chilled,
+                        source_date: None,
+                        usability_deadline: days.map(|days| UsabilityDeadline {
+                            date: self.today + Duration::days(days),
+                            basis: Some("printed on the bottle".to_owned()),
+                        }),
+                        note: Some(note.to_owned()),
+                    },
+                    self.actor.id,
+                    Some(self.member.id),
+                )
+                .await?;
+            self.report.stock_items_created += 1;
+        }
+
+        let date = self.today + Duration::days(5);
+        let id = meal_id(date, MealSlot::Breakfast);
+        if self.state.meal_plan.get(id).await.is_ok() {
+            return Ok(());
+        }
+        self.state
+            .meal_plan
+            .create_occasion_backdated(member_occasion(
+                self.actor.id,
+                self.member.id,
+                date,
+                MealSlot::Breakfast,
+                slot_time(MealSlot::Breakfast),
+                id,
+                vec![NewMealPlanComponent {
+                    id: None,
+                    item: MealItemRef::recipe(recipe_id("porridge")),
+                    amount: servings(2),
+                    cooking_servings: None,
+                }],
+            ))
+            .await?;
+        self.report.meals_created += 1;
+        Ok(())
+    }
+
+    async fn load_shopping(&mut self) -> anyhow::Result<()> {
+        let fresh = self.state.shopping.cadence().await?.is_none();
+        if fresh {
+            self.state
+                .shopping
+                .set_cadence(
+                    Revision::UNRECORDED,
+                    NewShoppingCadence {
+                        interval_weeks: 1,
+                        days: vec![Weekday::Wednesday, Weekday::Saturday],
+                        anchor: self.week_start,
+                        usual_time: Time::from_hms(10, 0, 0).ok(),
+                    },
+                )
+                .await?;
+            self.report.shopping_seeded += 1;
+        }
+
+        if fresh {
+            let opportunities = self
+                .state
+                .shopping
+                .opportunities(self.today, self.today + Duration::days(28))
+                .await?;
+            let later: Vec<Date> = opportunities
+                .iter()
+                .filter(|opportunity| opportunity.date > self.today + Duration::days(7))
+                .map(|opportunity| opportunity.date)
+                .collect();
+            if let [skip, move_me, ..] = later.as_slice() {
+                self.state
+                    .shopping
+                    .skip_opportunity(*skip, Revision::UNRECORDED)
+                    .await?;
+                self.state
+                    .shopping
+                    .move_opportunity(*move_me, *move_me - Duration::days(1), Revision::UNRECORDED)
+                    .await?;
+                self.report.shopping_seeded += 2;
+            }
+        }
+
+        let expiring_note = "goes off before the weekend";
+        let yoghurt = product_id("greek-yoghurt");
+        let already_there = self
+            .state
+            .stock
+            .list(&mmp_core::ports::StockQuery {
+                product_id: Some(yoghurt),
+                ..Default::default()
+            })
+            .await?
+            .items
+            .iter()
+            .any(|item| item.note.as_deref() == Some(expiring_note));
+        if !already_there {
+            self.state
+                .stock
+                .create(
+                    NewStockItem {
+                        subject: StockSubject::product(yoghurt),
+                        level: StockLevel::Exact {
+                            quantity: quantity(200, Unit::Gram),
+                        },
+                        storage_location: StorageLocation::Chilled,
+                        source_date: None,
+                        usability_deadline: Some(UsabilityDeadline {
+                            date: self.today + Duration::days(2),
+                            basis: Some("printed on the pack".to_owned()),
+                        }),
+                        note: Some(expiring_note.to_owned()),
+                    },
+                    self.actor.id,
+                    Some(self.member.id),
+                )
+                .await?;
+            self.report.stock_items_created += 1;
+        }
+
+        for (offset, key) in [(1_i64, "yoghurt-early"), (6, "yoghurt-late")] {
+            let d = self.today + Duration::days(offset);
+            self.ensure_timed_snack(
+                d,
+                key,
+                Time::from_hms(16, 0, 0).unwrap(),
+                "greek-yoghurt",
+                measured(200, Unit::Gram),
+            )
+            .await?;
+        }
+
+        for (key, amount, unit) in [
+            ("broccoli", 400, Unit::Gram),
+            ("potato", 600, Unit::Gram),
+            ("chicken-breast", 1200, Unit::Gram),
+            ("rolled-oats", 200, Unit::Gram),
+            ("banana", 3, Unit::Item),
+        ] {
+            let note = format!("part of the week covered: {key}");
+            let product = product_id(key);
+            let held = self
+                .state
+                .stock
+                .list(&mmp_core::ports::StockQuery {
+                    product_id: Some(product),
+                    ..Default::default()
+                })
+                .await?
+                .items
+                .iter()
+                .any(|item| item.note.as_deref() == Some(note.as_str()));
+            if held {
+                continue;
+            }
+            self.state
+                .stock
+                .create(
+                    NewStockItem {
+                        subject: StockSubject::product(product),
+                        level: StockLevel::Exact {
+                            quantity: quantity(amount, unit),
+                        },
+                        storage_location: StorageLocation::Ambient,
+                        source_date: None,
+                        usability_deadline: None,
+                        note: Some(note),
+                    },
+                    self.actor.id,
+                    Some(self.member.id),
+                )
+                .await?;
+            self.report.stock_items_created += 1;
+        }
+
+        self.ensure_product_meal(
+            self.today + Duration::days(12),
+            "large-pack-roast",
+            MealSlot::Dinner,
+            Time::from_hms(18, 30, 0).unwrap(),
+            "chicken-breast-large",
+            measured(900, Unit::Gram),
+        )
+        .await?;
+
+        self.ensure_timed_snack(
+            self.today + Duration::days(2),
+            "paprika-rub",
+            Time::from_hms(19, 0, 0).unwrap(),
+            "smoked-paprika",
+            measured(5, Unit::Gram),
+        )
+        .await?;
+
+        self.ensure_product_meal(
+            self.today + Duration::days(8),
+            "shopping-split-salmon-first",
+            MealSlot::Snacks,
+            Time::from_hms(17, 0, 0).unwrap(),
+            "salmon-fillet",
+            measured(150, Unit::Gram),
+        )
+        .await?;
+        self.ensure_product_meal(
+            self.today + Duration::days(15),
+            "shopping-split-salmon-second",
+            MealSlot::Snacks,
+            Time::from_hms(17, 0, 0).unwrap(),
+            "salmon-fillet",
+            measured(150, Unit::Gram),
+        )
+        .await?;
+
+        if self.state.shopping.pending_purchases().await?.is_empty()
+            && let Some(focus) = self.state.shopping.requirements(None).await?.focus
+        {
+            self.state
+                .shopping
+                .record_purchase(
+                    NewPurchase {
+                        ingredient_id: Some(IngredientId::seeded("chicken-breast")),
+                        prepared_meal_id: None,
+                        product_id: Some(product_id("chicken-breast")),
+                        name: None,
+                        quantity: Some(quantity(600, Unit::Gram)),
+                        opportunity_date: Some(focus),
+                        note: None,
+                    },
+                    self.actor.id,
+                )
+                .await?;
+            self.state
+                .shopping
+                .record_purchase(
+                    NewPurchase {
+                        ingredient_id: Some(IngredientId::seeded("broccoli")),
+                        prepared_meal_id: None,
+                        product_id: None,
+                        name: None,
+                        quantity: None,
+                        opportunity_date: Some(focus),
+                        note: Some("grabbed some, forgot to look at the pack".to_owned()),
+                    },
+                    self.actor.id,
+                )
+                .await?;
+            self.state
+                .shopping
+                .record_purchase(
+                    NewPurchase {
+                        ingredient_id: Some(IngredientId::seeded("potato")),
+                        prepared_meal_id: None,
+                        product_id: None,
+                        name: None,
+                        quantity: None,
+                        opportunity_date: Some(self.today - Duration::days(2)),
+                        note: Some("last Saturday's shop, never unpacked".to_owned()),
+                    },
+                    self.actor.id,
+                )
+                .await?;
+            self.report.shopping_seeded += 3;
+        }
+
+        let settings = self.state.household_settings.get().await?;
+        if settings.section_order == SectionOrder::default() {
+            self.state
+                .household_settings
+                .update(
+                    settings.revision,
+                    HouseholdSettingsPatch {
+                        timezone: Some("Europe/London".to_owned()),
+                        section_order: Some(vec![
+                            ShoppingSection::MeatFish,
+                            ShoppingSection::FreshProduce,
+                            ShoppingSection::Dairy,
+                            ShoppingSection::Bakery,
+                            ShoppingSection::Ambient,
+                            ShoppingSection::Frozen,
+                            ShoppingSection::Drinks,
+                            ShoppingSection::Household,
+                            ShoppingSection::Other,
+                        ]),
+                        ..Default::default()
+                    },
+                )
+                .await?;
+            self.report.shopping_seeded += 1;
+        }
+
+        if self.state.shopping.list_items().await?.is_empty() {
+            for (name, product_key, section) in [
+                ("Onion Salt", Some("onion-salt"), ShoppingSection::Ambient),
+                (
+                    "Tomato Ketchup",
+                    Some("tomato-ketchup"),
+                    ShoppingSection::Ambient,
+                ),
+            ] {
+                self.state
+                    .shopping
+                    .add_list_item(
+                        NewShoppingListItem {
+                            ingredient_id: None,
+                            prepared_meal_id: None,
+                            product_id: product_key.map(product_id),
+                            name: name.to_owned(),
+                            quantity: None,
+                            section: Some(section),
+                            opportunity_date: None,
+                        },
+                        self.actor.id,
+                    )
+                    .await?;
+                self.report.shopping_seeded += 1;
+            }
+        }
+
+        if self.state.shopping.trip(self.today).await?.is_none() {
+            let has_one_off = self
+                .state
+                .shopping
+                .opportunities(self.today, self.today)
+                .await?
+                .iter()
+                .any(|opportunity| opportunity.state == mmp_core::domain::OpportunityState::OneOff);
+            if !has_one_off {
+                self.state
+                    .shopping
+                    .add_one_off(
+                        self.today,
+                        Some("Unfinished extra trip".to_owned()),
+                        Revision::UNRECORDED,
+                    )
+                    .await?;
+            }
+            self.state
+                .shopping
+                .start_shop(self.today, self.actor.id)
+                .await?;
+        }
+        let pending = self.state.shopping.pending_purchases().await?;
+        for (ingredient, note) in [
+            ("salmon-fillet", "unfinished extra trip: salmon"),
+            ("broccoli", "unfinished extra trip: broccoli"),
+        ] {
+            if pending
+                .iter()
+                .any(|purchase| purchase.note.as_deref() == Some(note))
+            {
+                continue;
+            }
+            self.state
+                .shopping
+                .record_purchase(
+                    NewPurchase {
+                        ingredient_id: Some(IngredientId::seeded(ingredient)),
+                        prepared_meal_id: None,
+                        product_id: None,
+                        name: None,
+                        quantity: None,
+                        opportunity_date: Some(self.today),
+                        note: Some(note.to_owned()),
+                    },
+                    self.actor.id,
+                )
+                .await?;
+            self.report.shopping_seeded += 1;
+        }
+
+        Ok(())
+    }
+
+    async fn load_assumed_meals(&mut self) -> anyhow::Result<()> {
+        let manager = HouseholdMemberId::from_uuid(sample_uuid("household-member", "manager"));
+        let basic = HouseholdMemberId::from_uuid(sample_uuid("household-member", "basic-user"));
+
+        self.ensure_timed_snack(
+            self.today - Duration::days(3),
+            "assumed-recent",
+            Time::from_hms(15, 30, 0).unwrap(),
+            "banana",
+            measured(1, Unit::Item),
+        )
+        .await?;
+
+        self.ensure_timed_snack(
+            self.today - Duration::days(10),
+            "assumed-old",
+            Time::from_hms(15, 30, 0).unwrap(),
+            "banana",
+            measured(1, Unit::Item),
+        )
+        .await?;
+
+        self.ensure_household_meal_at(
+            self.today - Duration::days(2),
+            MealSlot::Dinner,
+            Some("assumed"),
+            Time::from_hms(18, 0, 0).ok(),
+            "chicken-and-rice",
+            servings(2),
+            &[(manager, 1), (basic, 1)],
+            0,
+        )
+        .await?;
+
+        self.ensure_household_meal_at(
+            self.today - Duration::days(5),
+            MealSlot::Dinner,
+            Some("assumed-partly"),
+            Time::from_hms(18, 0, 0).ok(),
+            "chicken-and-rice",
+            servings(2),
+            &[(manager, 1), (basic, 1)],
+            0,
+        )
+        .await?;
+        self.confirm_one_participant(self.today - Duration::days(5), "assumed-partly", manager)
+            .await
+    }
+
+    async fn confirm_one_participant(
+        &mut self,
+        date: Date,
+        key: &str,
+        member_id: HouseholdMemberId,
+    ) -> anyhow::Result<()> {
+        let id = MealPlanEntryId::from_uuid(sample_uuid(
+            "meal-plan-entry",
+            &format!("{date}:{}:household:{key}", MealSlot::Dinner),
+        ));
+        let view = self.state.meal_plan.get(id).await?;
+        if view.entry.status(Assumption::NONE) != MealPlanStatus::Planned {
+            return Ok(());
+        }
+        self.cook_planned_recipes(&view).await?;
+        self.state
+            .meal_plan
+            .review_outcomes_backdated(
+                id,
+                view.entry.revision,
+                mmp_core::domain::ReviewMealOutcomes {
+                    consumed_on: date,
+                    consumed_at: None,
+                    members: vec![mmp_core::domain::ReviewedMemberOutcome {
+                        member_id,
+                        outcome: mmp_core::domain::ReviewedMealOutcome::AsPlanned,
+                    }],
+                    guests: Vec::new(),
+                    actor_id: self.actor.id,
+                },
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn load_household_meals(&mut self) -> anyhow::Result<()> {
+        let manager = HouseholdMemberId::from_uuid(sample_uuid("household-member", "manager"));
+        let basic = HouseholdMemberId::from_uuid(sample_uuid("household-member", "basic-user"));
+        let owner = self.member.id;
+
+        let thursday = self.week_start + Duration::days(3);
+        self.ensure_household_meal(
+            thursday,
+            MealSlot::Lunch,
+            "chicken-and-rice",
+            servings(3),
+            &[(manager, 1), (basic, 1)],
+            1,
+        )
+        .await?;
+
+        let friday = self.week_start + Duration::days(4);
+        self.ensure_household_meal(
+            friday,
+            MealSlot::Lunch,
+            "chicken-and-rice",
+            servings(2),
+            &[(manager, 1), (basic, 1)],
+            0,
+        )
+        .await?;
+
+        let saturday = self.week_start + Duration::days(5);
+        self.ensure_household_meal(
+            saturday,
+            MealSlot::Lunch,
+            "chicken-and-rice",
+            servings(3),
+            &[(owner, 1), (manager, 1), (basic, 1)],
+            0,
+        )
+        .await?;
+
+        let sunday = self.week_start + Duration::days(6);
+        self.ensure_household_meal(
+            sunday,
+            MealSlot::Lunch,
+            "chicken-and-rice",
+            servings(4),
+            &[(owner, 1), (manager, 1), (basic, 1)],
+            2,
+        )
+        .await?;
+
+        let next_wed = self.week_start + Duration::weeks(1) + Duration::days(2);
+        self.ensure_household_meal(
+            next_wed,
+            MealSlot::Dinner,
+            "chicken-and-rice",
+            servings(3),
+            &[(owner, 1), (manager, 1), (basic, 1)],
+            0,
+        )
+        .await?;
+
+        self.ensure_household_meal_at(
+            self.today,
+            MealSlot::Dinner,
+            Some("tonight"),
+            Time::from_hms(18, 0, 0).ok(),
+            "chicken-and-rice",
+            servings(2),
+            &[(manager, 1), (basic, 1)],
+            1,
+        )
+        .await?;
+
+        Ok(())
+    }
+
+    async fn ensure_household_meal(
+        &mut self,
+        date: Date,
+        slot: MealSlot,
+        recipe_key: &str,
+        prepared: ConsumedAmount,
+        allocations: &[(HouseholdMemberId, i64)],
+        guest_count: i32,
+    ) -> anyhow::Result<()> {
+        self.ensure_household_meal_at(
+            date,
+            slot,
+            None,
+            None,
+            recipe_key,
+            prepared,
+            allocations,
+            guest_count,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn ensure_household_meal_at(
+        &mut self,
+        date: Date,
+        slot: MealSlot,
+        key: Option<&str>,
+        planned_time: Option<Time>,
+        recipe_key: &str,
+        prepared: ConsumedAmount,
+        allocations: &[(HouseholdMemberId, i64)],
+        guest_count: i32,
+    ) -> anyhow::Result<()> {
+        let id = match key {
+            Some(key) => MealPlanEntryId::from_uuid(sample_uuid(
+                "meal-plan-entry",
+                &format!("{date}:{slot}:household:{key}"),
+            )),
+            None => meal_id(date, slot),
+        };
+        let planned_time = planned_time.or_else(|| slot_time(slot));
+        if !matches!(
+            self.state.meal_plan.get(id).await,
+            Err(CoreError::NotFound { .. })
+        ) {
+            return Ok(());
+        }
+        self.report.meals_created += 1;
+        let component_id = mmp_core::domain::MealPlanComponentId::new();
+        let participants = allocations
+            .iter()
+            .map(|(member_id, count)| NewMealParticipant {
+                id: None,
+                member_id: *member_id,
+                note: None,
+                allocations: vec![NewMealParticipantAllocation {
+                    component_id,
+                    allocated: servings(*count),
+                }],
+            })
+            .collect();
+        let created = self
+            .state
+            .meal_plan
+            .create_occasion_backdated(NewMealOccasion {
+                id: Some(occasion_id(date, slot)),
+                planned_on: date,
+                planned_time,
+                slot,
+                note: None,
+                group: NewMealGroup {
+                    id: Some(id),
+                    label: None,
+                    ad_hoc: None,
+                    components: vec![NewMealPlanComponent {
+                        id: Some(component_id),
+                        item: MealItemRef::recipe(recipe_id(recipe_key)),
+                        amount: prepared,
+                        cooking_servings: None,
+                    }],
+                    everyone: false,
+                    participants,
+                    guest_groups: if guest_count > 0 {
+                        vec![NewMealGuestGroup {
+                            id: None,
+                            count: guest_count,
+                            name: None,
+                            note: None,
+                            allocations: vec![NewMealGuestAllocation {
+                                component_id,
+                                allocated: servings(1),
+                            }],
+                        }]
+                    } else {
+                        Vec::new()
+                    },
+                },
+                actor_id: self.actor.id,
+            })
+            .await;
+        match created {
+            Ok(_) => {}
+            Err(CoreError::Conflict { .. }) => {
+                self.report.meals_created -= 1;
+                return Ok(());
+            }
+            Err(other) => return Err(other.into()),
+        }
+        self.report.household_participants_created += allocations.len();
+        Ok(())
+    }
+
+    async fn load_previous_partial_week(&mut self) -> anyhow::Result<()> {
+        let week = self.week_start - Duration::weeks(1);
+        for day_offset in 0..2 {
+            let date = week + Duration::days(day_offset);
+            for slot in MealSlot::ALL {
+                self.ensure_filler_meal(date, slot, Outcome::Eaten { varied: true })
+                    .await?;
+            }
+        }
+
+        let wednesday = week + Duration::days(2);
+        self.ensure_filler_meal(
+            wednesday,
+            MealSlot::Breakfast,
+            Outcome::PartiallyEaten { component_index: 1 },
+        )
+        .await?;
+        self.ensure_filler_meal(wednesday, MealSlot::Lunch, Outcome::Eaten { varied: true })
+            .await?;
+        self.ensure_filler_meal(wednesday, MealSlot::Dinner, Outcome::NotEaten)
+            .await?;
+
+        let thursday = week + Duration::days(3);
+        self.ensure_consumption_entry(
+            thursday,
+            MealSlot::Lunch,
+            "bakery-lunch",
+            "bakery-lunch",
+            servings(1),
+        )
+        .await?;
+        self.ensure_consumption_entry(
+            thursday,
+            MealSlot::Snacks,
+            "mystery-snack",
+            "mystery-snack",
+            servings(1),
+        )
+        .await?;
+
+        let friday = week + Duration::days(4);
+        self.ensure_filler_meal(friday, MealSlot::Dinner, Outcome::Planned)
+            .await
+    }
+
+    async fn load_current_partial_week(&mut self) -> anyhow::Result<()> {
+        let week_end = self.week_start + Duration::days(6);
+
+        let mut date = self.week_start;
+        while date < self.today {
+            for slot in MealSlot::ALL {
+                self.ensure_filler_meal(date, slot, Outcome::Eaten { varied: true })
+                    .await?;
+            }
+            date += Duration::days(1);
+        }
+
+        self.ensure_filler_meal(
+            self.today,
+            MealSlot::Breakfast,
+            Outcome::Eaten { varied: true },
+        )
+        .await?;
+        self.ensure_filler_meal(self.today, MealSlot::Lunch, Outcome::Eaten { varied: true })
+            .await?;
+        self.ensure_filler_meal(self.today, MealSlot::Dinner, Outcome::Planned)
+            .await?;
+        self.ensure_filler_meal(self.today, MealSlot::Snacks, Outcome::Planned)
+            .await?;
+        self.ensure_timed_snack(
+            self.today,
+            "morning",
+            Time::from_hms(10, 0, 0).unwrap(),
+            "banana",
+            measured(1, Unit::Item),
+        )
+        .await?;
+        self.ensure_timed_snack(
+            self.today,
+            "afternoon",
+            Time::from_hms(14, 0, 0).unwrap(),
+            "mystery-snack",
+            measured(1, Unit::Item),
+        )
+        .await?;
+
+        self.ensure_consumption_entry(
+            self.today,
+            MealSlot::Snacks,
+            "extra-snack",
+            "greek-yoghurt",
+            servings(1),
+        )
+        .await?;
+        self.ensure_recipe_consumption_entry(
+            self.today,
+            MealSlot::Lunch,
+            "leftover-porridge",
+            "porridge",
+            servings(1),
+        )
+        .await?;
+
+        let mut date = self.today + Duration::days(1);
+        while date <= week_end {
+            for slot in [MealSlot::Breakfast, MealSlot::Dinner] {
+                self.ensure_filler_meal(date, slot, Outcome::Planned)
+                    .await?;
+            }
+            date += Duration::days(1);
+        }
+
+        let recipe_day = self.today + Duration::days(1);
+        let household_lunch_window =
+            self.week_start + Duration::days(3)..=self.week_start + Duration::days(6);
+        if recipe_day <= week_end && !household_lunch_window.contains(&recipe_day) {
+            self.ensure_recipe_meal(recipe_day, MealSlot::Lunch, "chicken-and-rice", servings(1))
+                .await?;
+        }
+
+        Ok(())
+    }
+
+    async fn ensure_product_meal(
+        &mut self,
+        date: Date,
+        key: &str,
+        slot: MealSlot,
+        planned_time: Time,
+        product_key: &str,
+        amount: ConsumedAmount,
+    ) -> anyhow::Result<()> {
+        let id = snack_id(date, key);
+        if !matches!(
+            self.state.meal_plan.get(id).await,
+            Err(CoreError::NotFound { .. })
+        ) {
+            return Ok(());
+        }
+        self.report.meals_created += 1;
+        self.state
+            .meal_plan
+            .create_occasion_backdated(member_occasion(
+                self.actor.id,
+                self.member.id,
+                date,
+                slot,
+                Some(planned_time),
+                id,
+                vec![NewMealPlanComponent {
+                    id: None,
+                    item: MealItemRef::product(product_id(product_key)),
+                    amount,
+                    cooking_servings: None,
+                }],
+            ))
+            .await?;
+        Ok(())
+    }
+
+    async fn ensure_timed_snack(
+        &mut self,
+        date: Date,
+        key: &str,
+        planned_time: Time,
+        product_key: &str,
+        amount: ConsumedAmount,
+    ) -> anyhow::Result<()> {
+        let id = snack_id(date, key);
+        if !matches!(
+            self.state.meal_plan.get(id).await,
+            Err(CoreError::NotFound { .. })
+        ) {
+            return Ok(());
+        }
+        self.report.meals_created += 1;
+        self.state
+            .meal_plan
+            .create_occasion_backdated(member_occasion(
+                self.actor.id,
+                self.member.id,
+                date,
+                MealSlot::Snacks,
+                Some(planned_time),
+                id,
+                vec![NewMealPlanComponent {
+                    id: None,
+                    item: MealItemRef::product(product_id(product_key)),
+                    amount,
+                    cooking_servings: None,
+                }],
+            ))
+            .await?;
+        Ok(())
+    }
+
+    async fn ensure_meal(
+        &mut self,
+        date: Date,
+        slot: MealSlot,
+        outcome: Outcome,
+    ) -> anyhow::Result<()> {
+        let outcome = if date > self.today {
+            Outcome::Planned
+        } else {
+            outcome
+        };
+        let id = meal_id(date, slot);
+        let mut view = match self.state.meal_plan.get(id).await {
+            Ok(view) => view,
+            Err(CoreError::NotFound { .. }) => {
+                self.report.meals_created += 1;
+                self.state
+                    .meal_plan
+                    .create_occasion_backdated(member_occasion(
+                        self.actor.id,
+                        self.member.id,
+                        date,
+                        slot,
+                        slot_time(slot),
+                        id,
+                        components_for(slot),
+                    ))
+                    .await?;
+                self.state.meal_plan.get(id).await?
+            }
+            Err(error) => return Err(error.into()),
+        };
+
+        let desired = match outcome {
+            Outcome::Planned => MealPlanStatus::Planned,
+            Outcome::PartiallyEaten { .. } => MealPlanStatus::PartiallyResolved,
+            Outcome::Eaten { .. } => MealPlanStatus::Eaten,
+            Outcome::NotEaten => MealPlanStatus::NotEaten,
+        };
+        if view.entry.status(Assumption::NONE) == desired {
+            return Ok(());
+        }
+        if view.entry.status(Assumption::NONE) != MealPlanStatus::Planned {
+            view = self
+                .state
+                .meal_plan
+                .reopen(
+                    view.entry.id,
+                    view.entry.revision,
+                    OutcomeActor::own(self.actor.id),
+                )
+                .await?
+                .into_value();
+        }
+
+        if !matches!(outcome, Outcome::Planned | Outcome::NotEaten) {
+            self.cook_planned_recipes(&view).await?;
+        }
+
+        match outcome {
+            Outcome::Planned => {}
+            Outcome::PartiallyEaten { component_index } => {
+                let component = view
+                    .components
+                    .get(component_index)
+                    .context("sample partial meal component does not exist")?;
+                self.state
+                    .meal_plan
+                    .mark_component_eaten_backdated(
+                        view.entry.id,
+                        component.component.id,
+                        component.component.revision,
+                        ConfirmMealPlanComponent {
+                            consumed_on: date,
+                            consumed_at: slot_time(slot)
+                                .map(|time| PrimitiveDateTime::new(date, time).assume_utc()),
+                            amount: component.component.amount,
+                            actor_id: self.actor.id,
+                            subject_member_id: None,
+                        },
+                    )
+                    .await?;
+                self.report.meals_resolved += 1;
+            }
+            Outcome::NotEaten => {
+                self.state
+                    .meal_plan
+                    .mark_not_eaten_backdated(
+                        view.entry.id,
+                        view.entry.revision,
+                        OutcomeActor::own(self.actor.id),
+                    )
+                    .await?;
+                self.report.meals_resolved += 1;
+            }
+            Outcome::Eaten { varied } => {
+                let components = view
+                    .entry
+                    .components
+                    .iter()
+                    .enumerate()
+                    .map(|(index, component)| ActualMealPlanComponent {
+                        component_id: component.id,
+                        amount: if varied {
+                            vary_amount(component.amount, index)
+                        } else {
+                            component.amount
+                        },
+                    })
+                    .collect();
+                let resolved = self
+                    .state
+                    .meal_plan
+                    .mark_eaten_backdated(
+                        view.entry.id,
+                        view.entry.revision,
+                        ConfirmMealPlanEntry {
+                            consumed_on: date,
+                            consumed_at: slot_time(slot)
+                                .map(|time| PrimitiveDateTime::new(date, time).assume_utc()),
+                            components,
+                            actor_id: self.actor.id,
+                            subject_member_id: None,
+                        },
+                    )
+                    .await?;
+                self.report.meals_resolved += 1;
+                self.count_stock_effects(&resolved.entry).await?;
+            }
+        }
+        Ok(())
+    }
+
+    async fn ensure_filler_meal(
+        &mut self,
+        date: Date,
+        slot: MealSlot,
+        outcome: Outcome,
+    ) -> anyhow::Result<()> {
+        if is_reserved_occasion(self.today, date, slot) {
+            return Ok(());
+        }
+        self.ensure_meal(date, slot, outcome).await
+    }
+
+    async fn count_stock_effects(
+        &mut self,
+        entry: &mmp_core::domain::MealPlanEntry,
+    ) -> anyhow::Result<()> {
+        for component in &entry.components {
+            let effects = self
+                .state
+                .stock
+                .effects_for_source(
+                    mmp_core::domain::StockEffectSource::MealPlanComponent,
+                    component.id.as_uuid(),
+                )
+                .await?;
+            self.report.stock_effects_applied += effects
+                .iter()
+                .filter(|effect| effect.state == mmp_core::domain::StockEffectState::Applied)
+                .count();
+        }
+        Ok(())
+    }
+
+    async fn ensure_recipe_meal(
+        &mut self,
+        date: Date,
+        slot: MealSlot,
+        recipe_key: &str,
+        amount: ConsumedAmount,
+    ) -> anyhow::Result<()> {
+        let id = meal_id(date, slot);
+        if !matches!(
+            self.state.meal_plan.get(id).await,
+            Err(CoreError::NotFound { .. })
+        ) {
+            return Ok(());
+        }
+        self.report.meals_created += 1;
+        self.state
+            .meal_plan
+            .create_occasion_backdated(member_occasion(
+                self.actor.id,
+                self.member.id,
+                date,
+                slot,
+                slot_time(slot),
+                id,
+                vec![NewMealPlanComponent {
+                    id: None,
+                    item: MealItemRef::recipe(recipe_id(recipe_key)),
+                    amount,
+                    cooking_servings: None,
+                }],
+            ))
+            .await?;
+        Ok(())
+    }
+
+    async fn ensure_recipe_consumption_entry(
+        &mut self,
+        date: Date,
+        slot: MealSlot,
+        key: &str,
+        recipe_key: &str,
+        amount: ConsumedAmount,
+    ) -> anyhow::Result<()> {
+        let id = ConsumptionRecordId::from_uuid(sample_uuid(
+            "consumption-record",
+            &format!("{date}:{key}"),
+        ));
+        match self.state.consumption.get(id).await {
+            Ok(_) => return Ok(()),
+            Err(CoreError::NotFound { .. }) => {}
+            Err(error) => return Err(error.into()),
+        }
+        self.state
+            .consumption
+            .record_backdated(NewConsumptionRecord {
+                id: Some(id),
+                member_id: self.member.id,
+                item: MealItemRef::recipe(recipe_id(recipe_key)),
+                recorded_by: Some(self.actor.id),
+                meal_plan_entry_id: None,
+                meal_plan_component_id: None,
+                slot,
+                amount,
+                consumed_on: date,
+                consumed_at: Some(
+                    PrimitiveDateTime::new(date, Time::from_hms(12, 30, 0).unwrap()).assume_utc(),
+                ),
+            })
+            .await?;
+        self.report.consumption_entries_created += 1;
+        Ok(())
+    }
+
+    async fn ensure_consumption_entry(
+        &mut self,
+        date: Date,
+        slot: MealSlot,
+        key: &str,
+        product_key: &str,
+        amount: ConsumedAmount,
+    ) -> anyhow::Result<()> {
+        let id = ConsumptionRecordId::from_uuid(sample_uuid(
+            "consumption-record",
+            &format!("{date}:{key}"),
+        ));
+        match self.state.consumption.get(id).await {
+            Ok(_) => return Ok(()),
+            Err(CoreError::NotFound { .. }) => {}
+            Err(error) => return Err(error.into()),
+        }
+        self.state
+            .consumption
+            .record_backdated(NewConsumptionRecord {
+                id: Some(id),
+                member_id: self.member.id,
+                item: MealItemRef::product(product_id(product_key)),
+                recorded_by: Some(self.actor.id),
+                meal_plan_entry_id: None,
+                meal_plan_component_id: None,
+                slot,
+                amount,
+                consumed_on: date,
+                consumed_at: Some(
+                    PrimitiveDateTime::new(date, Time::from_hms(15, 30, 0).unwrap()).assume_utc(),
+                ),
+            })
+            .await?;
+        self.report.consumption_entries_created += 1;
+        Ok(())
+    }
+}
+
+fn product_specs() -> Vec<ProductSpec> {
+    vec![
+        ProductSpec {
+            key: "smoked-paprika",
+            name: "Sample Smoked Paprika",
+            brand: Some("Sample Pantry"),
+            ingredient_key: Some("smoked-paprika"),
+            section: ShoppingSection::Ambient,
+            package_quantity: Some(quantity(50, Unit::Gram)),
+            servings_per_pack: None,
+            nutrition: nutrition(100, Unit::Gram, [282, 14, 54, 10, 13, 2, 35, 1, 0]),
+        },
+        ProductSpec {
+            key: "rolled-oats",
+            name: "Sample Jumbo Oats",
+            brand: Some("Sample Pantry"),
+            ingredient_key: Some("rolled-oats"),
+            section: ShoppingSection::Ambient,
+            package_quantity: Some(quantity(1000, Unit::Gram)),
+            servings_per_pack: Some(12),
+            nutrition: nutrition(100, Unit::Gram, [389, 17, 66, 1, 7, 1, 11, 0, 0]),
+        },
+        ProductSpec {
+            key: "whole-milk",
+            name: "Sample Whole Milk",
+            brand: Some("Sample Dairy"),
+            ingredient_key: Some("whole-milk"),
+            section: ShoppingSection::Dairy,
+            package_quantity: Some(quantity(2000, Unit::Millilitre)),
+            servings_per_pack: Some(8),
+            nutrition: nutrition(100, Unit::Millilitre, [64, 3, 5, 5, 4, 2, 0, 0, 10]),
+        },
+        ProductSpec {
+            key: "whole-milk-value",
+            name: "Sample Value Whole Milk",
+            brand: Some("Sample Basics"),
+            ingredient_key: Some("whole-milk"),
+            section: ShoppingSection::Dairy,
+            package_quantity: Some(quantity(1000, Unit::Millilitre)),
+            servings_per_pack: Some(4),
+            nutrition: nutrition(100, Unit::Millilitre, [61, 3, 5, 5, 3, 2, 0, 0, 11]),
+        },
+        ProductSpec {
+            key: "banana",
+            name: "Sample Bananas",
+            brand: None,
+            ingredient_key: Some("banana"),
+            section: ShoppingSection::FreshProduce,
+            package_quantity: Some(quantity(6, Unit::Item)),
+            servings_per_pack: Some(6),
+            nutrition: nutrition(1, Unit::Item, [105, 1, 27, 14, 0, 0, 3, 0, 0]),
+        },
+        ProductSpec {
+            key: "chicken-breast",
+            name: "Sample Chicken Breast Fillets",
+            brand: Some("Sample Fresh"),
+            ingredient_key: Some("chicken-breast"),
+            section: ShoppingSection::MeatFish,
+            package_quantity: Some(quantity(600, Unit::Gram)),
+            servings_per_pack: Some(4),
+            nutrition: nutrition(100, Unit::Gram, [165, 31, 0, 0, 4, 1, 0, 1, 85]),
+        },
+        ProductSpec {
+            key: "chicken-breast-large",
+            name: "Sample Chicken Breast, large pack",
+            brand: Some("Sample Farm"),
+            ingredient_key: Some("chicken-breast"),
+            section: ShoppingSection::MeatFish,
+            package_quantity: Some(quantity(900, Unit::Gram)),
+            servings_per_pack: Some(6),
+            nutrition: nutrition(100, Unit::Gram, [165, 31, 0, 0, 4, 1, 0, 1, 85]),
+        },
+        ProductSpec {
+            key: "onion-salt",
+            name: "Sample Onion Salt",
+            brand: Some("Sample Pantry"),
+            ingredient_key: None,
+            section: ShoppingSection::Ambient,
+            package_quantity: Some(quantity(90, Unit::Gram)),
+            servings_per_pack: None,
+            nutrition: nutrition(100, Unit::Gram, [0, 0, 0, 0, 0, 0, 0, 60, 0]),
+        },
+        ProductSpec {
+            key: "tomato-ketchup",
+            name: "Sample Tomato Ketchup",
+            brand: Some("Sample Pantry"),
+            ingredient_key: None,
+            section: ShoppingSection::Ambient,
+            package_quantity: Some(quantity(500, Unit::Millilitre)),
+            servings_per_pack: None,
+            nutrition: nutrition(100, Unit::Millilitre, [102, 1, 24, 22, 0, 0, 0, 2, 0]),
+        },
+        ProductSpec {
+            key: "kiwi-fruit",
+            name: "Sample Kiwi Fruit",
+            brand: None,
+            ingredient_key: None,
+            section: ShoppingSection::FreshProduce,
+            package_quantity: Some(quantity(6, Unit::Item)),
+            servings_per_pack: Some(6),
+            nutrition: nutrition(1, Unit::Item, [46, 1, 11, 7, 0, 0, 2, 0, 0]),
+        },
+        ProductSpec {
+            key: "basmati-rice",
+            name: "Sample Cooked Basmati Rice",
+            brand: Some("Sample Pantry"),
+            ingredient_key: Some("basmati-rice"),
+            section: ShoppingSection::Ambient,
+            package_quantity: Some(quantity(500, Unit::Gram)),
+            servings_per_pack: Some(5),
+            nutrition: nutrition(100, Unit::Gram, [130, 3, 28, 0, 0, 0, 0, 0, 0]),
+        },
+        ProductSpec {
+            key: "salmon-fillet",
+            name: "Sample Salmon Fillets",
+            brand: Some("Sample Fresh"),
+            ingredient_key: Some("salmon-fillet"),
+            section: ShoppingSection::MeatFish,
+            package_quantity: Some(quantity(400, Unit::Gram)),
+            servings_per_pack: Some(2),
+            nutrition: nutrition(100, Unit::Gram, [208, 20, 0, 0, 13, 3, 0, 0, 55]),
+        },
+        ProductSpec {
+            key: "potato",
+            name: "Sample White Potatoes",
+            brand: None,
+            ingredient_key: Some("potato"),
+            section: ShoppingSection::FreshProduce,
+            package_quantity: Some(quantity(2500, Unit::Gram)),
+            servings_per_pack: None,
+            nutrition: nutrition(100, Unit::Gram, [77, 2, 17, 1, 0, 0, 2, 0, 0]),
+        },
+        ProductSpec {
+            key: "broccoli",
+            name: "Sample Broccoli",
+            brand: None,
+            ingredient_key: Some("broccoli"),
+            section: ShoppingSection::FreshProduce,
+            package_quantity: Some(quantity(500, Unit::Gram)),
+            servings_per_pack: None,
+            nutrition: nutrition(100, Unit::Gram, [34, 3, 7, 2, 0, 0, 3, 0, 0]),
+        },
+        ProductSpec {
+            key: "greek-yoghurt",
+            name: "Sample Greek Yoghurt",
+            brand: Some("Sample Dairy"),
+            ingredient_key: Some("greek-yoghurt"),
+            section: ShoppingSection::Dairy,
+            package_quantity: Some(quantity(500, Unit::Gram)),
+            servings_per_pack: Some(4),
+            nutrition: nutrition(100, Unit::Gram, [97, 9, 4, 4, 5, 3, 0, 0, 15]),
+        },
+        ProductSpec {
+            key: "apple",
+            name: "Sample Apples",
+            brand: None,
+            ingredient_key: Some("apple"),
+            section: ShoppingSection::FreshProduce,
+            package_quantity: Some(quantity(6, Unit::Item)),
+            servings_per_pack: Some(6),
+            nutrition: nutrition(1, Unit::Item, [95, 0, 25, 19, 0, 0, 4, 0, 0]),
+        },
+        ProductSpec {
+            key: "bakery-lunch",
+            name: "Sample Bakery Lunch",
+            brand: Some("Sample Bakery"),
+            ingredient_key: None,
+            section: ShoppingSection::Bakery,
+            package_quantity: Some(quantity(1, Unit::Item)),
+            servings_per_pack: Some(1),
+            nutrition: NutritionFacts {
+                basis: Some(quantity(1, Unit::Item)),
+                energy_kcal: Some(decimal(540)),
+                carbohydrate_g: Some(decimal(62)),
+                fat_g: Some(decimal(24)),
+                ..Default::default()
+            },
+        },
+        ProductSpec {
+            key: "mystery-snack",
+            name: "Sample Mystery Snack",
+            brand: None,
+            ingredient_key: None,
+            section: ShoppingSection::Ambient,
+            package_quantity: Some(quantity(1, Unit::Item)),
+            servings_per_pack: Some(1),
+            nutrition: NutritionFacts::default(),
+        },
+        ProductSpec {
+            key: "fish-fingers",
+            name: "Sample Fish Fingers",
+            brand: Some("Sample Frozen"),
+            ingredient_key: Some("fish-fingers"),
+            section: ShoppingSection::Frozen,
+            package_quantity: Some(quantity(10, Unit::Item)),
+            servings_per_pack: Some(5),
+            nutrition: nutrition(1, Unit::Item, [65, 4, 5, 0, 3, 1, 0, 1, 5]),
+        },
+        ProductSpec {
+            key: "fish-fingers-posh",
+            name: "Sample Salmon Fish Fingers",
+            brand: Some("Sample Fresh"),
+            ingredient_key: Some("fish-fingers"),
+            section: ShoppingSection::Frozen,
+            package_quantity: Some(quantity(8, Unit::Item)),
+            servings_per_pack: Some(4),
+            nutrition: nutrition(1, Unit::Item, [80, 5, 4, 0, 5, 1, 0, 1, 8]),
+        },
+        ProductSpec {
+            key: "chips",
+            name: "Sample Oven Chips",
+            brand: Some("Sample Frozen"),
+            ingredient_key: Some("chips"),
+            section: ShoppingSection::Frozen,
+            package_quantity: Some(quantity(1000, Unit::Gram)),
+            servings_per_pack: Some(6),
+            nutrition: nutrition(100, Unit::Gram, [136, 2, 22, 1, 4, 1, 2, 0, 0]),
+        },
+        ProductSpec {
+            key: "chips-thin-cut",
+            name: "Sample Thin Cut Fries",
+            brand: Some("Sample Basics"),
+            ingredient_key: Some("chips"),
+            section: ShoppingSection::Frozen,
+            package_quantity: Some(quantity(750, Unit::Gram)),
+            servings_per_pack: Some(5),
+            nutrition: nutrition(100, Unit::Gram, [155, 2, 24, 1, 6, 1, 2, 1, 0]),
+        },
+        ProductSpec {
+            key: "peas",
+            name: "Sample Garden Peas",
+            brand: Some("Sample Frozen"),
+            ingredient_key: Some("peas"),
+            section: ShoppingSection::Frozen,
+            package_quantity: Some(quantity(900, Unit::Gram)),
+            servings_per_pack: Some(9),
+            nutrition: nutrition(100, Unit::Gram, [79, 5, 10, 4, 1, 0, 5, 0, 0]),
+        },
+        ProductSpec {
+            key: "peas-petit-pois",
+            name: "Sample Petit Pois",
+            brand: Some("Sample Fresh"),
+            ingredient_key: Some("peas"),
+            section: ShoppingSection::Frozen,
+            package_quantity: Some(quantity(600, Unit::Gram)),
+            servings_per_pack: Some(6),
+            nutrition: nutrition(100, Unit::Gram, [66, 5, 8, 3, 1, 0, 5, 0, 0]),
+        },
+    ]
+}
+
+fn components_for(slot: MealSlot) -> Vec<NewMealPlanComponent> {
+    let values = match slot {
+        MealSlot::Breakfast => vec![
+            ("rolled-oats", measured(80, Unit::Gram)),
+            ("whole-milk", measured(250, Unit::Millilitre)),
+            ("banana", measured(1, Unit::Item)),
+        ],
+        MealSlot::Lunch => vec![
+            ("chicken-breast", measured(150, Unit::Gram)),
+            ("basmati-rice", measured(150, Unit::Gram)),
+            ("broccoli", measured(100, Unit::Gram)),
+        ],
+        MealSlot::Dinner => vec![
+            ("salmon-fillet", measured(150, Unit::Gram)),
+            ("potato", measured(300, Unit::Gram)),
+            ("broccoli", measured(150, Unit::Gram)),
+        ],
+        MealSlot::Snacks => vec![
+            ("greek-yoghurt", servings(1)),
+            ("apple", measured(1, Unit::Item)),
+        ],
+    };
+    values
+        .into_iter()
+        .map(|(key, amount)| NewMealPlanComponent {
+            id: None,
+            item: MealItemRef::product(product_id(key)),
+            amount,
+            cooking_servings: None,
+        })
+        .collect()
+}
+
+fn vary_amount(amount: ConsumedAmount, index: usize) -> ConsumedAmount {
+    let factor = if index.is_multiple_of(2) {
+        Decimal::new(9, 1)
+    } else {
+        Decimal::new(11, 1)
+    };
+    match amount {
+        ConsumedAmount::Measure(quantity) => {
+            ConsumedAmount::Measure(Quantity::new(quantity.amount * factor, quantity.unit))
+        }
+        ConsumedAmount::Servings(value) => ConsumedAmount::Servings(value * factor),
+        ConsumedAmount::Packs(value) => ConsumedAmount::Packs(value * factor),
+    }
+}
+
+fn sample_uuid(resource: &str, key: &str) -> Uuid {
+    Uuid::new_v5(&SAMPLE_NAMESPACE, format!("{resource}:{key}").as_bytes())
+}
+
+fn product_id(key: &str) -> ProductId {
+    ProductId::from_uuid(sample_uuid("product", key))
+}
+
+fn recipe_id(key: &str) -> RecipeId {
+    RecipeId::from_uuid(sample_uuid("recipe", key))
+}
+
+fn meal_template_id(key: &str) -> MealTemplateId {
+    MealTemplateId::from_uuid(sample_uuid("meal-template", key))
+}
+
+enum RecipeLineSpec {
+    Ingredient(&'static str),
+    Product(&'static str),
+    Unresolved(&'static str),
+}
+
+impl RecipeLineSpec {
+    fn requirement(&self) -> RecipeRequirement {
+        match self {
+            RecipeLineSpec::Ingredient(key) => RecipeRequirement::Ingredient {
+                ingredient_id: IngredientId::seeded(key),
+            },
+            RecipeLineSpec::Product(key) => RecipeRequirement::Product {
+                product_id: product_id(key),
+            },
+            RecipeLineSpec::Unresolved(text) => RecipeRequirement::Unresolved {
+                text: (*text).to_owned(),
+            },
+        }
+    }
+}
+
+struct PreparedMealProductSpec {
+    key: &'static str,
+    name: &'static str,
+    brand: &'static str,
+    prepared_meal_key: &'static str,
+    section: ShoppingSection,
+    package_quantity: Quantity,
+    servings_per_pack: Option<i32>,
+    nutrition: NutritionFacts,
+}
+
+fn prepared_meal_product_specs() -> Vec<PreparedMealProductSpec> {
+    vec![
+        PreparedMealProductSpec {
+            key: "frozen-lasagne-tesco",
+            name: "Sample Frozen Lasagne",
+            brand: "Sample Tesco",
+            prepared_meal_key: "frozen-lasagne",
+            section: ShoppingSection::Frozen,
+            package_quantity: quantity(400, Unit::Gram),
+            servings_per_pack: Some(2),
+            nutrition: nutrition(100, Unit::Gram, [140, 7, 12, 3, 7, 3, 1, 1, 20]),
+        },
+        PreparedMealProductSpec {
+            key: "frozen-lasagne-sainsburys",
+            name: "Sample Beef Lasagne",
+            brand: "Sample Sainsbury's",
+            prepared_meal_key: "frozen-lasagne",
+            section: ShoppingSection::Frozen,
+            package_quantity: quantity(500, Unit::Gram),
+            servings_per_pack: Some(2),
+            nutrition: nutrition(100, Unit::Gram, [180, 9, 14, 4, 10, 4, 1, 1, 25]),
+        },
+    ]
+}
+
+struct RecipeSpec {
+    key: &'static str,
+    name: &'static str,
+    servings: i32,
+    description: &'static str,
+    preparation_minutes: i32,
+    cooking_minutes: i32,
+    notes: &'static str,
+    components: Vec<(RecipeLineSpec, ConsumedAmount)>,
+    instructions: Vec<&'static str>,
+    meal_categories: Vec<MealCategory>,
+    country_categories: Vec<&'static str>,
+    tags: Vec<&'static str>,
+    photo: bool,
+}
+
+fn recipe_specs() -> Vec<RecipeSpec> {
+    vec![
+        RecipeSpec {
+            key: "porridge",
+            name: "Morning Porridge",
+            servings: 2,
+            description: "Creamy oats with banana for a warm start to the day.",
+            preparation_minutes: 5,
+            cooking_minutes: 10,
+            notes: "Add the banana just before serving.",
+            components: vec![
+                (
+                    RecipeLineSpec::Ingredient("rolled-oats"),
+                    ConsumedAmount::Measure(quantity(100, Unit::Gram)),
+                ),
+                (
+                    RecipeLineSpec::Ingredient("whole-milk"),
+                    ConsumedAmount::Measure(quantity(400, Unit::Millilitre)),
+                ),
+                (
+                    RecipeLineSpec::Ingredient("banana"),
+                    ConsumedAmount::Measure(quantity(1, Unit::Item)),
+                ),
+                (
+                    RecipeLineSpec::Ingredient("cinnamon"),
+                    ConsumedAmount::Measure(quantity(1, Unit::Teaspoon)),
+                ),
+            ],
+            instructions: vec![
+                "Add the oats and milk to a saucepan.",
+                "Cook gently until creamy, stirring often.",
+                "Slice the banana over the porridge, dust with cinnamon and serve.",
+            ],
+            meal_categories: vec![MealCategory::Breakfast],
+            country_categories: vec!["GB"],
+            tags: vec!["Quick", "Vegetarian"],
+            photo: false,
+        },
+        RecipeSpec {
+            key: "chicken-and-rice",
+            name: "Chicken and Rice",
+            servings: 4,
+            description: "Tender chicken in a rich tomato sauce with fluffy basmati rice.",
+            preparation_minutes: 10,
+            cooking_minutes: 30,
+            notes: "Rest the chicken for five minutes before serving.",
+            components: vec![
+                (
+                    RecipeLineSpec::Product("chicken-breast"),
+                    ConsumedAmount::Measure(quantity(600, Unit::Gram)),
+                ),
+                (
+                    RecipeLineSpec::Ingredient("basmati-rice"),
+                    ConsumedAmount::Measure(quantity(300, Unit::Gram)),
+                ),
+            ],
+            instructions: vec![
+                "Season the chicken and brown it in a hot pan.",
+                "Add the sauce and simmer until the chicken is cooked through.",
+                "Cook the basmati rice until tender.",
+                "Rest the chicken, then serve with the rice.",
+            ],
+            meal_categories: vec![MealCategory::Dinner],
+            country_categories: vec!["IN"],
+            tags: vec!["Family favourite", "High protein"],
+            photo: true,
+        },
+        RecipeSpec {
+            key: "imported-rice-bowl",
+            name: "Imported Rice Bowl",
+            servings: 2,
+            description: "A quick bowl imported from a friend's collection, still being tidied up.",
+            preparation_minutes: 5,
+            cooking_minutes: 15,
+            notes: "Match the imported ingredient to your catalogue when you get a moment.",
+            components: vec![
+                (
+                    RecipeLineSpec::Ingredient("basmati-rice"),
+                    ConsumedAmount::Measure(quantity(200, Unit::Gram)),
+                ),
+                (
+                    RecipeLineSpec::Unresolved("Jasmin Rice"),
+                    ConsumedAmount::Measure(quantity(50, Unit::Gram)),
+                ),
+            ],
+            instructions: vec![
+                "Rinse the rice until the water runs clear.",
+                "Simmer until tender, then fluff and serve.",
+            ],
+            meal_categories: vec![MealCategory::Lunch],
+            country_categories: vec!["TH"],
+            tags: vec!["Quick"],
+            photo: false,
+        },
+        RecipeSpec {
+            key: "saturday-cake",
+            name: "Saturday Cake",
+            servings: 8,
+            description: "A simple cake for sharing on Saturday afternoon.",
+            preparation_minutes: 20,
+            cooking_minutes: 50,
+            notes: "Leave it to cool before serving.",
+            components: vec![
+                (
+                    RecipeLineSpec::Ingredient("rolled-oats"),
+                    ConsumedAmount::Measure(quantity(300, Unit::Gram)),
+                ),
+                (
+                    RecipeLineSpec::Ingredient("whole-milk"),
+                    ConsumedAmount::Measure(quantity(250, Unit::Millilitre)),
+                ),
+                (
+                    RecipeLineSpec::Ingredient("banana"),
+                    ConsumedAmount::Measure(quantity(3, Unit::Item)),
+                ),
+                (
+                    RecipeLineSpec::Ingredient("cinnamon"),
+                    ConsumedAmount::Measure(quantity(2, Unit::Teaspoon)),
+                ),
+            ],
+            instructions: vec![
+                "Mix the ingredients into a smooth batter.",
+                "Bake until golden and set in the middle.",
+                "Cool before slicing into eight pieces.",
+            ],
+            meal_categories: vec![MealCategory::Snack],
+            country_categories: vec!["GB"],
+            tags: vec!["Baking", "Vegetarian"],
+            photo: false,
+        },
+    ]
+}
+
+fn everyone_recipe_group(date: Date, slot: MealSlot, key: &str, recipe_key: &str) -> NewMealGroup {
+    NewMealGroup {
+        id: Some(showcase_group_id(date, slot, key)),
+        label: None,
+        ad_hoc: None,
+        components: vec![NewMealPlanComponent {
+            id: None,
+            item: MealItemRef::recipe(recipe_id(recipe_key)),
+            amount: servings(3),
+            cooking_servings: None,
+        }],
+        everyone: true,
+        participants: Vec::new(),
+        guest_groups: Vec::new(),
+    }
+}
+
+fn showcase_group_id(date: Date, slot: MealSlot, key: &str) -> MealPlanEntryId {
+    MealPlanEntryId::from_uuid(sample_uuid(
+        "meal-plan-entry",
+        &format!("{date}:{slot}:showcase:{key}"),
+    ))
+}
+
+fn member_occasion(
+    actor_id: UserId,
+    member_id: HouseholdMemberId,
+    planned_on: Date,
+    slot: MealSlot,
+    planned_time: Option<Time>,
+    group_id: MealPlanEntryId,
+    components: Vec<NewMealPlanComponent>,
+) -> NewMealOccasion {
+    NewMealOccasion {
+        id: Some(occasion_id(planned_on, slot)),
+        planned_on,
+        slot,
+        planned_time,
+        note: None,
+        group: NewMealGroup {
+            id: Some(group_id),
+            label: None,
+            ad_hoc: None,
+            components,
+            everyone: false,
+            participants: vec![NewMealParticipant::member(member_id)],
+            guest_groups: Vec::new(),
+        },
+        actor_id,
+    }
+}
+
+fn occasion_id(date: Date, slot: MealSlot) -> MealOccasionId {
+    MealOccasionId::from_uuid(sample_uuid("meal-occasion", &format!("{date}:{slot}")))
+}
+
+fn is_reserved_occasion(today: Date, date: Date, slot: MealSlot) -> bool {
+    match slot {
+        MealSlot::Dinner => {
+            date == today - Duration::days(2) || date == today - Duration::days(5)
+        }
+        MealSlot::Snacks => {
+            date == today - Duration::days(3) || date == today - Duration::days(10)
+        }
+        _ => false,
+    }
+}
+
+fn meal_id(date: Date, slot: MealSlot) -> MealPlanEntryId {
+    MealPlanEntryId::from_uuid(sample_uuid("meal-plan-entry", &format!("{date}:{slot}")))
+}
+
+fn snack_id(date: Date, key: &str) -> MealPlanEntryId {
+    MealPlanEntryId::from_uuid(sample_uuid(
+        "meal-plan-entry",
+        &format!("{date}:snacks:{key}"),
+    ))
+}
+
+fn slot_time(slot: MealSlot) -> Option<Time> {
+    let (hour, minute) = match slot {
+        MealSlot::Breakfast => (7, 30),
+        MealSlot::Lunch => (12, 30),
+        MealSlot::Dinner => (18, 30),
+        MealSlot::Snacks => return None,
+    };
+    Some(Time::from_hms(hour, minute, 0).unwrap())
+}
+
+fn quantity(amount: i64, unit: Unit) -> Quantity {
+    Quantity::new(decimal(amount), unit)
+}
+
+fn measured(amount: i64, unit: Unit) -> ConsumedAmount {
+    ConsumedAmount::Measure(quantity(amount, unit))
+}
+
+fn servings(amount: i64) -> ConsumedAmount {
+    ConsumedAmount::Servings(decimal(amount))
+}
+
+fn decimal(value: i64) -> Decimal {
+    Decimal::new(value, 0)
+}
+
+fn nutrition(amount: i64, unit: Unit, values: [i64; 9]) -> NutritionFacts {
+    NutritionFacts {
+        basis: Some(quantity(amount, unit)),
+        energy_kcal: Some(decimal(values[0])),
+        protein_g: Some(decimal(values[1])),
+        carbohydrate_g: Some(decimal(values[2])),
+        sugar_g: Some(decimal(values[3])),
+        fat_g: Some(decimal(values[4])),
+        saturated_fat_g: Some(decimal(values[5])),
+        fibre_g: Some(decimal(values[6])),
+        salt_g: Some(decimal(values[7])),
+        cholesterol_mg: Some(decimal(values[8])),
+        ..Default::default()
+    }
+}
+
+fn nutrition_goals(values: [i64; 9]) -> NutritionGoals {
+    NutritionGoals {
+        energy_kcal: Some(decimal(values[0])),
+        protein_g: Some(decimal(values[1])),
+        carbohydrate_g: Some(decimal(values[2])),
+        sugar_g: Some(decimal(values[3])),
+        fat_g: Some(decimal(values[4])),
+        saturated_fat_g: Some(decimal(values[5])),
+        fibre_g: Some(decimal(values[6])),
+        salt_g: Some(decimal(values[7])),
+        cholesterol_mg: Some(decimal(values[8])),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use time::macros::date;
+
+    #[test]
+    fn sample_identifiers_are_stable_and_separate_by_resource() {
+        assert_eq!(product_id("apple"), product_id("apple"));
+        assert_ne!(
+            product_id("apple").as_uuid(),
+            sample_uuid("ingredient", "apple")
+        );
+    }
+
+    #[test]
+    fn meal_identifiers_follow_the_absolute_date() {
+        assert_eq!(
+            meal_id(date!(2026 - 08 - 24), MealSlot::Breakfast),
+            meal_id(date!(2026 - 08 - 24), MealSlot::Breakfast)
+        );
+        assert_ne!(
+            meal_id(date!(2026 - 08 - 24), MealSlot::Breakfast),
+            meal_id(date!(2026 - 08 - 25), MealSlot::Breakfast)
+        );
+    }
+
+    #[test]
+    fn filler_meals_leave_the_assumed_occasions_unclaimed() {
+        let today = date!(2026 - 09 - 18);
+        assert!(is_reserved_occasion(
+            today,
+            date!(2026 - 09 - 16),
+            MealSlot::Dinner
+        ));
+        assert!(is_reserved_occasion(
+            today,
+            date!(2026 - 09 - 13),
+            MealSlot::Dinner
+        ));
+        assert!(is_reserved_occasion(
+            today,
+            date!(2026 - 09 - 15),
+            MealSlot::Snacks
+        ));
+        assert!(is_reserved_occasion(
+            today,
+            date!(2026 - 09 - 08),
+            MealSlot::Snacks
+        ));
+        assert!(!is_reserved_occasion(
+            today,
+            date!(2026 - 09 - 16),
+            MealSlot::Lunch
+        ));
+        assert!(!is_reserved_occasion(
+            today,
+            date!(2026 - 09 - 15),
+            MealSlot::Dinner
+        ));
+        assert!(!is_reserved_occasion(
+            today,
+            date!(2026 - 09 - 16),
+            MealSlot::Snacks
+        ));
+    }
+
+    #[test]
+    fn the_product_set_includes_known_partial_and_unknown_nutrition() {
+        let products = product_specs();
+        assert!(products.iter().any(|product| {
+            product
+                .nutrition
+                .named_values()
+                .all(|(_, value)| value.is_some())
+        }));
+        assert!(products.iter().any(|product| {
+            !product.nutrition.is_unknown()
+                && product
+                    .nutrition
+                    .named_values()
+                    .any(|(_, value)| value.is_none())
+        }));
+        assert!(
+            products
+                .iter()
+                .any(|product| product.nutrition.is_unknown())
+        );
+    }
+}

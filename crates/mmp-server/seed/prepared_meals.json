@@ -1,0 +1,9 @@
+[
+  {
+    "seed_key": "frozen-lasagne",
+    "name": "Frozen Lasagne",
+    "default_unit": "item",
+    "shopping_section": "frozen",
+    "track_stock": true
+  }
+]
